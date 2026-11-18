@@ -327,6 +327,24 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
             .any(|body| body.contains(&format!("/tasks/{copied_task}"))),
         "the address names the copy's task"
     );
+    // Field values are keyed by their field's id: the copy's keys name the
+    // copy's fields, so its records keep their values.
+    let (keys, strangers) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT count(*), count(*) FILTER (WHERE NOT EXISTS ( \
+             SELECT 1 FROM field_definitions field \
+             WHERE field.workspace_id = $1 AND field.id::text = key)) \
+         FROM collection_records record, jsonb_object_keys(record.field_values) key \
+         WHERE record.workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("field keys");
+    assert!(keys > 0, "the fixture's record has field values");
+    assert_eq!(
+        strangers, 0,
+        "every field value names one of the copy's fields"
+    );
     let originals = [a.task.to_string(), a.channel.clone(), a.page.clone()];
     for table in ["work_items", "messages", "conversations", "project_pages"] {
         let rows = sqlx::query_scalar::<_, Value>(&format!(

@@ -1257,7 +1257,11 @@ fn ids_in(value: &Value, into: &mut HashSet<Uuid>) {
     match value {
         Value::String(text) => into.extend(uuids(text).map(|(_, id)| id)),
         Value::Array(items) => items.iter().for_each(|item| ids_in(item, into)),
-        Value::Object(fields) => fields.values().for_each(|item| ids_in(item, into)),
+        Value::Object(fields) => fields.iter().for_each(|(key, item)| {
+            // Field values are keyed by their field's id.
+            into.extend(uuids(key).map(|(_, id)| id));
+            ids_in(item, into);
+        }),
         _ => {}
     }
 }
@@ -1312,7 +1316,21 @@ fn rewrite(value: &mut Value, map: &HashMap<Uuid, Uuid>) {
             *text = out;
         }
         Value::Array(items) => items.iter_mut().for_each(|item| rewrite(item, map)),
-        Value::Object(fields) => fields.values_mut().for_each(|item| rewrite(item, map)),
+        Value::Object(fields) => {
+            // Keys too: field values are keyed by their field's id.
+            *fields = std::mem::take(fields)
+                .into_iter()
+                .map(|(key, mut item)| {
+                    rewrite(&mut item, map);
+                    let mut key = Value::String(key);
+                    rewrite(&mut key, map);
+                    match key {
+                        Value::String(key) => (key, item),
+                        _ => unreachable!("a string stays a string"),
+                    }
+                })
+                .collect();
+        }
         _ => {}
     }
 }
@@ -2089,5 +2107,17 @@ mod tests {
             format!("see /tasks/{to}#x and {}", to.to_string().to_uppercase())
         );
         assert_eq!(value["other"], other);
+    }
+
+    #[test]
+    fn ids_used_as_keys_are_found_and_rewritten() {
+        let field = Uuid::now_v7();
+        let copied = Uuid::now_v7();
+        let mut value = json!({ field.to_string(): "high", "title": "x" });
+        let mut found = HashSet::new();
+        ids_in(&value, &mut found);
+        assert!(found.contains(&field));
+        rewrite(&mut value, &HashMap::from([(field, copied)]));
+        assert_eq!(value, json!({ copied.to_string(): "high", "title": "x" }));
     }
 }
