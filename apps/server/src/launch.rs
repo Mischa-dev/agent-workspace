@@ -1589,6 +1589,7 @@ pub(crate) async fn launch_tasks(
         .await?;
     let immediate =
         request.work_item_ids.len() == 1 && request.start_when == StartWhen::Now && !request.queue;
+    let person_caller = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
     let mut launch_ids = Vec::new();
     for work_item_id in &request.work_item_ids {
         let task = load_task(&mut *transaction, project_id, *work_item_id).await?;
@@ -1643,7 +1644,7 @@ pub(crate) async fn launch_tasks(
         // within the app's limit: it starts only within that limit when the
         // queue drains.
         .bind(
-            caller.actor_kind == ActorKind::Human
+            person_caller
                 && (caller.mcp
                     || crate::policy::current_agent_limit(
                         caller.actor_id,
@@ -2296,17 +2297,17 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         // directly, in a batch or through an app-made automation) must still
         // be within that app's agent limit as it is now. Source mcp covers
         // rows queued before the flag was set on every insert.
-        let limits =
-            if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
-                let mut connection = crate::db::scoped_tx(&state.pool).await?;
-                Some(
-                    crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
-                        .await?
-                        .limits,
-                )
-            } else {
-                None
-            };
+        let person = kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+        let limits = if (queued.source == "mcp" || queued.made_through_app) && person {
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
+            Some(
+                crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                    .await?
+                    .limits,
+            )
+        } else {
+            None
+        };
         let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
@@ -2705,7 +2706,7 @@ pub(crate) async fn queue_tag_launches(
           ON worker.project_id = membership.project_id AND worker.actor_id = actor.id
          AND worker.enabled
         WHERE membership.project_id = $1 AND membership.enabled
-          AND actor.kind = 'execution_worker' AND actor.status = 'active'
+          AND actor.kind = 'execution_worker' AND actor.status = 'active' -- // kind-check: mechanical (the execution worker's own account)
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
         ORDER BY actor.id
@@ -2728,7 +2729,7 @@ pub(crate) async fn queue_tag_launches(
             .bind(message_id)
             .fetch_one(&mut **transaction)
             .await?;
-    if crate::policy::agent_limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
+    if crate::access::limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
         return Ok(());
     }
     // An app acting for the author is in this call when its limit is set.
@@ -2790,12 +2791,18 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     else {
         return Ok(());
     };
-    if message.removed || message.author_kind != "human" {
+    // A run's own messages never start runs; anyone else's tag does when
+    // their role lets them start runs here.
+    let Some(author_kind) = actor_kind(&message.author_kind) else {
+        return Ok(());
+    };
+    let from_a_run = author_kind == ActorKind::ExecutionWorker; // kind-check: mechanical (a run's own output doesn't start runs)
+    if message.removed || from_a_run {
         return Ok(());
     }
     let caller = LaunchCaller {
         actor_id: message.author_actor_id,
-        actor_kind: ActorKind::Human,
+        actor_kind: author_kind,
         via_grant_id: None,
         mcp: false,
         session_id: None,

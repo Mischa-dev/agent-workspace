@@ -21,7 +21,6 @@ use crate::{
     policy::ActorKind,
 };
 
-const NOT_FOR_AGENTS: &str = "Agents ask a person to launch with run_request; task_launch spends a person's own provider account.";
 const CHOOSE_PROJECT: &str = "Name the project (projectId: an ID, link or key such as \"AWD\").";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -251,9 +250,6 @@ pub(super) async fn task_launch(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
-    }
     if arguments.task_ids.is_empty() || arguments.task_ids.len() > launch::MAX_TASKS_PER_LAUNCH {
         return ToolResult::invalid("taskIds", "Pass 1 to 50 tasks.");
     }
@@ -440,7 +436,8 @@ pub(super) async fn session_bind(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::ExternalAgent {
+    let agent_connection = principal.actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (a session runs inside an agent connection)
+    if !agent_connection {
         return ToolResult::denied("Only agents bind their own sessions.");
     }
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {

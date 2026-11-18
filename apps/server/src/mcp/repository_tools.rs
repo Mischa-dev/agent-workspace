@@ -124,7 +124,6 @@ pub(super) async fn repository_write(
         let role = repositories::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::RepositoryManage,
         )
@@ -134,7 +133,6 @@ pub(super) async fn repository_write(
         repositories::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::RepositoryView,
         )
@@ -270,7 +268,6 @@ async fn add_from_installation(
         let mut picked = crate::github::add_picked_repository_as(
             state,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             installation_id,
             github_repository_id,

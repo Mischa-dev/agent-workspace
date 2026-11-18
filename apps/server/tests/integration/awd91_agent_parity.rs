@@ -574,7 +574,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
 /// start it again on the person's account; the person's app can. A launch
 /// in the queue is cancelled by whoever queued it, not by an agent.
 #[tokio::test]
-async fn an_agent_stops_its_run_and_only_people_start_it_again() {
+async fn an_agent_stops_its_run_and_restarts_only_on_its_own_account() {
     let Some(f) = fixture().await else {
         return;
     };
@@ -632,7 +632,8 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
     )
     .await;
 
-    // Starting it again spends the person's account, so the agent can't.
+    // Starting it again spends the caller's own provider account, never the
+    // person's, so the agent (with none of its own) is told so.
     let refused = tool(
         &f.app,
         &f.token,
@@ -641,7 +642,13 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
         json!({"runId": run, "clientRequestId": "awd111-agent-retry"}),
     )
     .await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("signed-in provider account")),
+        "{refused}"
+    );
 
     // The person's own app can, and the new run is theirs.
     let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;

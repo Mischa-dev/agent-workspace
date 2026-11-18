@@ -995,31 +995,32 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     .await;
     let work = thread(pool, &seed, seed.channel_id, "Fix the mirrors").await;
 
-    // Agents and read-only apps can't spend Codex.
-    for who in [MARA, READER] {
-        let refused = call(
+    // A read-only app can't start runs.
+    let refused = call(
+        READER,
+        "run_start",
+        json!({"threadId": work, "prompt": "Fix it"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // An account with no signed-in provider account of its own, agent or
+    // person, is told so, not asked to retry later: a run spends the
+    // caller's own account, never someone else's.
+    for who in [MARA, DANA] {
+        let no_account = call(
             who,
             "run_start",
             json!({"threadId": work, "prompt": "Fix it"}),
         )
         .await;
-        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+        assert_eq!(no_account["outcome"], "conflict", "{no_account}");
+        assert!(
+            no_account["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("signed-in provider account")),
+            "{no_account}"
+        );
     }
-    // A person with no signed-in account of their own is told so, not asked
-    // to retry later.
-    let no_account = call(
-        DANA,
-        "run_start",
-        json!({"threadId": work, "prompt": "Fix it"}),
-    )
-    .await;
-    assert_eq!(no_account["outcome"], "conflict", "{no_account}");
-    assert!(
-        no_account["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("signed-in provider account")),
-        "{no_account}"
-    );
 
     // A person starts a run on their own account; a retry doesn't start a second.
     let started = call(

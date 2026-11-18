@@ -251,7 +251,7 @@ pub async fn list_for(
         JOIN project_memberships membership ON membership.actor_id = actor.id AND membership.enabled
         JOIN projects project ON project.id = membership.project_id
         WHERE project.organization_id = $1
-          AND actor.kind = 'external_agent' AND actor.status = 'active'
+          AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (a runner signs in through an agent connection)
         ORDER BY actor.id, membership.created_at
         "#,
     )
@@ -358,7 +358,7 @@ async fn valid_runner(
             JOIN project_memberships membership ON membership.actor_id = actor.id
             JOIN projects project ON project.id = membership.project_id
             WHERE actor.id = $1 AND project.organization_id = $2
-              AND actor.kind = 'external_agent' AND actor.status = 'active'
+              AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (a runner signs in through an agent connection)
         )
         "#,
     )

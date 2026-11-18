@@ -17,11 +17,8 @@ use crate::{
     api::{StartRunRequest, interrupt_run_in, retry_run_in, start_run_in},
     error::AppError,
     idempotency::IdempotencyKey,
-    policy::ActorKind,
     runs::{RunCaller, brief},
 };
-
-const NOT_FOR_AGENTS: &str = "Agents ask a person to start a run with run_request; run_start spends a person's own provider account.";
 
 /// AWD-75: the projects the caller belongs to where `module` is off for
 /// them, for lists that reach projects through membership rather than a
@@ -308,9 +305,6 @@ pub(super) async fn run_start(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
-    }
     let Some(thread_id) = parse_id(&arguments.thread_id) else {
         return ToolResult::invalid("threadId", "Pass the thread's ID or link.");
     };
@@ -458,9 +452,6 @@ pub(super) async fn run_retry(
 ) -> ToolResult<RunValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
     }
     let (run_id, request_id, key) = match control_key(&arguments) {
         Ok(parts) => parts,
