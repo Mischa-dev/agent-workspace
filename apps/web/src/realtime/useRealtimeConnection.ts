@@ -16,6 +16,7 @@ import {
 import { cacheContext, RECONNECT, SELF_HANDLED, type Touch } from './handlers'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
 import { modulesChanged } from './moduleSwitches'
+import { announceRunFinished } from './runFinished'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
@@ -286,6 +287,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
           void touchTable.then(({ touchesFor }) => invalidate(touchesFor(envelope, context))).catch(() => undefined)
+          announceRunFinished(envelope)
           if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }

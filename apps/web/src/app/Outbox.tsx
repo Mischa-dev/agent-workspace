@@ -6,6 +6,7 @@ import { sendConversationMessage } from '../conversations/api'
 import type { OutboxTarget, QueuedSend } from '../conversations/composerModel'
 import { showToast } from '../ui'
 import { commentContent, createWorkItemComment } from '../work-items/api'
+import { flushOutbound } from '../data/outbound'
 import { onReconnect } from './localDrafts'
 import { flushOutbox } from './outbox'
 
@@ -64,6 +65,26 @@ export default function Outbox() {
               title: refused.length === 1 ? 'A message you wrote offline wasn’t sent' : `${refused.length} messages you wrote offline weren’t sent`,
               description: 'Each is back in its box when you open it, to change or copy.',
               action: { label: 'Open', onSelect: () => navigate(first.target.href) },
+            })
+          }
+        })
+        // Then the operations that waited for the connection (W1.30).
+        .then(() => flushOutbound())
+        .then(({ refused, sent }) => {
+          for (const entry of [...sent, ...refused]) {
+            const id = entry.thing?.slice(entry.thing.indexOf(':') + 1)
+            if (id) void queryClient.invalidateQueries({ predicate: (query) => query.queryKey.includes(id) })
+          }
+          if (sent.length) {
+            showToast({ tone: 'success', title: sent.length === 1 ? `${sent[0].label} went through` : `${sent.length} changes you made offline went through` })
+          }
+          for (const entry of refused) {
+            showToast({
+              id: `outbound:${entry.id}`,
+              tone: 'danger',
+              title: `${entry.label} wasn’t saved`,
+              description: entry.refused,
+              action: entry.href ? { label: 'Open', onSelect: () => navigate(entry.href ?? '/') } : undefined,
             })
           }
         })

@@ -109,6 +109,12 @@
   cursor: pointer;
 }
 
+.aw-toast__action:is(a) {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .aw-toast__action:hover {
   background: var(--content-hover);
 }

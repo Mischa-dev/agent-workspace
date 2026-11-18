@@ -18,6 +18,8 @@ import { Button } from '../ui'
 const AppearanceSync = lazy(() => import('../theme/AppearanceSync'))
 // Loads after the page too: it sends what was written offline once the connection is back.
 const Outbox = lazy(() => import('../app/Outbox'))
+// A run you asked for that finishes elsewhere says so.
+const RunFinishedToasts = lazy(() => import('../runs/RunFinishedToasts'))
 
 export function SessionBoundary() {
   const session = useSession()
@@ -92,6 +94,7 @@ export function SessionBoundary() {
         <Suspense fallback={null}>
           <AppearanceSync />
           <Outbox />
+          <RunFinishedToasts />
         </Suspense>
       </RealtimeProvider>
     </AuthenticatedSessionProvider>

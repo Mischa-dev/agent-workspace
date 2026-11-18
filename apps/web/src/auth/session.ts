@@ -187,6 +187,8 @@ export async function logout() {
   // forget them first, so a failed or slow sign-out can't leave them behind.
   clearLocalDrafts()
   setLocalDraftOwner(null)
+  // And the writes waiting for the connection (W1.30), kept in IndexedDB.
+  await import('../data/outbound').then((outbound) => outbound.clearOutbound()).catch(() => undefined)
   await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 

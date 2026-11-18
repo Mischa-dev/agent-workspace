@@ -10,7 +10,7 @@ import { Banner, Icon } from '../ui'
 import { staticPageTitle } from './documentTitleModel'
 import { loadShellLazy } from './loadShellLazy'
 import { MenuButton } from './MenuButton'
-import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth } from './mobileNavigation'
+import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useBackCloses, useMobileWidth } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
 import { useKeyboardViewport } from './useKeyboardViewport'
@@ -28,6 +28,7 @@ const drawerFocusableSelector = [
 const PullToRefresh = lazy(() => loadShellLazy().then((module) => ({ default: module.PullToRefresh })))
 const HomeSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.HomeSidebar })))
 const DirectSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.DirectSidebar })))
+const PhoneTabs = lazy(() => loadShellLazy().then((module) => ({ default: module.PhoneTabs })))
 const ResizeEdge = lazy(() => loadShellLazy().then((module) => ({ default: module.ResizeEdge })))
 
 /** A home-screen app on a touch screen, where there's no reload button. */
@@ -170,6 +171,10 @@ export function ShellFrame({
     },
     [setNavOpen],
   )
+
+  // On a phone, back closes an open drawer or details sheet first.
+  useBackCloses(anyDrawerOpen, closeDrawers)
+  const phone = useMobileWidth()
 
   const shellHeader = useMemo(() => ({ openNavigation, navigationOpen: navOpen }), [navOpen, openNavigation])
 
@@ -359,6 +364,11 @@ export function ShellFrame({
           )}
           {children}
         </main>
+        {phone && !conversationLayout ? (
+          <Suspense fallback={null}>
+            <PhoneTabs spaceId={project?.id ?? null} />
+          </Suspense>
+        ) : null}
         {hasSidebar && context ? (
           <Suspense fallback={null}>
             <ResizeEdge edge="panel" />

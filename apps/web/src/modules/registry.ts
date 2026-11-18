@@ -1,5 +1,5 @@
 import type { Experience } from '../experience/layout'
-import type { CaptureRegistration, PaletteEntry, ShortcutRegistration, SidebarRow, ThingRegistration, WebModule } from './define'
+import type { CaptureRegistration, PaletteEntry, PhoneTab, ShortcutRegistration, SidebarRow, ThingRegistration, WebModule } from './define'
 import { MODULE_IDS } from './names'
 
 // M1.4: every core module's web registration, found by the build
@@ -48,6 +48,17 @@ export function sidebarRows(
         .filter((row) => !row.unless || !experience.shows(row.unless))
         .map((row) => ({ ...row, module: module.id })),
     )
+    .sort((left, right) => left.rank - right.rank)
+}
+
+/** The phone's bottom bar (W1.29): each module that's on brings at most one destination. */
+export function phoneTabs(
+  experience: Pick<Experience, 'shows' | 'moduleOn'>,
+  modules: readonly WebModule[] = WEB_MODULES,
+): (PhoneTab & { module: string })[] {
+  return modules
+    .filter((module) => module.phone && experience.moduleOn(module.id))
+    .flatMap((module) => (module.phone && (!module.phone.part || experience.shows(module.phone.part)) ? [{ ...module.phone, module: module.id }] : []))
     .sort((left, right) => left.rank - right.rank)
 }
 
