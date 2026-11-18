@@ -23,10 +23,11 @@ retries = 1
 
 # The isolation sweeps call every read and write route and tool as each
 # workspace against the other's ids (hundreds of calls), and take four to
-# five minutes on a shared runner. Slow by size, not by waiting on anything:
-# they get ten minutes instead of five. Retries stay at zero. The read sweep
-# runs once per edge (http, an app, an agent, realtime), so its filter
-# matches every edge's test.
+# five minutes on a shared runner (the agent and app sweeps read a tools
+# list of close to a megabyte for each). Slow by size, not by waiting on
+# anything: they get ten minutes instead of five. Retries stay at zero. The
+# read sweep runs once per edge (http, an app, an agent, realtime), so its
+# filter matches every edge's test.
 [[profile.ci.overrides]]
 filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another)"
 slow-timeout = { period = "60s", terminate-after = 10 }

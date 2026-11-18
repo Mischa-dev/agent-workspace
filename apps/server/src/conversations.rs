@@ -2,6 +2,7 @@
 pub mod channel_ops;
 pub mod ops;
 pub mod sidebar_ops;
+pub mod system_entries;
 pub mod thread_ops;
 
 use std::{
@@ -34,8 +35,8 @@ use crate::{
         NewOutboxEvent, OutboxConversationKind, OutboxEventPayload, ReadStateUpdatedPayload,
     },
     policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
+        Action, ActorKind, Decision, DelegatedScope, Membership, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
     reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
@@ -388,6 +389,9 @@ pub struct MessageView {
     /// it done (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<SavedMark>,
+    /// What this message was made into (C2.20), for the reader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_into: Vec<system_entries::MadeIntoView>,
 }
 
 /// The viewer's own saved-for-later mark on a message.
@@ -471,6 +475,19 @@ pub struct TimelineEntryView {
     pub created_at: String,
     pub message: Option<MessageView>,
     pub worker_event: Option<WorkerEventView>,
+    /// What a system entry says (C2.20), with its actor's name here; the
+    /// thing's title is read with the reader's access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemEntryView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemEntryView {
+    #[serde(flatten)]
+    pub event: system_entries::SystemEvent,
+    /// The actor's name in this space, if they're still in it.
+    pub actor_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -688,6 +705,10 @@ struct TimelineEntryRow {
     event_kind: Option<String>,
     event_summary: Option<String>,
     event_created_at: Option<String>,
+    #[sqlx(default)]
+    system_event: Option<serde_json::Value>,
+    #[sqlx(default)]
+    system_actor_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1697,6 +1718,7 @@ async fn send_direct_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         None,
@@ -1730,6 +1752,7 @@ async fn send_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         Some(expected_kind),
@@ -1753,6 +1776,9 @@ pub(crate) struct MessageCommandActor {
     pub(crate) mcp_credential: Option<MessageMcpCredential>,
     /// The connected app a person is sending through, if any.
     pub(crate) via_grant_id: Option<Uuid>,
+    /// Sent as a run's agent, in the run's space (`runs::say`): the run is
+    /// the proof, and a worker gets message sending delegated for it.
+    pub(crate) run_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1811,6 +1837,9 @@ pub(crate) struct AppendExtras {
     /// The client chose the idempotency key (`clientRequestId`): it goes
     /// out on `message.created` as `clientMessageId` (A2.12).
     pub(crate) client_keyed: bool,
+    /// The run whose agent said it (a host reporting a `text_message` for
+    /// the thread, `runs::say`): the message links to the run.
+    pub(crate) agent_run_id: Option<Uuid>,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1974,9 +2003,9 @@ pub(crate) async fn append_message_command_with(
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
             content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
-            reply_to_message_id, may_notify_everyone
+            reply_to_message_id, may_notify_everyone, agent_run_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11)
         "#,
     )
     .bind(message_id)
@@ -1989,6 +2018,7 @@ pub(crate) async fn append_message_command_with(
     .bind(extras.forwarded_message_id)
     .bind(extras.reply_to_message_id)
     .bind(notify_everyone)
+    .bind(extras.agent_run_id)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -2151,6 +2181,7 @@ pub(crate) async fn append_message_command_with(
         forwarded: None,
         reply_to,
         saved: None,
+        made_into: Vec::new(),
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2162,6 +2193,7 @@ pub(crate) async fn append_message_command_with(
             created_at: result.entry_created_at,
             message: Some(message),
             worker_event: None,
+            system: None,
         },
     };
     if let Some(reply) = reply {
@@ -2443,8 +2475,10 @@ pub(crate) async fn lock_message_conversation(
     } else {
         None
     };
-    let row = sqlx::query_as::<_, ConversationAccessRow>(
-        r#"
+    // A run's worker has no workspace membership of its own: sent as a
+    // run, the workspace membership is optional, and a disabled one still
+    // refuses.
+    let access_sql = r#"
         SELECT conversation.id, conversation.project_id, conversation.kind,
                conversation.parent_channel_id, conversation.origin_message_id,
                conversation.name, conversation.version,
@@ -2487,26 +2521,54 @@ pub(crate) async fn lock_message_conversation(
           AND (
               -- Browser authentication, including the loopback-only development
               -- principal, was validated before entering this command path.
-              ($4::uuid IS NULL AND actor.kind = 'human')
+              ($4::uuid IS NULL AND $5::uuid IS NULL AND actor.kind = 'human')
               OR
               ($4::uuid = conversation.project_id AND actor.kind = 'external_agent')
+              OR
+              -- A run's agent, in the run's space (`runs::say`).
+              ($4::uuid IS NULL AND $5::uuid = conversation.project_id)
           )
         FOR UPDATE OF conversation
         FOR SHARE OF project, actor, organization_membership, membership
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(actor.actor_id)
-    .bind(&actor.actor_kind)
-    .bind(mcp_project_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("conversation"))?;
+        "#;
+    let access_sql = if actor.run_id.is_some() {
+        access_sql
+            .replace(
+                "        JOIN organization_memberships organization_membership\n",
+                "        LEFT JOIN organization_memberships organization_membership\n",
+            )
+            .replace(
+                "        FOR UPDATE OF conversation\n        FOR SHARE OF project, actor, organization_membership, membership",
+                "          AND NOT EXISTS (SELECT 1 FROM organization_memberships disabled\n                          WHERE disabled.organization_id = project.organization_id\n                            AND disabled.actor_id = $2 AND NOT disabled.enabled)\n        FOR UPDATE OF conversation\n        FOR SHARE OF project, actor, membership",
+            )
+    } else {
+        access_sql.to_owned()
+    };
+    let run_space = match actor.run_id {
+        Some(run_id) => {
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
+        }
+        None => None,
+    };
+    let row = sqlx::query_as::<_, ConversationAccessRow>(&access_sql)
+        .bind(conversation_id)
+        .bind(actor.actor_id)
+        .bind(&actor.actor_kind)
+        .bind(mcp_project_id)
+        .bind(run_space)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("conversation"))?;
     let scope = if row.kind == "thread" {
         ProjectScope::thread(row.project_id, row.id)
     } else {
         ProjectScope::project(row.project_id)
     };
+    // A run hands its worker what it says in the run's space; any other
+    // account sends by its role.
+    let delegated = actor
+        .run_id
+        .map(|_| DelegatedScope::new(scope, [Action::MessageSend]));
     let subject = Subject::new(
         actor.actor_id,
         parse_actor_kind(&actor.actor_kind)?,
@@ -2519,7 +2581,7 @@ pub(crate) async fn lock_message_conversation(
             )?,
             row.membership_enabled,
         )),
-        None,
+        delegated,
     );
     if !matches!(
         authorize(&subject, action, Resource::Project(scope)),
@@ -2616,10 +2678,15 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             event.agent_run_id,
             event.kind AS event_kind,
             event.summary AS event_summary,
-            event.created_at::text AS event_created_at
+            event.created_at::text AS event_created_at,
+            entry.system_event,
+            system_membership.display_name AS system_actor_name
         FROM conversation_entries entry
         LEFT JOIN messages message ON message.id = entry.message_id
         LEFT JOIN actors author ON author.id = message.author_actor_id
+        LEFT JOIN project_memberships system_membership
+          ON system_membership.project_id = $2
+         AND system_membership.actor_id = (entry.system_event->>'actorId')::uuid
         LEFT JOIN project_memberships author_membership
           ON author_membership.project_id = $2
          AND author_membership.actor_id = message.author_actor_id
@@ -2798,6 +2865,8 @@ async fn conversation_timeline(
         hide_entry_work_item_details(&mut entries);
     }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
+    system_entries::attach_made_into(&state.pool, conversation.id, &mut entries, sees_tasks)
+        .await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
         if conversation.kind == "thread" {
@@ -4556,6 +4625,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .reply_to_message_id
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
+                made_into: Vec::new(),
             })
         }
         None => None,
@@ -4576,6 +4646,14 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         }),
         None => None,
     };
+    // An entry whose event this server doesn't know shows as a bare line.
+    let system = row
+        .system_event
+        .and_then(|value| serde_json::from_value::<system_entries::SystemEvent>(value).ok())
+        .map(|event| SystemEntryView {
+            event,
+            actor_name: row.system_actor_name,
+        });
     Ok(TimelineEntryView {
         id: row.id,
         sequence: row.sequence,
@@ -4583,6 +4661,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         created_at: row.created_at,
         message,
         worker_event,
+        system,
     })
 }
 

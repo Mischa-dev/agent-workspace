@@ -38,6 +38,13 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "inbox_views",
+                table: "inbox_views",
+                references: &[("account_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "account_groups",
                 table: "account_groups",
                 references: &[("created_by_actor_id", "actors")],
@@ -640,6 +647,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "conversation_tabs",
+                table: "conversation_tabs",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("added_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "conversation_pins",
                 table: "conversation_pins",
                 references: &[
@@ -1129,6 +1147,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("project_id", "projects"),
                     ("collection_id", "collections"),
+                    ("source_message_id", "messages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                     ("archived_by_actor_id", "actors"),

@@ -545,6 +545,7 @@ async fn hide_http(
         actor_kind: principal.actor_kind.clone(),
         mcp_credential: None,
         via_grant_id: None,
+        run_id: None,
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_message_for_change(

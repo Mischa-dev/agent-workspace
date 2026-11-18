@@ -59,7 +59,12 @@ const ownList =
   () => [opAnswers(op)]
 
 /** A block, or a message request answered (C2.39): DM standings, blocks and the DM list. */
-const dmRulesChanged: Handler = () => [opAnswers('dm_standing_get'), opAnswers('account_block_list'), direct]
+const dmRulesChanged: Handler = () => [
+  opAnswers('dm_standing_get'),
+  opAnswers('account_block_list'),
+  opAnswers('sidebar_list'),
+  direct,
+]
 
 /** Someone's profile or avatar changed: profiles and avatars read again. */
 const profileChanged: Handler = () => [opAnswers('profile_get'), opAnswers('profile_avatar_list')]
@@ -77,6 +82,7 @@ export const peopleHandlers: Record<string, Handler> = {
   'notification_keywords.changed': ownList('notification_keyword_list'),
   'sidebar.changed': ownList('sidebar_list'),
   'saved_searches.changed': ownList('saved_search_list'),
+  'inbox_views.changed': ownList('inbox_view_list'),
   'dm_rules.changed': dmRulesChanged,
   'account.profile_changed': profileChanged,
   'account.status.changed': statusChanged,

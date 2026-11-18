@@ -241,6 +241,7 @@ impl From<&OpContext> for crate::conversations::MessageCommandActor {
                 _ => None,
             },
             via_grant_id: ctx.caller.via_grant_id,
+            run_id: None,
         }
     }
 }

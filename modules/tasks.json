@@ -32,6 +32,7 @@
     "task_move": "change",
     "task_watch_set": "change",
     "task_ready_list": "query",
+    "conversation_task_list": "query",
     "task_from_template": "create",
     "task_import": "create",
     "bug_report_link_list": "query",

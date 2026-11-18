@@ -74,6 +74,9 @@ struct KeptCaller {
     delegated: bool,
     requested_by: Option<Uuid>,
     run_id: Option<Uuid>,
+    /// Through a host's run credential (A1.12): `credential_id` names it.
+    #[serde(default)]
+    for_run: bool,
     /// The credential the call came through, which must still stand.
     credential_id: Option<Uuid>,
     oauth_grant_id: Option<Uuid>,
@@ -117,6 +120,7 @@ impl KeptCaller {
             delegated: caller.limits.is_some(),
             requested_by: caller.requested_by,
             run_id: caller.run_id,
+            for_run: caller.for_run,
             credential_id,
             oauth_grant_id,
         }
@@ -132,6 +136,17 @@ impl KeptCaller {
             return Ok(None);
         };
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        // A run credential stands while its run, host binding and space do.
+        let run_credential = match (self.for_run, self.credential_id) {
+            (true, Some(credential_id)) => Some(credential_id),
+            (true, None) => return Ok(None),
+            (false, _) => None,
+        };
+        if let Some(credential_id) = run_credential
+            && !crate::runs::credentials::stands(&mut connection, credential_id).await?
+        {
+            return Ok(None);
+        }
         let standing = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND status = 'active')
@@ -145,7 +160,7 @@ impl KeptCaller {
             "#,
         )
         .bind(self.account_id)
-        .bind(self.credential_id)
+        .bind(self.credential_id.filter(|_| run_credential.is_none()))
         .bind(self.oauth_grant_id)
         .fetch_one(&mut *connection)
         .await?;
@@ -173,6 +188,7 @@ impl KeptCaller {
             limits,
             requested_by: self.requested_by,
             run_id: self.run_id,
+            for_run: self.for_run,
         }))
     }
 }

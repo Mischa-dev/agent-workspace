@@ -1047,6 +1047,14 @@ async fn delete_profile_rows(
         .bind(actor_id)
         .execute(&mut **transaction)
         .await?;
+    // Its binding to the built-in host goes with it (it never ran, so no run
+    // names it).
+    sqlx::query(
+        "DELETE FROM host_agents WHERE account_id = $1 AND host_id IN (SELECT id FROM hosts WHERE builtin)",
+    )
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
     sqlx::query("DELETE FROM actors WHERE id = $1 AND kind = 'execution_worker'")
         .bind(actor_id)
         .execute(&mut **transaction)

@@ -344,6 +344,7 @@ done
     .execute(&pool)
     .await
     .expect("insert exact completed-turn recovery run");
+    super::support::builtin_run_started(&pool, completed_recovery_run_id).await;
 
     assert_eq!(
         recovery::reconcile_non_terminal_runs(&state)
@@ -351,6 +352,7 @@ done
             .expect("reconcile exact completed provider turn"),
         1
     );
+    super::support::run_due_jobs(&state).await;
     let (completed_state, completed_session_state, message_text, recovery_result) =
         sqlx::query_as::<_, (String, String, String, String)>(
             r#"

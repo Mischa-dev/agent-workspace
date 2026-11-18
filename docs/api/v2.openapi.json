@@ -610,6 +610,31 @@
         ],
         "type": "object"
       },
+      "Category": {
+        "description": "Groups of kinds people filter the inbox by.",
+        "oneOf": [
+          {
+            "enum": [
+              "all",
+              "mentions",
+              "tasks",
+              "runs",
+              "pull_requests"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "threads",
+            "description": "Replies in threads you follow (C2.5).",
+            "type": "string"
+          },
+          {
+            "const": "usage",
+            "description": "Capacity alerts about your provider accounts (W9).",
+            "type": "string"
+          }
+        ]
+      },
       "ChangedTask": {
         "description": "The task a link change (task_depend, task_relate) was on. Someone who may\nchange tasks here but not see them (their role, or an app's agent limit)\ngets only its id and key: no title, status or whether it's finished.",
         "properties": {
@@ -1175,6 +1200,54 @@
         ],
         "type": "object"
       },
+      "ConversationFile": {
+        "properties": {
+          "contentType": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "height": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "messageId": {
+            "description": "The message it was sent with.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "width": {
+            "description": "Set for images that show inline.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "contentType",
+          "size",
+          "messageId",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "ConversationMember": {
         "properties": {
           "displayName": {
@@ -1282,6 +1355,62 @@
           "projectName",
           "unreadCount",
           "url"
+        ],
+        "type": "object"
+      },
+      "ConversationTab": {
+        "description": "A page shown as a tab on a channel.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "\"page\".",
+            "type": "string"
+          },
+          "position": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "position"
+        ],
+        "type": "object"
+      },
+      "ConversationTask": {
+        "properties": {
+          "how": {
+            "description": "made_from: made from a message here; about: linked to the conversation.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "description": "Such as AWD-12.",
+            "type": "string"
+          },
+          "statusCategory": {
+            "description": "backlog, unstarted, started, completed or canceled.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "statusCategory",
+          "how"
         ],
         "type": "object"
       },
@@ -1746,6 +1875,14 @@
           "createdAt"
         ],
         "type": "object"
+      },
+      "Density": {
+        "description": "How densely a view lists its rows.",
+        "enum": [
+          "detailed",
+          "compact"
+        ],
+        "type": "string"
       },
       "DependencyChange": {
         "properties": {
@@ -3092,6 +3229,30 @@
         ],
         "type": "object"
       },
+      "InboxFilter": {
+        "additionalProperties": false,
+        "description": "What a view shows. Unknown keys are refused.",
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/Category",
+            "default": "all",
+            "description": "Which kinds: all (the default), mentions, threads, tasks, runs,\npull_requests or usage."
+          },
+          "spaces": {
+            "description": "Only these spaces (up to 20); left out, every space.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "$ref": "#/components/schemas/View",
+            "default": "inbox",
+            "description": "Which part of the inbox: inbox (the default), unread, snoozed or\narchived."
+          }
+        },
+        "type": "object"
+      },
       "InboxItem": {
         "properties": {
           "conversationId": {
@@ -3181,6 +3342,35 @@
           "generation",
           "createdAt",
           "replyConversationId"
+        ],
+        "type": "object"
+      },
+      "InboxViewItem": {
+        "description": "A saved inbox view.",
+        "properties": {
+          "density": {
+            "$ref": "#/components/schemas/Density"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/InboxFilter"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "position",
+          "filter",
+          "density"
         ],
         "type": "object"
       },
@@ -6552,7 +6742,7 @@
             ]
           },
           "payload": {
-            "description": "A JSON object, by kind: run_finished {outcome: done, failed or\ncancelled}; text_message and reasoning {text}; tool_call {toolCallRef,\ntool, status, ...}, the same toolCallRef for every report of one call;\nplan {items: [{title, status}]}, the whole list each time; interrupt\n{request: {kind: question or approval, title, detail?, options?:\n[{id, label, style?}], allowText?, audience?: {accounts, roles},\nclientRequestId?, expiresInSeconds?}}, which opens a request, or\n{requestId}; interrupt_resolved {requestId}; gap {reason}. At most\n48 KiB; secrets are removed."
+            "description": "A JSON object, by kind: run_finished {outcome: done, failed or\ncancelled}; text_message and reasoning {text}, and a text_message\nwith inThread: true is also posted in the run's thread as its agent\n(answering the reply request it was launched from); tool_call {toolCallRef,\ntool, status, ...}, the same toolCallRef for every report of one call;\nplan {items: [{title, status}]}, the whole list each time; interrupt\n{request: {kind: question or approval, title, detail?, options?:\n[{id, label, style?}], allowText?, audience?: {accounts, roles},\nclientRequestId?, expiresInSeconds?}}, which opens a request, or\n{requestId}; interrupt_resolved {requestId}; gap {reason}. At most\n48 KiB; secrets are removed."
           },
           "stepRef": {
             "description": "The step it belongs to, your own name for it.",
@@ -7034,6 +7224,10 @@
           "conversationId": {
             "type": "string"
           },
+          "hidden": {
+            "description": "A DM you blocked the other person in, or declined a request in: it\nkeeps its place but isn't shown (C2.39).",
+            "type": "boolean"
+          },
           "kind": {
             "description": "channel, dm or group.",
             "type": "string"
@@ -7075,6 +7269,7 @@
           "spaceId",
           "private",
           "unread",
+          "hidden",
           "position"
         ],
         "type": "object"
@@ -8452,6 +8647,28 @@
           "url"
         ],
         "type": "object"
+      },
+      "View": {
+        "description": "Which part of the inbox to show.",
+        "oneOf": [
+          {
+            "enum": [
+              "snoozed",
+              "archived"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "inbox",
+            "description": "Everything not archived and not snoozed.",
+            "type": "string"
+          },
+          {
+            "const": "unread",
+            "description": "The inbox, unread only.",
+            "type": "string"
+          }
+        ]
       },
       "ViewEntry": {
         "description": "One view as a reader sees it.",
@@ -25419,6 +25636,324 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/conversation_file_list": {
+      "post": {
+        "description": "The files sent in a conversation, newest first, with the message each came with. file_read opens one.",
+        "operationId": "conversation_file_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The channel, thread, DM or group: its id or a link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "ConversationFileListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "files": {
+                              "description": "Newest first, at most 200; files of removed messages are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationFile"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "files"
+                          ],
+                          "title": "ConversationFiles",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "files": {
+                              "description": "Newest first, at most 200; files of removed messages are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationFile"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "files"
+                          ],
+                          "title": "ConversationFiles",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List a conversation's files",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/conversation_mark_read": {
       "post": {
         "description": "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing; its mention notifications are read with it. To come back to something later, pass unread: true: the conversation is unread again from fromMessageId (default: its newest message) onward. Marking unread never marks anything read.",
@@ -26553,6 +27088,988 @@
           "messages"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/conversation_tab_list": {
+      "post": {
+        "description": "The pages shown as tabs on a channel, in order. page_get reads one; conversation_tab_set adds, moves or removes one.",
+        "operationId": "conversation_tab_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The channel: its id or a link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "ConversationTabListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tabs": {
+                              "description": "In the order shown, after the messages; a page you can't open is\nleft out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTab"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tabs"
+                          ],
+                          "title": "ConversationTabs",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tabs": {
+                              "description": "In the order shown, after the messages; a page you can't open is\nleft out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTab"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tabs"
+                          ],
+                          "title": "ConversationTabs",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List a channel's tabs",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/conversation_tab_set": {
+      "post": {
+        "description": "Show a page as a tab on a channel, move it, or take it away (remove). The page must be in the channel's space; everyone who can read both sees the tab. At most 20 tabs. Needs \"Post messages\" where it acts.",
+        "operationId": "conversation_tab_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The channel: its id or a link. DMs and groups have no tabs.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "page": {
+                    "description": "The page, in the channel's space: its id or a link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "position": {
+                    "description": "Where it goes among the tabs, from 0; the end when left out.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "remove": {
+                    "description": "Take the tab away (the page itself stays).",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "conversationId",
+                  "page"
+                ],
+                "title": "ConversationTabSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tabs": {
+                              "description": "In the order shown, after the messages; a page you can't open is\nleft out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTab"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tabs"
+                          ],
+                          "title": "ConversationTabs",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tabs": {
+                              "description": "In the order shown, after the messages; a page you can't open is\nleft out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTab"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tabs"
+                          ],
+                          "title": "ConversationTabs",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set a channel's page tab",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/conversation_task_list": {
+      "post": {
+        "description": "The tasks linked to a conversation or made from one of its messages, in the conversation's own space, newest first. task_open opens one. Needs \"See tasks\" where it acts.",
+        "operationId": "conversation_task_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The channel, thread, DM or group: its id or a link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "ConversationTaskListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tasks": {
+                              "description": "Newest link first; archived tasks are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTask"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tasks"
+                          ],
+                          "title": "ConversationTasks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "tasks": {
+                              "description": "Newest link first; archived tasks are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationTask"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "tasks"
+                          ],
+                          "title": "ConversationTasks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List a conversation's tasks",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/conversation_update": {
@@ -30665,6 +32182,10 @@
                   },
                   "pin": {
                     "description": "Also pin the decision to its conversation.",
+                    "type": "boolean"
+                  },
+                  "saySo": {
+                    "description": "With sourceMessageId: also say in that conversation that you made\nthe message into this decision.",
                     "type": "boolean"
                   },
                   "sourceConversationId": {
@@ -42632,6 +44153,682 @@
         "summary": "Unlink a host",
         "tags": [
           "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/inbox_view_list": {
+      "post": {
+        "description": "Your own saved inbox views in this workspace, in order: each a name, a filter (view, category, spaces) and a density. Read what one shows with inbox_list.",
+        "operationId": "inbox_view_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "InboxViewListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "views": {
+                              "items": {
+                                "$ref": "#/components/schemas/InboxViewItem"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "InboxViews",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "views": {
+                              "items": {
+                                "$ref": "#/components/schemas/InboxViewItem"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "InboxViews",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List saved inbox views",
+        "tags": [
+          "inbox"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/inbox_view_set": {
+      "post": {
+        "description": "Save an inbox view in this workspace (leave inboxViewId out and give a name and a filter: view, category and spaces), or change one: its name, filter, density or place. delete: true removes it. Views are your own. Returns them all.",
+        "operationId": "inbox_view_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "delete": {
+                    "description": "true removes it.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "density": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Density"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "detailed (the default) or compact."
+                  },
+                  "filter": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/InboxFilter"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "What it shows."
+                  },
+                  "inboxViewId": {
+                    "description": "The view to change; left out, a new one is saved (give its name and\nfilter).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "description": "Its name, 1 to 40 characters on one line.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "position": {
+                    "description": "Its place among your views, from 0.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "InboxViewSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "views": {
+                              "items": {
+                                "$ref": "#/components/schemas/InboxViewItem"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "InboxViews",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "views": {
+                              "items": {
+                                "$ref": "#/components/schemas/InboxViewItem"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "InboxViews",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Save an inbox view",
+        "tags": [
+          "inbox"
         ],
         "x-operation-kind": "change"
       }
@@ -62623,6 +64820,376 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/record_create": {
+      "post": {
+        "description": "Add one record to a collection, with its title and field values by name. Pass fromMessageId to make it from a message: the record links back to the message, takes its first line as the title unless you give one, and with saySo the conversation says you made it. Records of a collection that acts like tasks are tasks: use task_create. record_write changes many records at once. Needs \"Edit records\" where it acts.",
+        "operationId": "record_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "fields": {
+                    "additionalProperties": true,
+                    "description": "Values by field name or id.",
+                    "type": "object"
+                  },
+                  "fromMessageId": {
+                    "description": "The message it is made from (its id, or a link), in a conversation of\nthe collection's space that you can read. The record links back to it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "saySo": {
+                    "description": "With fromMessageId: also say in that conversation that you made the\nmessage into this record.",
+                    "type": "boolean"
+                  },
+                  "title": {
+                    "description": "The record's title. Made from a message, its first line when left out.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "collection"
+                ],
+                "title": "RecordCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "number",
+                            "title"
+                          ],
+                          "title": "RecordCreateOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "number",
+                            "title"
+                          ],
+                          "title": "RecordCreateOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Create a record",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
     "/api/v2/w/{workspace}/ops/recurring_create": {
       "post": {
         "description": "Schedule a task template to make a task daily, weekly or monthly (template, frequency, and when). A schedule acts as whoever last set it up, so the tasks it makes are created as you. Needs \"Create tasks\" where it acts.",
@@ -76747,7 +79314,7 @@
     },
     "/api/v2/w/{workspace}/ops/sidebar_list": {
       "post": {
-        "description": "Your own sidebar sections in this workspace (Starred, and any you named) with the channels, DMs and groups you placed in each, whether each is unread, in each section's order. Arrange them with sidebar_section_set and sidebar_item_move.",
+        "description": "Your own sidebar sections in this workspace (Starred, and any you named) with the channels, DMs and groups you placed in each, whether each is unread, in each section's order. A section whose show is unread still lists every item, and so are hidden ones (DMs you blocked or declined); display only the unread and unhidden ones. Arrange them with sidebar_section_set and sidebar_item_move.",
         "operationId": "sidebar_list",
         "parameters": [
           {
@@ -80694,6 +83261,14 @@
                       "null"
                     ]
                   },
+                  "fromMessageId": {
+                    "description": "Made from this message, one in the same space you can read: the task\nlinks back to it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "labels": {
                     "description": "Labels by name or ID, at most 20. They must exist already; create one\nwith label_write.",
                     "items": {
@@ -80738,6 +83313,13 @@
                     "maxLength": 2048,
                     "type": [
                       "string",
+                      "null"
+                    ]
+                  },
+                  "saySo": {
+                    "description": "With fromMessageId, also say so in its conversation (\"… made a\nmessage here into a task\"). Off unless asked.",
+                    "type": [
+                      "boolean",
                       "null"
                     ]
                   },
