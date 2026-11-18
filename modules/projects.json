@@ -10,8 +10,8 @@
   "worksWith": ["channels", "tasks", "pages"],
   "permissions": ["projects.view", "projects.create", "projects.manage", "spaces.browse"],
   "tools": {
-    "projects_list": "query",
-    "project_open": "describe",
+    "project_list": "query",
+    "project_get": "describe",
     "project_create": "create",
     "project_template_list": "query",
     "project_template_write": "change",

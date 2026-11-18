@@ -33,7 +33,8 @@ pub struct Alias {
     /// The old arguments as the canonical operation's input.
     pub adapt_in: fn(JsonObject) -> JsonObject,
     /// The canonical operation's value in the old result shape.
-    pub adapt_out: fn(&str, Value) -> Value,
+    /// Takes the canonical name, the value and whether the answer was a replay.
+    pub adapt_out: fn(&str, Value, bool) -> Value,
     /// When it stops being served, once set (a `YYYY-MM-DD` date).
     pub sunset: Option<&'static str>,
 }
@@ -42,13 +43,13 @@ fn same_in(arguments: JsonObject) -> JsonObject {
     arguments
 }
 
-fn same_out(_canonical: &str, value: Value) -> Value {
+fn same_out(_canonical: &str, value: Value, _replayed: bool) -> Value {
     value
 }
 
 /// Tools that already answered in the `{outcome, value}` envelope (A1.3's
 /// run tools) keep it.
-fn enveloped(_canonical: &str, value: Value) -> Value {
+fn enveloped(_canonical: &str, value: Value, _replayed: bool) -> Value {
     serde_json::json!({ "outcome": "ok", "value": value })
 }
 
@@ -76,7 +77,7 @@ fn mark_ready_in(arguments: JsonObject) -> JsonObject {
 }
 
 /// The old task write answer: the write's fields with `"outcome": "applied"`.
-fn task_written(_canonical: &str, mut value: Value) -> Value {
+fn task_written(_canonical: &str, mut value: Value, _replayed: bool) -> Value {
     if let Some(object) = value.as_object_mut() {
         object.insert("outcome".to_owned(), Value::String("applied".to_owned()));
     }
@@ -127,31 +128,254 @@ macro_rules! written {
             },
             runs: &[$create, $update],
             adapt_in: same_in,
-            adapt_out: same_out,
+            adapt_out: enveloped,
             sunset: None,
         }
     };
 }
 
+/// `task_link_pull_request` took `expectedVersion`, `pullRequestId` and a
+/// `projectId`; `task_link` finds the space from the task.
+fn link_pull_request_in(arguments: JsonObject) -> JsonObject {
+    without_project(arguments)
+}
+
+/// `task_link_pull_request` answered a task write (`"outcome": "applied"`).
+fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Value {
+    let changed = value["changed"].as_bool().unwrap_or(false);
+    serde_json::json!({
+        "outcome": "applied",
+        "workItemId": value["taskId"],
+        "version": value["version"],
+        "changedFields": if changed { vec!["pullRequests"] } else { Vec::new() },
+        "resultId": value["targetId"],
+        "idempotentReplay": replayed,
+        "key": value["key"],
+        "url": value["taskUrl"],
+    })
+}
+
+/// The argument a call names its workspace with (not the module).
+const NAMED_WORKSPACE: &str = "workspace";
+
+/// What every edge takes beside an operation's own arguments: the workspace
+/// the call names, its request id (so a retry through the old name is
+/// answered once) and a preview.
+fn edge_argument(key: &str) -> bool {
+    matches!(key, NAMED_WORKSPACE | "clientRequestId" | "preview")
+}
+
+/// `automation_write`'s `operation` names the automation operation it runs.
+fn automation_write_runs(arguments: &JsonObject) -> &'static str {
+    match arguments.get("operation").and_then(Value::as_str) {
+        Some("update") => "automation_update",
+        Some("delete") => "automation_delete",
+        Some("run") => "automation_run_start",
+        _ => "automation_create",
+    }
+}
+
+/// `automation_write` took every field for every operation; each operation
+/// takes only its own.
+fn automation_write_in(mut arguments: JsonObject) -> JsonObject {
+    let keep: &[&str] = match automation_write_runs(&arguments) {
+        "automation_update" => &[
+            "projectId",
+            "ruleId",
+            "expectedVersion",
+            "name",
+            "trigger",
+            "conditions",
+            "actions",
+            "enabled",
+        ],
+        "automation_delete" => &["projectId", "ruleId"],
+        "automation_run_start" => &["projectId", "ruleId", "taskId"],
+        _ => &[
+            "projectId",
+            "name",
+            "trigger",
+            "conditions",
+            "actions",
+            "enabled",
+        ],
+    };
+    // What the edge reads (the workspace, request id, preview) stays.
+    arguments.retain(|key, value| {
+        (keep.contains(&key.as_str()) || edge_argument(key)) && !value.is_null()
+    });
+    arguments
+}
+
+/// `environment_write` archived or checked with a flag, changed with an
+/// `environment` and added without one.
+fn environment_write_runs(arguments: &JsonObject) -> &'static str {
+    let flag = |name: &str| arguments.get(name).and_then(Value::as_bool) == Some(true);
+    if flag("archive") {
+        "environment_archive"
+    } else if flag("check") {
+        "environment_check"
+    } else if arguments.contains_key("environment") {
+        "environment_update"
+    } else {
+        "environment_create"
+    }
+}
+
+/// `environment_write`'s flags name the operation; archive and check took
+/// nothing else (the operations refuse what they don't take).
+fn environment_write_in(mut arguments: JsonObject) -> JsonObject {
+    let canonical = environment_write_runs(&arguments);
+    arguments.retain(|key, value| !value.is_null() && key != "archive" && key != "check");
+    if canonical == "environment_create" {
+        arguments.remove("expectedVersion");
+    }
+    arguments
+}
+
+/// `repository_write` prepared or archived the repository it named, and
+/// added one otherwise.
+fn repository_write_runs(arguments: &JsonObject) -> &'static str {
+    let flag = |name: &str| arguments.get(name).and_then(Value::as_bool) == Some(true);
+    if arguments.contains_key("repository") && flag("archive") {
+        "repository_archive"
+    } else if arguments.contains_key("repository") && flag("prepare") {
+        "repository_prepare"
+    } else {
+        "repository_create"
+    }
+}
+
+fn repository_write_in(arguments: JsonObject) -> JsonObject {
+    let keep: &[&str] = match repository_write_runs(&arguments) {
+        "repository_create" => &[
+            "projectId",
+            "owner",
+            "name",
+            "githubRepositoryId",
+            "installationId",
+            "defaultBranch",
+            "trustAcknowledged",
+            // Refused by the operation, as repository_write refused them.
+            "repository",
+            "prepare",
+            "archive",
+        ],
+        _ => &["projectId", "repository", "expectedVersion"],
+    };
+    keep_only(arguments, keep)
+}
+
+/// `github_integration_write` linked an installation or switched the
+/// automation.
+fn github_integration_write_runs(arguments: &JsonObject) -> &'static str {
+    if arguments.contains_key("installationId") || arguments.contains_key("repositories") {
+        "github_installation_link"
+    } else {
+        "github_automation_update"
+    }
+}
+
+fn github_integration_write_in(arguments: JsonObject) -> JsonObject {
+    // Mixing the two was refused; the operation refuses the other's fields.
+    let _ = github_integration_write_runs(&arguments);
+    keep_only(
+        arguments,
+        &[
+            "projectId",
+            "installationId",
+            "repositories",
+            "pullRequestOpen",
+            "pullRequestMerge",
+            "expectedVersion",
+        ],
+    )
+}
+
+/// The arguments one operation takes, and what the edge reads.
+fn keep_only(mut arguments: JsonObject, keep: &[&str]) -> JsonObject {
+    arguments.retain(|key, value| {
+        (keep.contains(&key.as_str()) || edge_argument(key)) && !value.is_null()
+    });
+    arguments
+}
+
 /// The rename plan of K2 section 3.6. Adapters beyond the identity land
 /// with each row's canonical operation, in its module's slice.
 pub const ALIASES: &[Alias] = &[
-    renamed!("projects_list" => "project_list"),
-    renamed!("project_open" => "project_get"),
-    renamed!("task_open" => "task_get"),
+    // K2.15: the read tools answered in the envelope already.
+    run_renamed!("projects_list" => "project_list"),
+    run_renamed!("project_open" => "project_get"),
+    run_renamed!("task_open" => "task_get"),
+    run_renamed!("my_work" => "my_work_get"),
+    run_renamed!("dependency_graph" => "dependency_graph_get"),
+    run_renamed!("search" => "workspace_search"),
     renamed!("conversation_open" => "conversation_get"),
     renamed!("thing_open" => "thing_get"),
     written!("page_write", "pageId" => "page_create", "page_update"),
     renamed!("page_edit" => "page_update_blocks"),
     written!("sheet_write", "sheetId" => "sheet_create", "sheet_update"),
     written!("collection_write", "collectionId" => "collection_create", "collection_update"),
-    written!("view_write", "viewId" => "view_create", "view_update"),
-    written!("label_write", "labelId" => "label_create", "label_update"),
-    written!("field_write", "fieldId" => "field_create", "field_update"),
+    written!("view_write", "view" => "view_create", "view_update"),
+    written!("label_write", "label" => "label_create", "label_update"),
+    written!("field_write", "field" => "field_create", "field_update"),
     written!("milestone_write", "milestoneId" => "milestone_create", "milestone_update"),
-    written!("template_write", "templateId" => "template_create", "template_update"),
-    written!("automation_write", "ruleId" => "automation_create", "automation_update"),
-    written!("environment_write", "environmentId" => "environment_create", "environment_update"),
+    written!("template_write", "template" => "template_create", "template_update"),
+    // K2.14: recurring_write names the schedule as `recurring`.
+    written!("recurring_write", "recurring" => "recurring_create", "recurring_update"),
+    // K2.18: automation_write chose by `operation`; automation_runs is
+    // automation_history. Both answered in the envelope already.
+    Alias {
+        name: "automation_write",
+        canonical: automation_write_runs,
+        runs: &[
+            "automation_create",
+            "automation_update",
+            "automation_delete",
+            "automation_run_start",
+        ],
+        adapt_in: automation_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    run_renamed!("automation_runs" => "automation_history"),
+    // K2.18: repository_write and github_integration_write chose by their
+    // fields; both answered in the envelope already.
+    Alias {
+        name: "repository_write",
+        canonical: repository_write_runs,
+        runs: &[
+            "repository_create",
+            "repository_prepare",
+            "repository_archive",
+        ],
+        adapt_in: repository_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    Alias {
+        name: "github_integration_write",
+        canonical: github_integration_write_runs,
+        runs: &["github_installation_link", "github_automation_update"],
+        adapt_in: github_integration_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    // K2.18: environment_write chose by its fields; it answered in the
+    // envelope already.
+    Alias {
+        name: "environment_write",
+        canonical: environment_write_runs,
+        runs: &[
+            "environment_create",
+            "environment_update",
+            "environment_archive",
+            "environment_check",
+        ],
+        adapt_in: environment_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),
     // K2.12: whiteboard_edit answered in the envelope already.
     run_renamed!("whiteboard_edit" => "whiteboard_update_elements"),
@@ -187,10 +411,26 @@ pub const ALIASES: &[Alias] = &[
         adapt_out: task_written,
         sunset: None,
     },
-    renamed!("task_watch" => "task_watch_set"),
-    renamed!("task_link_pull_request" => "task_link"),
+    // K2.14: these answered in the envelope already; task_link takes the
+    // arguments of each.
+    run_renamed!("task_watch" => "task_watch_set"),
+    run_renamed!("task_depend" => "task_link"),
+    run_renamed!("task_relate" => "task_link"),
+    Alias {
+        name: "task_link_pull_request",
+        canonical: |_| "task_link",
+        runs: &["task_link"],
+        adapt_in: link_pull_request_in,
+        adapt_out: link_pull_request_out,
+        sunset: None,
+    },
     run_renamed!("mark_read" => "conversation_mark_read"),
-    renamed!("briefing" => "briefing_get"),
+    // K2.8: answered in the envelope already.
+    run_renamed!("conversation_members" => "conversation_members_update"),
+    // K2.9: the reply tools answered in an envelope of their own; the
+    // operations' refusals carry a message too.
+    run_renamed!("reply_progress" => "reply_progress_report"),
+    run_renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),
     renamed!("project_member_set" => "member_update"),
     renamed!("project_layout_set" => "layout_update"),
@@ -326,7 +566,7 @@ mod tests {
                 }
                 arguments
             },
-            adapt_out: |_, value| serde_json::json!({ "thing": { "name": value["title"] } }),
+            adapt_out: |_, value, _| serde_json::json!({ "thing": { "name": value["title"] } }),
             sunset: Some("2027-06-01"),
         };
         let mut old = JsonObject::new();
@@ -336,6 +576,7 @@ mod tests {
         let answered = (alias.adapt_out)(
             "thing_create",
             serde_json::json!({ "id": "t-1", "title": "Kept" }),
+            false,
         );
         assert_eq!(
             serde_json::to_string(&answered).expect("JSON"),

@@ -5,7 +5,7 @@ import { Button, EmptyState, ListSkeleton, countLabel } from '../ui'
 import { useRecords, type CollectionBody, type CollectionRecord, type ViewConfig } from './api'
 import { cardValues, viewColumns } from './collectionModel'
 import { NewRecordInput } from './RecordCells'
-import { RecordsEmpty } from './RecordTable'
+import { RecordsEmpty } from './RecordsEmpty'
 import type { RecordEdits } from './useRecordEdits'
 
 /**

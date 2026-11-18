@@ -6,7 +6,9 @@ import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
 import { refreshLayouts } from '../../experience/api'
 import { Button, ErrorState, Icon, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, Switch, showToast } from '../../ui'
+import { ShapePicker } from '../../workspace-templates/ShapePicker'
 import type { SettingsPageProps } from '../types'
+import { AvailablePackages } from './AvailablePackages'
 
 // AWD-75: Workspace › Modules. Which whole features are on in the workspace.
 // Off hides a module everywhere (its pages, sidebar rows, palette entries,
@@ -81,6 +83,12 @@ function WorkspaceModules({ name, organizationId }: { name: string; organization
         Which features {name} uses. A module that’s off is hidden everywhere, for people and agents, and nothing in it is
         deleted: turn it back on and everything comes back.
       </PageHeader>
+      <Section
+        description="What the workspace is for: it turns modules on and off and sets where everyone starts. Nothing is deleted when you change it."
+        title="Shape"
+      >
+        <ShapePicker canChange={manage} organizationId={organizationId} />
+      </Section>
       <Section description="Start from one of these, then switch single modules below." title="Presets">
         <RowList>
           {view.presets.map((preset) => (
@@ -130,6 +138,12 @@ function WorkspaceModules({ name, organizationId }: { name: string; organization
               />
             ))}
         </RowList>
+      </Section>
+      <Section
+        description="Packages bring ready-made parts: collections, forms, automations, pages, roles and more. Built-in ones, this server’s and your workspace’s own lists, and saved templates."
+        title="Available"
+      >
+        <AvailablePackages canManage={manage} organizationId={organizationId} />
       </Section>
     </>
   )

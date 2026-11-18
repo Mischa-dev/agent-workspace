@@ -42,7 +42,7 @@ const DIFF_CHARACTERS: usize = 1_500;
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskHistory {
+pub(crate) struct TaskHistory {
     /// Oldest first: the latest `historyLimit` entries, or those before
     /// `historyBefore`.
     pub entries: Vec<HistoryEntry>,
@@ -55,7 +55,8 @@ pub(super) struct TaskHistory {
 
 #[derive(Clone, Debug, Default, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct HistoryEntry {
+#[schemars(rename = "TaskHistoryEntry")]
+pub(crate) struct HistoryEntry {
     pub sequence: i64,
     pub at: String,
     /// "comment", or what happened: work_item_created, work_item_updated

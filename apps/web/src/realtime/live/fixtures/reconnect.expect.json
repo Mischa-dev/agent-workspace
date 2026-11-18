@@ -1,0 +1,5 @@
+{
+  "about": "The connection drops and comes back with a message on each side: whatever was missed, everything open refetches, including what no event names.",
+  "fetched": { "channel timeline": { "min": 1 }, "sidebar": { "min": 1 }, "rail": { "min": 1 }, "page list": { "min": 1 }, "sheet list": { "min": 1 } },
+  "untouched": []
+}

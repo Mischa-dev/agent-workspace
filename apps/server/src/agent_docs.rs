@@ -213,7 +213,7 @@ mod tests {
         let count = tools.len();
         let reference = render_tool_reference("https://example.test", tools);
         assert_eq!(reference.matches("\n### `").count(), count);
-        assert!(reference.contains("### `briefing` (Briefing)"));
+        assert!(reference.contains("### `briefing_get` (Briefing)"));
         assert!(reference.contains("### `skill_get`"));
         assert!(reference.contains("| `handoff` | string |"));
     }

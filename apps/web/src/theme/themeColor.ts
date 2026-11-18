@@ -26,7 +26,7 @@ function cssColorToHex(color: string) {
 /**
  * Colors the phone status bar and browser toolbar to match the top of the app:
  * the conversation header in a conversation, the space bar everywhere else.
- * AppShell sets data-chrome; ThemeProvider calls this again when the theme changes.
+ * The shell frame sets data-chrome; ThemeProvider calls this again when the theme changes.
  */
 export function syncThemeColor() {
   const root = document.documentElement

@@ -7,7 +7,7 @@ import type { CollectionBody, ViewConfig } from './api'
 import { useRecords } from './api'
 import { cardValues, tableItems, viewColumns } from './collectionModel'
 import { NewRecordInput } from './RecordCells'
-import { RecordsEmpty } from './RecordTable'
+import { RecordsEmpty } from './RecordsEmpty'
 import type { RecordEdits } from './useRecordEdits'
 import '../styles/work.css'
 

@@ -19,7 +19,7 @@ const PEOPLE_ONLY: &str =
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RepositoryWriteArguments {
+pub(crate) struct RepositoryWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// A repository of the project to prepare or archive, by ID
@@ -50,7 +50,7 @@ pub(super) struct RepositoryWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepositoryWriteValue {
+pub(crate) struct RepositoryWriteValue {
     /// "added", "prepared" or "archived".
     pub done: String,
     /// The repository as it is now.
@@ -58,7 +58,7 @@ pub(super) struct RepositoryWriteValue {
     pub repository: Value,
 }
 
-pub(super) async fn repository_write(
+pub(crate) async fn repository_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RepositoryWriteArguments,

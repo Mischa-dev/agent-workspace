@@ -9,7 +9,6 @@ src/events/route.rs: 2
 src/mcp.rs: 1
 src/mcp/admin.rs: 2
 src/mcp/agents.rs: 1
-src/mcp/automation_tools.rs: 7
 src/mcp/briefing.rs: 2
 src/mcp/bug_report_tools.rs: 1
 src/mcp/code.rs: 1

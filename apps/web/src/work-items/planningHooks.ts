@@ -1,5 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { getWorkItemBoard, getWorkItemGroups, listWorkItems, searchWorkItemReferences } from './api'
 import {
@@ -8,7 +9,6 @@ import {
   createMilestone,
   listLabels,
   listMilestones,
-  releaseClaim,
   saveWorkflow,
   setDependencies,
   setRelation,
@@ -141,8 +141,34 @@ export function useSetRelation() {
   return useTaskMutation(setRelation)
 }
 
+type ClaimInput = { projectId: string; workItemId: string }
+
+/** A claim write answers with the claim, not the task: the task refetches. */
+function useClaimMutation<TInput extends ClaimInput>(mutationFn: (input: TInput) => Promise<unknown>) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn,
+    onSettled: (_result, _error, input) =>
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workItem(input.projectId, input.workItemId) }),
+  })
+}
+
+/** Says you're working on the task, the way an agent claims one before starting. */
+export function useClaimTask() {
+  return useClaimMutation((input: ClaimInput & { note?: string }) =>
+    callOp('task_claim', { taskId: input.workItemId, note: input.note }),
+  )
+}
+
+/** Ends your claim, or with `anyone` someone else's; a handoff note goes to whoever picks it up next. */
 export function useReleaseClaim() {
-  return useTaskMutation(releaseClaim)
+  return useClaimMutation((input: ClaimInput & { anyone?: boolean; handoff?: string }) =>
+    callOp('task_release', {
+      taskId: input.workItemId,
+      anyone: input.anyone || undefined,
+      handoff: input.handoff,
+    }),
+  )
 }
 
 export function useSetWatching() {

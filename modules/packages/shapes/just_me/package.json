@@ -1,0 +1,56 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "shapes.just_me",
+  "version": "1.0.0",
+  "name": "Just me and my agents",
+  "description": "Everything on, for you and the agents you work with. Starts in your own space, with no prompts to invite people.",
+  "publisher": {
+    "name": "Agent Workspace"
+  },
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": []
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "agent_lab",
+        "changes": {},
+        "words": {}
+      }
+    },
+    {
+      "kind": "space",
+      "key": "my_space",
+      "body": {
+        "name": "My space",
+        "key": "ME"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "page",
+      "key": "start_here",
+      "body": {
+        "title": "Start here",
+        "markdown": "This space is yours. Bring your agents in, hand them tasks and follow what they do. Invite people whenever you like.\n"
+      }
+    }
+  ]
+}
