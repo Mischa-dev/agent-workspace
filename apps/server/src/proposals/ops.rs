@@ -31,7 +31,7 @@ pub struct ProposalList;
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposalListInput {
-    /// The kind of thing (`page`) whose proposals to list, with thingId.
+    /// page, sheet or whiteboard, with thingId.
     /// Leave both out to list the proposals you made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thing_kind: Option<String>,
@@ -80,7 +80,7 @@ impl Operation for ProposalList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List proposals";
     const DESCRIPTION: &'static str = "List proposed changes waiting for someone who edits the \
-        thing: pass thingKind (page) and thingId for one thing's, or nothing for the ones you \
+        thing: pass thingKind (page, sheet or whiteboard) and thingId for one thing's, or nothing for the ones you \
         made. Each says what it changes and what it read. Decide one with proposal_decide.";
 
     type Input = ProposalListInput;
@@ -94,7 +94,10 @@ impl Operation for ProposalList {
             (None, None) => Listing::Mine,
             (Some(kind), Some(id)) => Listing::Thing(
                 known_kind(kind).ok_or_else(|| {
-                    OpError::invalid("thingKind", "Only pages take proposals so far (page).")
+                    OpError::invalid(
+                        "thingKind",
+                        "Pages, sheets and whiteboards take proposals (page, sheet, whiteboard).",
+                    )
                 })?,
                 id.id(),
             ),
@@ -157,8 +160,9 @@ pub struct ProposalDecideInput {
     /// accept (apply it, as its author's change), reject, or withdraw (the
     /// author takes it back).
     pub decision: DecisionArg,
-    /// Accept only these parts of a sheet proposal: positions in its
-    /// `change.cells`, from 0. Leave out to accept all of it.
+    /// Accept only these parts of a sheet or whiteboard proposal: positions
+    /// in its `change.cells` or `change.elements`, from 0. Leave out to
+    /// accept all of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts: Option<Vec<u16>>,
 }
@@ -196,7 +200,11 @@ impl Operation for ProposalDecide {
     // for the thing, since no one permission covers every kind.
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-    const EMITS: &'static [&'static str] = &["page.discussion.updated", "sheet.proposals_changed"];
+    const EMITS: &'static [&'static str] = &[
+        "page.discussion.updated",
+        "sheet.proposals_changed",
+        "whiteboard.proposals_changed",
+    ];
     const TITLE: &'static str = "Decide a proposal";
     const DESCRIPTION: &'static str = "Accept, reject or withdraw a proposed change \
         (proposal_list finds them). Accepting applies it as its author's change, and is refused \

@@ -323,7 +323,7 @@
 }
 
 .aw-sheet__view-filters legend {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   margin-bottom: var(--space-2);
 }
 
@@ -353,7 +353,7 @@
 
 .aw-sheet__proposal-by {
   margin: 0 0 var(--space-2);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-sheet__proposal-cells {
@@ -375,7 +375,7 @@
 
 .aw-sheet__proposal-change ins {
   text-decoration: none;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-sheet__proposal-actions {
@@ -399,7 +399,7 @@
 }
 
 .aw-sheet__range-name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-sheet__range-where {

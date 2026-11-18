@@ -1083,6 +1083,13 @@
             },
             "type": "array"
           },
+          "proposalId": {
+            "description": "Set when your role only suggests here: nothing was drawn, and the\nchange waits as this proposal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/OperationResult"
@@ -2986,7 +2993,7 @@
             "type": "integer"
           },
           "change": {
-            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
+            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
           },
           "createdAt": {
             "type": "string"
@@ -3022,6 +3029,7 @@
             "description": "The operation the change would have run.",
             "type": "string"
           },
+          "preview": true,
           "spaceId": {
             "type": "string"
           },
@@ -3053,6 +3061,7 @@
           "authorId",
           "baseVersion",
           "change",
+          "preview",
           "status",
           "createdAt"
         ],
@@ -37151,7 +37160,7 @@
                     "description": "accept (apply it, as its author's change), reject, or withdraw (the\nauthor takes it back)."
                   },
                   "parts": {
-                    "description": "Accept only these parts of a sheet proposal: positions in its\n`change.cells`, from 0. Leave out to accept all of it.",
+                    "description": "Accept only these parts of a sheet or whiteboard proposal: positions\nin its `change.cells` or `change.elements`, from 0. Leave out to\naccept all of it.",
                     "items": {
                       "format": "uint16",
                       "maximum": 65535,
@@ -37232,7 +37241,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
                             },
                             "createdAt": {
                               "type": "string"
@@ -37268,6 +37277,7 @@
                               "description": "The operation the change would have run.",
                               "type": "string"
                             },
+                            "preview": true,
                             "spaceId": {
                               "type": "string"
                             },
@@ -37299,6 +37309,7 @@
                             "authorId",
                             "baseVersion",
                             "change",
+                            "preview",
                             "status",
                             "createdAt"
                           ],
@@ -37451,7 +37462,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
                             },
                             "createdAt": {
                               "type": "string"
@@ -37487,6 +37498,7 @@
                               "description": "The operation the change would have run.",
                               "type": "string"
                             },
+                            "preview": true,
                             "spaceId": {
                               "type": "string"
                             },
@@ -37518,6 +37530,7 @@
                             "authorId",
                             "baseVersion",
                             "change",
+                            "preview",
                             "status",
                             "createdAt"
                           ],
@@ -37629,7 +37642,7 @@
     },
     "/api/v2/w/{workspace}/ops/proposal_list": {
       "post": {
-        "description": "List proposed changes waiting for someone who edits the thing: pass thingKind (page) and thingId for one thing's, or nothing for the ones you made. Each says what it changes and what it read. Decide one with proposal_decide.",
+        "description": "List proposed changes waiting for someone who edits the thing: pass thingKind (page, sheet or whiteboard) and thingId for one thing's, or nothing for the ones you made. Each says what it changes and what it read. Decide one with proposal_decide.",
         "operationId": "proposal_list",
         "parameters": [
           {
@@ -37671,7 +37684,7 @@
                     ]
                   },
                   "thingKind": {
-                    "description": "The kind of thing (`page`) whose proposals to list, with thingId.\nLeave both out to list the proposals you made.",
+                    "description": "page, sheet or whiteboard, with thingId.\nLeave both out to list the proposals you made.",
                     "type": [
                       "string",
                       "null"
@@ -56843,6 +56856,356 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/whiteboard_propose": {
+      "post": {
+        "description": "Propose changed elements for someone who edits the board to decide. whiteboard_update_elements proposes by itself when you only suggest. Needs \"Suggest whiteboard changes\" where it acts.",
+        "operationId": "whiteboard_propose",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "elements": {
+                    "description": "Changed elements as Excalidraw writes them.",
+                    "items": true,
+                    "type": "array"
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "whiteboardId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "whiteboardId",
+                  "elements"
+                ],
+                "title": "WhiteboardProposeInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "elements": {
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "proposalId": {
+                              "description": "Absent when nothing would change.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "elements"
+                          ],
+                          "title": "WhiteboardProposeOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "elements": {
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "proposalId": {
+                              "description": "Absent when nothing would change.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "elements"
+                          ],
+                          "title": "WhiteboardProposeOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Propose a whiteboard change",
+        "tags": [
+          "whiteboards"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
     "/api/v2/w/{workspace}/ops/whiteboard_template_list": {
       "post": {
         "description": "List what a new whiteboard in a workspace can start from: the built-in templates and boards marked as templates. Pass a template's id to whiteboard_create as fromTemplateId.",
@@ -57562,7 +57925,7 @@
     },
     "/api/v2/w/{workspace}/ops/whiteboard_update_elements": {
       "post": {
-        "description": "Draw on a whiteboard with operations: add shapes, text, arrows and images, connect shapes, update, move, align, distribute, lay out, group and order them, or delete them. The server turns them into elements and merges them like a browser's change, so open boards update live. Pass the sceneSeq you read as expectedSceneSeq to be told when someone else changed what you touch. Needs \"Draw on whiteboards\" where it acts.",
+        "description": "Draw on a whiteboard with operations: add shapes, text, arrows and images, connect shapes, update, move, align, distribute, lay out, group and order them, or delete them. The server turns them into elements and merges them like a browser's change, so open boards update live. Pass the sceneSeq you read as expectedSceneSeq to be told when someone else changed what you touch. If you only suggest here, it becomes a proposal (proposalId). Needs \"Suggest whiteboard changes\" where it acts.",
         "operationId": "whiteboard_update_elements",
         "parameters": [
           {
@@ -57664,6 +58027,13 @@
                                 "type": "string"
                               },
                               "type": "array"
+                            },
+                            "proposalId": {
+                              "description": "Set when your role only suggests here: nothing was drawn, and the\nchange waits as this proposal.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "results": {
                               "items": {
@@ -57821,6 +58191,13 @@
                                 "type": "string"
                               },
                               "type": "array"
+                            },
+                            "proposalId": {
+                              "description": "Set when your role only suggests here: nothing was drawn, and the\nchange waits as this proposal.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "results": {
                               "items": {

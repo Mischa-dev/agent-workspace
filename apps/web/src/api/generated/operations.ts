@@ -76,7 +76,7 @@ export type Direction = "asc" | "desc"
 
 export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
 
-export type EditOutcome = { changed: string[]; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
+export type EditOutcome = { changed: string[]; proposalId?: string | null; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
 export type Entry = { addressed: boolean; family: string; kind: string; summary: string }
 
@@ -172,7 +172,7 @@ export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
-export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
+export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
 export type Publisher = { name: string; url?: string | null }
 
@@ -594,7 +594,7 @@ export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; cl
 
 export type ProposalDecideInput = { decision: DecisionArg; parts?: number[] | null; proposalId: string }
 
-export type ProposalDecideOutput = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
+export type ProposalDecideOutput = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
 export type ProposalListInput = { includeDecided?: boolean; limit?: number | null; thingId?: string | null; thingKind?: string | null }
 
@@ -780,6 +780,10 @@ export type WhiteboardLinkInput = { remove?: boolean | null; targetId: string; t
 
 export type WhiteboardLinkOutput = { changed: boolean; linked: boolean; links: LinkView[]; whiteboardId: string }
 
+export type WhiteboardProposeInput = { elements: unknown[]; note?: string | null; whiteboardId: string }
+
+export type WhiteboardProposeOutput = { elements: number; proposalId?: string | null }
+
 export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
@@ -790,7 +794,7 @@ export type WhiteboardUpdateOutput = { edit?: EditOutcome | null; idempotentRepl
 
 export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; expectedSceneSeq?: number | null; operations: Operation[]; whiteboardId: string }
 
-export type WhiteboardUpdateElementsOutput = { changed: string[]; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
+export type WhiteboardUpdateElementsOutput = { changed: string[]; proposalId?: string | null; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
 export type WorkspaceDeleteInput = { confirm: string }
 
@@ -933,6 +937,7 @@ export type Operations = {
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }
+  whiteboard_propose: { input: WhiteboardProposeInput; output: WhiteboardProposeOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
   whiteboard_update: { input: WhiteboardUpdateInput; output: WhiteboardUpdateOutput }
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }

@@ -337,25 +337,22 @@ export async function updateSheet(
   )
 }
 
+/** Sends cell changes; the server writes them, or keeps them as a proposal. */
+function postChanges(projectId: string, sheetId: string, changes: SheetChange[]) {
+  return requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
+    method: 'POST',
+    idempotencyKey: crypto.randomUUID(),
+    json: { changes },
+  })
+}
+
 export async function changeSheet(projectId: string, sheetId: string, changes: SheetChange[]) {
-  return normalizeResult(
-    await requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
-      method: 'POST',
-      idempotencyKey: crypto.randomUUID(),
-      json: { changes },
-    }),
-  )
+  return normalizeResult(await postChanges(projectId, sheetId, changes))
 }
 
 /** Cell changes from someone whose role only suggests: kept as one proposal. */
 export async function proposeCells(projectId: string, sheetId: string, changes: SheetChange[]) {
-  const raw = asRecord(
-    await requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
-      method: 'POST',
-      idempotencyKey: crypto.randomUUID(),
-      json: { changes },
-    }),
-  )
+  const raw = asRecord(await postChanges(projectId, sheetId, changes))
   return { proposalId: typeof raw.proposalId === 'string' ? raw.proposalId : null, cells: asArray(raw.proposed).length }
 }
 

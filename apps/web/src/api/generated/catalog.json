@@ -1307,7 +1307,8 @@
     "destructive": false,
     "emits": [
       "page.discussion.updated",
-      "sheet.proposals_changed"
+      "sheet.proposals_changed",
+      "whiteboard.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
@@ -2037,6 +2038,22 @@
     "title": "Link whiteboard"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.proposals_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_propose",
+    "permission": "whiteboards.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Propose a whiteboard change"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2070,14 +2087,15 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "whiteboard.updated"
+      "whiteboard.updated",
+      "whiteboard.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
     "module": "whiteboards",
     "name": "whiteboard_update_elements",
-    "permission": "whiteboards.edit",
+    "permission": "whiteboards.suggest",
     "preview": false,
     "proposable": false,
     "title": "Draw on whiteboard"

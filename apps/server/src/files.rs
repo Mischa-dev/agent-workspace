@@ -1143,7 +1143,7 @@ mod tests {
             .map(|line| format!("line {line}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let preview = text_preview("text/plain", many.as_bytes()).unwrap();
+        let preview = text_preview("text/plain", many.as_bytes()).expect("a preview");
         assert_eq!(preview.lines().count(), PREVIEW_LINES);
         assert!(preview.starts_with("line 1\nline 2"));
         assert_eq!(

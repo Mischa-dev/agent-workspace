@@ -460,6 +460,12 @@ pub static WHITEBOARD_VERSION_RESTORED: EventType = fact(
     Some("whiteboard"),
     "An earlier version of a whiteboard was put back",
 );
+pub static WHITEBOARD_PROPOSALS_CHANGED: EventType = fact(
+    "whiteboard.proposals_changed",
+    "whiteboards",
+    Some("whiteboard"),
+    "A change to a whiteboard was proposed, or a proposal on it decided",
+);
 
 // --- collections -----------------------------------------------------------
 pub static COLLECTION_UPDATED: EventType = fact(
@@ -677,6 +683,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
+        &WHITEBOARD_PROPOSALS_CHANGED,
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
         &RECORD_UPDATED,

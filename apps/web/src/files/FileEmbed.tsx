@@ -6,12 +6,13 @@ import { useQuery } from '@tanstack/react-query'
 
 import { Icon, ListSkeleton } from '../ui'
 import { fileContentUrl, formatBytes, getFile, isInlineImage } from './api'
+import { fileKeys } from './keys'
 import { Attachments } from './Attachments'
 import '../collections/collectionEmbed.css'
 import './files.css'
 
 export default function FileEmbed({ fileId, label }: { fileId: string; label: string }) {
-  const file = useQuery({ queryKey: ['file', fileId], queryFn: () => getFile(fileId), staleTime: 5 * 60_000 })
+  const file = useQuery({ queryKey: fileKeys.file(fileId), queryFn: () => getFile(fileId), staleTime: 5 * 60_000 })
   if (file.isPending) return <ListSkeleton label={`Loading ${label || 'the file'}`} rows={2} />
   if (file.isError || !file.data) {
     return (

@@ -30,6 +30,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "install",
             // A page made from other things (messages, a thread, blocks).
             "make",
+            // A change kept for someone who edits the thing to decide (C1.11).
+            "propose",
         ],
     ),
     (

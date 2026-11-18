@@ -621,6 +621,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
+    "whiteboard_propose",
     "whiteboard_link",
     "whiteboard_update",
     "whiteboard_trash_empty",
@@ -7200,6 +7201,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
+        ),
+        // C1.11: a proposal goes only on a board the caller can see.
+        mcp_case(
+            "whiteboard_propose",
+            json!({"whiteboardId": a.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]}),
+            vec![json!({"whiteboardId": b.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]})],
         ),
         mcp_case(
             "whiteboard_update",

@@ -2381,6 +2381,84 @@ async fn history_restore_needs_the_things_edit_permission() {
     world.finish().await;
 }
 
+/// C1.11: a role that neither edits nor suggests on boards can't draw on
+/// one or leave a proposal there, from an agent or from the web.
+#[tokio::test]
+async fn board_proposals_need_the_suggest_permission() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("DRAW")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .agent("mara", "member")
+        .build("privacy_board_proposals")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, mara) = (&world.agents["rook"], &world.agents["mara"]);
+    let made = structured(
+        &call_tool(
+            app,
+            &mara.token,
+            &mara.session,
+            "whiteboard_create",
+            json!({"title": "Plan", "projectId": world.projects["DRAW"],
+                   "operations": [{"op": "add", "type": "rectangle", "id": "box", "text": "A"}],
+                   "clientRequestId": "privacy-board"}),
+        )
+        .await
+        .1,
+    );
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let board = made["value"]["whiteboard"]["id"].clone();
+    let element = json!({"id": "net", "type": "rectangle", "x": 0, "y": 0, "width": 10,
+                         "height": 10, "version": 1, "versionNonce": 1});
+
+    for (name, arguments) in [
+        (
+            "whiteboard_update_elements",
+            json!({"whiteboardId": board, "operations": [{"op": "add", "type": "ellipse", "id": "net"}]}),
+        ),
+        (
+            "whiteboard_propose",
+            json!({"whiteboardId": board, "elements": [element.clone()]}),
+        ),
+    ] {
+        let refused = structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        );
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "viewer agent {name}: {refused}"
+        );
+    }
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/whiteboard_propose",
+            Some("privacy-propose-vera"),
+            json!({"whiteboardId": board, "elements": [element]}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer person: {status} {refused}"
+    );
+    let proposals = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM proposals WHERE thing_kind = 'whiteboard'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("proposals");
+    assert_eq!(proposals, 0);
+    world.finish().await;
+}
+
 /// H1.24: deleting the workspace needs "Delete the workspace"
 /// (`workspace.delete`), which only owners start with. A member and an
 /// admin are refused; the owner schedules it and keeps it again.

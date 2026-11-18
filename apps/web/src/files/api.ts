@@ -111,13 +111,18 @@ export function uploadFile(target: UploadTarget): Uploader {
   }
 }
 
+/** One file's own address: read it, or remove it. */
+function fileRequest(id: string, init?: { method: 'DELETE' }) {
+  return requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`, init)
+}
+
 export async function removeFile(id: string) {
-  await requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  await fileRequest(id, { method: 'DELETE' })
 }
 
 /** One file, if the session may see it. */
 export async function getFile(id: string): Promise<FileAttachment> {
-  const file = normalizeFile(await requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`))
+  const file = normalizeFile(await fileRequest(id))
   if (!file) throw new ApiError({ status: 500, code: 'invalid_response', message: 'The server returned an invalid response.' })
   return file
 }
