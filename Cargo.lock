@@ -23,6 +23,7 @@ dependencies = [
 name = "agent-workspace-builtin-host"
 version = "0.0.1"
 dependencies = [
+ "agent-workspace-host-protocol",
  "agent-workspace-redaction",
  "axum",
  "base64 0.22.1",

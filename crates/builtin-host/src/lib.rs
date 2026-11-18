@@ -4,6 +4,7 @@
 //! database; what it needs from the server (stored keys, a repository's
 //! token) it asks through [`harness::host::HarnessHost`].
 
+pub mod assistant;
 pub mod config;
 pub mod error;
 pub mod git;

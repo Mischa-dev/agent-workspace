@@ -2386,7 +2386,7 @@
           },
           "offer": {
             "additionalProperties": true,
-            "description": "The offer as the host wrote it: `{id, title, summary?, start}`.",
+            "description": "The offer as the host wrote it: `{id, title, summary?, start}`. The\nbuilt-in assistant's says `unavailable` (what to set first) when the\nworkspace has no model yet, and `start.adds` when choosing it adds\nthe agent at once.",
             "type": "object"
           }
         },
@@ -7958,9 +7958,24 @@
                     "maxLength": 2048,
                     "type": "string"
                   },
+                  "name": {
+                    "description": "For an offer that adds the agent at once (the built-in assistant):\nits name here. Default: the offer's title.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "offerId": {
                     "description": "The offer's id, as the host published it.",
                     "type": "string"
+                  },
+                  "roleId": {
+                    "description": "For an offer that adds the agent at once: its role here. Default:\nthe workspace's role for new agents.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -8002,9 +8017,19 @@
                         },
                         "value": {
                           "properties": {
+                            "accountId": {
+                              "description": "The agent's account, when the offer added it at once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
                             "commandId": {
-                              "description": "The command the host was sent; read it with agent_action_get.",
-                              "type": "string"
+                              "description": "The command the host was sent; read it with agent_action_get. None\nwhen the offer added the agent at once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "page": {
                               "description": "The host's page to carry on at, when the offer names one.",
@@ -8014,9 +8039,6 @@
                               ]
                             }
                           },
-                          "required": [
-                            "commandId"
-                          ],
                           "title": "OfferStarted",
                           "type": "object"
                         }
@@ -8142,9 +8164,19 @@
                         },
                         "value": {
                           "properties": {
+                            "accountId": {
+                              "description": "The agent's account, when the offer added it at once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
                             "commandId": {
-                              "description": "The command the host was sent; read it with agent_action_get.",
-                              "type": "string"
+                              "description": "The command the host was sent; read it with agent_action_get. None\nwhen the offer added the agent at once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "page": {
                               "description": "The host's page to carry on at, when the offer names one.",
@@ -8154,9 +8186,6 @@
                               ]
                             }
                           },
-                          "required": [
-                            "commandId"
-                          ],
                           "title": "OfferStarted",
                           "type": "object"
                         }

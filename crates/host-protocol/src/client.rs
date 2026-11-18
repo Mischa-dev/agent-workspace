@@ -57,6 +57,18 @@ pub struct HttpRequest {
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The answer's headers, names in lowercase.
+    pub headers: Vec<(String, String)>,
+}
+
+impl HttpResponse {
+    /// A header's value, by its lowercase name.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 pub type TransportFuture<'a> =
@@ -104,8 +116,19 @@ impl Transport for ReqwestTransport {
             }
             let response = builder.send().await?;
             let status = response.status().as_u16();
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect();
             let body = response.bytes().await?.to_vec();
-            Ok(HttpResponse { status, body })
+            Ok(HttpResponse {
+                status,
+                body,
+                headers,
+            })
         })
     }
 }
@@ -347,6 +370,41 @@ impl RunReporter {
             key,
         )
         .await
+    }
+
+    /// A request of the host's own as the run's agent: `headers` and the
+    /// run's credential. For calls the reporter has no method for, such as
+    /// the agent's MCP tools.
+    pub async fn send_as_agent(
+        &self,
+        method: &'static str,
+        path: &str,
+        mut headers: Vec<(&'static str, String)>,
+        body: Option<Vec<u8>>,
+    ) -> Result<HttpResponse, ClientError> {
+        headers.push(("authorization", format!("Bearer {}", self.token)));
+        self.transport
+            .send(HttpRequest {
+                method,
+                path: path.to_owned(),
+                headers,
+                body,
+            })
+            .await
+    }
+
+    /// A1.25: one model turn through the server's model gateway, with the
+    /// workspace's model and key; the server records its tokens on the run.
+    pub async fn model_turn(&self, turn: &crate::ModelTurn) -> Result<crate::ModelReply, ClientError> {
+        let response = self
+            .send_as_agent(
+                "POST",
+                &format!("/api/v1/host/runs/{}/model", self.run_id),
+                Vec::new(),
+                Some(json_body(turn)?),
+            )
+            .await?;
+        read(response)
     }
 
     /// Tokens used, under a key of the host's own.

@@ -296,9 +296,9 @@ export type AgentOfferListInput = Record<string, never>
 
 export type AgentOfferListOutput = { offers: Offer[] }
 
-export type AgentOfferStartInput = { host: string; offerId: string }
+export type AgentOfferStartInput = { host: string; name?: string | null; offerId: string; roleId?: string | null }
 
-export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+export type AgentOfferStartOutput = { accountId?: string | null; commandId?: string | null; page?: string | null }
 
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 

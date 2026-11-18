@@ -2889,7 +2889,10 @@ pub(crate) async fn queue_tag_launches(
     conversation_id: Uuid,
     message_id: Uuid,
     mentioned_actor_ids: &[Uuid],
+    hosts_only: bool,
 ) -> Result<(), AppError> {
+    // An agent a host runs (A1.25: the built-in host's assistant too), or,
+    // unless `hosts_only` (a DM or group), a built-in worker.
     let workers = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT actor.id
@@ -2902,12 +2905,13 @@ pub(crate) async fn queue_tag_launches(
           AND actor.status = 'active'
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
-          AND ((actor.kind = 'execution_worker' AND worker.id IS NOT NULL)
+          AND ((NOT $4 AND actor.kind = 'execution_worker' AND worker.id IS NOT NULL)
                OR EXISTS (
                    SELECT 1 FROM host_agents binding
                    JOIN hosts host ON host.id = binding.host_id
                    WHERE binding.account_id = actor.id AND binding.status = 'active'
-                     AND host.status <> 'revoked' AND NOT host.builtin))
+                     AND host.status <> 'revoked'
+                     AND (NOT host.builtin OR starts_with(binding.host_agent_ref, $5))))
         ORDER BY actor.id
         LIMIT 1
         "#,
@@ -2915,6 +2919,8 @@ pub(crate) async fn queue_tag_launches(
     .bind(project_id)
     .bind(mentioned_actor_ids)
     .bind(conversation_id)
+    .bind(hosts_only)
+    .bind(crate::hosts::builtin::assistant::AGENT_REF_PREFIX)
     .fetch_all(&mut **transaction)
     .await?;
     let Some(worker_actor_id) = workers.first() else {
@@ -3041,6 +3047,9 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         message.conversation_id
     } else if message.conversation_kind == "channel" {
         thread_under(state, &caller, &message, payload.message_id).await?
+    } else if matches!(message.conversation_kind.as_str(), "dm" | "group") {
+        // A1.25: a DM to an agent a host runs is answered where it was said.
+        message.conversation_id
     } else {
         return Ok(());
     };

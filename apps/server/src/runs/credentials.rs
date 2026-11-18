@@ -105,6 +105,8 @@ pub async fn revoke_for_run(
 #[derive(Clone, Debug, FromRow)]
 pub struct Holder {
     pub credential_id: Uuid,
+    /// The run it was minted for.
+    pub run_id: Uuid,
     pub account_id: Uuid,
     pub account_kind: String,
     pub space_id: Uuid,
@@ -126,7 +128,7 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let holder = sqlx::query_as::<_, Holder>(
         r#"
-        SELECT credential.id AS credential_id, credential.account_id,
+        SELECT credential.id AS credential_id, credential.run_id, credential.account_id,
                account.kind AS account_kind, credential.space_id,
                host.name AS host_name, credential.token_digest,
                (SELECT connection.id FROM external_agent_connections connection

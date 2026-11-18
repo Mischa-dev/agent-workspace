@@ -456,6 +456,11 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
 }
 
 mod client;
+mod model;
+pub use model::{
+    MAX_MESSAGES as MAX_MODEL_MESSAGES, MAX_TOOLS as MAX_MODEL_TOOLS, ModelMessage, ModelPart,
+    ModelReply, ModelRole, ModelStop, ModelTool, ModelTurn,
+};
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,
     TransportFuture,

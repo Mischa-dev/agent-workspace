@@ -46,6 +46,9 @@ pub enum MutationAction {
     /// A host's own call (A1.11): enrolling with a one-time code a person
     /// made, or describing itself, sending a heartbeat or a notice with the
     /// token it got then. It acts only for the agents people bound to it.
+    /// A run's own credential (A1.25) asks the workspace's model for its
+    /// next turn, only for the built-in assistant's runs, within the
+    /// workspace's budget.
     HostCredential,
     /// The generated operation route (K2): the operation it names checks
     /// its own permission, module and target through `ops::dispatch`, the
@@ -1323,6 +1326,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "hosts/routes",
         Post,
         "/api/v1/host/commands/{command_id}/ack",
+        HostCredential
+    ),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/runs/{run_id}/model",
         HostCredential
     ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),

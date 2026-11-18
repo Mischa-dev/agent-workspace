@@ -116,6 +116,9 @@ pub async fn hear_now(
 
 async fn carry_out(state: &AppState, client: &HostClient, command: &Command) -> Option<Ack> {
     match command.kind {
+        CommandKind::Start if super::assistant::is_assistant_start(command) => {
+            Some(super::assistant::accept_start(state, command).await)
+        }
         CommandKind::Start => Some(start(state, client, command).await),
         CommandKind::Inspect => Some(inspect(state, command).await),
         CommandKind::Answer => Some(answered(state, command).await),

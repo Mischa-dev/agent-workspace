@@ -999,6 +999,31 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         }
     }
     assert_eq!(host.started.len(), 1);
+    // A run on another host can't spend the workspace's model (A1.25): only
+    // the built-in assistant's runs may ask it for a turn.
+    let turn = json!({"system": "", "messages": [{"role": "user", "parts": [{"type": "text", "text": "hi"}]}]});
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{run}/model"),
+            credentials.last().map(String::as_str),
+            turn.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{}/model", Uuid::now_v7()),
+            credentials.last().map(String::as_str),
+            turn,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
     let starts = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM host_commands WHERE run_id = $1 AND kind = 'start'",
     )
