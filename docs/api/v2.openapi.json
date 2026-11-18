@@ -2791,7 +2791,7 @@
             "type": "integer"
           },
           "change": {
-            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`)."
+            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
           },
           "createdAt": {
             "type": "string"
@@ -25259,6 +25259,19 @@
                     "$ref": "#/components/schemas/DecisionArg",
                     "description": "accept (apply it, as its author's change), reject, or withdraw (the\nauthor takes it back)."
                   },
+                  "parts": {
+                    "description": "Accept only these parts of a sheet proposal: positions in its\n`change.cells`, from 0. Leave out to accept all of it.",
+                    "items": {
+                      "format": "uint16",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "proposalId": {
                     "description": "The proposal: its id.",
                     "maxLength": 2048,
@@ -25325,7 +25338,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`)."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
                             },
                             "createdAt": {
                               "type": "string"
@@ -25502,7 +25515,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`)."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`)."
                             },
                             "createdAt": {
                               "type": "string"

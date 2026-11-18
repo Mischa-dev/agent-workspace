@@ -157,6 +157,10 @@ pub struct ProposalDecideInput {
     /// accept (apply it, as its author's change), reject, or withdraw (the
     /// author takes it back).
     pub decision: DecisionArg,
+    /// Accept only these parts of a sheet proposal: positions in its
+    /// `change.cells`, from 0. Leave out to accept all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<u16>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
@@ -192,7 +196,7 @@ impl Operation for ProposalDecide {
     // for the thing, since no one permission covers every kind.
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-    const EMITS: &'static [&'static str] = &["page.discussion.updated"];
+    const EMITS: &'static [&'static str] = &["page.discussion.updated", "sheet.proposals_changed"];
     const TITLE: &'static str = "Decide a proposal";
     const DESCRIPTION: &'static str = "Accept, reject or withdraw a proposed change \
         (proposal_list finds them). Accepting applies it as its author's change, and is refused \
@@ -211,7 +215,16 @@ impl Operation for ProposalDecide {
         let viewer = call.account_id();
         let id = input.proposal_id.id();
         let tx = call.tx().await?;
-        match super::decide(tx, &caller, writer, id, input.decision.into()).await? {
+        match super::decide(
+            tx,
+            &caller,
+            writer,
+            id,
+            input.decision.into(),
+            input.parts.as_deref(),
+        )
+        .await?
+        {
             Ok(_) => {}
             Err(refusal) => return Err(refused(refusal)),
         }

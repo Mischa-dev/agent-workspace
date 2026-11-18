@@ -46,6 +46,7 @@ export function SheetGrid({
   onSelect,
   onStyle,
   pending,
+  proposed,
   revision,
   selection,
   shown,
@@ -63,6 +64,8 @@ export function SheetGrid({
   onStyle?: (style: 'bold' | 'italic' | 'underline') => void
   /** Inputs sent and not saved yet, shown as typed. */
   pending: Map<string, string>
+  /** Cells a waiting proposal would set, outlined. */
+  proposed?: ReadonlyMap<string, unknown>
   /** The sheet's revision as shown: an edit holds the one it opened at. */
   revision: number
   selection: Selection
@@ -325,6 +328,7 @@ export function SheetGrid({
           selected ? 'is-selected' : '',
           focused ? 'is-focused' : '',
           commented?.has(cellKey(row, column)) ? 'has-comment' : '',
+          proposed?.has(key) ? 'is-proposed' : '',
           (cell?.conditional ?? cell?.style)?.fill ? 'has-fill' : '',
         ]
           .filter(Boolean)

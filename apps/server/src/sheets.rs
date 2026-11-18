@@ -26,6 +26,7 @@ pub mod engine;
 pub mod history;
 pub mod http;
 pub mod ops;
+pub mod proposals;
 pub mod transfer;
 
 use std::collections::{BTreeMap, HashMap};

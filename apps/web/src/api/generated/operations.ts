@@ -516,7 +516,7 @@ export type PersonCreateInput = { displayName: string; handle: string; roleId?: 
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
-export type ProposalDecideInput = { decision: DecisionArg; proposalId: string }
+export type ProposalDecideInput = { decision: DecisionArg; parts?: number[] | null; proposalId: string }
 
 export type ProposalDecideOutput = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 

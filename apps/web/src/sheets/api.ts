@@ -104,6 +104,8 @@ export type SheetBody = {
   tab: string
   cells: SheetCell[]
   canEdit: boolean
+  /** The role only suggests here: cell changes wait as a proposal (C1.11). */
+  canSuggest: boolean
 }
 
 /** One change from the grid, as the server takes it. */
@@ -247,6 +249,7 @@ export function normalizeBody(value: unknown): SheetBody {
     tab: asString(raw.tab),
     cells: asArray(raw.cells).map(normalizeCell),
     canEdit: raw.canEdit === true,
+    canSuggest: raw.canSuggest === true,
   }
 }
 
@@ -331,6 +334,18 @@ export async function changeSheet(projectId: string, sheetId: string, changes: S
       json: { changes },
     }),
   )
+}
+
+/** Cell changes from someone whose role only suggests: kept as one proposal. */
+export async function proposeCells(projectId: string, sheetId: string, changes: SheetChange[]) {
+  const raw = asRecord(
+    await requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
+      method: 'POST',
+      idempotencyKey: crypto.randomUUID(),
+      json: { changes },
+    }),
+  )
+  return { proposalId: typeof raw.proposalId === 'string' ? raw.proposalId : null, cells: asArray(raw.proposed).length }
 }
 
 /** The file types a sheet can be made from. */

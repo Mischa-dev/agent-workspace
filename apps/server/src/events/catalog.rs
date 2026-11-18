@@ -408,6 +408,12 @@ pub static SHEET_VIEWS_CHANGED: EventType = fact(
     Some("sheet"),
     "A sheet's filter views were added, changed or removed",
 );
+pub static SHEET_PROPOSALS_CHANGED: EventType = fact(
+    "sheet.proposals_changed",
+    "sheets",
+    Some("sheet"),
+    "A change to a sheet was proposed, or a proposal on it decided",
+);
 
 // --- dashboards ------------------------------------------------------------
 pub static DASHBOARD_UPDATED: EventType = fact(
@@ -649,6 +655,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_UPDATED,
         &SHEET_VERSION_RESTORED,
         &SHEET_VIEWS_CHANGED,
+        &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,

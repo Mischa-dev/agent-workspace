@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { opQuery } from '../api/ops'
+import { opPrefix, opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
 import { useProjectExperience } from '../experience/layout'
 import { useAuthenticatedSession, type SessionUser } from '../auth/session'
@@ -31,9 +31,11 @@ import {
   type MenuEntry,
 } from '../ui'
 import { usePhoneWidth } from '../ui/useCoarsePointer'
-import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type LookChange, type SheetBody, type SheetChange, type SheetTab } from './api'
+import { changeSheet, proposeCells, sheetExportHref, sheetKeys, updateSheet, useSheet, type LookChange, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit, type GridShown } from './SheetGrid'
+import { SheetProposalsDialog } from './SheetProposals'
+import { proposedOn, useSheetProposals } from './sheetProposals'
 import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
 import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
@@ -122,6 +124,12 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const [viewDialog, setViewDialog] = useState<{ view: SheetView | null } | null>(null)
   const [editingRules, setEditingRules] = useState(false)
   const views = useSheetViews(sheetId, body?.tab, !phone)
+  // Proposals (C1.11): a role that only suggests edits a draft, sent as one
+  // proposal; editors see the waiting ones outlined and decide them.
+  const [draft, setDraft] = useState<Map<string, SheetChange>>(() => new Map())
+  const [sendingDraft, setSendingDraft] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const proposals = useSheetProposals(sheetId, Boolean(body?.canEdit || body?.canSuggest))
   const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
   const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
   const frozenRows = shownTab?.frozenRows ?? 0
@@ -171,6 +179,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const tabs = [...body.tabs].sort((left, right) => left.position - right.position)
   const tab = tabs.find((entry) => entry.id === body.tab) ?? tabs[0]
   const editable = body.canEdit && !project.archivedAt
+  const suggesting = !body.canEdit && body.canSuggest && !project.archivedAt && !body.sheet.archived
   const used = extent({ rows: tab?.rows ?? 0, columns: tab?.columns ?? 0 })
   const size = {
     rows: Math.max(used.rows, selection.focus.row + 20),
@@ -200,6 +209,8 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   }
   const prefix = `${tab?.id ?? ''}:`
   const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
+  for (const [at, change] of draft) if (at.startsWith(prefix) && change.type === 'cell') tabPending.set(at.slice(prefix.length), change.input)
+  const proposedHere = tab && body.canEdit ? proposedOn(proposals, tab.id) : undefined
   const scope = sheetKeys.one(projectId, sheetId)
   const key = sheetKeys.tab(projectId, sheetId, tabParam)
 
@@ -278,6 +289,34 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
         })),
         new Map(batch.map((entry) => [at(entry), entry.input])),
       )
+    }
+  }
+
+  /** A suggest-only edit: kept in the draft until it's sent as a proposal. */
+  const suggestEdit = (edits: GridEdit[]) => {
+    if (!tab || !edits.length) return
+    setDraft((current) => {
+      const next = new Map(current)
+      for (const entry of edits) next.set(`${tab.id}:${cellKey(entry.row, entry.column)}`, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input })
+      return next
+    })
+  }
+
+  const sendDraft = async () => {
+    setSendingDraft(true)
+    try {
+      const sent = await proposeCells(projectId, sheetId, [...draft.values()])
+      setDraft(new Map())
+      void client.invalidateQueries({ queryKey: opPrefix('proposal_list') })
+      showToast(
+        sent.proposalId
+          ? { tone: 'success', title: 'Suggestion sent', description: 'Someone who edits this sheet can accept it.' }
+          : { title: 'Nothing to suggest', description: 'Those cells already hold what you typed.' },
+      )
+    } catch (error) {
+      showToast({ tone: 'danger', title: 'That suggestion wasn’t sent', description: describeError(error).message })
+    } finally {
+      setSendingDraft(false)
     }
   }
 
@@ -621,6 +660,23 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             ) : null}
           </Banner>
         ) : null}
+        {suggesting ? (
+          <div className="aw-sheet__suggesting">
+            <Banner tone="info" title={draft.size ? `${draft.size === 1 ? 'One cell' : `${draft.size} cells`} to suggest` : 'You’re suggesting changes'}>
+              {draft.size ? 'Send them as one suggestion for someone who edits this sheet.' : 'Type in cells as usual; nothing changes until someone who edits this sheet accepts.'}
+            </Banner>
+            {draft.size ? (
+              <>
+                <Button busy={sendingDraft} onClick={() => void sendDraft()} size="sm" variant="primary">
+                  Send suggestion
+                </Button>
+                <Button disabled={sendingDraft} onClick={() => setDraft(new Map())} size="sm" variant="ghost">
+                  Discard
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {phone ? (
           <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
@@ -638,6 +694,11 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
               <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
                 Find
               </Button>
+              {proposals.length ? (
+                <Button onClick={() => setReviewing(true)} size="sm" variant="ghost">
+                  {`Proposals (${proposals.length})`}
+                </Button>
+              ) : null}
               {viewItems.length ? (
                 <Menu
                   items={viewItems}
@@ -697,13 +758,14 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
               <SheetGrid
                 cells={cells}
                 commented={marks}
-                editable={writable}
+                editable={writable || suggesting}
                 key={tab.id}
-                onEdits={edit}
-                onResize={(column, width) => void send([{ type: 'columnWidth', tab: tab.id, column, width }])}
+                onEdits={suggesting ? suggestEdit : edit}
+                onResize={(column, width) => (writable ? void send([{ type: 'columnWidth', tab: tab.id, column, width }]) : undefined)}
                 onSelect={setSelection}
-                onStyle={(style) => look({ [style]: !focusStyle[style] })}
+                onStyle={writable ? (style) => look({ [style]: !focusStyle[style] }) : undefined}
                 pending={tabPending}
+                proposed={proposedHere}
                 revision={body.sheet.revision}
                 selection={selection}
                 shown={shown}
@@ -740,6 +802,15 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             viewerId={user.actorId}
           />
         </SidePanel>
+      ) : null}
+      {reviewing ? (
+        <SheetProposalsDialog
+          canDecide={body.canEdit && !body.sheet.archived}
+          onClose={() => setReviewing(false)}
+          onDecided={() => void refresh()}
+          proposals={proposals}
+          userId={user.actorId}
+        />
       ) : null}
       {editingRules && tab ? (
         <SheetRulesDialog

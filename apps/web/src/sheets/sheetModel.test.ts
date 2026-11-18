@@ -49,6 +49,7 @@ const body = (): SheetBody => ({
     { row: 2, column: 2, input: '=1+1', kind: 'number', value: 2, revision: 2 },
   ],
   canEdit: true,
+  canSuggest: false,
 })
 
 describe('sheet model', () => {

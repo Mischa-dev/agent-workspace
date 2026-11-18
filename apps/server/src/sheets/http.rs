@@ -131,11 +131,58 @@ async fn reader(
     Ok(allows(&actor, &membership, Action::SheetEdit)? && membership.project_archived_at.is_none())
 }
 
+/// How someone whose role doesn't edit sheets may change this one's cells
+/// (C1.11): directly with edit-own on a sheet they made, as a proposal with
+/// suggest, or not at all.
+async fn cell_mode(
+    connection: &mut PgConnection,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    sheet_id: Uuid,
+) -> Result<Option<crate::access::WriteMode>, AppError> {
+    let own = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT created_by_actor_id FROM sheets WHERE id = $1",
+    )
+    .bind(sheet_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .flatten()
+        == Some(principal.actor_id);
+    let caller =
+        crate::access::Caller::person(principal.actor_id, parse_actor_kind(&principal.actor_kind)?);
+    Ok(crate::access::write_mode(
+        connection,
+        &caller,
+        "sheet",
+        project_id,
+        own,
+        Some("sheets"),
+    )
+    .await?
+    .ok()
+    .map(|grant| grant.mode))
+}
+
+/// What a proposed cell change answers.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposedBody {
+    /// Unchanged: nothing is written until someone who edits accepts.
+    revision: i64,
+    /// None when it wouldn't change any cell.
+    proposal_id: Option<Uuid>,
+    proposed: Vec<super::proposals::ProposedCell>,
+}
+
 /// A write that holds the project lock and an idempotency reservation.
 struct Write {
     transaction: Transaction<'static, Postgres>,
     reservation: IdempotencyReservation,
     actor: CommandActor,
+    /// Whether the role edits sheets. Only a change to a sheet's cells gets
+    /// this far without it, to be kept as a proposal or allowed on the
+    /// caller's own sheet (C1.11).
+    edits: bool,
 }
 
 impl Write {
@@ -207,7 +254,8 @@ async fn start_write<T: Serialize>(
     if !holds_sheets(&mut transaction, project_id).await? {
         return Err(AppError::NotFound("project"));
     }
-    if !allows(&actor, &membership, Action::SheetEdit)? {
+    let edits = allows(&actor, &membership, Action::SheetEdit)?;
+    if !edits && !matches!(lock, ProjectLock::Membership) {
         return Err(AppError::Forbidden);
     }
     if membership.project_archived_at.is_some() {
@@ -233,6 +281,7 @@ async fn start_write<T: Serialize>(
             transaction,
             reservation,
             actor,
+            edits,
         }))),
     }
 }
@@ -354,13 +403,16 @@ struct SheetBody {
     tab: Uuid,
     cells: Vec<CellBody>,
     can_edit: bool,
+    /// The role only suggests here: cell changes are kept as a proposal
+    /// for someone who edits the sheet (C1.11).
+    can_suggest: bool,
 }
 
 async fn sheet_body(
     connection: &mut PgConnection,
     sheet: &Sheet,
     tab: Option<&str>,
-    can_edit: bool,
+    (can_edit, can_suggest): (bool, bool),
 ) -> Result<SheetBody, AppError> {
     let tabs = super::tabs(&mut *connection, sheet.id).await?;
     let chosen = pick_tab(&tabs, tab).ok_or(AppError::NotFound("tab"))?;
@@ -421,6 +473,7 @@ async fn sheet_body(
         // Whether this person may change sheets: an archived one they can
         // restore. The screen keeps its cells read only while archived.
         can_edit,
+        can_suggest,
     })
 }
 
@@ -483,8 +536,18 @@ async fn get_sheet(
         .await?
         .filter(|sheet| sheet.id == sheet_id)
         .ok_or(AppError::NotFound("sheet"))?;
+    let mode = if can_edit {
+        None
+    } else {
+        cell_mode(&mut connection, &principal, project_id, sheet.id).await?
+    };
+    let open = !sheet.archived;
+    let access = (
+        can_edit || (open && mode == Some(crate::access::WriteMode::Direct)),
+        open && mode == Some(crate::access::WriteMode::Propose),
+    );
     Ok(Json(
-        sheet_body(&mut connection, &sheet, query.tab.as_deref(), can_edit).await?,
+        sheet_body(&mut connection, &sheet, query.tab.as_deref(), access).await?,
     ))
 }
 
@@ -560,7 +623,7 @@ async fn create_sheet(
     .await?;
     outbox::enqueue_sheet_updated(&mut write.transaction, project_id, sheet.id, sheet.revision)
         .await?;
-    let body = sheet_body(&mut write.transaction, &sheet, None, true).await?;
+    let body = sheet_body(&mut write.transaction, &sheet, None, (true, false)).await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 
@@ -652,7 +715,13 @@ async fn update_sheet(
                 ));
             }
         };
-    let body = sheet_body(&mut write.transaction, &sheet, request.tab.as_deref(), true).await?;
+    let body = sheet_body(
+        &mut write.transaction,
+        &sheet,
+        request.tab.as_deref(),
+        (true, false),
+    )
+    .await?;
     write.finish(StatusCode::OK, &body).await
 }
 
@@ -915,6 +984,15 @@ async fn change_sheet(
             }
         }
     }
+    if !write.edits {
+        match cell_mode(&mut write.transaction, &principal, project_id, sheet.id).await? {
+            Some(crate::access::WriteMode::Direct) => {}
+            Some(crate::access::WriteMode::Propose) => {
+                return propose_changes(write, &principal, &sheet, &changes).await;
+            }
+            None => return Err(AppError::Forbidden),
+        }
+    }
     let applied = match super::apply(
         &mut write.transaction,
         &sheet,
@@ -983,6 +1061,69 @@ async fn change_sheet(
                 conditional: cell.conditional,
             })
             .collect(),
+    };
+    write.finish(StatusCode::OK, &body).await
+}
+
+/// Cell changes from someone whose role only suggests: kept as a proposal
+/// for someone who edits the sheet (C1.11).
+async fn propose_changes(
+    mut write: Write,
+    principal: &AuthenticatedActor,
+    sheet: &Sheet,
+    changes: &[Change],
+) -> Result<Response, AppError> {
+    use super::proposals::Proposed;
+    let author = crate::memory::browser_writer(principal)?;
+    let (proposal_id, proposed) = match super::proposals::propose(
+        &mut write.transaction,
+        author,
+        sheet,
+        changes,
+        None,
+    )
+    .await?
+    {
+        Proposed::Made { id, cells } => (Some(id), cells),
+        Proposed::Unchanged => (None, Vec::new()),
+        Proposed::Refused(message) => {
+            return Ok(refusal(
+                StatusCode::FORBIDDEN,
+                "suggest_only",
+                message,
+                Json_::Null,
+            ));
+        }
+        Proposed::Problem(problem) => {
+            let (status, code) = match problem.kind {
+                ProblemKind::Invalid => (StatusCode::UNPROCESSABLE_ENTITY, "validation_failed"),
+                ProblemKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                ProblemKind::Conflict => (StatusCode::CONFLICT, "sheet_conflict"),
+                ProblemKind::Full => (StatusCode::CONFLICT, "sheet_limit"),
+            };
+            return Ok(refusal(
+                status,
+                code,
+                format!("Nothing was proposed. {}", problem.message),
+                json!({ "field": format!("changes[{}]", problem.index), "index": problem.index }),
+            ));
+        }
+    };
+    if let Some(id) = proposal_id {
+        record_audit_for(
+            &mut write.transaction,
+            &write.actor,
+            "proposal",
+            "sheet.proposal_created",
+            id,
+            json!({ "sheet": sheet.id, "cells": proposed.len() }),
+        )
+        .await?;
+    }
+    let body = ProposedBody {
+        revision: sheet.revision,
+        proposal_id,
+        proposed,
     };
     write.finish(StatusCode::OK, &body).await
 }
@@ -1130,7 +1271,7 @@ async fn import_sheet(
     )
     .await?;
     let sheet = write.sheet(sheet.id).await?;
-    let body = sheet_body(&mut write.transaction, &sheet, None, true).await?;
+    let body = sheet_body(&mut write.transaction, &sheet, None, (true, false)).await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 

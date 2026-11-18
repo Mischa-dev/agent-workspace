@@ -1059,7 +1059,8 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "page.discussion.updated"
+      "page.discussion.updated",
+      "sheet.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
