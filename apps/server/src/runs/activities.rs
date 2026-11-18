@@ -296,6 +296,25 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
     })
 }
 
+/// The words of an activity the agent said in its thread (`runs::say`).
+pub async fn said_text(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    activity_id: &str,
+) -> Result<Option<String>, crate::error::AppError> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        r#"
+        SELECT payload->>'text' FROM run_activities
+        WHERE run_id = $1 AND client_id = $2 AND kind = 'text_message'
+        "#,
+    )
+    .bind(run_id)
+    .bind(activity_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;

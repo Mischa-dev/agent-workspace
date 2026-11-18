@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    domain::{RunState, allocate_conversation_sequence},
+    domain::RunState,
     error::AppError,
     git_runtime::worktree_is_dirty,
     message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
@@ -702,7 +702,6 @@ pub(crate) async fn complete_recovered_run(
         project_id,
         run_id,
         conversation_id,
-        Uuid::now_v7(),
         message,
         Some(RecoveryCompletion {
             previous_state,
@@ -807,7 +806,6 @@ async fn drive_turn(
                             project_id,
                             run_id,
                             conversation_id,
-                            message_stream_id,
                             message.as_str(),
                             None,
                         ).await?;
@@ -1039,7 +1037,6 @@ async fn complete_run(
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    worker_message_id: Uuid,
     message: &str,
     recovery: Option<RecoveryCompletion<'_>>,
 ) -> Result<(), AppError> {
@@ -1063,16 +1060,6 @@ async fn complete_run(
     .await
     .map_err(|_| AppError::Internal("join worktree inspection task"))??;
 
-    let worker_actor_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT ew.actor_id FROM agent_runs ar
-        JOIN execution_workers ew ON ew.id = ar.execution_worker_id
-        WHERE ar.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(crate::db::scoped(&state.pool))
-    .await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
@@ -1091,69 +1078,20 @@ async fn complete_run(
     .bind(dirty)
     .execute(&mut *transaction)
     .await?;
+    // What the agent said goes to the thread like any host's answer: a
+    // `text_message` for the thread, posted by `runs::say` through the
+    // send path.
     if let Some(validated_message) = validated_message {
-        let (content, plain_text, mentioned_actor_ids) = validated_message.into_parts();
-        debug_assert!(mentioned_actor_ids.is_empty());
-        let content = serde_json::to_value(content)
-            .map_err(|_| AppError::Internal("serialize provider Worker Message"))?;
-        sqlx::query(
-            r#"
-            INSERT INTO messages (
-                id, project_id, conversation_id, author_actor_id,
-                content_version, content, plain_text, agent_run_id
-            )
-            VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-            ON CONFLICT (agent_run_id) WHERE agent_run_id IS NOT NULL DO NOTHING
-            "#,
+        let (_, plain_text, _) = validated_message.into_parts();
+        crate::runs::steps::record(
+            &mut transaction,
+            run_id,
+            "provider:reply",
+            "agent_reply",
+            "The agent's answer.",
+            json!({"text": plain_text, "inThread": true}),
         )
-        .bind(worker_message_id)
-        .bind(project_id)
-        .bind(conversation_id)
-        .bind(worker_actor_id)
-        .bind(content)
-        .bind(plain_text)
-        .bind(run_id)
-        .execute(&mut *transaction)
         .await?;
-        let persisted_message_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM messages WHERE agent_run_id = $1 -- visibility: the run's own reply",
-        )
-        .bind(run_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let existing_entry = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM conversation_entries WHERE message_id = $1)",
-        )
-        .bind(persisted_message_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !existing_entry {
-            let sequence =
-                allocate_conversation_sequence(&mut transaction, conversation_id).await?;
-            sqlx::query(
-                r#"
-                INSERT INTO conversation_entries (
-                    id, conversation_id, sequence, kind, message_id
-                )
-                VALUES ($1, $2, $3, 'message', $4)
-                "#,
-            )
-            .bind(Uuid::now_v7())
-            .bind(conversation_id)
-            .bind(sequence)
-            .bind(persisted_message_id)
-            .execute(&mut *transaction)
-            .await?;
-            outbox::enqueue_message_created(
-                &mut transaction,
-                project_id,
-                conversation_id,
-                persisted_message_id,
-                sequence,
-                worker_actor_id,
-            )
-            .await?;
-        }
     }
     crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Completed, None).await?;
     sqlx::query(

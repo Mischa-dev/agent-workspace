@@ -73,7 +73,7 @@ mod code;
 mod collaboration;
 mod collection_tools;
 mod comment_tools;
-mod common;
+pub(crate) mod common;
 mod criteria;
 #[cfg(test)]
 mod description_words;
@@ -102,7 +102,7 @@ mod project_template_tools;
 mod publish_tools;
 mod reactions;
 mod reads;
-mod replies;
+pub(crate) mod replies;
 mod repository_tools;
 mod role_tools;
 mod run_pages;

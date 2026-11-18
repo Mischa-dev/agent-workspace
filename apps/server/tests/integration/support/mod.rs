@@ -166,3 +166,23 @@ pub(crate) async fn heard(
     .expect("events")
     .events
 }
+
+/// Run the jobs that are due now (such as `runs.say` posting what a run's
+/// agent said in its thread), as the workers would.
+pub(crate) async fn run_due_jobs(state: &agent_workspace_server::AppState) {
+    use agent_workspace_server::jobs;
+    for _ in 0..2 {
+        jobs::run_due(
+            state,
+            &jobs::default_registry(),
+            &jobs::WorkerOptions {
+                concurrency: 1,
+                poll_interval: std::time::Duration::from_millis(20),
+                lease: std::time::Duration::from_secs(30),
+                worker_id: "integration-tests".to_owned(),
+            },
+        )
+        .await
+        .expect("run due jobs");
+    }
+}
