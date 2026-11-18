@@ -116,23 +116,38 @@ pub(crate) async fn task_made_from_message(
     let Some(conversation) = conversation else {
         return Ok(false);
     };
-    if !say_so {
-        // The message's chip changes (attach_made_into).
-        announce(tx, conversation).await?;
-    } else {
+    made_from_message(tx, conversation, actor, "task", task, message, say_so).await?;
+    Ok(true)
+}
+
+/// After `actor` made `message` (in `conversation`, which they can read)
+/// into a thing: with `say_so`, a system entry says so there; either way,
+/// the message's made-into line changes, so open timelines refresh.
+pub(crate) async fn made_from_message(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+    actor: Uuid,
+    kind: &str,
+    thing: Uuid,
+    message: Uuid,
+    say_so: bool,
+) -> Result<(), AppError> {
+    if say_so {
         post(
             tx,
             conversation,
             &SystemEvent::MadeInto {
                 actor_id: actor,
-                thing_kind: "task".to_owned(),
-                thing_id: task,
+                thing_kind: kind.to_owned(),
+                thing_id: thing,
                 message_id: Some(message),
             },
         )
         .await?;
+    } else {
+        announce(tx, conversation).await?;
     }
-    Ok(true)
+    Ok(())
 }
 
 /// A thing a message was made into (C2.20), as a chip under the message:
@@ -147,7 +162,7 @@ pub struct MadeIntoView {
 /// Puts on each message of `entries` (a page of `conversation`'s timeline,
 /// already read with the viewer's access) what it was made into: the tasks
 /// linked to it, which only a reader who sees tasks in the space is told
-/// of, the decisions recorded from it, and every other thing a system entry
+/// of, the decisions and records made from it, and every other thing a system entry
 /// here says was made from it. The web names each with the reader's access
 /// and leaves out one they can't open.
 pub(crate) async fn attach_made_into<'e, E>(
@@ -182,13 +197,17 @@ where
             FROM project_decisions decision
             WHERE decision.source_message_id = ANY($1)
             UNION ALL
+            SELECT record.source_message_id, 'record', record.id, record.created_at
+            FROM collection_records record
+            WHERE record.source_message_id = ANY($1) AND record.archived_at IS NULL
+            UNION ALL
             SELECT (entry.system_event->>'messageId')::uuid,
                    entry.system_event->>'thingKind',
                    (entry.system_event->>'thingId')::uuid, entry.created_at
             FROM conversation_entries entry
             WHERE entry.conversation_id = $2 AND entry.kind = 'system'
               AND entry.system_event->>'type' = 'made_into'
-              AND entry.system_event->>'thingKind' NOT IN ('task', 'decision')
+              AND entry.system_event->>'thingKind' NOT IN ('task', 'decision', 'record')
               AND (entry.system_event->>'messageId')::uuid = ANY($1)
         ) made
         ORDER BY made.created_at, made.id

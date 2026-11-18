@@ -503,6 +503,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "field_write",
     "collection_write",
     "record_write",
+    "record_create",
     "button_press",
     "sheet_write",
     "later_save",
@@ -7001,6 +7002,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        // C2.21: a record made from a message, only from one here.
+        mcp_case(
+            "record_create",
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": a.message}),
+            vec![json!({"collection": b.collection, "title": "Net made"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
+            json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
         ]),
         mcp_case(
             "button_press",

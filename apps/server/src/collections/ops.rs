@@ -4,6 +4,8 @@
 //! `button_press` (T1.21) runs a button field's operations on one record as
 //! whoever presses it; `button_get` says whether they can, and if not why,
 //! so the web app draws the button disabled with the reason.
+//! `record_create` (C2.21) adds one record, made from a message if asked:
+//! the record links back to it and, with saySo, the conversation says so.
 
 use std::collections::HashMap;
 
@@ -21,8 +23,9 @@ use crate::{
         formula::{self, ResultType},
     },
     ops::{
-        DispatchRequest, Idempotency, OpCall, OpError, OpKind, Operation, Registry, Target,
-        Targeted, Unkeyed, refs::IdRef,
+        ConflictReason, DispatchRequest, Idempotency, OpCall, OpError, OpKind, Operation, Perm,
+        Registry, Target, Targeted, Unkeyed,
+        refs::{IdRef, MessageRef},
     },
 };
 
@@ -30,6 +33,223 @@ pub fn register_ops(registry: &mut Registry) {
     registry.add::<FormulaPreview>();
     registry.add::<ButtonGet>();
     registry.add::<ButtonPress>();
+    registry.add::<RecordCreate>();
+}
+
+/// Add a record to a collection, made from a message if you like.
+pub struct RecordCreate;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordCreateInput {
+    /// The collection: its id, or a link to it.
+    pub collection: IdRef,
+    /// The record's title. Made from a message, its first line when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Values by field name or id.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub fields: serde_json::Map<String, Value>,
+    /// The message it is made from (its id, or a link), in a conversation of
+    /// the collection's space that you can read. The record links back to it.
+    #[serde(
+        default,
+        alias = "sourceMessageId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub from_message_id: Option<MessageRef>,
+    /// With fromMessageId: also say in that conversation that you made the
+    /// message into this record.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub say_so: bool,
+}
+
+impl Targeted for RecordCreateInput {
+    fn target(&self) -> Target {
+        Target::thing("collection", self.collection.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordCreateOutput {
+    #[schemars(with = "String")]
+    pub id: Uuid,
+    #[schemars(with = "String")]
+    pub collection_id: Uuid,
+    pub number: i64,
+    pub title: String,
+}
+
+/// A message's first line, as a record title.
+fn title_from(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(300)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+impl Operation for RecordCreate {
+    const NAME: &'static str = "record_create";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "collections";
+    const PERMISSION: Option<Perm> = Some(Perm::CollectionsEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["record.created"];
+    const TITLE: &'static str = "Create a record";
+    const DESCRIPTION: &'static str = "Add one record to a collection, with its title and \
+        field values by name. Pass fromMessageId to make it from a message: the record links \
+        back to the message, takes its first line as the title unless you give one, and with \
+        saySo the conversation says you made it. Records of a collection that acts like tasks \
+        are tasks: use task_create. record_write changes many records at once.";
+
+    type Input = RecordCreateInput;
+    type Output = RecordCreateOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RecordCreateInput,
+    ) -> Result<RecordCreateOutput, OpError> {
+        let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let actor = call.account_id();
+        let tx = call.tx().await?;
+        let Some(collection) = super::lock(tx, space_id, input.collection.id()).await? else {
+            return Err(OpError::not_found("collection"));
+        };
+        if collection.archived {
+            return Err(OpError::Conflict {
+                reason: ConflictReason::Archived,
+                message: format!(
+                    "\"{}\" is archived. Restore it before adding records.",
+                    collection.name
+                )
+                .into(),
+                current: None,
+            });
+        }
+        if collection.acts_like_task {
+            return Err(OpError::Invalid {
+                field: "collection".into(),
+                message: format!(
+                    "Records in \"{}\" are tasks: make them with task_create.",
+                    collection.name
+                )
+                .into(),
+            });
+        }
+        // The message, only from a conversation here the actor can read.
+        let source = match input.from_message_id {
+            None => None,
+            Some(message) => Some(
+                sqlx::query_as::<_, (Uuid, Uuid, String)>(
+                    "SELECT message.id, message.conversation_id, message.plain_text \
+                     FROM messages message \
+                     WHERE message.id = $1 AND message.project_id = $2 \
+                       AND message.removed_at IS NULL \
+                       AND conversation_visible_to(message.conversation_id, $3)",
+                )
+                .bind(message.id())
+                .bind(space_id)
+                .bind(actor)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?
+                .ok_or_else(|| {
+                    OpError::invalid(
+                        "fromMessageId",
+                        "That isn't a message you can read in this collection's space.",
+                    )
+                })?,
+            ),
+        };
+        let title = input
+            .title
+            .map(|title| title.trim().to_owned())
+            .filter(|title| !title.is_empty())
+            .or_else(|| source.as_ref().map(|(_, _, text)| title_from(text)));
+        let project_key =
+            sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+                .bind(space_id)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+        let definitions = super::field_definitions(tx, space_id, collection.id, true).await?;
+        let written = super::records::write(
+            tx,
+            space_id,
+            &collection,
+            crate::work_item_fields::Writer {
+                actor_id: actor,
+                project_key: &project_key,
+            },
+            &definitions,
+            "fields",
+            &[super::records::RecordInput {
+                record: None,
+                title,
+                values: input.fields.into_iter().collect(),
+                archived: None,
+                expected_version: None,
+            }],
+        )
+        .await?
+        .map_err(|problem| match problem.kind {
+            super::records::ProblemKind::Full => OpError::Conflict {
+                reason: ConflictReason::State {
+                    code: "collection_full",
+                },
+                message: problem.message.into(),
+                current: None,
+            },
+            _ => OpError::Invalid {
+                field: problem.field.into(),
+                message: problem.message.into(),
+            },
+        })?;
+        let record = written
+            .into_iter()
+            .next()
+            .ok_or(OpError::Unavailable)?
+            .record()
+            .clone();
+        if let Some((message_id, conversation_id, _)) = source {
+            sqlx::query(
+                "UPDATE collection_records SET source_message_id = $1 \
+                 WHERE id = $2 AND project_id = $3",
+            )
+            .bind(message_id)
+            .bind(record.id)
+            .bind(space_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            crate::conversations::system_entries::made_from_message(
+                tx,
+                conversation_id,
+                actor,
+                "record",
+                record.id,
+                message_id,
+                input.say_so,
+            )
+            .await?;
+        }
+        crate::outbox::enqueue_collection_updated(tx, space_id, collection.id, &[record.id])
+            .await?;
+        call.audit_target("record", record.id, serde_json::json!({}));
+        Ok(RecordCreateOutput {
+            id: record.id,
+            collection_id: collection.id,
+            number: record.number,
+            title: record.title,
+        })
+    }
 }
 
 /// Check a formula and see its value on a record.

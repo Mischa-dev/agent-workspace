@@ -122,19 +122,17 @@ impl Operation for DecisionRecord {
         {
             super::set_pin(tx, writer, conversation_id, "decision", id, true).await?;
         }
-        if input.say_so
-            && let Some(message_id) = decision.source_message_id
+        if let Some(message_id) = decision.source_message_id
             && let Some(conversation_id) = super::decision_conversation(tx, &decision).await?
         {
-            crate::conversations::system_entries::post(
+            crate::conversations::system_entries::made_from_message(
                 tx,
                 conversation_id,
-                &crate::conversations::system_entries::SystemEvent::MadeInto {
-                    actor_id: viewer,
-                    thing_kind: "decision".to_owned(),
-                    thing_id: id,
-                    message_id: Some(message_id),
-                },
+                viewer,
+                "decision",
+                id,
+                message_id,
+                input.say_so,
             )
             .await?;
         }
