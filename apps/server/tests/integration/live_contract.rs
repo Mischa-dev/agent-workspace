@@ -506,20 +506,30 @@ async fn conformance(name: &str, target: Target) {
     until(&mut socket, WAIT, |frame| frame["type"] == "ticket.stale")
         .await
         .expect("the owner's ticket went stale");
-    let refreshed = ticket(&world, &owner).await;
-    socket
-        .send(Message::Text(
-            json!({"type": "ticket", "ticket": refreshed["ticket"]})
-                .to_string()
-                .into(),
-        ))
+    // Making a group changes access more than once; a ticket cut between
+    // two of those changes goes stale again, and a client asks once more.
+    let mut accepted = false;
+    for _ in 0..5 {
+        let refreshed = ticket(&world, &owner).await;
+        socket
+            .send(Message::Text(
+                json!({"type": "ticket", "ticket": refreshed["ticket"]})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("new ticket");
+        let answer = until(&mut socket, WAIT, |frame| {
+            frame["type"] == "ticket.accepted" || frame["type"] == "ticket.stale"
+        })
         .await
-        .expect("new ticket");
-    until(&mut socket, WAIT, |frame| {
-        frame["type"] == "ticket.accepted"
-    })
-    .await
-    .expect("the new ticket is in use");
+        .expect("an answer to the new ticket");
+        if answer["type"] == "ticket.accepted" {
+            accepted = true;
+            break;
+        }
+    }
+    assert!(accepted, "the new ticket is in use");
     say(&world, &owner, group, "live-group-0").await;
     say(&world, &owner, general, "live-general-after-group").await;
     until(&mut socket, WAIT, |frame| message_in(frame, group))

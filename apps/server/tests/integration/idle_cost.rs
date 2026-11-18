@@ -85,10 +85,25 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (transactions_after, rows_after) = counts(pool).await;
     let after = tables(pool).await;
+    // What the server did in the window: jobs it ran, consumers it moved.
+    let work = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT concat_ws('; ', \
+             (SELECT 'jobs: ' || string_agg(kind || ' ' || state || ' x' || n, ', ') FROM ( \
+                 SELECT kind, state, count(*) AS n FROM background_jobs \
+                 WHERE updated_at > now() - make_interval(secs => $1) \
+                 GROUP BY kind, state ORDER BY count(*) DESC LIMIT 12) jobs), \
+             (SELECT 'consumers: ' || string_agg(name, ', ') FROM event_consumers \
+              WHERE updated_at > now() - make_interval(secs => $1)))",
+    )
+    .bind((WINDOW.as_secs() + 2) as f64)
+    .fetch_one(pool)
+    .await
+    .expect("window work")
+    .unwrap_or_default();
     (
         transactions_after - transactions,
         rows_after - rows,
-        busiest(&before, &after),
+        format!("{}; {work}", busiest(&before, &after)),
     )
 }
 
