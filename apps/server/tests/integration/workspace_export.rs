@@ -26,6 +26,31 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
     };
     let (app, a, b) = (&fixture.app, &fixture.a, &fixture.b);
     let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", a.organization);
+    // An agent's run in A's DM, and what it did: left out with the DM, to
+    // any depth (the run by its conversation, its activity by its run).
+    let (dm_run, dm_activity) = (Uuid::now_v7(), Uuid::now_v7());
+    sqlx::query(
+        "INSERT INTO runs (id, workspace_id, account_id, title, cause_kind, conversation_id, state) \
+         VALUES ($1, $2, $3, 'Run in a DM', 'thread', $4::uuid, 'running')",
+    )
+    .bind(dm_run)
+    .bind(a.organization)
+    .bind(a.agent)
+    .bind(&a.dm)
+    .execute(&fixture.pool)
+    .await
+    .expect("a run in the DM");
+    sqlx::query(
+        "INSERT INTO run_activities (id, run_id, workspace_id, seq, kind, summary, occurred_at, \
+         reported_by_account_id) VALUES ($1, $2, $3, 1, 'reasoning', 'thinking aloud', now(), $4)",
+    )
+    .bind(dm_activity)
+    .bind(dm_run)
+    .bind(a.organization)
+    .bind(a.agent)
+    .execute(&fixture.pool)
+    .await
+    .expect("its activity");
 
     let (status, started) = send(
         app,
@@ -153,9 +178,15 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
         ("the DM", &a.dm),
         ("the DM's message", &a.dm_message),
         ("the group", &a.group),
+        ("a run in the DM", &dm_run.to_string()),
+        ("the run's activity", &dm_activity.to_string()),
     ] {
         assert!(!text.contains(id.as_str()), "{what} ({id}) stays out");
     }
+    assert!(
+        !text.contains("thinking aloud"),
+        "the run's activity stays out"
+    );
     // Nothing of B's.
     let b_ids = sweep_ids(&fixture.pool, b.organization).await;
     let found = leaked(&text, &b_ids);

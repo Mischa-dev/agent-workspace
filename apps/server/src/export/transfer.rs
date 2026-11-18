@@ -411,6 +411,7 @@ async fn write_archive(
     let mut counts = BTreeMap::new();
     let (blobs, slug) = {
         let hidden = not_spaces(&mut snapshot, workspace).await?;
+        let left_out = left_out(&mut snapshot, workspace, &hidden).await?;
         let header = workspace_entry(&mut snapshot, workspace).await?;
         write_json(&mut zip, "workspace/workspace.json", &header)?;
         let slug = header["slug"].clone();
@@ -435,6 +436,7 @@ async fn write_archive(
                     },
                     workspace,
                     &hidden,
+                    &left_out,
                     &cold,
                 )
                 .await?;
@@ -449,7 +451,7 @@ async fn write_archive(
         if !skipped.is_empty() {
             counts.insert("skipped".to_owned(), json!(skipped));
         }
-        let (index, blobs) = files_index(&mut snapshot, workspace, &hidden).await?;
+        let (index, blobs) = files_index(&mut snapshot, workspace, &hidden, &left_out).await?;
         counts.insert("files".to_owned(), json!(index.len()));
         write_lines(&mut zip, "files/index.jsonl", index.iter())?;
         let (secrets, connections) = needs(&mut snapshot, workspace).await?;
@@ -717,6 +719,145 @@ async fn naming_columns(
     Ok(columns)
 }
 
+/// Rows left out of an export because a row they point at is (R20, to
+/// any depth): a run in a DM is left out by its conversation, and its
+/// activities, usage and requests by their run. Worked out once per
+/// snapshot, from every exported table's single-column foreign keys.
+struct LeftOut {
+    /// Every left-out row's id, the hidden conversations and messages
+    /// included.
+    ids: Vec<Uuid>,
+    /// Each table's foreign key columns that point at a table rows were
+    /// left out of.
+    pointing: HashMap<String, Vec<String>>,
+    /// Exported tables with an `id` column.
+    with_id: HashSet<String>,
+}
+
+impl LeftOut {
+    /// ` AND NOT (...)` for a table: none of its rows' foreign keys may
+    /// name a left-out row, nor may its own id be one. The ids are at
+    /// parameter `$<parameter>`.
+    fn filter(&self, table: &str, parameter: u8) -> String {
+        let mut tests = Vec::new();
+        if self.with_id.contains(table) {
+            tests.push(format!("t.id = ANY(${parameter})"));
+        }
+        for column in self.pointing.get(table).into_iter().flatten() {
+            tests.push(format!("t.{} = ANY(${parameter})", plain(column)));
+        }
+        if tests.is_empty() {
+            String::new()
+        } else {
+            format!(" AND NOT ({})", tests.join(" OR "))
+        }
+    }
+}
+
+/// Works out [`LeftOut`]: starting from the hidden conversations and
+/// messages, any row whose foreign key names a left-out row is left out
+/// too, until nothing more is.
+async fn left_out(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    not_spaces: &[Uuid],
+) -> Result<LeftOut, AppError> {
+    let mut ids =
+        sqlx::query_scalar::<_, Uuid>(&format!("{}SELECT id FROM hidden", with_hidden(2)))
+            .bind(workspace)
+            .bind(not_spaces)
+            .fetch_all(&mut *connection)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+    // Single-column foreign keys between tables that have a workspace
+    // column and an id, so each step can ask one table at a time.
+    let keys = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT child.relname::text, column_name.attname::text, parent.relname::text
+        FROM pg_constraint constraint_row
+        JOIN pg_class child ON child.oid = constraint_row.conrelid
+        JOIN pg_class parent ON parent.oid = constraint_row.confrelid
+        JOIN pg_namespace space ON space.oid = child.relnamespace
+        JOIN pg_attribute column_name
+          ON column_name.attrelid = child.oid AND column_name.attnum = constraint_row.conkey[1]
+        WHERE constraint_row.contype = 'f' AND array_length(constraint_row.conkey, 1) = 1
+          AND space.nspname = current_schema()
+          AND column_name.atttypid = 'uuid'::regtype
+        "#,
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    let exported = DECLARATIONS
+        .iter()
+        .flat_map(|declaration| declaration.kinds.iter())
+        .filter_map(|kind| tables::tenant_column(kind.table).map(|column| (kind.table, column)))
+        .collect::<HashMap<_, _>>();
+    let mut tables_left_out: HashSet<String> = ["conversations", "messages", "projects"]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+    let with_id = sqlx::query_scalar::<_, String>(
+        "SELECT table_name::text FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND column_name = 'id' AND data_type = 'uuid'",
+    )
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .filter(|table| exported.contains_key(table.as_str()))
+    .collect::<HashSet<_>>();
+    // Each round reaches one level further; the chain from a DM down is
+    // short, and a round that finds nothing new ends it.
+    for _ in 0..8 {
+        let mut found = false;
+        for (child, column, parent) in &keys {
+            if !tables_left_out.contains(parent) {
+                continue;
+            }
+            let Some(tenant) = exported.get(child.as_str()) else {
+                continue;
+            };
+            if !with_id.contains(child) {
+                continue;
+            }
+            let current = ids.iter().copied().collect::<Vec<_>>();
+            let reached = sqlx::query_scalar::<_, Uuid>(&format!(
+                "SELECT t.id FROM {} t WHERE t.{} = $1 AND t.{} = ANY($2)",
+                plain(child),
+                identifier(tenant),
+                plain(column)
+            ))
+            .bind(workspace)
+            .bind(&current)
+            .fetch_all(&mut *connection)
+            .await?;
+            for id in reached {
+                if ids.insert(id) {
+                    found = true;
+                    tables_left_out.insert(child.clone());
+                }
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    let mut pointing: HashMap<String, Vec<String>> = HashMap::new();
+    for (child, column, parent) in &keys {
+        if tables_left_out.contains(parent) && exported.contains_key(child.as_str()) {
+            pointing
+                .entry(child.clone())
+                .or_default()
+                .push(column.clone());
+        }
+    }
+    Ok(LeftOut {
+        ids: ids.into_iter().collect(),
+        pointing,
+        with_id,
+    })
+}
+
 /// One declared kind and the column that names its workspace.
 struct Kind<'a> {
     declaration: &'a ExportDecl,
@@ -737,11 +878,13 @@ async fn write_kind(
     }: Kind<'_>,
     workspace: Uuid,
     not_spaces: &[Uuid],
+    left_out: &LeftOut,
     cold: &HashMap<(Uuid, i64), String>,
 ) -> Result<usize, AppError> {
     let table = identifier(kind.table);
     let column = identifier(column);
     let naming = naming_columns(connection, kind).await?;
+    let parents = left_out.filter(kind.table, 4);
     let (with, hidden) = if naming.is_empty() {
         (String::new(), String::new())
     } else {
@@ -761,13 +904,14 @@ async fn write_kind(
         .map(|column| (*column).to_owned())
         .collect::<Vec<_>>();
     let sql = format!(
-        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden} \
+        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden}{parents} \
          ORDER BY to_jsonb(t)->>'created_at', to_jsonb(t)->>'id'"
     );
     let mut rows = sqlx::query_scalar::<_, Value>(&sql)
         .bind(workspace)
         .bind(&excluded)
         .bind(not_spaces)
+        .bind(&left_out.ids)
         .fetch(&mut *connection);
     let name = format!("things/{}/{}.jsonl", declaration.module, kind.kind);
     let mut started = false;
@@ -821,7 +965,9 @@ async fn files_index(
     connection: &mut PgConnection,
     workspace: Uuid,
     not_spaces: &[Uuid],
+    left_out: &LeftOut,
 ) -> Result<(Vec<Value>, Vec<Blob>), AppError> {
+    let parents = left_out.filter("files", 3);
     let rows = sqlx::query_as::<_, (Uuid, String, i64, String, String, String)>(&format!(
         r#"
         {}
@@ -832,12 +978,15 @@ async fn files_index(
           AND file.blob_deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM hidden h
                           WHERE h.id IN (file.conversation_id, file.message_id, file.project_id))
+          {}
         ORDER BY file.id
         "#,
-        with_hidden(2)
+        with_hidden(2),
+        parents.replace("t.", "file.")
     ))
     .bind(workspace)
     .bind(not_spaces)
+    .bind(&left_out.ids)
     .fetch_all(&mut *connection)
     .await?;
     let mut seen = HashSet::new();
