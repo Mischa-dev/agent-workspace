@@ -1,5 +1,6 @@
-//! The browser's file routes: upload into a conversation or a task, list a
-//! task's files, read a file or its preview, and remove one.
+//! The browser's file routes: upload into a conversation, a task or another
+//! thing (a page, C1.33), list a task's files, read a file, what it is or
+//! its preview, and remove one.
 //!
 //! Uploads are the raw bytes as the request body, with the file's name in
 //! `?name=` and its type in `Content-Type`, so a large file is never
@@ -11,14 +12,15 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, Upload, readable_file,
-    remove_file, served_content_type, store_upload, task_files, upload_limit,
+    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, ThingKind, Upload,
+    readable_file, remove_file, served_content_type, store_upload, task_files, thing_destination,
+    upload_limit,
 };
 use crate::{
     AppState,
@@ -41,7 +43,11 @@ pub fn router() -> Router<AppState> {
                 .post(upload_to_task)
                 .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
-        .route("/api/v1/files/{id}", delete(remove))
+        .route(
+            "/api/v1/things/{kind}/{id}/files",
+            post(upload_to_thing).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route("/api/v1/files/{id}", get(describe).delete(remove))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
 }
@@ -153,6 +159,65 @@ async fn upload_to_task(
         crate::work_items::notify_files_changed(&state.pool, project_id, work_item_id).await?;
     }
     Ok((StatusCode::CREATED, Json(row.view())).into_response())
+}
+
+/// A file of a thing the uploader may edit, such as a picture pasted into a
+/// page: attached at once, and read by whoever can see the thing.
+async fn upload_to_thing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((kind, thing_id)): ApiPath<(String, Uuid)>,
+    ApiQuery(query): ApiQuery<UploadQuery>,
+    body: Body,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal).await?;
+    if query.purpose.is_some() {
+        return Err(AppError::Validation("for"));
+    }
+    let thing = ThingKind::parse(&kind).ok_or(AppError::NotFound("thing"))?;
+    let destination = thing_destination(
+        &state.pool,
+        principal.actor_id,
+        crate::conversations::parse_actor_kind(&principal.actor_kind)?,
+        thing,
+        thing_id,
+    )
+    .await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let limit = upload_limit(&mut transaction, destination.project_id()).await?;
+    transaction.commit().await?;
+    let bytes = read_body(body, limit).await?;
+    let row = store_upload(
+        &state,
+        principal.actor_id,
+        destination,
+        Upload {
+            name: query.name,
+            declared_type: declared_type(&headers),
+            bytes,
+        },
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(row.view())).into_response())
+}
+
+/// What a file is (its name, type, size and preview), for the reader who
+/// may see it.
+async fn describe(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(file_id): ApiPath<Uuid>,
+) -> Result<Json<FileView>, AppError> {
+    let row = readable_file(
+        &state.pool,
+        Reader::Browser {
+            actor_id: principal.actor_id,
+        },
+        file_id,
+    )
+    .await?;
+    Ok(Json(row.view()))
 }
 
 async fn list_task_files(

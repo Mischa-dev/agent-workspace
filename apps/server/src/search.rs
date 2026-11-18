@@ -642,6 +642,8 @@ const FILES_SQL: &str = r#"
       AND file.project_id = ANY($2)
       AND file.attached_at IS NOT NULL
       AND file.removed_at IS NULL
+      -- A page's own files are found through the page (C1.28 adds them).
+      AND file.thing_id IS NULL
       AND (file.conversation_id IS NULL OR (
           message.removed_at IS NULL
           AND conversation.archived_at IS NULL

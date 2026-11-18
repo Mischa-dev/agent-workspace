@@ -985,6 +985,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("undoes_change_set_id", "document_change_sets"),
                     ("undone_by_change_set_id", "document_change_sets"),
                     ("proposal_id", "proposals"),
+                    ("thread_id", "conversations"),
                 ],
                 text_references: &[],
                 exclude: &[],

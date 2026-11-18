@@ -102,6 +102,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/direct",
     "/api/v1/events",
     "/api/v1/events/catalogue",
+    "/api/v1/files/{id}",
     "/api/v1/files/{id}/content",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
@@ -1837,6 +1838,12 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             format!("/api/v1/files/{}{suffix}", w.task_file),
         ]
     };
+    cases.push(case(
+        "/api/v1/files/{id}",
+        files(a, ""),
+        files(b, ""),
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/files/{id}/content",
         [files(a, "/content"), files(a, "/content?download=1")].concat(),

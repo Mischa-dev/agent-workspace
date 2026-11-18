@@ -733,6 +733,11 @@ mod tests {
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
             Tool("file_upload"),
         ),
+        (
+            Post,
+            "/api/v1/things/{kind}/{id}/files",
+            Tool("file_upload"),
+        ),
         (Delete, "/api/v1/files/{id}", Tool("file_delete")),
         (
             Delete,

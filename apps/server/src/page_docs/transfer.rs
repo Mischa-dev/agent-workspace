@@ -354,8 +354,9 @@ const MAX_PDF_BOARD_SIDE: u32 = 1600;
 /// RGBA); boards past it show as their links.
 const MAX_PDF_BOARD_PIXELS: u64 = 8_000_000;
 
-/// The pictures for a PDF's embeds: a board's drawing and a sheet range's
-/// values, each only when this reader may open it there. Anything else, or
+/// The pictures for a PDF's embeds: a board's drawing, a sheet range's
+/// values and a picture of the page (C1.33), each only when this reader may
+/// open it there. Anything else, or
 /// anything they can't see, stays its label and link.
 async fn pdf_embeds(
     state: &AppState,
@@ -377,7 +378,18 @@ async fn pdf_embeds(
             continue;
         }
         let picture = match embed_target(&href) {
-            Some(EmbedTarget::Board(_)) if board_pixels >= MAX_PDF_BOARD_PIXELS => None,
+            Some(EmbedTarget::Board(_) | EmbedTarget::File(_))
+                if board_pixels >= MAX_PDF_BOARD_PIXELS =>
+            {
+                None
+            }
+            Some(EmbedTarget::File(id)) => {
+                let picture = file_picture(state, principal, id).await?;
+                if let Some(pdf::EmbedPicture::Image { width, height, .. }) = &picture {
+                    board_pixels += u64::from(*width) * u64::from(*height);
+                }
+                picture.filter(|_| board_pixels <= MAX_PDF_BOARD_PIXELS)
+            }
             Some(EmbedTarget::Board(id)) => {
                 let picture = board_picture(state, principal, id).await?;
                 if let Some(pdf::EmbedPicture::Image { width, height, .. }) = &picture {
@@ -403,6 +415,8 @@ async fn pdf_embeds(
 #[derive(Debug, PartialEq, Eq)]
 enum EmbedTarget {
     Board(Uuid),
+    /// A file of the page, such as a pasted picture: `/files/{id}`.
+    File(Uuid),
     Sheet {
         project_id: Uuid,
         sheet_id: Uuid,
@@ -439,9 +453,56 @@ fn embed_target(href: &str) -> Option<EmbedTarget> {
                 range: query("range"),
             })
         }
+        ["files", file] => file.parse().ok().map(EmbedTarget::File),
         [.., "whiteboards", board] => board.parse().ok().map(EmbedTarget::Board),
         _ => None,
     }
+}
+
+/// The most of a picture's bytes read for a PDF.
+const MAX_PDF_PICTURE_BYTES: u64 = 30 * 1024 * 1024;
+
+/// A picture of the page as pixels, when this reader may see the file and
+/// it is one that shows inline. Anything else stays its label.
+async fn file_picture(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    file_id: Uuid,
+) -> Result<Option<pdf::EmbedPicture>, AppError> {
+    let row = match crate::files::readable_file(
+        &state.pool,
+        crate::files::Reader::Browser {
+            actor_id: principal.actor_id,
+        },
+        file_id,
+    )
+    .await
+    {
+        Ok(row) => row,
+        Err(AppError::NotFound(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let (Some(width), Some(height)) = (row.image_width, row.image_height) else {
+        return Ok(None);
+    };
+    let bytes = crate::files::FileStore::from_config(&state.config)
+        .read_all(&row.storage_key, MAX_PDF_PICTURE_BYTES)
+        .await?;
+    use base64::Engine as _;
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><image width="{width}" height="{height}" href="data:{};base64,{}"/></svg>"#,
+        row.content_type,
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+    );
+    Ok(
+        crate::whiteboards::render::pixels_within(&svg, 1.0, MAX_PDF_BOARD_SIDE)
+            .ok()
+            .map(|(rgba, width, height)| pdf::EmbedPicture::Image {
+                rgba,
+                width,
+                height,
+            }),
+    )
 }
 
 async fn board_picture(

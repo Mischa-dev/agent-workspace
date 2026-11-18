@@ -304,6 +304,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/scheduled-messages/{id}/send-now",
     "PUT /api/v1/settings/values/{key}",
     "POST /api/v1/settings/values/{key}/reset",
+    "POST /api/v1/things/{kind}/{id}/files",
     "PATCH /api/v1/threads/{id}",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
@@ -3979,6 +3980,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             |_| Payload::Bytes("text/plain", b"Net file".to_vec()),
         )
         .query("?name=net.txt"),
+        path_case(
+            "POST /api/v1/things/{kind}/{id}/files",
+            &[same("page"), id(&a.page, &b.page)],
+            |_| Payload::Bytes("image/png", tiny_png()),
+        )
+        .query("?name=net.png"),
         path_case(
             "POST /api/v1/conversations/{id}/mark-seen",
             &[channel()],

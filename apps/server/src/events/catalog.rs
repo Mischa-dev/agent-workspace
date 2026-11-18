@@ -544,7 +544,7 @@ pub static FILE_ATTACHED: EventType = fact(
     "file.attached",
     "workspace",
     Some("file"),
-    "A file was attached to a message or task",
+    "A file was attached to a message, a task or a page",
 );
 pub static FILE_REMOVED: EventType = fact(
     "file.removed",
