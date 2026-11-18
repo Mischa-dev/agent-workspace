@@ -273,15 +273,27 @@ async fn each_filter_narrows_and_none_widens() {
     let first = &places["value"]["hits"][0];
     assert_eq!(first["kind"], "channel", "{places}");
     assert_eq!(first["id"], design.as_str(), "{places}");
-    assert!(first["path"].as_str().is_some_and(|path| path.contains(&design)));
+    assert!(
+        first["path"]
+            .as_str()
+            .is_some_and(|path| path.contains(&design))
+    );
     let (_, places) = op(app, lena, "place_search", json!({"q": "mara"})).await;
     let kinds = places["value"]["hits"]
         .as_array()
         .expect("hits")
         .iter()
-        .map(|hit| (hit["kind"].as_str().unwrap_or("").to_owned(), hit["id"].clone()))
+        .map(|hit| {
+            (
+                hit["kind"].as_str().unwrap_or("").to_owned(),
+                hit["id"].clone(),
+            )
+        })
         .collect::<Vec<_>>();
-    assert!(kinds.contains(&("person".to_owned(), json!(mara.actor))), "{places}");
+    assert!(
+        kinds.contains(&("person".to_owned(), json!(mara.actor))),
+        "{places}"
+    );
     assert!(kinds.contains(&("dm".to_owned(), json!(dm))), "{places}");
     for q in ["secret", "mara", "lena"] {
         let (status, places) = op(app, nina, "place_search", json!({"q": q})).await;

@@ -435,7 +435,7 @@ impl Operation for PlaceSearch {
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
-        let modules = ProjectModules::load(&mut **tx, account, &spaces).await?;
+        let modules = ProjectModules::load(tx, account, &spaces).await?;
         // Each kind shows where the module whose manifest lists it is on.
         let on = |kind: super::SearchKind, spaces: &[Uuid]| {
             kind.module()
@@ -643,7 +643,7 @@ impl Operation for PlaceSearch {
         }
 
         // Best matches first; ties keep the order above.
-        hits.sort_by(|left, right| right.score.cmp(&left.score));
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
         hits.truncate(MAX_JUMPS);
         Ok(PlaceSearchResults { hits })
     }
