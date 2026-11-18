@@ -13,3 +13,18 @@ declare module 'virtual:modules/names' {
   const names: Readonly<Record<string, string>>
   export default names
 }
+declare module 'virtual:modules/slash-commands' {
+  // C2.24: the slash commands that run an operation, with their module.
+  const commands: ReadonlyArray<{
+    name: string
+    usage?: string
+    description: string
+    icon: string
+    operation: string
+    args: 'text' | 'none'
+    field?: string
+    where: 'space' | 'any'
+    module: string
+  }>
+  export default commands
+}

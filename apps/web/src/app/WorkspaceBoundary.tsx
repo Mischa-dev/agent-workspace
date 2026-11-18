@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
+import { AvatarSourcesProvider } from '../profiles/AvatarSourcesProvider'
 import { useProject, useProjects } from '../projects/hooks'
 import { CommandCenter } from '../shell/CommandCenter'
 import { useShellPage } from '../shell/shellStore'
@@ -49,9 +50,11 @@ export function WorkspaceProvider() {
   }, [remembered])
   return (
     <WorkspaceContext.Provider value={workspace}>
-      <Outlet />
-      {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
-      <CommandCenter />
+      <AvatarSourcesProvider workspaceId={workspace?.id}>
+        <Outlet />
+        {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
+        <CommandCenter />
+      </AvatarSourcesProvider>
     </WorkspaceContext.Provider>
   )
 }

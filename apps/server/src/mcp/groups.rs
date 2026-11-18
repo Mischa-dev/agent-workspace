@@ -247,6 +247,9 @@ pub(super) async fn conversation_members(
         let group_id = match (row.kind.as_str(), row.effective_kind()) {
             ("group", _) => row.id,
             ("thread", "group") => row.membership_conversation_id(),
+            // C2.6: a private channel's managers change its members.
+            ("channel", _) if row.private => row.id,
+            ("thread", _) if row.private => row.parent_channel_id.unwrap_or(row.id),
             (_, "dm") => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
@@ -256,11 +259,13 @@ pub(super) async fn conversation_members(
             _ => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
-                    "Channels are open to everyone in the project. To add someone to the project, an owner or admin uses project_member_set.",
+                    "This channel is open to everyone in the project. To add someone to the project, an owner or admin uses project_member_set.",
                 ));
             }
         };
-        let is_person = principal.actor_kind == ActorKind::Human;
+        // Groups predate C2.6's rule; a private channel's managers are
+        // whoever made it and whoever they choose, of any kind.
+        let is_person = row.private || principal.actor_kind == ActorKind::Human;
         if !is_person && !add.is_empty() {
             return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE));
         }

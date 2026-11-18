@@ -13,6 +13,7 @@
 //! it reads the notification as them, so a lost membership sends nothing.
 
 pub mod actions;
+pub mod receipts;
 pub mod web_push;
 
 use std::time::Duration as StdDuration;
@@ -66,6 +67,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(PRUNE_KIND, |context| async move {
         prune_deliveries(&context.state.pool).await?;
         actions::prune(&context.state.pool).await?;
+        receipts::prune(&context.state.pool).await?;
         Ok(())
     });
     registry.every(PRUNE_KIND, StdDuration::from_secs(6 * 60 * 60));
@@ -249,15 +251,31 @@ pub struct DeviceView {
     pub last_sent_at: Option<DateTime<Utc>>,
     pub last_failure_at: Option<DateTime<Utc>>,
     pub failure_count: i32,
+    /// web_push, or later apns or fcm.
+    pub transport: String,
+    /// Of the pushes sent to it in the last 30 days, how many showed and
+    /// how many were tapped (C2.34).
+    pub recent_sent: i64,
+    pub recent_shown: i64,
+    pub recent_opened: i64,
 }
 
 pub async fn devices(pool: &PgPool, actor_id: Uuid) -> Result<Vec<DeviceView>, AppError> {
     Ok(sqlx::query_as::<_, DeviceView>(
         r#"
-        SELECT id, label, service_host, endpoint_hash, created_at, last_sent_at,
-               last_failure_at, failure_count
-        FROM push_subscriptions WHERE actor_id = $1
-        ORDER BY created_at, id
+        SELECT device.id, device.label, device.service_host, device.endpoint_hash,
+               device.created_at, device.last_sent_at, device.last_failure_at,
+               device.failure_count, device.transport,
+               count(receipt.receipt_hash) AS recent_sent,
+               count(receipt.shown_at) AS recent_shown,
+               count(receipt.opened_at) AS recent_opened
+        FROM push_subscriptions device
+        LEFT JOIN push_receipts receipt
+          ON receipt.subscription_id = device.id
+         AND receipt.created_at > now() - interval '30 days'
+        WHERE device.actor_id = $1
+        GROUP BY device.id
+        ORDER BY device.created_at, device.id
         "#,
     )
     .bind(actor_id)
@@ -408,7 +426,7 @@ async fn remove_device(pool: &PgPool, actor_id: Uuid, id: Uuid) -> Result<bool, 
 // Sending
 
 #[derive(FromRow)]
-struct DeviceRow {
+pub(crate) struct DeviceRow {
     id: Uuid,
     organization_id: Uuid,
     secret_id: Uuid,
@@ -629,7 +647,13 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
         let (quiet, _) =
             notification_settings::quiet_hours(&mut connection, organization_id, job.recipient)
                 .await?;
-        if let Some(ends) = quiet.ends_after(Utc::now()) {
+        // Questions and approvals waiting on the person can break through
+        // quiet hours and days when they allow it (C2.14).
+        let urgent = matches!(
+            notification.kind.as_str(),
+            notifications::kind::REQUEST_RAISED | notifications::kind::RUN_WAITING
+        );
+        if let Some(ends) = quiet.ends_after_for(Utc::now(), urgent) {
             jobs::enqueue(
                 &state.pool,
                 NewJob::new(DELIVER_KIND)
@@ -656,8 +680,14 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
     // Approve, Deny and Reply buttons carry a token made after the checks
     // above, for this recipient only.
     let minted = actions::mint(&state.pool, organization_id, job.recipient, &notification).await?;
-    let payload = serde_json::to_vec(&payload_with_actions(&notification, minted.as_ref()))
-        .map_err(|_| JobError::permanent("push payload"))?;
+    let mut payload = payload_with_actions(&notification, minted.as_ref());
+    // C2.34: the app's badge (the places that need them), set by the
+    // service worker while the app is closed.
+    payload["badge"] = Value::from(
+        notifications::attentions(&state.pool, job.recipient)
+            .await?
+            .needs_you_conversations,
+    );
     let topic = notification.id.simple().to_string();
     let urgency = if Group::of(&notification.kind) == Group::Usage
         || notification.kind == notifications::kind::REQUEST_RAISED
@@ -679,7 +709,14 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
         if sent {
             continue;
         }
-        let result = send_one(state, &client, &device, &payload, &topic, urgency).await?;
+        // Each device's push carries its own receipt, so the service worker
+        // can say it was shown and tapped, and nothing else.
+        let receipt = receipts::mint(&state.pool, &device, notification.id).await?;
+        let mut sent_payload = payload.clone();
+        sent_payload["receipt"] = Value::String(receipt);
+        let sent_payload =
+            serde_json::to_vec(&sent_payload).map_err(|_| JobError::permanent("push payload"))?;
+        let result = send_one(state, &client, &device, &sent_payload, &topic, urgency).await?;
         if result == SendResult::Sent {
             sqlx::query(
                 "INSERT INTO push_deliveries (subscription_id, delivery_key) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -721,6 +758,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/push/subscriptions/{id}", delete(remove_http))
         .route("/api/v1/push/subscriptions/{id}/test", post(test_http))
         .route("/api/v1/notification-actions", post(actions::act_http))
+        .route("/api/v1/push-receipts", post(receipts::receipt_http))
 }
 
 #[derive(Debug, Deserialize)]

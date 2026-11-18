@@ -81,6 +81,47 @@ pub(crate) async fn href_of_conversation(
     .flatten())
 }
 
+/// Refuses a message into a thing's comments, or a thread in them, once the
+/// thing is archived or `sender` can no longer see it, whichever edge sent
+/// it. Any other conversation passes.
+pub(crate) async fn ensure_subject_takes_messages(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+    sender: Uuid,
+) -> Result<(), AppError> {
+    let subject = sqlx::query_as::<_, (String, Uuid)>(
+        r#"
+        -- visibility: the sender holds the conversation, checked by the send
+        SELECT COALESCE(parent.subject_kind, conversation.subject_kind),
+               COALESCE(parent.subject_id, conversation.subject_id)
+        FROM conversations conversation
+        LEFT JOIN conversations parent
+          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
+        WHERE conversation.id = $1
+          AND COALESCE(parent.subject_id, conversation.subject_id) IS NOT NULL
+          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((kind, thing_id)) = subject else {
+        return Ok(());
+    };
+    let Some(kind) = SubjectKind::parse(&kind) else {
+        return Ok(());
+    };
+    let home = kind
+        .subject()
+        .home(connection, thing_id, sender)
+        .await?
+        .ok_or(AppError::NotFound(kind.as_str()))?;
+    if !home.accepts_comments {
+        return Err(AppError::Conflict(kind.as_str(), "archived"));
+    }
+    Ok(())
+}
+
 /// The thing's comments conversation and its project, made if it doesn't
 /// exist yet, when `creator` may see the thing and it takes comments. A
 /// board outside any project keeps its comments in the workspace space,

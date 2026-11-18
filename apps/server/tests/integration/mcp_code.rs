@@ -763,8 +763,18 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
         ] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+        // As a value of its own: the bare digits also turn up inside ids
+        // and timestamps.
         if let Some(id) = installation_id {
-            assert!(!text.contains(&id.to_string()), "{id} in {text}");
+            for shown in [
+                format!(":{id},"),
+                format!(":{id}}}"),
+                format!("\"{id}\""),
+                format!("/{id}/"),
+                format!("/{id}\""),
+            ] {
+                assert!(!text.contains(&shown), "{id} in {text}");
+            }
         }
         for id in &installation_ids {
             assert!(!text.contains(&format!(":{id}")), "{id} in {text}");

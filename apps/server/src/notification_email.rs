@@ -311,10 +311,24 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
             &notification.kind,
         )
         .await?;
-        if decision.email {
+        // A digest also carries DMs and what needs you, wherever they show
+        // (C2.14): what someone who reads email once a day mustn't miss.
+        let must = notification.kind == notifications::kind::DIRECT_MESSAGE
+            || notification.attention == notifications::Attention::NeedsYou;
+        if decision.email || (must && decision.in_app) {
             items.push(notification);
         }
     }
+    // DMs first, then what needs you, then the rest, each newest first.
+    items.sort_by_key(|notification| {
+        if notification.kind == notifications::kind::DIRECT_MESSAGE {
+            0
+        } else if notification.attention == notifications::Attention::NeedsYou {
+            1
+        } else {
+            2
+        }
+    });
     if items.is_empty() {
         record_digest(&mut connection, candidate).await?;
         connection.commit().await?;

@@ -130,6 +130,14 @@ function chartsSheet(data: unknown, sheetId: string) {
   return Array.isArray(tiles) && tiles.some((tile) => tile.sheet === sheetId)
 }
 
+/**
+ * Open dashboards read their tiles again: a tile over a collection or over
+ * tasks shows figures any change to them can move.
+ */
+export function refreshDashboards(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') })
+}
+
 /** A thing's discussion summary (`comment_list` through `opQuery`), for one thing or any. */
 export function isCommentSummary(key: readonly unknown[], thingId?: string) {
   if (key[0] !== 'op' || key[2] !== 'comment_list') return false
@@ -177,7 +185,7 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
       void queryClient.invalidateQueries({ queryKey: collectionKeys.one(event.projectId, collection.collectionId) })
       void queryClient.invalidateQueries({ queryKey: collectionKeys.lists(event.projectId) })
       // An open dashboard's tiles read the records again.
-      void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') })
+      refreshDashboards(queryClient)
     })
     return
   }

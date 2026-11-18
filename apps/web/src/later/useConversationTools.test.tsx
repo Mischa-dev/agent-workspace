@@ -7,8 +7,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { SLASH_COMMANDS } from './slashCommands'
 import { useConversationTools } from './useConversationTools'
 
-const createWorkItem = vi.fn()
-vi.mock('../work-items/api', () => ({ createWorkItem: (input: unknown) => createWorkItem(input) }))
+const callOp = vi.fn()
+vi.mock('../api/ops', async (original) => ({
+  ...(await original<typeof import('../api/ops')>()),
+  callOp: (name: string, input: unknown, options: unknown) => callOp(name, input, options),
+}))
 vi.mock('./api', () => ({
   invalidateLater: vi.fn(),
   laterKeys: { level: (id: string) => ['level', id] },
@@ -20,7 +23,7 @@ vi.mock('./api', () => ({
 }))
 
 describe('/task', () => {
-  it('uses a new idempotency key for each task, and the same one to retry a failure', async () => {
+  it('runs its manifest’s operation, with a new request id for each task and the same one to retry a failure', async () => {
     const queryClient = new QueryClient()
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>
@@ -34,13 +37,19 @@ describe('/task', () => {
     const task = SLASH_COMMANDS.find((command) => command.name === 'task')!
     const run = (args: string) => result.current.composer.onCommand!(task, args, () => null)
 
-    createWorkItem.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    callOp.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     await expect(run('First')).rejects.toThrow()
-    createWorkItem.mockResolvedValue({ id: 'w1', key: 'AW-1', title: 'First' })
+    callOp.mockResolvedValue({ workItemId: 'w1', key: 'AW-1' })
     await run('First')
     await run('Second')
+    await expect(run('')).rejects.toThrow('Add the title after /task.')
 
-    const keys = createWorkItem.mock.calls.map(([input]) => (input as { idempotencyKey: string }).idempotencyKey)
+    expect(callOp.mock.calls.map(([name, input]) => [name, input])).toEqual([
+      ['task_create', { title: 'First', projectId: 'p1' }],
+      ['task_create', { title: 'First', projectId: 'p1' }],
+      ['task_create', { title: 'Second', projectId: 'p1' }],
+    ])
+    const keys = callOp.mock.calls.map(([, , options]) => (options as { requestId: string }).requestId)
     expect(keys[0]).toBe(keys[1])
     expect(keys[2]).not.toBe(keys[1])
   })

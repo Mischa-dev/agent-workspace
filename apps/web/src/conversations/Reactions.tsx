@@ -4,7 +4,7 @@ import { Icon, IconButton, Tooltip } from '../ui'
 import { Popover } from '../ui/Popover'
 import { CustomEmojiDialog } from './customEmoji'
 import { useCustomEmoji } from './customEmojiQuery'
-import { REACTION_CHOICES, loadEmojiList, reactionNames, searchEmoji, type ReactionChoice } from './reactions'
+import { REACTION_CHOICES, loadEmojiList, reactionKey, reactionNames, searchEmoji, type ReactionChoice } from './reactions'
 import type { MessageReaction } from './types'
 import '../styles/conversation.css'
 
@@ -50,7 +50,7 @@ export function MessageReactions({
           </>
         )
         return (
-          <Tooltip key={reaction.name} label={names ? `${names} reacted with ${reaction.emoji}` : named}>
+          <Tooltip key={reaction.customEmojiId ?? reaction.name} label={names ? `${names} reacted with ${reaction.emoji}` : named}>
             {onToggle ? (
               <button
                 aria-label={label}
@@ -87,14 +87,14 @@ export function QuickReactions({
   onPick: (choice: ReactionChoice, reacted: boolean) => void
   reactions: readonly MessageReaction[]
 }) {
-  const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map((reaction) => reaction.name))
+  const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map(reactionKey))
   return QUICK_REACTIONS.map((choice) => (
-    <Tooltip key={choice.name} label={mine.has(choice.name) ? `Remove your ${choice.emoji}` : `React with ${choice.emoji}`}>
+    <Tooltip key={choice.name} label={mine.has(reactionKey(choice)) ? `Remove your ${choice.emoji}` : `React with ${choice.emoji}`}>
       <button
         aria-label={`React with ${choice.label}`}
-        aria-pressed={mine.has(choice.name)}
+        aria-pressed={mine.has(reactionKey(choice))}
         className="aw-iconbtn aw-iconbtn--sm aw-quickreact"
-        onClick={() => onPick(choice, !mine.has(choice.name))}
+        onClick={() => onPick(choice, !mine.has(reactionKey(choice)))}
         type="button"
       >
         <span aria-hidden="true">{choice.emoji}</span>
@@ -122,7 +122,7 @@ export function ReactionPicker({
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const grid = useRef<HTMLDivElement>(null)
-  const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map((reaction) => reaction.name))
+  const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map(reactionKey))
   const toggle = (element: HTMLElement) => setAnchor((current) => (current ? null : element))
   // C2.19: any emoji, by name, and the workspace's own.
   const [query, setQuery] = useState('')
@@ -200,11 +200,11 @@ export function ReactionPicker({
           {shown.map((choice) => (
             <button
               aria-label={choice.label}
-              aria-pressed={mine.has(choice.name)}
-              className={mine.has(choice.name) ? 'aw-emojigrid__item is-mine' : 'aw-emojigrid__item'}
+              aria-pressed={mine.has(reactionKey(choice))}
+              className={mine.has(reactionKey(choice)) ? 'aw-emojigrid__item is-mine' : 'aw-emojigrid__item'}
               key={choice.name}
               onClick={() => {
-                onPick(choice, !mine.has(choice.name))
+                onPick(choice, !mine.has(reactionKey(choice)))
                 close()
               }}
               title={choice.label}

@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 
+import { callOp } from '../api/ops'
+import { toastError } from '../app/mutations'
 import { atPhrase } from '../later/when'
 import {
   Banner,
@@ -11,11 +13,11 @@ import {
   countLabel,
   formatDateTime,
   formatFullDate,
-  formatTime,
   plainPreview,
+  showToast,
 } from '../ui'
 import { BatchLaunch } from './BatchLaunch'
-import { isExternalHref, snoozeChoices, type InboxNotification, type InboxRequest, type InboxView } from './api'
+import { isExternalHref, snoozeMenu, type InboxNotification, type InboxRequest, type InboxView, type SnoozeTarget } from './api'
 import { KIND_ICON } from './kinds'
 
 /** What became of a question or approval someone already answered. */
@@ -109,10 +111,47 @@ function RequestCard({ onSend, request }: { onSend: (answer: { optionId?: string
   )
 }
 
-/** A time on the snooze menu: the clock for today or tomorrow, the date after that. */
-function snoozeHint(until: Date, now = new Date()) {
-  const days = Math.round((new Date(until).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / 86_400_000)
-  return days <= 1 ? formatTime(until.toISOString()) : formatDateTime(until.toISOString(), now)
+/** Answers a mention, DM or thread reply where it was said, without leaving the inbox (C2.10). */
+function ReplyInPlace({ conversationId, onSent, to }: { conversationId: string; onSent: () => void; to: string | null }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const send = (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
+    const message = text.trim()
+    if (!message || busy) return
+    setBusy(true)
+    void callOp('message_send', { conversationId, text: message })
+      .then(() => {
+        setText('')
+        showToast({ tone: 'success', title: to ? `Replied to ${to}` : 'Replied' })
+        onSent()
+      })
+      .catch((reason: unknown) => toastError('Your reply wasn’t sent', reason))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <form className="aw-inbox__reply" onSubmit={send}>
+      <TextArea
+        id="inbox-reply"
+        label="Reply"
+        maxLength={4000}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter sends, Shift+Enter starts a new line, as in the composer.
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault()
+            send()
+          }
+        }}
+        placeholder={to ? `Reply to ${to}` : 'Reply'}
+        rows={2}
+        value={text}
+      />
+      <Button busy={busy} disabled={!text.trim()} size="sm" type="submit" variant="primary">
+        Send
+      </Button>
+    </form>
+  )
 }
 
 /** The preview pane: what happened, and every way to act on it. */
@@ -122,6 +161,7 @@ export function NotificationDetail({
   onArchive,
   onBack,
   onOpen,
+  onReplied,
   onSnooze,
   onToggleRead,
   onUnsnooze,
@@ -132,7 +172,9 @@ export function NotificationDetail({
   onArchive: () => void
   onBack: () => void
   onOpen: () => void
-  onSnooze: (until: Date) => void
+  /** After a reply in place went out. */
+  onReplied: () => void
+  onSnooze: (until: SnoozeTarget) => void
   onToggleRead: () => void
   onUnsnooze: () => void
   view: InboxView
@@ -159,12 +201,17 @@ export function NotificationDetail({
         {item.count > 1 ? ` · ${countLabel(item.count, 'time')}` : ''}
         {item.snoozedUntil ? (
           <span title={formatFullDate(item.snoozedUntil)}> · Snoozed until {atPhrase(item.snoozedUntil)}</span>
+        ) : item.untilActivity ? (
+          <span> · Snoozed until something new happens</span>
         ) : null}
       </p>
       {item.request ? (
         <RequestCard key={item.request.id} onSend={onAnswerRequest} request={item.request} />
       ) : preview ? (
         <blockquote className="aw-inbox__quote">{preview}</blockquote>
+      ) : null}
+      {item.replyConversationId && !item.request && view !== 'archived' ? (
+        <ReplyInPlace conversationId={item.replyConversationId} key={item.id} onSent={onReplied} to={item.actor?.name ?? null} />
       ) : null}
       <div className="aw-inbox__actions">
         {item.request && item.href === '/inbox' ? null : external ? (
@@ -197,19 +244,10 @@ export function NotificationDetail({
           </Button>
         ) : view !== 'archived' ? (
           <Menu
-            items={[
-              { heading: 'Snooze until' },
-              ...snoozeChoices().map((choice) => ({
-                // The quick choices already say their time; "Later today" gets it added.
-                label: choice.id === 'later' ? `${choice.label} · ${snoozeHint(choice.until)}` : choice.label,
-                icon: 'clock' as const,
-                // The time is read again when it's picked, so a menu left open stays right.
-                onSelect: () => onSnooze(snoozeChoices().find((fresh) => fresh.id === choice.id)?.until ?? choice.until),
-              })),
-            ]}
+            items={snoozeMenu(onSnooze)}
             label="Snooze until"
             trigger={
-              <Button icon="clock" iconEnd="chevron-down">
+              <Button data-snooze="one" icon="clock" iconEnd="chevron-down">
                 Snooze
               </Button>
             }

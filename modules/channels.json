@@ -11,6 +11,11 @@
   "permissions": ["channels.post", "channels.create", "channels.moderate", "conversations.see", "conversations.members", "replies.steer"],
   "tools": {
     "channel_create": "create",
+    "channel_list": "query",
+    "channel_get": "describe",
+    "channel_join": "change",
+    "channel_leave": "change",
+    "channel_update": "change",
     "thread_start": "create",
     "thread_update": "change"
   },
@@ -58,14 +63,15 @@
   "slots": {
     "pages": [
       "/projects/:projectId/channels/:channelId",
+      "/projects/:projectId/conversations/channels",
       "/projects/:projectId/conversations/archived",
       "/projects/:projectId/threads/:threadId"
     ],
-    "parts": ["area.chat", "talk.threads"],
+    "parts": ["area.chat", "talk.threads", "channel.browse"],
     "sidebar": [],
     "home": [],
     "settings": [],
-    "palette": ["p:archived", "c:*", "t:*"],
+    "palette": ["p:channels", "p:archived", "c:*", "t:*"],
     "shortcuts": [],
     "slash": [],
     "setup": []
