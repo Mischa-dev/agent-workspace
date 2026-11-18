@@ -42,7 +42,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 /// Move every run whose liveness no longer matches its silence, and say so.
 /// Returns how many changed.
 pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let changed = sqlx::query_as::<_, RunRow>(&format!(
         r#"
         WITH due AS (
@@ -110,7 +110,7 @@ pub const STOP_GRACE_SECONDS: i64 = 600;
 ///
 /// Returns how many ended.
 pub async fn settle(pool: &PgPool) -> Result<usize, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let ended_requests = sqlx::query_as::<_, (uuid::Uuid, String, Option<String>)>(
         r#"
         SELECT run.id, latest.status, latest.reason

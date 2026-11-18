@@ -220,9 +220,7 @@ async fn request(
     let named = match arguments.remove("workspace") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => {
-            let mut connection = state
-                .pool
-                .acquire()
+            let mut connection = crate::db::scoped_tx(&state.pool)
                 .await
                 .map_err(|error| OpError::logged("workspace", &error.into()))?;
             Some(target::workspace_named(&mut connection, &text).await?)

@@ -86,7 +86,7 @@ async fn upload_to_conversation(
         via_grant_id: None,
         run_id: None,
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -125,7 +125,7 @@ async fn upload_to_task(
         Some("comment") => true,
         Some(_) => return Err(AppError::Validation("for")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
@@ -184,7 +184,7 @@ async fn remove(
         file_id,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // H1.24: the route layer refuses a closed workspace; this holds it open
     // until the removal commits.
     crate::workspace::lifecycle::hold_open_for_space(

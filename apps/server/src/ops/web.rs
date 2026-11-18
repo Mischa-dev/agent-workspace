@@ -230,7 +230,7 @@ async fn call(
     };
     let workspace = match workspace {
         Some(named) => {
-            let mut connection = match state.pool.acquire().await {
+            let mut connection = match crate::db::scoped_tx(&state.pool).await {
                 Ok(connection) => connection,
                 Err(error) => return refused(&OpError::logged(meta.name, &error.into())),
             };

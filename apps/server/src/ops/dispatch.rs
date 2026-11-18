@@ -136,7 +136,7 @@ async fn space_keys_to_ids(
         .bind(&key)
         .bind(request.caller.confined_space)
         .bind(request.workspace)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged("space key", &error.into()))?;
         if let [id] = found.as_slice() {
@@ -307,9 +307,7 @@ async fn admit<O: Operation>(
     target: &Target,
 ) -> Result<Admitted, OpError> {
     let writes = O::KIND.writes();
-    let mut connection = state
-        .pool
-        .acquire()
+    let mut connection = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     // A call that can't name its workspace needs none named when the

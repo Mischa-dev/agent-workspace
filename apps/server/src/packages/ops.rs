@@ -124,10 +124,7 @@ impl Operation for PackageExport {
             pages: input.include_pages,
             skills: input.include_skills,
         };
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
         let caller =
