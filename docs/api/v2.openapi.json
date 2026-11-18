@@ -37635,7 +37635,7 @@
         },
         "summary": "Decide a proposal",
         "tags": [
-          "pages"
+          "workspace"
         ],
         "x-operation-kind": "change"
       }
@@ -37974,7 +37974,7 @@
         },
         "summary": "List proposals",
         "tags": [
-          "pages"
+          "workspace"
         ],
         "x-operation-kind": "query"
       }

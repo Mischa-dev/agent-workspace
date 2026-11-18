@@ -781,17 +781,32 @@ impl Operation for SheetViewUpdate {
                filters = COALESCE($3, filters), sort = COALESCE($4, sort), \
                hidden_columns = COALESCE($5, hidden_columns), version = version + 1, \
                updated_at = now() \
-             WHERE id = $1",
+             WHERE id = $1 AND ($6::bigint IS NULL OR version = $6)",
         )
         .bind(id)
         .bind(name)
         .bind(input.filters.map(|filters| json!(filters)))
         .bind(input.sort.map(|sort| json!(sort)))
         .bind(hidden.map(|hidden| json!(hidden)))
+        .bind(input.expected_version)
         .execute(&mut **tx)
         .await;
+        // The version is checked again as the row is written, so two
+        // updates from one read can't both land.
         match updated {
             Err(error) if unique_violation(&error) => return Err(taken()),
+            Ok(done) if done.rows_affected() == 0 => {
+                let (now, _) = view_by_id(tx, id, viewer)
+                    .await?
+                    .ok_or(OpError::not_found(VIEW))?;
+                return Err(OpError::Conflict {
+                    reason: ConflictReason::Version {
+                        current_version: now.version,
+                    },
+                    message: "That view changed since you read it. Read it again and retry.".into(),
+                    current: None,
+                });
+            }
             other => {
                 other.map_err(db)?;
             }

@@ -454,7 +454,9 @@ changes to a task take the `expectedVersion` you last read.";
 
 /// The OpenAPI 3.1 document for every operation.
 /// Drops what a schema says twice, to keep the document small: a schema's
-/// `title` (the operation's id or the component's name says it) and the
+/// `title` (the operation's id or the component's name says it), what JSON
+/// Schema assumes without being told (`default: null`,
+/// `additionalProperties: true`), and the
 /// unsigned integer formats the schema generator adds, which aren't
 /// OpenAPI's (`minimum: 0` already says it, and the type's own maximum
 /// adds nothing).
@@ -463,6 +465,14 @@ fn slim(value: &mut Value) {
         Value::Object(map) => {
             if map.get("title").is_some_and(Value::is_string) {
                 map.remove("title");
+            }
+            // What JSON Schema assumes anyway: a null default on an optional
+            // value, and properties beyond the listed ones allowed.
+            if map.get("default").is_some_and(Value::is_null) {
+                map.remove("default");
+            }
+            if map.get("additionalProperties") == Some(&Value::Bool(true)) {
+                map.remove("additionalProperties");
             }
             if map
                 .get("format")
