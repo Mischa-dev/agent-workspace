@@ -967,7 +967,7 @@ pub async fn append(
             duplicates += 1;
             continue;
         }
-        if super::say::is_said_in_thread(&activity.kind, &activity.payload) {
+        if super::say::is_said_in_thread(activity.kind, &activity.payload) {
             super::say::enqueue(transaction, &run, &activity.client_id).await?;
         }
         seq += 1;
