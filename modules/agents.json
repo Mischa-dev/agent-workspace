@@ -20,6 +20,7 @@
     "session_bind": "change",
     "host_list": "query",
     "host_enrolment_create": "create",
+    "host_link": "change",
     "host_agent_bind": "change",
     "host_agent_unbind": "change",
     "host_unlink": "change",

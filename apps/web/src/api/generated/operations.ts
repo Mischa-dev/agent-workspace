@@ -430,6 +430,10 @@ export type HostEnrolmentCreateInput = { label?: string | null; owner: HostOwner
 
 export type HostEnrolmentCreateOutput = { code: string; enrolmentId: string; expiresAt: string; owner: OwnerView }
 
+export type HostLinkInput = { accountId?: string | null; cardUrl: string; owner: HostOwnerChoice; token?: string | null }
+
+export type HostLinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
 export type HostListInput = { mineOnly?: boolean }
 
 export type HostListOutput = { hosts: HostView[] }
@@ -784,6 +788,7 @@ export type Operations = {
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
+  host_link: { input: HostLinkInput; output: HostLinkOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }

@@ -31,6 +31,7 @@ import {
   bindHostAgent,
   createEnrolment,
   hostKeys,
+  linkA2aAgent,
   listHosts,
   unbindHostAgent,
   unlinkHost,
@@ -67,6 +68,8 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
   const [code, setCode] = useState<EnrolmentCode | null>(null)
   const [label, setLabel] = useState('')
   const [unlinking, setUnlinking] = useState<Host | null>(null)
+  const [cardUrl, setCardUrl] = useState('')
+  const [cardToken, setCardToken] = useState('')
   const refresh = () => queryClient.invalidateQueries({ queryKey: key })
   const enrol = useMutation({
     mutationFn: () =>
@@ -78,6 +81,20 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
       setCode(made)
       setLabel('')
     },
+  })
+  const linkA2a = useMutation({
+    mutationFn: () =>
+      linkA2aAgent(workspaceId, {
+        owner: mode === 'workspace' ? 'workspace' : 'person',
+        cardUrl: cardUrl.trim(),
+        ...(cardToken.trim() ? { token: cardToken.trim() } : {}),
+      }),
+    onSuccess: (host) => {
+      setCardUrl('')
+      setCardToken('')
+      showToast({ tone: 'success', title: `${host.name} linked`, description: 'Bind an agent account to it below.' })
+    },
+    onSettled: refresh,
   })
   const unlink = useMutation({
     mutationFn: (host: Host) => unlinkHost(workspaceId, host.id),
@@ -129,6 +146,43 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
           <div className="aw-form__actions">
             <Button busy={enrol.isPending} icon="plus" type="submit" variant="primary">
               Make a code
+            </Button>
+          </div>
+        </form>
+      </Section>
+      <Section id="link-a2a-heading" title="Link an A2A agent">
+        <form
+          className="aw-card aw-formcard aw-form"
+          onSubmit={(event: FormEvent<HTMLFormElement>) => {
+            event.preventDefault()
+            linkA2a.mutate()
+          }}
+        >
+          <TextField
+            hint="The agent’s address or its agent card’s. Workspace calls it; nothing runs here."
+            id="a2a-card-url"
+            label="Agent card address"
+            maxLength={1000}
+            onChange={(event) => setCardUrl(event.target.value)}
+            required
+            type="url"
+            value={cardUrl}
+          />
+          <TextField
+            autoComplete="off"
+            hint="Only if the agent asks for one. It is kept sealed and never shown again."
+            id="a2a-token"
+            label="Token"
+            onChange={(event) => setCardToken(event.target.value)}
+            type="password"
+            value={cardToken}
+          />
+          {linkA2a.isError && (
+            <Banner tone="danger">{`The agent wasn’t linked. ${describeError(linkA2a.error).message}`}</Banner>
+          )}
+          <div className="aw-form__actions">
+            <Button busy={linkA2a.isPending} disabled={!cardUrl.trim()} icon="plus" type="submit" variant="primary">
+              Link
             </Button>
           </div>
         </form>

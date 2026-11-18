@@ -53,6 +53,11 @@ export const listHosts = (workspaceId: string | null, mineOnly: boolean) =>
 export const createEnrolment = (workspaceId: string | null, input: { owner: 'person' | 'workspace'; label?: string }) =>
   callOp('host_enrolment_create', input, where(workspaceId)).then((value) => value as unknown as EnrolmentCode)
 
+export const linkA2aAgent = (
+  workspaceId: string | null,
+  input: { owner: 'person' | 'workspace'; cardUrl: string; token?: string },
+) => callOp('host_link', input, where(workspaceId)).then((value) => value as unknown as Host)
+
 export const bindHostAgent = (workspaceId: string | null, hostId: string, accountId: string, hostAgentRef: string) =>
   callOp('host_agent_bind', { hostId, accountId, hostAgentRef }, where(workspaceId)).then(
     (value) => value as unknown as Host,

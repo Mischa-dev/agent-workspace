@@ -486,6 +486,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload",
     "github_integration_write",
     "history_restore",
+    "host_link",
     "host_agent_bind",
     "host_agent_unbind",
     "host_enrolment_create",
@@ -7299,6 +7300,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"owner": "workspace", "workspace": a.organization, "label": "Net mcp host"}),
             vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
         ),
+        mcp_case(
+            "host_link",
+            json!({"owner": "workspace", "workspace": a.organization, "cardUrl": "https://agent.example.com"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "cardUrl": "https://agent.example.com"})],
+        )
+        .without_own("it reads an agent card over the network, which tests can't reach"),
         mcp_case(
             "host_agent_bind",
             json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),

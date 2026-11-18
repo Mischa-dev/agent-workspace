@@ -748,6 +748,22 @@
     "title": "Make a host enrolment code"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.linked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_link",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link an A2A agent"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

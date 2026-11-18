@@ -1765,6 +1765,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a host's pending offer of an agent; the host proposes it again after import",
             ),
             (
+                "host_a2a_tasks",
+                "an outside agent's task for a run in flight; a run that moves ends rather than resumes",
+            ),
+            (
                 "host_commands",
                 "requests to a host for runs in flight; a run that moves ends rather than resumes",
             ),

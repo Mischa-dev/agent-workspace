@@ -22484,6 +22484,537 @@
         "x-operation-kind": "create"
       }
     },
+    "/api/v2/w/{workspace}/ops/host_link": {
+      "post": {
+        "description": "Link an agent that speaks the A2A protocol, by its Agent Card's address, as a host you own (owner person) or the workspace's (owner workspace, which needs hosts.manage). The card's agent is the host's one described agent (hostAgentRef \"agent\"); bind an agent account to it here with accountId or later with host_agent_bind, and mentions and launches of that account then run on the A2A agent.",
+        "operationId": "host_link",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "accountId": {
+                    "description": "An agent account to bind to it now (its id), as host_agent_bind would.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cardUrl": {
+                    "description": "The agent's A2A Agent Card: its address, or the agent's own address\n(its card is then read from /.well-known/agent-card.json).",
+                    "type": "string"
+                  },
+                  "owner": {
+                    "$ref": "#/components/schemas/HostOwnerChoice",
+                    "description": "person (a host you own) or workspace (one the workspace owns)."
+                  },
+                  "token": {
+                    "description": "A bearer token the agent asks for, if any. Kept sealed; never shown\nagain.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "owner",
+                  "cardUrl"
+                ],
+                "title": "HostLinkInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actions": {
+                              "items": true,
+                              "type": "array"
+                            },
+                            "agents": {
+                              "description": "The agent accounts it may act for.",
+                              "items": {
+                                "$ref": "#/components/schemas/HostAgentView"
+                              },
+                              "type": "array"
+                            },
+                            "builtin": {
+                              "description": "This server's own runner: it can't be unlinked or given agents here.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether the caller may bind agents to it and unlink it.",
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "additionalProperties": true,
+                              "type": "object"
+                            },
+                            "connection": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "describedAgents": {
+                              "description": "The agents the host last described, bound or not.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastSeenAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "moduleManifestUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "offers": {
+                              "description": "Ways to get a new agent, in the host's own words.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "owner": {
+                              "$ref": "#/components/schemas/OwnerView"
+                            },
+                            "protocol": {
+                              "type": "string"
+                            },
+                            "software": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "softwareVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "status": {
+                              "description": "active, offline or revoked.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "owner",
+                            "builtin",
+                            "status",
+                            "protocol",
+                            "connection",
+                            "capabilities",
+                            "offers",
+                            "actions",
+                            "describedAgents",
+                            "agents",
+                            "canManage",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "HostView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actions": {
+                              "items": true,
+                              "type": "array"
+                            },
+                            "agents": {
+                              "description": "The agent accounts it may act for.",
+                              "items": {
+                                "$ref": "#/components/schemas/HostAgentView"
+                              },
+                              "type": "array"
+                            },
+                            "builtin": {
+                              "description": "This server's own runner: it can't be unlinked or given agents here.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether the caller may bind agents to it and unlink it.",
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "additionalProperties": true,
+                              "type": "object"
+                            },
+                            "connection": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "describedAgents": {
+                              "description": "The agents the host last described, bound or not.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastSeenAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "moduleManifestUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "offers": {
+                              "description": "Ways to get a new agent, in the host's own words.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "owner": {
+                              "$ref": "#/components/schemas/OwnerView"
+                            },
+                            "protocol": {
+                              "type": "string"
+                            },
+                            "software": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "softwareVersion": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "status": {
+                              "description": "active, offline or revoked.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "owner",
+                            "builtin",
+                            "status",
+                            "protocol",
+                            "connection",
+                            "capabilities",
+                            "offers",
+                            "actions",
+                            "describedAgents",
+                            "agents",
+                            "canManage",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "HostView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Link an A2A agent",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/host_list": {
       "post": {
         "description": "List the hosts (machines and services that run agents) you own and the workspace's: their status, the agents bound to each and the ones each last described, and whether you may manage it. Bind an agent with host_agent_bind.",

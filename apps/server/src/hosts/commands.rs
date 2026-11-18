@@ -172,18 +172,24 @@ pub async fn issue(
     Ok(row)
 }
 
-/// For a push host, a job that sends the host this command's thin event.
+/// For a push host, a job that sends the host this command's thin event;
+/// for an A2A host, the job that makes the call.
 async fn push_later(
     transaction: &mut Transaction<'_, Postgres>,
     row: &CommandRow,
 ) -> Result<(), AppError> {
-    let pushed = sqlx::query_scalar::<_, bool>(
-        "SELECT connection = 'push' AND push_url IS NOT NULL AND status <> 'revoked' FROM hosts WHERE id = $1",
+    let (pushed, a2a) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT connection = 'push' AND push_url IS NOT NULL AND status <> 'revoked', \
+                connection = 'a2a' AND status <> 'revoked' \
+         FROM hosts WHERE id = $1",
     )
     .bind(row.host_id)
     .fetch_one(&mut **transaction)
     .await?;
-    if pushed {
+    if a2a {
+        // An A2A agent is called by Workspace itself (A1.20).
+        super::a2a::send_later(transaction, row.id, row.workspace_id).await?;
+    } else if pushed {
         crate::jobs::enqueue(
             &mut **transaction,
             NewJob::new(PUSH_KIND)
@@ -727,7 +733,7 @@ pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
     changed += sqlx::query(
         r#"
         UPDATE hosts SET status = 'offline', updated_at = now()
-         WHERE status = 'active' AND NOT builtin
+         WHERE status = 'active' AND NOT builtin AND connection <> 'a2a'
            AND last_seen_at < now() - make_interval(secs => report_interval_seconds * 3)
         "#,
     )

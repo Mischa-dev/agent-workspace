@@ -29,6 +29,7 @@ use crate::{
     roles,
 };
 
+pub mod a2a;
 pub mod builtin;
 pub mod commands;
 pub mod dispatch;
@@ -553,16 +554,14 @@ fn label(value: Option<&str>) -> Result<Option<String>, AppError> {
     Ok(Some(value.to_owned()))
 }
 
-/// Make a one-time code that links a host to `owner`. A person may own a
-/// host; a workspace's host needs `hosts.manage` there.
-pub async fn create_enrolment(
+/// Whether `caller` may link a host for `owner`: a person their own, and a
+/// workspace's with `hosts.manage` there.
+pub(crate) async fn may_link(
     transaction: &mut Transaction<'_, Postgres>,
     caller: Uuid,
     caller_kind: ActorKind,
     owner: Owner,
-    label_text: Option<&str>,
-) -> Result<EnrolmentCode, AppError> {
-    let label_text = label(label_text)?;
+) -> Result<(), AppError> {
     match owner {
         Owner::Account(account) => {
             // A host's owner is a person or a workspace (R19).
@@ -585,6 +584,20 @@ pub async fn create_enrolment(
             }
         }
     }
+    Ok(())
+}
+
+/// Make a one-time code that links a host to `owner`. A person may own a
+/// host; a workspace's host needs `hosts.manage` there.
+pub async fn create_enrolment(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: Uuid,
+    caller_kind: ActorKind,
+    owner: Owner,
+    label_text: Option<&str>,
+) -> Result<EnrolmentCode, AppError> {
+    let label_text = label(label_text)?;
+    may_link(transaction, caller, caller_kind, owner).await?;
     let open = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM host_enrolments
