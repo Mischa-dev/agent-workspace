@@ -30,6 +30,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<SheetViewUpdate>()
         .add::<SheetViewDelete>()
         .add::<SheetRangeSet>()
+        .add::<super::row_ops::SheetRowAdd>()
         .add::<super::chart_ops::SheetChartSet>()
         .add::<super::chart_ops::SheetChartGet>();
 }

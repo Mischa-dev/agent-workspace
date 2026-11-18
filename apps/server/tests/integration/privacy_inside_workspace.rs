@@ -3100,6 +3100,100 @@ async fn channel_writes_keep_to_private_channels() {
         "{timeline}"
     );
 
+    // C1.25, C2.22: a page, a sheet row or a sticky is made only from a
+    // message its maker reads, and saying so puts a line in the channel.
+    let (status, sheet) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/sheets"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": "Plans"}),
+        ),
+    )
+    .await;
+    let sheet = sheet
+        .pointer("/sheet/id")
+        .or_else(|| sheet.pointer("/id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("lena makes a sheet: {status} {sheet}"))
+        .to_owned();
+    let (status, board) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Plans", "projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let sticky = |from: &str| {
+        json!({"whiteboardId": board, "fromMessageId": from, "saySo": true, "operations": [
+            {"op": "add", "type": "rectangle", "text": "From the channel"},
+        ]})
+    };
+    for (name, input) in [
+        ("page_make", json!({"messages": [hidden], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": hidden, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&hidden)),
+    ] {
+        let (status, refused) = op(&omar.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {refused}");
+        assert!(
+            !refused.to_string().contains("secret-plans"),
+            "{name}: {refused}"
+        );
+    }
+    let mut made_things = Vec::new();
+    for (name, input) in [
+        ("page_make", json!({"messages": [shown], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": shown, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&shown)),
+    ] {
+        let (status, made) = op(&omar.browser, name, input).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {made}");
+        made_things.push(made);
+    }
+    let cell = sqlx::query_scalar::<_, String>(
+        "SELECT cell.input FROM sheet_cells cell JOIN sheet_tabs tab ON tab.id = cell.tab_id \
+         WHERE tab.sheet_id = $1::uuid AND cell.row_number = $2",
+    )
+    .bind(&sheet)
+    .bind(
+        made_things[1]["value"]["row"]
+            .as_i64()
+            .and_then(|row| i32::try_from(row).ok())
+            .expect("row"),
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the row");
+    assert_eq!(cell, "Open plans launch day");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let said = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["system"]["thingKind"].as_str())
+        .collect::<Vec<_>>();
+    for kind in ["page", "sheet_row", "sticky"] {
+        assert!(said.contains(&kind), "a line for the {kind}: {timeline}");
+    }
+
     // C2.8: a channel's Tasks tab lists what its tasks are only to people
     // who read the channel and may see tasks.
     let (status, task) = op(

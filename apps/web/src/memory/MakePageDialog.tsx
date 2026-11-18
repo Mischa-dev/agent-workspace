@@ -37,6 +37,8 @@ export function MakePageDialog({
   const [title, setTitle] = useState(suggestedTitle)
   const [target, setTarget] = useState(() => projects?.[0]?.id ?? projectId)
   const [move, setMove] = useState(false)
+  // A line in the conversation that says the messages became a page.
+  const [saySo, setSaySo] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [requestId] = useState(() => newRequestId())
@@ -48,9 +50,9 @@ export function MakePageDialog({
     setError(null)
     const from =
       source.kind === 'messages'
-        ? { messages: source.messageIds }
+        ? { messages: source.messageIds, saySo }
         : source.kind === 'thread'
-          ? { threadId: source.threadId }
+          ? { threadId: source.threadId, saySo }
           : { pageId: source.pageId, blocks: source.blockIds, move }
     void callOp('page_make', { spaceId: target, title: title.trim() || null, ...from }, { requestId })
       .then(async (made) => {
@@ -112,7 +114,9 @@ export function MakePageDialog({
       />
       {source.kind === 'blocks' ? (
         <Checkbox checked={move} label="Move them, and leave the new page embedded here" onChange={setMove} />
-      ) : null}
+      ) : (
+        <Checkbox checked={saySo} label="Say so in the conversation" onChange={setSaySo} />
+      )}
     </Dialog>
   )
 }

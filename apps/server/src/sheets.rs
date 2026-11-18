@@ -30,6 +30,7 @@ pub mod http;
 pub mod ops;
 pub mod proposals;
 pub mod ranges;
+pub mod row_ops;
 pub mod transfer;
 pub mod validation;
 

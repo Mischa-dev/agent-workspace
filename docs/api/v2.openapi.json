@@ -43134,7 +43134,7 @@
     },
     "/api/v2/w/{workspace}/ops/page_make": {
       "post": {
-        "description": "Make a page from messages (quoted in order, with a link back), a whole thread, blocks of another page (copied, or moved so a link to the new page takes their place; change_undo puts them back), or a whiteboard (a heading per frame, its notes as bullets). The page shows what it was made from. From a DM or group, name the space. Needs \"Edit pages and decisions\" where it acts.",
+        "description": "Make a page from messages (quoted in order, with a link back), a whole thread, blocks of another page (copied, or moved so a link to the new page takes their place; change_undo puts them back), or a whiteboard (a heading per frame, its notes as bullets). The page shows what it was made from; with saySo the conversation says you made it. From a DM or group, name the space. Needs \"Edit pages and decisions\" where it acts.",
         "operationId": "page_make",
         "parameters": [
           {
@@ -43190,6 +43190,10 @@
                       "string",
                       "null"
                     ]
+                  },
+                  "saySo": {
+                    "description": "With messages or a threadId: also say in that conversation that you\nmade them into this page.",
+                    "type": "boolean"
                   },
                   "spaceId": {
                     "description": "The space the page goes in: its id, link or key. Needed for messages\nin a DM or group; otherwise it's where they are.",
@@ -57082,6 +57086,374 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/sheet_row_add": {
+      "post": {
+        "description": "Add a row under a sheet tab's last one, with values by header (a missing header is added to row 1), or make one from a message (fromMessageId; its text goes under Message unless you pass values). With saySo the conversation says you made it. Needs \"Edit sheets\" where it acts.",
+        "operationId": "sheet_row_add",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "fromMessageId": {
+                    "description": "The message the row is made from (its id, or a link), in a\nconversation of the sheet's space that you can read.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "saySo": {
+                    "description": "With fromMessageId: also say in that conversation that you made the\nmessage into a row of this sheet.",
+                    "type": "boolean"
+                  },
+                  "sheetId": {
+                    "description": "The sheet: its id or link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "tab": {
+                    "description": "The tab, by name; leave out for the first.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "values": {
+                    "additionalProperties": true,
+                    "description": "Values by header (row 1), up to 50. A header that isn't there yet is\nadded. Made from a message and left out: its text under \"Message\".",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "sheetId"
+                ],
+                "title": "SheetRowAddInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "revision": {
+                              "description": "The sheet's revision now.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "row": {
+                              "description": "The row it went in (1 is the header row).",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "sheetId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "sheetId",
+                            "row",
+                            "revision"
+                          ],
+                          "title": "SheetRowAdded",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "revision": {
+                              "description": "The sheet's revision now.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "row": {
+                              "description": "The row it went in (1 is the header row).",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "sheetId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "sheetId",
+                            "row",
+                            "revision"
+                          ],
+                          "title": "SheetRowAdded",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Add a sheet row",
+        "tags": [
+          "sheets"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/sheet_search": {
       "post": {
         "description": "Find cells in a sheet by what they show (or, with inFormulas, by their formulas), in reading order, with the sheet's revision. To replace what was found, write the new inputs with sheet_write, giving that revision as each cell's ifRevision so a cell someone changed since isn't overwritten.",
@@ -70580,7 +70952,7 @@
     },
     "/api/v2/w/{workspace}/ops/whiteboard_update_elements": {
       "post": {
-        "description": "Draw on a whiteboard with operations: add shapes, text, arrows and images, connect shapes, update, move, align, distribute, lay out, group and order them, or delete them. The server turns them into elements and merges them like a browser's change, so open boards update live. Pass the sceneSeq you read as expectedSceneSeq to be told when someone else changed what you touch. If you only suggest here, it becomes a proposal (proposalId). Needs \"Suggest whiteboard changes\" where it acts.",
+        "description": "Draw on a whiteboard with operations: add shapes, text, arrows and images, connect shapes, update, move, align, distribute, lay out, group and order them, or delete them. The server turns them into elements and merges them like a browser's change, so open boards update live. Pass the sceneSeq you read as expectedSceneSeq to be told when someone else changed what you touch. Made from a message (fromMessageId, such as a sticky with its text), saySo tells the conversation. If you only suggest here, it becomes a proposal (proposalId). Needs \"Suggest whiteboard changes\" where it acts.",
         "operationId": "whiteboard_update_elements",
         "parameters": [
           {
@@ -70624,12 +70996,24 @@
                       "null"
                     ]
                   },
+                  "fromMessageId": {
+                    "description": "The message what you add is made from (its id, or a link), such as\na sticky with its text, in a conversation of the board's space that\nyou can read (C2.22).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "operations": {
                     "description": "Applied in order, all or nothing. Each is {op, ...}:\nadd {type, id?, x?, y?, width?, height?, text?, styles…} draws a\nshape (rectangle, ellipse, diamond, frame), text, line or arrow;\nadd {type: \"image\", dataBase64, mimeType?, x?, y?, width?, height?}\nputs an image on the board (or fileId, one already on it);\nconnect {from, to, text?, id?} draws an arrow bound to both;\nupdate {id, text?, x?, y?, width?, height?, styles…};\ndelete {ids} (labels and bound arrows go with their shape);\nmove {ids, dx, dy}; align {ids, edge}; distribute {ids, axis, gap?};\nlayout {ids?, direction?, gap?}; group/ungroup {ids};\norder {ids, position}. Arrows follow the shapes they connect.",
                     "items": {
                       "$ref": "#/components/schemas/Operation"
                     },
                     "type": "array"
+                  },
+                  "saySo": {
+                    "description": "With fromMessageId: also say in that conversation that you made the\nmessage into a sticky on this board.",
+                    "type": "boolean"
                   },
                   "whiteboardId": {
                     "description": "The board: its id or a link to it.",

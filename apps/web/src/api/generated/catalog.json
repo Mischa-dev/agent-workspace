@@ -2049,6 +2049,22 @@
     "title": "Name a sheet range"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_row_add",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Add a sheet row"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

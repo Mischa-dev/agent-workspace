@@ -643,6 +643,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_duplicate",
     "whiteboard_to_tasks",
     "whiteboard_ask",
+    "sheet_row_add",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -7087,6 +7088,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
             json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
         ]),
+        // C2.22: a sheet row from a message, only into a sheet here and
+        // only from a message here.
+        mcp_case(
+            "sheet_row_add",
+            json!({"sheetId": a.sheet, "fromMessageId": a.message}),
+            vec![json!({"sheetId": b.sheet, "values": {"Item": "Net"}})],
+        )
+        .rejecting(vec![
+            json!({"sheetId": a.sheet, "fromMessageId": b.message}),
+        ]),
         mcp_case(
             "button_press",
             json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),
@@ -7322,7 +7333,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
-        ),
+        )
+        // C2.22: a sticky is made only from a message here.
+        .rejecting(vec![json!({"whiteboardId": a.whiteboard, "fromMessageId": b.message,
+            "operations": [{"op": "add", "type": "rectangle", "id": "netmsg", "text": "Net"}]})]),
         // C1.11: a proposal goes only on a board the caller can see.
         mcp_case(
             "whiteboard_propose",

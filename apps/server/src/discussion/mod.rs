@@ -235,6 +235,28 @@ pub(crate) async fn hand_over(
     }
 }
 
+/// A message a thing is made from (C2.22): one the actor can read, in a
+/// conversation of `space`. Its id, conversation and text, or None.
+pub(crate) async fn message_in_space(
+    connection: &mut sqlx::PgConnection,
+    message_id: Uuid,
+    space: Uuid,
+    actor: Uuid,
+) -> Result<Option<(Uuid, Uuid, String)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        "SELECT message.id, message.conversation_id, message.plain_text \
+         FROM messages message \
+         WHERE message.id = $1 AND message.project_id = $2 \
+           AND message.removed_at IS NULL \
+           AND conversation_visible_to(message.conversation_id, $3)",
+    )
+    .bind(message_id)
+    .bind(space)
+    .bind(actor)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
 /// Posts a comment on a thing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post(

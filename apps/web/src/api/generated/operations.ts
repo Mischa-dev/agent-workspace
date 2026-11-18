@@ -700,7 +700,7 @@ export type PageFileUploadInput = { contentType?: string | null; dataBase64?: st
 
 export type PageFileUploadOutput = { contentType: string; embed: string; fileId: string; name: string; size: number }
 
-export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null; whiteboardId?: string | null }
+export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; saySo?: boolean; spaceId?: string | null; threadId?: string | null; title?: string | null; whiteboardId?: string | null }
 
 export type PageMakeOutput = { id: string; sourceVersion?: number | null; spaceId: string; title: string; url: string }
 
@@ -835,6 +835,10 @@ export type SheetChartSetOutput = { chartId?: string | null; charts: Chart[] }
 export type SheetRangeSetInput = { name: string; range?: string | null; remove?: boolean; sheetId: string }
 
 export type SheetRangeSetOutput = { ranges: NamedRange[] }
+
+export type SheetRowAddInput = { fromMessageId?: string | null; saySo?: boolean; sheetId: string; tab?: string | null; values?: Record<string, unknown> }
+
+export type SheetRowAddOutput = { revision: number; row: number; sheetId: string }
 
 export type SheetSearchInput = { inFormulas?: boolean; limit?: number | null; matchCase?: boolean; query: string; sheetId: string; tab?: string | null; wholeCell?: boolean }
 
@@ -972,7 +976,7 @@ export type WhiteboardUpdateInput = { deleted?: boolean | null; expectedVersion?
 
 export type WhiteboardUpdateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
 
-export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; expectedSceneSeq?: number | null; operations: Operation[]; whiteboardId: string }
+export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; expectedSceneSeq?: number | null; fromMessageId?: string | null; operations: Operation[]; saySo?: boolean; whiteboardId: string }
 
 export type WhiteboardUpdateElementsOutput = { changed: string[]; proposalId?: string | null; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
@@ -1119,6 +1123,7 @@ export type Operations = {
   sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }
   sheet_chart_set: { input: SheetChartSetInput; output: SheetChartSetOutput }
   sheet_range_set: { input: SheetRangeSetInput; output: SheetRangeSetOutput }
+  sheet_row_add: { input: SheetRowAddInput; output: SheetRowAddOutput }
   sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
   sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }
   sheet_view_delete: { input: SheetViewDeleteInput; output: SheetViewDeleteOutput }

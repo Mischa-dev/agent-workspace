@@ -70,6 +70,15 @@ pub struct WhiteboardUpdateElementsInput {
     /// first, so whiteboard_update restoreRevision can undo it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm_delete: Option<bool>,
+    /// The message what you add is made from (its id, or a link), such as
+    /// a sticky with its text, in a conversation of the board's space that
+    /// you can read (C2.22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_message_id: Option<crate::ops::refs::MessageRef>,
+    /// With fromMessageId: also say in that conversation that you made the
+    /// message into a sticky on this board.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub say_so: bool,
 }
 
 impl Targeted for WhiteboardUpdateElementsInput {
@@ -95,8 +104,9 @@ impl Operation for WhiteboardUpdateElements {
         arrows and images, connect shapes, update, move, align, distribute, lay out, group and \
         order them, or delete them. The server turns them into elements and merges them like a \
         browser's change, so open boards update live. Pass the sceneSeq you read as \
-        expectedSceneSeq to be told when someone else changed what you touch. If you only \
-        suggest here, it becomes a proposal (proposalId).";
+        expectedSceneSeq to be told when someone else changed what you touch. Made from a \
+        message (fromMessageId, such as a sticky with its text), saySo tells the conversation. \
+        If you only suggest here, it becomes a proposal (proposalId).";
     const EMITS: &'static [&'static str] = &["whiteboard.updated", "whiteboard.proposals_changed"];
 
     type Input = WhiteboardUpdateElementsInput;
@@ -112,6 +122,26 @@ impl Operation for WhiteboardUpdateElements {
         let state = call.state;
         let tx = call.tx().await?;
         let (board, mode) = board_for_writing(tx, &caller, &access_caller, id).await?;
+        // The message it's made from, only one the caller reads in the
+        // board's space.
+        let source = match input.from_message_id {
+            None => None,
+            Some(message) => Some(
+                crate::discussion::message_in_space(
+                    tx,
+                    message.id(),
+                    board.project_id,
+                    caller.actor_id,
+                )
+                .await?
+                .ok_or_else(|| {
+                    OpError::invalid(
+                        "fromMessageId",
+                        "That isn't a message you can read in this board's space.",
+                    )
+                })?,
+            ),
+        };
         if mode == WriteMode::Propose {
             let planned = edit::plan(tx, id, &input.operations, input.expected_scene_seq)
                 .await
@@ -150,6 +180,18 @@ impl Operation for WhiteboardUpdateElements {
         )
         .await
         .map_err(whiteboard_commands::edit_error)?;
+        if let Some((message_id, conversation_id, _)) = source {
+            crate::conversations::system_entries::made_from_message(
+                tx,
+                conversation_id,
+                caller.actor_id,
+                "sticky",
+                id,
+                message_id,
+                input.say_so,
+            )
+            .await?;
+        }
         call.audit_target(
             "whiteboard",
             id,
