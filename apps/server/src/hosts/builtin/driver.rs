@@ -164,7 +164,7 @@ async fn answered(state: &AppState, command: &Command) -> Ack {
     if goes_on && detail_state(state, run_id).await.as_deref() != Some("blocked") {
         return Ack::new(AckOutcome::Accepted);
     }
-    let reports = match RunReports::open(state, run_id).await {
+    let reports = match super::report::open(state, run_id).await {
         Ok(reports) => reports,
         Err(error) => {
             tracing::warn!(%run_id, error_category = error.log_category(), "a run's answer wasn't heard");
@@ -222,7 +222,7 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
         .and_then(serde_json::Value::as_str)
         .unwrap_or(crate::runs::state::STOPPED_BY_REQUESTER)
         .to_owned();
-    let stopped = match RunReports::open(state, run_id).await {
+    let stopped = match super::report::open(state, run_id).await {
         Ok(reports) => stop(state, &reports, run_id, &reason, "The run was interrupted.").await,
         Err(error) => Err(error),
     };

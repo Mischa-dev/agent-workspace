@@ -9,6 +9,7 @@ pub mod error;
 pub mod git;
 pub mod harness;
 pub mod profile;
+pub mod runtime;
 pub mod steps;
 
 pub use config::HarnessConfig;
