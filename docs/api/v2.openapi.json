@@ -50235,6 +50235,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
@@ -50370,6 +50377,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
@@ -50541,6 +50555,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
@@ -50676,6 +50697,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
@@ -50923,6 +50951,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
@@ -51058,6 +51093,13 @@
                                 "$ref": "#/components/schemas/SidebarSection"
                               },
                               "type": "array"
+                            },
+                            "workspaceSpaceId": {
+                              "description": "The workspace's own space, where its channels live when it has no\nprojects (C2.40).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [

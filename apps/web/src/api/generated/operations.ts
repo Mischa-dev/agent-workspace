@@ -730,15 +730,15 @@ export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: Sche
 
 export type SidebarItemMoveInput = { conversationId: string; position?: number | null; sectionId?: string | null; starred?: boolean | null }
 
-export type SidebarItemMoveOutput = { sections: SidebarSection[] }
+export type SidebarItemMoveOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
 
 export type SidebarListInput = Record<string, never>
 
-export type SidebarListOutput = { sections: SidebarSection[] }
+export type SidebarListOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
 
 export type SidebarSectionSetInput = { collapsed?: boolean | null; delete?: boolean | null; expectedVersion?: number | null; name?: string | null; position?: number | null; sectionId?: string | null; show?: SectionShow | null; sort?: SectionSort | null }
 
-export type SidebarSectionSetOutput = { sections: SidebarSection[] }
+export type SidebarSectionSetOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
 
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 

@@ -124,6 +124,11 @@ struct SectionRow {
 #[serde(rename_all = "camelCase")]
 pub struct Sidebar {
     pub sections: Vec<SidebarSection>,
+    /// The workspace's own space, where its channels live when it has no
+    /// projects (C2.40).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub workspace_space_id: Option<Uuid>,
 }
 
 /// The caller's sections in the call's workspace, with what they can still
@@ -222,7 +227,11 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
             }
         })
         .collect();
-    Ok(Sidebar { sections })
+    let workspace_space_id = crate::spaces::workspace::find(tx, workspace).await?;
+    Ok(Sidebar {
+        sections,
+        workspace_space_id,
+    })
 }
 
 /// Tells the caller's other tabs and devices (their id only), in the same
