@@ -33,6 +33,18 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// Events waiting for a position in the log: how many, and the age in
+/// seconds of the oldest (0 when none wait). For the status page and the
+/// metrics, which read the log only through this module.
+pub async fn staged_backlog(connection: &mut PgConnection) -> Result<(i64, f64), sqlx::Error> {
+    sqlx::query_as::<_, (i64, f64)>(
+        "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+         FROM event_staging",
+    )
+    .fetch_one(connection)
+    .await
+}
+
 /// Who is acting in this transaction, for every event it emits: the
 /// account, the credential (and so the app) it came through, who asked for
 /// it, the run it is part of and the caller's request id. K2's runner sets

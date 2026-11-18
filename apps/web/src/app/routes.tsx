@@ -25,6 +25,7 @@ import {
   ResetPasswordPage,
   SearchPage,
   SettingsArea,
+  SetupPage,
   SignInPage,
   VerifyEmailPage,
 } from './pages'
@@ -85,6 +86,7 @@ export const moduleRoutes = (key: 'routes' | 'publicRoutes', modules: readonly W
 /** Signed out: these pages need no session. */
 const publicRoutes: AppRoute[] = [
   publicPage('/sign-in', SignInPage),
+  publicPage('/setup', SetupPage),
   publicPage('/forgot-password', ForgotPasswordPage),
   publicPage('/reset-password', ResetPasswordPage),
   publicPage('/verify-email', VerifyEmailPage),

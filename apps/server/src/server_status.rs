@@ -291,12 +291,17 @@ async fn read_http(
         },
     };
     let queue = jobs::queue_stats(&state.pool).await?;
-    let (waiting, oldest_waiting_seconds, parked) = crate::db::scoped_one(&state.pool, async |connection| sqlx::query_as::<_, (i64, f64, i64)>(
-        "SELECT (SELECT count(*) FROM event_staging), \
-                COALESCE((SELECT EXTRACT(EPOCH FROM now() - min(staged_at)) FROM event_staging), 0)::float8, \
-                (SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL)",
-    )
-    .fetch_one(&mut *connection).await).await?;
+    let ((waiting, oldest_waiting_seconds), parked) =
+        crate::db::scoped_one(&state.pool, async |connection| {
+            let backlog = crate::events::staged_backlog(&mut *connection).await?;
+            let parked = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL",
+            )
+            .fetch_one(&mut *connection)
+            .await?;
+            Ok::<_, sqlx::Error>((backlog, parked))
+        })
+        .await?;
     // Instances heard from in the last minute that haven't stopped.
     let instances = crate::db::scoped_one(&state.pool, async |connection| {
         sqlx::query_as::<_, InstanceView>(

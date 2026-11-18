@@ -539,13 +539,18 @@ async fn gauge(
             .await?
         }
         ("workspaces_owned", Scope::Account(account)) => {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM organization_memberships \
-                 WHERE actor_id = $1 AND role = 'owner' AND enabled", // kind-check: mechanical (counting ownership, not deciding access)
+            // Ownership is the role's tier, read the way access reads it.
+            let roles = sqlx::query_scalar::<_, String>(
+                "SELECT role FROM organization_memberships WHERE actor_id = $1 AND enabled",
             )
             .bind(account)
-            .fetch_one(&mut *connection)
-            .await?
+            .fetch_all(&mut *connection)
+            .await?;
+            roles
+                .iter()
+                .filter_map(|role| crate::policy::MembershipRole::parse(role))
+                .filter(|role| crate::access::Tier::from(*role) == crate::access::Tier::Owner)
+                .count() as i64
         }
         // Guests come with C2; until then there are none.
         _ => 0,
@@ -594,13 +599,16 @@ async fn counted(
         .unwrap_or(0))
 }
 
+/// A limit with what was used and what the ask would make it.
+type Decided = (Limit, i64, i64);
+
 /// Of the limits that apply, the one that decides: a hard limit the ask
 /// goes over (the smallest such), else the one it comes nearest.
 fn decide(
     checked: &[(Limit, i64)],
     quantity: i64,
     kind: MeterKind,
-) -> Result<Option<(Limit, i64, i64)>, (Limit, i64, i64)> {
+) -> Result<Option<Decided>, Decided> {
     let after = |used: i64| {
         if kind == MeterKind::Each {
             quantity
@@ -859,6 +867,67 @@ pub async fn largest(
     )
 }
 
+/// Writes a subscription's state, as its merchant of record reported it at
+/// `read_at`, into the workspace's plan (H1.33): the one writer of a
+/// workspace's plan besides staff. An older reading never overwrites a
+/// newer one, and an ended subscription that has since been replaced by
+/// another changes nothing. Ended, the workspace goes back to the free
+/// plan with everything kept. True when it changed the plan row.
+pub async fn apply_billing_state(
+    connection: &mut PgConnection,
+    provider: &str,
+    subscription: &crate::billing::Subscription,
+    read_at: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    use crate::billing::SubscriptionState;
+    let ended = subscription.state == SubscriptionState::Ended;
+    let plan = if ended {
+        "free"
+    } else {
+        subscription.plan_id.as_str()
+    };
+    let known = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM plans WHERE id = $1)")
+        .bind(plan)
+        .fetch_one(&mut *connection)
+        .await?;
+    if !known {
+        return Err(AppError::Validation("billing plan"));
+    }
+    let status = match subscription.state {
+        SubscriptionState::Trialing => "trialing",
+        SubscriptionState::PastDue => "past_due",
+        SubscriptionState::Active | SubscriptionState::Ended => "active",
+    };
+    start_plan(&mut *connection, subscription.workspace_id).await?;
+    let changed = sqlx::query(
+        "UPDATE workspace_plans SET plan_id = $3, status = $4, source = 'billing', \
+             billing_provider = $2, customer_ref = $5, \
+             subscription_ref = CASE WHEN $9 THEN NULL ELSE $6 END, \
+             seats = $7, period_ends_at = $8, trial_ends_at = $10, \
+             billing_state_at = $11, version = version + 1, updated_at = now() \
+         WHERE workspace_id = $1 \
+           AND (billing_state_at IS NULL OR billing_state_at < $11) \
+           AND NOT ($9 AND subscription_ref IS NOT NULL \
+                    AND (subscription_ref <> $6 OR billing_provider <> $2))",
+    )
+    .bind(subscription.workspace_id)
+    .bind(provider)
+    .bind(plan)
+    .bind(status)
+    .bind(&subscription.customer_ref)
+    .bind(&subscription.subscription_ref)
+    .bind(i32::try_from(subscription.seats).unwrap_or(i32::MAX))
+    .bind(subscription.period_ends_at)
+    .bind(ended)
+    .bind(subscription.trial_ends_at)
+    .bind(read_at)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected()
+        == 1;
+    Ok(changed)
+}
+
 /// The plan a new workspace starts on, written as it is made.
 pub async fn start_plan(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
     sqlx::query(
@@ -1046,10 +1115,10 @@ mod tests {
     fn periods_reset_at_the_next_utc_day_and_month() {
         let now = Utc.with_ymd_and_hms(2026, 12, 31, 23, 0, 0).unwrap();
         let (start, resets) = Period::Month.bounds(now);
-        assert_eq!(start, NaiveDate::from_ymd_opt(2026, 12, 1).unwrap());
+        assert_eq!(start, NaiveDate::from_ymd_opt(2026, 12, 1).expect("date"));
         assert_eq!(resets, Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap());
         let (start, resets) = Period::Day.bounds(now);
-        assert_eq!(start, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
+        assert_eq!(start, NaiveDate::from_ymd_opt(2026, 12, 31).expect("date"));
         assert_eq!(resets, Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap());
     }
 

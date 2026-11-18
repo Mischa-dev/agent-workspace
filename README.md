@@ -13,6 +13,22 @@ master plan in [`docs/plans/master/`](docs/plans/master/README.md). The rules
 for changing it, for people and agents alike, are in [`AGENTS.md`](AGENTS.md).
 First-build documents are kept in [`docs/history/`](docs/history/).
 
+## Running your own
+
+On one machine with Docker or Podman:
+
+```sh
+cd deploy/container
+./init.sh
+docker compose exec app cat /var/lib/agent-workspace/setup-code
+```
+
+then open `http://localhost:3100`, enter the setup code and make the first
+account and workspace (or bring one in from another server). Nothing it
+does needs a service outside the machine. Install, TLS, configuration,
+backups, upgrades, moving a workspace and small machines are covered in
+[`docs/self-host/`](docs/self-host/README.md).
+
 ## Development
 
 Prerequisites:

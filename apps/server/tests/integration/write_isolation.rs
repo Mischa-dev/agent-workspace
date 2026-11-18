@@ -432,6 +432,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login/two-factor", SIGN_IN),
     ("POST /api/v1/auth/logout", SIGN_IN),
+    ("POST /api/v1/auth/oidc/link", SIGN_IN),
     ("POST /api/v1/auth/password-reset", SIGN_IN),
     ("POST /api/v1/auth/password-reset/complete", SIGN_IN),
     ("POST /api/v1/auth/password-reset/inspect", SIGN_IN),
@@ -442,6 +443,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "POST /api/v1/client-errors",
         "browser error reports: counted in process metrics, never stored with a \
          workspace, and takes no ID",
+    ),
+    (
+        "POST /api/v1/billing/webhook",
+        "the billing provider's own signed delivery, with no session; it applies only what \
+         the provider says of the subscription it names (tests/integration/billing.rs)",
     ),
     (
         "POST /api/v1/integrations/github/webhook",

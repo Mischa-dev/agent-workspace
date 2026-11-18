@@ -16,6 +16,7 @@ pub mod audit_log;
 pub mod auth;
 pub mod automations;
 pub mod backup;
+pub mod billing;
 pub mod bootstrap;
 pub mod bug_reports;
 pub mod client_config;

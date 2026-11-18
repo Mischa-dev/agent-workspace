@@ -191,6 +191,7 @@ mod tests {
             "/api/v1/client-errors",
             Plumbing("browser error reports"),
         ),
+        (Post, "/api/v1/auth/oidc/link", Plumbing("sign-in")),
         (Post, "/api/v1/auth/workos/start", Plumbing("sign-in")),
         (
             Patch,
@@ -948,6 +949,11 @@ mod tests {
             Post,
             "/api/v1/integrations/github/webhook",
             Plumbing("GitHub's own deliveries"),
+        ),
+        (
+            Post,
+            "/api/v1/billing/webhook",
+            Plumbing("the billing provider's own deliveries"),
         ),
         (
             Post,

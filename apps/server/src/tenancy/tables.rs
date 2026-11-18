@@ -152,6 +152,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("usage_counters", WORKSPACE_ID),
     ("spend_limits", WORKSPACE_ID),
     ("limit_notices", WORKSPACE_ID),
+    ("billing_events", WORKSPACE_ID),
     ("project_page_suggestions", WORKSPACE_ID),
     ("project_pages", WORKSPACE_ID),
     ("project_task_settings", WORKSPACE_ID),
@@ -348,6 +349,14 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "server_setup",
         "the server's first-run setup code, before any account or workspace exists (H1.14)",
+    ),
+    (
+        "oidc_login_attempts",
+        "an OpenID Connect sign-in on its way through the issuer, before there is an account (H1.18)",
+    ),
+    (
+        "oidc_identities",
+        "an issuer's identity linked to an account, and accounts are server-wide (H1.18)",
     ),
     (
         "sessions",

@@ -64,10 +64,16 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("auth.lookup", &["tenancy/mod.rs"]),
     // A whole-server backup or restore: every workspace's rows.
     ("backup", &["backup.rs"]),
-    // Claiming due jobs of every workspace, and finishing them.
     // First run (H1.14): the setup code, and the first account and
     // workspace, made before anyone has a scope.
     ("server.first_run", &["setup.rs"]),
+    // A billing provider's delivery (H1.33): the workspace is known only
+    // once the provider names it.
+    ("billing.webhook", &["billing/mod.rs"]),
+    // An OpenID Connect sign-in (H1.18): accounts are server-wide, and the
+    // workspace a verified domain joins is known only once it is read.
+    ("auth.oidc", &["auth/oidc.rs"]),
+    // Claiming due jobs of every workspace, and finishing them.
     ("jobs.claim", &["jobs.rs"]),
     // Jobs queued for no workspace (the server's own recurring work).
     ("jobs.server", &["jobs.rs"]),

@@ -76,21 +76,38 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
         ),
     ]))
     .expect("configuration");
+    if version != i64::MAX {
+        // Today's workspace creation writes tables an older schema doesn't
+        // have yet (plans, H1.25), so the demo workspace is made in the
+        // shape of the schema this database was held at; the seed adopts it.
+        sqlx::query(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Demo Workspace', 'demo-workspace')",
+        )
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("old workspace");
+    }
     let seed = dev_seed(&pool, &config).await.expect("seed");
-    bootstrap_admin(
-        &pool,
-        BootstrapCommand {
-            login_name: "owner".to_owned(),
-            display_name: "Owner".to_owned(),
-            organization_name: None,
-            organization_slug: None,
-            adopt_actor_id: Some(seed.human_actor_id),
-            organization_id: Some(seed.organization_id),
-        },
-        PASSWORD.to_owned(),
-    )
-    .await
-    .expect("bootstrap owner");
+    // The owner's password is for signing in, which an older schema doesn't
+    // get (below); bootstrapping also ends first-run setup (H1.14), whose
+    // table such a schema doesn't have.
+    if version == i64::MAX {
+        bootstrap_admin(
+            &pool,
+            BootstrapCommand {
+                login_name: "owner".to_owned(),
+                display_name: "Owner".to_owned(),
+                organization_name: None,
+                organization_slug: None,
+                adopt_actor_id: Some(seed.human_actor_id),
+                organization_id: Some(seed.organization_id),
+            },
+            PASSWORD.to_owned(),
+        )
+        .await
+        .expect("bootstrap owner");
+    }
     sqlx::query(
         "UPDATE execution_profiles SET account_state = 'authenticated', version = version + 1 WHERE id = $1",
     )

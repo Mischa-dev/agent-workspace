@@ -275,6 +275,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "which limit notices this server already gave (H1.25)",
             ),
             (
+                "billing_events",
+                "deliveries this server took from its billing provider (H1.33); billing stays with the server that bills",
+            ),
+            (
                 "spend_limits",
                 "nothing sets one yet: H1.27, which adds the operations that do, adds them to the export",
             ),

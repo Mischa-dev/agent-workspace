@@ -143,6 +143,8 @@ pub struct AppConfig {
     pub demo_executor: bool,
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
+    /// Plain OpenID Connect sign-in with one issuer (H1.18).
+    pub oidc: Option<OidcConfig>,
     pub log_filter: String,
     /// The secrets master keyring (S1): an owner-only file outside the data
     /// and release roots. Unset in development, a keyring under
@@ -348,6 +350,23 @@ pub struct WorkOsConfig {
     /// Where the WorkOS API lives: always `https://api.workos.com` outside
     /// development, where the browser tests point it at a stand-in.
     pub api_base: String,
+}
+
+/// One OpenID Connect issuer people sign in with (H1.18).
+#[derive(Clone, Debug)]
+pub struct OidcConfig {
+    /// The issuer's identifier, without a trailing slash: an https URL, or
+    /// a loopback stand-in in development.
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: SecretString,
+    /// What the sign-in button says: "Continue with <name>".
+    pub name: String,
+    /// Whether someone with a verified email and no account here gets one.
+    pub allow_signup: bool,
+    /// People whose verified email is in this domain join this workspace
+    /// (by its address).
+    pub join: Option<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -587,6 +606,7 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, environment, &data_root, &web_root)?;
+        let oidc = oidc_config(values, environment, &data_root, &web_root)?;
         let (secrets_key_path, secrets_key_missing) =
             secrets_key_path(values, &data_root, &web_root)?;
         // The master key opens every stored credential; a checkout (or an
@@ -788,6 +808,7 @@ impl AppConfig {
             demo_executor,
             github,
             workos,
+            oidc,
             log_filter,
             secrets_key_path,
             push_contact,
@@ -1610,6 +1631,105 @@ fn percent_decode(value: &str) -> Option<String> {
         }
     }
     String::from_utf8(decoded).ok()
+}
+
+/// `AGENT_WORKSPACE_OIDC_*`: unset, no OpenID Connect sign-in.
+fn oidc_config(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<OidcConfig>, ConfigError> {
+    let issuer = values.get("AGENT_WORKSPACE_OIDC_ISSUER");
+    let client_id = values.get("AGENT_WORKSPACE_OIDC_CLIENT_ID");
+    let secret_path = values.get("AGENT_WORKSPACE_OIDC_CLIENT_SECRET_PATH");
+    if issuer.is_none() && client_id.is_none() && secret_path.is_none() {
+        return Ok(None);
+    }
+    let invalid = |key: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{key}"),
+        reason: reason.into(),
+    };
+    let together = || {
+        invalid(
+            "OIDC_ISSUER",
+            "set the issuer, client ID and protected client secret file together",
+        )
+    };
+    let issuer = url::Url::parse(issuer.ok_or_else(together)?.trim())
+        .map_err(|_| invalid("OIDC_ISSUER", "must be a URL"))?;
+    let loopback = issuer.scheme() == "http"
+        && matches!(issuer.host_str(), Some("127.0.0.1" | "localhost"))
+        && environment.is_development();
+    if (issuer.scheme() != "https" && !loopback)
+        || issuer.host_str().is_none()
+        || !issuer.username().is_empty()
+        || issuer.password().is_some()
+        || issuer.query().is_some()
+        || issuer.fragment().is_some()
+    {
+        return Err(invalid(
+            "OIDC_ISSUER",
+            "must be an https URL with no query (a loopback http one in development)",
+        ));
+    }
+    let client_id = client_id
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty() && id.len() <= 255 && id.chars().all(|c| c.is_ascii_graphic()))
+        .ok_or_else(together)?;
+    let path = PathBuf::from(secret_path.ok_or_else(together)?);
+    validate_secret_file("OIDC_CLIENT_SECRET_PATH", &path, data_root, web_root, 4096)?;
+    let secret = std::fs::read_to_string(&path).map_err(|_| together())?;
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return Err(together());
+    }
+    let name = values
+        .get("AGENT_WORKSPACE_OIDC_NAME")
+        .map(|name| name.trim().to_owned())
+        .unwrap_or_else(|| "single sign-on".to_owned());
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err(invalid("OIDC_NAME", "1 to 60 characters"));
+    }
+    let allow_signup = match values
+        .get("AGENT_WORKSPACE_OIDC_ALLOW_SIGNUP")
+        .map(String::as_str)
+    {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => return Err(invalid("OIDC_ALLOW_SIGNUP", "true or false")),
+    };
+    let join = values
+        .get("AGENT_WORKSPACE_OIDC_JOIN")
+        .map(|value| {
+            let (domain, workspace) = value
+                .split_once('=')
+                .map(|(domain, workspace)| (domain.trim(), workspace.trim()))
+                .filter(|(domain, workspace)| {
+                    domain.contains('.')
+                        && !domain.contains('@')
+                        && !workspace.is_empty()
+                        && domain
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                })
+                .ok_or_else(|| {
+                    invalid(
+                        "OIDC_JOIN",
+                        "domain=workspace-address, such as example.com=acme",
+                    )
+                })?;
+            Ok::<_, ConfigError>((domain.to_ascii_lowercase(), workspace.to_owned()))
+        })
+        .transpose()?;
+    Ok(Some(OidcConfig {
+        issuer: issuer.as_str().trim_end_matches('/').to_owned(),
+        client_id,
+        client_secret: SecretString::new(secret),
+        name,
+        allow_signup,
+        join,
+    }))
 }
 
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";

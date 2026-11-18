@@ -29,6 +29,10 @@ pub enum MutationAction {
     /// secret over its timestamp, delivery id and body. It starts the
     /// rules on that hook, which act as their makers.
     IncomingHookSignature,
+    /// A delivery from the server's billing provider (H1.33), checked by
+    /// that provider's own signature; it only re-reads the subscription the
+    /// provider names and applies what the provider says.
+    BillingWebhookSignature,
     /// Frames published to this server's live side (K5.19), signed with
     /// the server's own live key; they reach only the audiences the
     /// database side named, and no session or workspace sends them.
@@ -280,6 +284,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "auth/workos",
         Post,
         "/api/v1/auth/workos/start",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "auth/oidc",
+        Post,
+        "/api/v1/auth/oidc/link",
         SessionAuthentication
     ),
     boundary_route!(
@@ -1243,6 +1253,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/integrations/github/webhook",
         GithubWebhook
+    ),
+    boundary_route!(
+        "billing",
+        Post,
+        "/api/v1/billing/webhook",
+        BillingWebhookSignature
     ),
     boundary_route!(
         "incoming_hooks",

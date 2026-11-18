@@ -281,9 +281,8 @@
   "log_readers": {
     "delivery/push.rs": 1,
     "delivery/read.rs": 1,
-    "metrics.rs": 3,
-    "notifications.rs": 5,
-    "server_status.rs": 2
+    "metrics.rs": 2,
+    "notifications.rs": 5
   },
   "message_inserts": {
     "conversations.rs": 1,

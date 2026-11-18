@@ -110,6 +110,28 @@ Unset, people sign in with a password and two-factor codes.
 | `AGENT_WORKSPACE_WORKOS_AGENT_REGISTRATION_ENABLED` | `false` | Let agents register through WorkOS (needs the AuthKit domain). |
 | `AGENT_WORKSPACE_WORKOS_API_BASE` | `https://api.workos.com` | Development only: a loopback stand-in for browser tests. |
 
+## Sign-in with OpenID Connect (optional)
+
+One issuer people sign in with: a company identity service, or any provider
+that speaks OpenID Connect. Register this server with it as a confidential
+web client whose redirect address is `<public origin>/auth/oidc/callback`,
+asking for the `openid email profile` scopes. Set all three of the first
+variables together.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_WORKSPACE_OIDC_ISSUER` | none | The issuer's identifier, an `https` URL; its discovery document is read from `<issuer>/.well-known/openid-configuration` on each sign-in. |
+| `AGENT_WORKSPACE_OIDC_CLIENT_ID` | none | This server's client id at the issuer. |
+| `AGENT_WORKSPACE_OIDC_CLIENT_SECRET_PATH` | none | An owner-only file holding the client secret. |
+| `AGENT_WORKSPACE_OIDC_NAME` | `single sign-on` | What the sign-in button says: "Continue with ...". |
+| `AGENT_WORKSPACE_OIDC_ALLOW_SIGNUP` | `false` | Whether someone the issuer vouches for, with a verified email and no account here, gets one. Off, they need an account first (an invitation, or the operator). |
+| `AGENT_WORKSPACE_OIDC_JOIN` | none | `domain=workspace-address`, such as `example.com=acme`: people whose verified email is in the domain join that workspace as members when they first sign in. |
+
+The first sign-in links the issuer's identity to the account whose verified
+email matches, or to the signed-in account when someone links it from
+Account settings. An email the issuer doesn't say it verified never links
+an account and never makes one.
+
 ## GitHub (optional)
 
 The App id, private key and webhook secret are set together or not at all.

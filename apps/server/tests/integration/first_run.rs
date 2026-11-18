@@ -23,7 +23,10 @@ const ORIGIN: &str = "http://127.0.0.1:3100";
 
 /// POSTs `body` with no session; the status, body and the browser its
 /// cookies make.
-async fn post_setup(router: &axum::Router, body: Value) -> (StatusCode, Value, Option<Browser>) {
+pub(crate) async fn post_setup(
+    router: &axum::Router,
+    body: Value,
+) -> (StatusCode, Value, Option<Browser>) {
     let response = router
         .clone()
         .oneshot(
