@@ -2053,6 +2053,39 @@
         ],
         "type": "object"
       },
+      "OutsideRef": {
+        "description": "One outside reference.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "externalId": {
+            "type": "string"
+          },
+          "hostId": {
+            "description": "The host that proposed it, for a pending rebind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "lineage": {
+            "description": "Earlier pairs this agent was moved or re-keyed from, newest first.",
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "issuer",
+          "externalId",
+          "lineage",
+          "at"
+        ],
+        "type": "object"
+      },
       "OwnerView": {
         "properties": {
           "id": {
@@ -3018,6 +3051,40 @@
         ],
         "type": "object"
       },
+      "SharedAccount": {
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "account"
+        ],
+        "type": "object"
+      },
+      "SharedLink": {
+        "properties": {
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "SortWrite": {
         "additionalProperties": false,
         "properties": {
@@ -3230,6 +3297,13 @@
           "id"
         ],
         "type": "object"
+      },
+      "ThingKind": {
+        "description": "The kinds of thing that can be shared one by one.",
+        "enum": [
+          "page"
+        ],
+        "type": "string"
       },
       "ThreadRef": {
         "properties": {
@@ -4131,6 +4205,1151 @@
           }
         },
         "summary": "Set agent managers",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/agent_ref_decide": {
+      "post": {
+        "description": "Accept or reject the new outside reference a host proposed for an agent account (the host's request asks its managers the same thing). Accepting keeps the account and moves its old pair into the lineage; rejecting leaves the reference as it was. You must manage the agent. Needs \"Manage agents\" where it acts.",
+        "operationId": "agent_ref_decide",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "accept": {
+                    "description": "`true` makes the proposed pair its reference; `false` sets it aside.",
+                    "type": "boolean"
+                  },
+                  "agent": {
+                    "description": "The agent account: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "accept"
+                ],
+                "title": "AgentRefDecideInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Decide on an agent's proposed rebind",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/agent_ref_remove": {
+      "post": {
+        "description": "Remove an agent account's outside reference and any rebind waiting for it. The account and everything it did stay. You must manage the agent. Needs \"Manage agents\" where it acts.",
+        "operationId": "agent_ref_remove",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agent": {
+                    "description": "The agent account: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent"
+                ],
+                "title": "AgentRefDetachInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Detach an agent's outside reference",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/agent_ref_set": {
+      "post": {
+        "description": "Record which agent elsewhere an agent account is: the issuer of its outside id and the id. An agent has at most one; to move it to a new pair use agent_ref_update. No other agent may hold the same pair. You must manage the agent. Needs \"Manage agents\" where it acts.",
+        "operationId": "agent_ref_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agent": {
+                    "description": "The agent account: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "externalId": {
+                    "description": "The id that issuer gave the agent.",
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "description": "Who issued the outside id, as the agent's host or platform names\nitself.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "issuer",
+                  "externalId"
+                ],
+                "title": "AgentRefAttachInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Attach an agent's outside reference",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/agent_ref_update": {
+      "post": {
+        "description": "Move an agent account's outside reference to a new issuer and id, when the agent was moved or re-keyed. The account, its roles, its name and everything it wrote stay; the old pair is kept in the reference's lineage. A rebind a host proposed is settled with agent_ref_decide instead. You must manage the agent. Needs \"Manage agents\" where it acts.",
+        "operationId": "agent_ref_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agent": {
+                    "description": "The agent account: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "externalId": {
+                    "description": "Its new outside id.",
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "description": "The issuer of its new outside id.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "issuer",
+                  "externalId"
+                ],
+                "title": "AgentRefRebindInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "An agent's outside reference now, and a rebind waiting for a manager.",
+                          "properties": {
+                            "active": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "agent": {
+                              "type": "string"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/OutsideRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A new pair a host proposed: a manager accepts or rejects it with\n`agent_ref_decide`."
+                            }
+                          },
+                          "required": [
+                            "agent"
+                          ],
+                          "title": "AgentRefView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Rebind an agent's outside reference",
         "tags": [
           "agents"
         ],
@@ -33789,6 +35008,866 @@
         "summary": "Update task",
         "tags": [
           "tasks"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/thing_link_create": {
+      "post": {
+        "description": "Make a link that lets anyone signed in who has it read one page, and nothing else, until it expires (168 hours unless you say) or is revoked with thing_share_remove. The token is shown once. Needs the right to edit the page. Needs \"Edit pages and decisions\" where it acts.",
+        "operationId": "thing_link_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiresInHours": {
+                    "description": "How long the link works, in hours: 1 to 2160 (90 days); 168 if left\nout.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "description": "The thing: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/ThingKind",
+                    "description": "What kind of thing: `page`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "title": "ThingLinkCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "expiresAt": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "description": "The link's id, to revoke it with thing_share_remove.",
+                              "type": "string"
+                            },
+                            "token": {
+                              "description": "The secret that opens the thing. Shown once: keep it now. Empty\nwhen the same request is retried.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "expiresAt"
+                          ],
+                          "title": "ThingLinkView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "expiresAt": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "description": "The link's id, to revoke it with thing_share_remove.",
+                              "type": "string"
+                            },
+                            "token": {
+                              "description": "The secret that opens the thing. Shown once: keep it now. Empty\nwhen the same request is retried.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "expiresAt"
+                          ],
+                          "title": "ThingLinkView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Make a link to one thing",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/thing_share_add": {
+      "post": {
+        "description": "Let one member of this workspace read one page that is in a space they aren't in, without giving them anything else there. Sharing again changes when it stops. Needs the right to edit the page. Undo it with thing_share_remove. Needs \"Edit pages and decisions\" where it acts.",
+        "operationId": "thing_share_add",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "The account to share it with: a member of this workspace.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "expiresAt": {
+                    "description": "When the share stops (RFC 3339). Leave out to keep it until it is\nunshared.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "description": "The thing: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/ThingKind",
+                    "description": "What kind of thing: `page`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id",
+                  "account"
+                ],
+                "title": "ThingShareInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Share one thing",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/thing_share_remove": {
+      "post": {
+        "description": "Stop sharing a page with one account (account), or revoke one of its links (link); it stops at once. Needs the right to edit the page. Needs \"Edit pages and decisions\" where it acts.",
+        "operationId": "thing_share_remove",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "The account to stop sharing it with.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "description": "The thing: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/ThingKind",
+                    "description": "What kind of thing: `page`."
+                  },
+                  "link": {
+                    "description": "The link to revoke (its id from thing_link_create).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "title": "ThingUnshareInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Stop sharing one thing",
+        "tags": [
+          "pages"
         ],
         "x-operation-kind": "change"
       }

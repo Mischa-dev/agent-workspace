@@ -32,6 +32,70 @@
     "title": "Set agent managers"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.ref_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_ref_decide",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Decide on an agent's proposed rebind"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "account.ref_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_ref_remove",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Detach an agent's outside reference"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.ref_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_ref_set",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Attach an agent's outside reference"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.ref_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_ref_update",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Rebind an agent's outside reference"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1451,6 +1515,54 @@
     "preview": false,
     "proposable": true,
     "title": "Update task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "thing.share_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "thing_link_create",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a link to one thing"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "thing.share_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "thing_share_add",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Share one thing"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "thing.share_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "thing_share_remove",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop sharing one thing"
   },
   {
     "automation": false,

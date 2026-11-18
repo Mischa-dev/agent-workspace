@@ -2010,3 +2010,181 @@ async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
     assert_eq!(body["outcome"], "ok", "the owner keeps it: {status} {body}");
     assert_eq!(lifecycle().await, "active");
 }
+
+/// K1.32: a page shared with a member outside its space opens for them, and
+/// nothing else in the space does; a link opens only its page, for whoever
+/// is signed in with it, until it is revoked. Only someone who may edit the
+/// page shares it.
+#[tokio::test]
+async fn a_shared_page_opens_only_itself() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("SECRET")
+        .person("lena", "member")
+        .person("mara", "member")
+        .build("privacy_thing_share")
+        .await
+    else {
+        return;
+    };
+    let secret = world.project("SECRET").to_owned();
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)")
+        .bind(secret.parse::<Uuid>().expect("space"))
+        .bind(vec![lena.actor, mara.actor])
+        .execute(world.pool())
+        .await
+        .expect("lena and mara aren't in SECRET");
+    let mut pages = Vec::new();
+    for title in ["Plan", "Salaries"] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{secret}/pages"),
+                None,
+                json!({"title": title, "body": "text"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {page}");
+        pages.push(page["id"].as_str().expect("page").to_owned());
+    }
+    let (plan, salaries) = (&pages[0], &pages[1]);
+    let read = |browser: &Browser, uri: String| browser.request("GET", &uri, None, Value::Null);
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    let (status, _) = send(
+        &world.app,
+        read(&lena.browser, format!("/api/v1/pages/{plan}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "not shared yet");
+
+    // Lena can't share what she can't edit.
+    let (_, refused) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "thing_share_add",
+            "lena-share",
+            json!({"kind": "page", "id": plan, "account": mara.actor}),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+
+    let (_, shared) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_add",
+            "owner-share",
+            json!({"kind": "page", "id": plan, "account": lena.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (status, page) = send(
+        &world.app,
+        read(&lena.browser, format!("/api/v1/pages/{plan}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["title"], "Plan");
+    for uri in [
+        format!("/api/v1/pages/{salaries}"),
+        format!("/api/v1/projects/{secret}/pages"),
+    ] {
+        let (status, body) = send(&world.app, read(&lena.browser, uri.clone())).await;
+        assert!(
+            matches!(status, StatusCode::NOT_FOUND | StatusCode::FORBIDDEN),
+            "{uri}: {status} {body}"
+        );
+    }
+    let (status, _) = send(
+        &world.app,
+        read(&mara.browser, format!("/api/v1/pages/{plan}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "shared with Lena only");
+
+    // A link opens the one page for Mara, until it is revoked.
+    let (_, link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-link",
+            json!({"kind": "page", "id": plan, "expiresInHours": 2}),
+        ),
+    )
+    .await;
+    assert_eq!(link["outcome"], "ok", "{link}");
+    let token = link["value"]["token"].as_str().expect("token").to_owned();
+    let (status, page) = send(
+        &world.app,
+        read(&mara.browser, format!("/api/v1/shared/{token}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["id"], plan.as_str());
+    let (status, _) = send(
+        &world.app,
+        read(&mara.browser, format!("/api/v1/pages/{salaries}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(
+        &world.app,
+        read(&mara.browser, format!("/api/v1/shared/{token}x")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a wrong token opens nothing");
+    let (_, revoked) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-revoke",
+            json!({"kind": "page", "id": plan, "link": link["value"]["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(revoked["outcome"], "ok", "{revoked}");
+    let (status, _) = send(
+        &world.app,
+        read(&mara.browser, format!("/api/v1/shared/{token}")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a revoked link stops at once"
+    );
+
+    let (_, unshared) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-unshare",
+            json!({"kind": "page", "id": plan, "account": lena.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(unshared["outcome"], "ok", "{unshared}");
+    let (status, _) = send(
+        &world.app,
+        read(&lena.browser, format!("/api/v1/pages/{plan}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    world.finish().await;
+}

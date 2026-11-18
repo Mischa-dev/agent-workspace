@@ -24,16 +24,20 @@
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
-    "decision_record": "create"
+    "decision_record": "create",
+    "thing_share_add": "change",
+    "thing_share_remove": "change",
+    "thing_link_create": "create"
   },
   "routes": [
     "/api/v1/pages/*",
+    "/api/v1/shared/{token}",
     "/api/v1/projects/{id}/pages",
     "/api/v1/projects/{id}/pages/import",
     "/api/v1/projects/{id}/decisions",
     "/api/v1/organizations/{organization_id}/pages-space"
   ],
-  "events": { "emits": ["page.content_saved", "page.updated", "page.discussion_changed", "page.commented", "page.comment_changed", "page.version_restored", "decision.recorded", "decision.updated"], "listens": [] },
+  "events": { "emits": ["page.content_saved", "page.updated", "page.discussion_changed", "page.commented", "page.comment_changed", "page.version_restored", "decision.recorded", "decision.updated", "thing.share_changed"], "listens": [] },
   "notifications": ["page_suggestion", "page_comment"],
   "search": ["pages", "decisions"],
   "automations": { "triggers": ["page_changed"], "actions": [] },

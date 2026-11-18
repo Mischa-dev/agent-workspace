@@ -336,7 +336,9 @@ impl Targeted for AgentRefAttachInput {
 pub struct AgentRefAttach;
 
 impl Operation for AgentRefAttach {
-    const NAME: &'static str = "agent_ref_attach";
+    const NAME: &'static str = "agent_ref_set";
+    // Recorded in the audit row, which K3's log reads.
+    const EMITS: &'static [&'static str] = &["account.ref_changed"];
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::AgentsManage);
@@ -344,12 +346,15 @@ impl Operation for AgentRefAttach {
     const TITLE: &'static str = "Attach an agent's outside reference";
     const DESCRIPTION: &'static str = "Record which agent elsewhere an agent account is: the \
         issuer of its outside id and the id. An agent has at most one; to move it to a new pair \
-        use agent_ref_rebind. No other agent may hold the same pair. You must manage the agent.";
+        use agent_ref_update. No other agent may hold the same pair. You must manage the agent.";
 
     type Input = AgentRefAttachInput;
     type Output = AgentRefView;
 
-    async fn run(call: &mut OpCall<'_>, input: AgentRefAttachInput) -> Result<AgentRefView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentRefAttachInput,
+    ) -> Result<AgentRefView, OpError> {
         let agent = input.agent.id();
         let issuer = part(&input.issuer, "issuer")?;
         let external_id = part(&input.external_id, "externalId")?;
@@ -363,7 +368,7 @@ impl Operation for AgentRefAttach {
             }
             return Err(OpError::invalid(
                 "agent",
-                "This agent already has an outside reference. Rebind it with agent_ref_rebind.",
+                "This agent already has an outside reference. Rebind it with agent_ref_update.",
             ));
         }
         if held_elsewhere(tx, agent, &issuer, &external_id).await? {
@@ -412,7 +417,9 @@ impl Targeted for AgentRefRebindInput {
 pub struct AgentRefRebind;
 
 impl Operation for AgentRefRebind {
-    const NAME: &'static str = "agent_ref_rebind";
+    const NAME: &'static str = "agent_ref_update";
+    // Recorded in the audit row, which K3's log reads.
+    const EMITS: &'static [&'static str] = &["account.ref_changed"];
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::AgentsManage);
@@ -426,7 +433,10 @@ impl Operation for AgentRefRebind {
     type Input = AgentRefRebindInput;
     type Output = AgentRefView;
 
-    async fn run(call: &mut OpCall<'_>, input: AgentRefRebindInput) -> Result<AgentRefView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentRefRebindInput,
+    ) -> Result<AgentRefView, OpError> {
         let agent = input.agent.id();
         let issuer = part(&input.issuer, "issuer")?;
         let external_id = part(&input.external_id, "externalId")?;
@@ -437,7 +447,7 @@ impl Operation for AgentRefRebind {
         let Some(active) = current.into_iter().find(|row| row.status == "active") else {
             return Err(OpError::invalid(
                 "agent",
-                "This agent has no outside reference yet. Attach one with agent_ref_attach.",
+                "This agent has no outside reference yet. Attach one with agent_ref_set.",
             ));
         };
         if active.issuer == issuer && active.external_id == external_id {
@@ -476,6 +486,8 @@ pub struct AgentRefDecide;
 
 impl Operation for AgentRefDecide {
     const NAME: &'static str = "agent_ref_decide";
+    // Recorded in the audit row, which K3's log reads.
+    const EMITS: &'static [&'static str] = &["account.ref_changed"];
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::AgentsManage);
@@ -489,7 +501,10 @@ impl Operation for AgentRefDecide {
     type Input = AgentRefDecideInput;
     type Output = AgentRefView;
 
-    async fn run(call: &mut OpCall<'_>, input: AgentRefDecideInput) -> Result<AgentRefView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentRefDecideInput,
+    ) -> Result<AgentRefView, OpError> {
         let agent = input.agent.id();
         let (workspace_id, caller) = (call.ctx.workspace_id, call.ctx.caller.clone());
         let tx = call.tx().await?;
@@ -527,7 +542,9 @@ impl Targeted for AgentRefDetachInput {
 pub struct AgentRefDetach;
 
 impl Operation for AgentRefDetach {
-    const NAME: &'static str = "agent_ref_detach";
+    const NAME: &'static str = "agent_ref_remove";
+    // Recorded in the audit row, which K3's log reads.
+    const EMITS: &'static [&'static str] = &["account.ref_changed"];
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::AgentsManage);
@@ -540,7 +557,10 @@ impl Operation for AgentRefDetach {
     type Input = AgentRefDetachInput;
     type Output = AgentRefView;
 
-    async fn run(call: &mut OpCall<'_>, input: AgentRefDetachInput) -> Result<AgentRefView, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentRefDetachInput,
+    ) -> Result<AgentRefView, OpError> {
         let agent = input.agent.id();
         let (workspace_id, caller) = (call.ctx.workspace_id, call.ctx.caller.clone());
         let tx = call.tx().await?;

@@ -486,12 +486,14 @@ pub(crate) async fn create(
                 return Err(AppError::Validation("projectId"));
             }
             // The workspace asked for, or the caller's only one (K4.6).
-            let mut connection = state.pool.acquire().await?;
-            crate::workspace::named_or_only(
-                &mut connection,
-                caller.actor_id,
-                request.organization_id,
-            )
+            crate::db::scoped_one(&state.pool, async |connection| {
+                crate::workspace::named_or_only(
+                    connection,
+                    caller.actor_id,
+                    request.organization_id,
+                )
+                .await
+            })
             .await?
         }
     };

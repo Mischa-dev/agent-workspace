@@ -880,6 +880,17 @@ pub(crate) async fn update_in(
     .bind(actor_id)
     .execute(&mut **transaction)
     .await?;
+    // Its name is the same in every seat it has, such as the workspace's
+    // own space (K1.28); the handle stays its project's.
+    sqlx::query(
+        "UPDATE project_memberships SET display_name = $3, updated_at = now() \
+         WHERE actor_id = $2 AND project_id <> $1 AND display_name <> $3",
+    )
+    .bind(project_id)
+    .bind(current.actor_id)
+    .bind(&clean.name)
+    .execute(&mut **transaction)
+    .await?;
     sqlx::query(
         r#"
         UPDATE execution_workers

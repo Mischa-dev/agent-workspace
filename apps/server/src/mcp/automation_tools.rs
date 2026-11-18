@@ -226,13 +226,17 @@ pub(super) async fn webhook_write(
         };
         let workspace = match arguments.workspace.as_deref() {
             Some(named) => {
-                let found = match state.pool.acquire().await {
-                    Ok(mut connection) => {
-                        crate::ops::target::workspace_named(&mut connection, named)
+                let found = match crate::db::scoped_one(&state.pool, async |connection| {
+                    Ok::<_, AppError>(
+                        crate::ops::target::workspace_named(connection, named)
                             .await
-                            .ok()
-                    }
-                    Err(error) => return refusal(error.into(), "webhook_write"),
+                            .ok(),
+                    )
+                })
+                .await
+                {
+                    Ok(found) => found,
+                    Err(error) => return refusal(error, "webhook_write"),
                 };
                 match found {
                     Some(workspace) => Some(workspace),
@@ -248,11 +252,10 @@ pub(super) async fn webhook_write(
         if project_id.is_none() && caller.token_project_id.is_none() {
             let off = async {
                 Ok::<_, AppError>(
-                    match crate::workspace::named_or_only(
-                        &mut *state.pool.acquire().await?,
-                        caller.actor_id,
-                        workspace,
-                    )
+                    match crate::db::scoped_one(&state.pool, async |connection| {
+                        crate::workspace::named_or_only(connection, caller.actor_id, workspace)
+                            .await
+                    })
                     .await
                     {
                         Ok(organization_id) => {

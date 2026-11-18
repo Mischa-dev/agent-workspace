@@ -120,6 +120,8 @@ export type OperationResult = { ids: string[]; op: string }
 
 export type OptionInput = { category?: string | null; color?: string | null; id?: string | null; name: string }
 
+export type OutsideRef = { at: string; externalId: string; hostId?: string | null; issuer: string; lineage: unknown[] }
+
 export type OwnerView = { id: string; kind: string; name: string }
 
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
@@ -168,6 +170,10 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
+export type SharedAccount = { account: string; expiresAt?: string | null }
+
+export type SharedLink = { expiresAt?: string | null; id: string }
+
 export type SortWrite = { direction?: Direction; field: string }
 
 export type SpaceKind = "workspace" | "project" | "team" | "personal"
@@ -183,6 +189,8 @@ export type StoredKind = SpaceKind
 export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 
 export type ThingInput = { id: string; kind: SubjectKind }
+
+export type ThingKind = "page"
 
 export type ThreadRef = { id: string; name: string; status: string }
 
@@ -201,6 +209,22 @@ export type AgentCreateOutput = { accountId: string; connectionId: string; crede
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentRefDecideInput = { accept: boolean; agent: string }
+
+export type AgentRefDecideOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefRemoveInput = { agent: string }
+
+export type AgentRefRemoveOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefSetInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefSetOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefUpdateInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefUpdateOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
 
 export type AgentTemplateListInput = { spaceId?: string | null }
 
@@ -570,6 +594,18 @@ export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: strin
 
 export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 
+export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind }
+
+export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
+
+export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
+
+export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
+export type ThingShareRemoveInput = { account?: string | null; id: string; kind: ThingKind; link?: string | null }
+
+export type ThingShareRemoveOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
 export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolean }
 
 export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
@@ -609,6 +645,10 @@ export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecyc
 export type Operations = {
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_ref_decide: { input: AgentRefDecideInput; output: AgentRefDecideOutput }
+  agent_ref_remove: { input: AgentRefRemoveInput; output: AgentRefRemoveOutput }
+  agent_ref_set: { input: AgentRefSetInput; output: AgentRefSetOutput }
+  agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
@@ -701,6 +741,9 @@ export type Operations = {
   task_criteria_update: { input: TaskCriteriaUpdateInput; output: TaskCriteriaUpdateOutput }
   task_restore: { input: TaskRestoreInput; output: TaskRestoreOutput }
   task_update: { input: TaskUpdateInput; output: TaskUpdateOutput }
+  thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
+  thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
+  thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }

@@ -398,7 +398,7 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
         crate::access::membership_allows(
             principal.actor_id,
             principal.project_id,
-            grant.clone(),
+            grant,
             true,
             action.permission(),
         )

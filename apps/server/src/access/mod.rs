@@ -28,6 +28,7 @@ pub mod credentials;
 pub mod decide;
 pub mod holding;
 pub mod manage;
+pub mod sharing;
 pub mod tier;
 pub mod tokens;
 

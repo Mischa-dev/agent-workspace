@@ -137,6 +137,11 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "runs are read through their thread, whose handler checks the Runs module",
     ),
     (
+        "/api/v1/shared/",
+        "a link's secret token opens one page; the token names no space to look the module up \
+         in, and it was made by someone who could edit the page",
+    ),
+    (
         "/api/v1/bug-report-links/",
         "a link is managed from its project's settings, which the gate covers",
     ),

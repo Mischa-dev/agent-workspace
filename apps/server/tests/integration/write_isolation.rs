@@ -459,6 +459,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_create",
     "agent_managers_set",
     "agent_profile_write",
+    "agent_ref_set",
+    "agent_ref_decide",
+    "agent_ref_remove",
+    "agent_ref_update",
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
@@ -572,6 +576,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "space_member_update",
     "space_restore",
     "space_update",
+    "thing_link_create",
+    "thing_share_add",
+    "thing_share_remove",
     "status_delete",
     "status_set",
     "task_claim",
@@ -6166,6 +6173,48 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": b.agent, "remove": [a.rook]}),
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
+        ),
+        // K1.32: sharing one page. B's page isn't A's to share, and B's
+        // people can't be shared with in A.
+        mcp_case(
+            "thing_share_add",
+            json!({"kind": "page", "id": a.page, "account": a.rook}),
+            vec![
+                json!({"kind": "page", "id": b.page, "account": a.rook}),
+                json!({"kind": "page", "id": a.page, "account": b.rook}),
+            ],
+        ),
+        mcp_case(
+            "thing_share_remove",
+            json!({"kind": "page", "id": a.page, "account": a.rook}),
+            vec![json!({"kind": "page", "id": b.page, "account": b.rook})],
+        ),
+        mcp_case(
+            "thing_link_create",
+            json!({"kind": "page", "id": a.page, "expiresInHours": 1}),
+            vec![json!({"kind": "page", "id": b.page, "expiresInHours": 1})],
+        ),
+        // K1.7: an agent's outside reference. B's agent isn't in A.
+        mcp_case(
+            "agent_ref_set",
+            json!({"agent": a.agent, "issuer": "net-issuer", "externalId": "net-a"}),
+            vec![json!({"agent": b.agent, "issuer": "net-issuer", "externalId": "net-b"})],
+        ),
+        mcp_case(
+            "agent_ref_update",
+            json!({"agent": a.agent, "issuer": "net-issuer", "externalId": "net-a2"}),
+            vec![json!({"agent": b.agent, "issuer": "net-issuer", "externalId": "net-b2"})],
+        ),
+        mcp_case(
+            "agent_ref_decide",
+            json!({"agent": a.agent, "accept": false}),
+            vec![json!({"agent": b.agent, "accept": false})],
+        )
+        .without_own("only a host proposes a rebind; agent_refs.rs settles one"),
+        mcp_case(
+            "agent_ref_remove",
+            json!({"agent": a.agent}),
+            vec![json!({"agent": b.agent})],
         ),
         // K1.23: an account's secrets. B's agent, B's spaces and B's
         // secrets aren't A's agent's to touch.

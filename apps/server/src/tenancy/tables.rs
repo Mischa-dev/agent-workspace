@@ -175,6 +175,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("task_import_links", WORKSPACE_ID),
     ("task_imports", WORKSPACE_ID),
     ("task_templates", WORKSPACE_ID),
+    ("thing_grants", WORKSPACE_ID),
     ("thing_references", WORKSPACE_ID),
     ("things", WORKSPACE_ID),
     ("usage_accounts", ORGANIZATION_ID),
@@ -237,6 +238,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "agent_outside_refs",
+        "which agent elsewhere an agent account is: accounts are server-wide (R19), so the reference is too",
     ),
     (
         "deleted_workspaces",
@@ -316,6 +321,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),
     (
+        "server_roles",
+        "who runs the server itself (its operators): above every workspace (K1.30)",
+    ),
+    (
         "sessions",
         "browser sign-in sessions, before any workspace is chosen",
     ),
@@ -374,6 +383,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
     "account_credentials",
     "account_managers",
     "agent_outside_refs",
+    "server_roles",
     "agent_connections",
     "connection_signing_secrets",
     "hosts",

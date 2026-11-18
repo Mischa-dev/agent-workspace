@@ -15,6 +15,7 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::memory::router);
         module.operations(crate::memory::ops::register_ops);
+        module.operations(crate::access::sharing::register_ops);
         module.id_route(IdRoute {
             prefix: "/api/v1/pages/",
             param: "id",

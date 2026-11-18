@@ -256,6 +256,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          subscribes as A and checks no B event arrives",
     ),
     (
+        "/api/v1/shared/{token}",
+        "a page opened by a link's secret token, made for that one page; covered in \
+         privacy_inside_workspace (a_shared_page_opens_only_itself)",
+    ),
+    (
         "/api/v1/forms/{token}",
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \

@@ -15,6 +15,7 @@ pub mod claims;
 pub mod credential_ops;
 pub mod ops;
 mod people;
+pub mod refs;
 
 pub use agents::{NewAgent, create_agent};
 pub use people::{NewPerson, Person, create_person};

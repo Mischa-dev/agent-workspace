@@ -529,6 +529,18 @@ pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
     "Who manages an agent or app changed",
 )
 .legacy(&["account.managers.changed"]);
+pub static ACCOUNT_REF_CHANGED: EventType = signal(
+    "account.ref_changed",
+    "agents",
+    None,
+    "Which agent elsewhere an agent account is changed, or a rebind waits",
+);
+pub static THING_SHARE_CHANGED: EventType = signal(
+    "thing.share_changed",
+    "pages",
+    None,
+    "One thing was shared, or a share or link was revoked",
+);
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
     static CATALOG: &[&EventType] = &[
@@ -595,6 +607,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
+        &ACCOUNT_REF_CHANGED,
+        &THING_SHARE_CHANGED,
     ];
     CATALOG
 }

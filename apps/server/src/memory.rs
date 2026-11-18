@@ -50,6 +50,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/pages/{id}",
             get(get_page_http).patch(update_page_http),
         )
+        .route("/api/v1/shared/{token}", get(open_shared_http))
         .route(
             "/api/v1/pages/{id}/revisions/{version}",
             get(get_revision_http),
@@ -1474,18 +1475,53 @@ async fn get_page_http(
     ApiPath(page_id): ApiPath<Uuid>,
 ) -> Result<Json<PageView>, AppError> {
     let project_id = page_project(&state.pool, page_id).await?;
-    project_access(
+    if project_access(
         &state.pool,
         principal.actor_id,
         project_id,
         Action::ProjectView,
     )
     .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    .is_err()
+        && !shared_page(&state.pool, principal.actor_id, page_id).await?
+    {
+        return Err(AppError::NotFound("page"));
+    }
     get_page(&state.pool, page_id, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
+}
+
+/// Whether the page was shared with `account` on its own (K1.32).
+pub(crate) async fn shared_page(
+    pool: &PgPool,
+    account: Uuid,
+    page_id: Uuid,
+) -> Result<bool, AppError> {
+    crate::db::scoped_one(pool, async |connection| {
+        crate::access::sharing::shared_with(connection, account, "page", page_id).await
+    })
+    .await
+}
+
+/// A page opened by a link someone made for it (K1.32): any signed-in
+/// account with the link reads that page and nothing else.
+async fn open_shared_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(token): ApiPath<String>,
+) -> Result<Json<PageView>, AppError> {
+    let Some((kind, page_id)) = crate::access::sharing::by_link(&state.pool, &token).await? else {
+        return Err(AppError::NotFound("link"));
+    };
+    if kind != crate::access::sharing::ThingKind::Page.key() {
+        return Err(AppError::NotFound("link"));
+    }
+    get_page(&state.pool, page_id, principal.actor_id)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound("link"))
 }
 
 async fn update_page_http(

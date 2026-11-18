@@ -21,5 +21,6 @@ impl CoreModule for Module {
         module.operations(crate::hosts::ops::register_ops);
         module.routes(crate::agent_setup_links::router);
         module.operations(crate::accounts::ops::register_ops);
+        module.operations(crate::accounts::refs::register_ops);
     }
 }

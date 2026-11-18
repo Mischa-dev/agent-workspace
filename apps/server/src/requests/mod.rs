@@ -571,6 +571,10 @@ pub async fn get(
     .await?)
 }
 
+/// What a host's "is it the same agent?" request is about.
+const HOST_AGENT_SUBJECT: &str = "host_agent";
+const AGENT_REF_CHANGED: &str = "agent_ref_changed:";
+
 /// A host says one of its agents now has a reference from a different
 /// lineage (A1.11): it may be a different agent, so the account's managers
 /// decide, in each workspace where it is a member. A repeat of the same
@@ -1180,6 +1184,25 @@ async fn follow(
     // A sponsored run request goes ahead or stops with its approval.
     if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
         crate::external_execution::approval_settled(state, transaction, row).await?;
+    }
+    // A host's "is it the same agent?" settles the rebind it proposed
+    // (K1.7): "same" accepts it, anything else sets it aside.
+    if row.subject_kind.as_deref() == Some(HOST_AGENT_SUBJECT)
+        && row
+            .client_request_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(AGENT_REF_CHANGED))
+        && let Some(agent) = row.subject_id
+    {
+        let same = status == "answered"
+            && row
+                .answer
+                .as_ref()
+                .and_then(|answer| answer.get("optionId"))
+                .and_then(Value::as_str)
+                == Some("same");
+        let by = by.unwrap_or(row.raised_by_account_id);
+        crate::accounts::refs::decide(transaction, agent, same, by).await?;
     }
     // A run on the built-in host goes on in process (A1.14).
     if let Some(run_id) = row.run_id

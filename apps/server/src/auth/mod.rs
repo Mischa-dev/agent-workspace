@@ -1,3 +1,4 @@
+pub mod identity;
 pub mod password;
 pub mod workos;
 
@@ -598,7 +599,10 @@ pub async fn load_authenticated_actor(
     let Some(row) = row else {
         return Ok(None);
     };
-    if !workos::session_valid(state, row.session_id).await? {
+    // Only a configured identity provider is asked (K1.30).
+    if let Some(provider) = identity::configured(state)
+        && !identity::IdentityProvider::session_valid(&provider, state, row.session_id).await?
+    {
         return Ok(None);
     }
     crate::db::scoped_one(&state.pool, async |connection| {
