@@ -1624,7 +1624,8 @@ async fn mcp_request(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
-    let body = to_bytes(response.into_body(), 1_000_000)
+    // The whole tool list is read here; the shared helpers take 4 MB too.
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");
     let text = String::from_utf8(body.to_vec()).expect("MCP UTF-8");
