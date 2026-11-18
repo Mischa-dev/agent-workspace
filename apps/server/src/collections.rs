@@ -28,6 +28,7 @@ pub mod computed;
 pub mod definition;
 pub mod http;
 pub mod ops;
+pub mod record_templates;
 pub mod records;
 pub mod relations;
 pub mod task_like;

@@ -1784,6 +1784,114 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_create",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Create a record template"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List record templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_update",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a record template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_create",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Make records on a schedule"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_delete",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop a recurring record"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List recurring records"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_update",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a recurring record"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "request.cancelled"
     ],
     "idempotent": true,

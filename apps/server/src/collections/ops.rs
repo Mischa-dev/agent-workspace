@@ -62,6 +62,10 @@ pub struct RecordCreateInput {
     /// message into this record.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub say_so: bool,
+    /// A record template of the collection to start from (T1.30): its title
+    /// and field values, under what you give.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<IdRef>,
 }
 
 impl Targeted for RecordCreateInput {
@@ -106,8 +110,9 @@ impl Operation for RecordCreate {
     const DESCRIPTION: &'static str = "Add one record to a collection, with its title and \
         field values by name. Pass fromMessageId to make it from a message: the record links \
         back to the message, takes its first line as the title unless you give one, and with \
-        saySo the conversation says you made it. Records of a collection that acts like tasks \
-        are tasks: use task_create. record_write changes many records at once.";
+        saySo the conversation says you made it. Pass template to start from a record template \
+        (record_template_list). Records of a collection that acts like tasks are tasks: use \
+        task_create. record_write changes many records at once.";
 
     type Input = RecordCreateInput;
     type Output = RecordCreateOutput;
@@ -169,10 +174,29 @@ impl Operation for RecordCreate {
                 })?,
             ),
         };
+        // A template's title and values, under what the input gives.
+        let mut fields = input.fields;
+        let mut template_title = None;
+        if let Some(template) = input.template {
+            let template = super::record_templates::template(tx, space_id, template.id(), false)
+                .await?
+                .filter(|template| !template.archived && template.collection_id == collection.id)
+                .ok_or_else(|| {
+                    OpError::invalid("template", "That isn't a template of this collection.")
+                })?;
+            for (name, value) in super::record_templates::values_of(&template) {
+                fields.entry(name).or_insert(value);
+            }
+            template_title = Some(super::record_templates::title_on(
+                &template.title,
+                chrono::Utc::now().date_naive(),
+            ));
+        }
         let title = input
             .title
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty())
+            .or(template_title)
             .or_else(|| source.as_ref().map(|(_, _, text)| title_from(text)));
         let project_key =
             sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
@@ -204,7 +228,7 @@ impl Operation for RecordCreate {
             &[super::records::RecordInput {
                 record: None,
                 title,
-                values: input.fields.into_iter().collect(),
+                values: fields.into_iter().collect(),
                 archived: None,
                 expected_version: None,
             }],

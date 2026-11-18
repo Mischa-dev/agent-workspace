@@ -2088,6 +2088,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "project_status_get",
     "form_list",
     "form_get",
+    "record_template_list",
+    "recurring_record_list",
     "module_list",
     "module_open",
     "my_permissions",
@@ -2394,6 +2396,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "form_get",
             vec![json!({"form": a.form})],
             vec![json!({"form": b.form})],
+            vec![],
+        ),
+        // T1.30: B's templates and schedules never list in A.
+        case(
+            "record_template_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        case(
+            "recurring_record_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
             vec![],
         ),
         // T1.26: B's initiatives never list in A.

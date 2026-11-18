@@ -571,6 +571,11 @@ const ACCOUNT_ROUTES_EXCUSED: &[(&str, &str)] = &[
         "/api/v1/projects/{project_id}/timeline",
         "the people on tasks the caller can see; P0.22's net walks it",
     ),
+    (
+        "/api/v1/my-work",
+        "the caller's own tasks, and the leads and update authors of spaces they are in (T1.43); \
+         workspace_isolation walks it",
+    ),
 ];
 
 /// What one caller in A must never read of B, and how it calls.
@@ -2777,6 +2782,11 @@ async fn channel_writes_keep_to_private_channels() {
         (
             "form_create",
             json!({"collection": collection, "name": "Nate's own"}),
+        ),
+        // T1.30: nor templates or schedules.
+        (
+            "record_template_create",
+            json!({"collection": collection, "name": "Nate's", "title": "Nate's"}),
         ),
     ] {
         let (status, refused) = op(&nate.browser, name, input).await;

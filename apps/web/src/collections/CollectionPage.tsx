@@ -52,12 +52,14 @@ const CollectionListView = lazy(() => import('./CollectionListView').then((modul
 const CollectionChartView = lazy(() => import('./CollectionChartView').then((module) => ({ default: module.CollectionChartView })))
 const CollectionTimelineView = lazy(() => import('./CollectionTimelineView').then((module) => ({ default: module.CollectionTimelineView })))
 const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
+const TemplatesDialog = lazy(() => import('./TemplatesDialog').then((module) => ({ default: module.TemplatesDialog })))
 
 const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
 
 type Dialogs =
   | { kind: 'details' }
   | { kind: 'forms' }
+  | { kind: 'templates' }
   | { kind: 'field'; field: FieldDefinition | null }
   | { kind: 'new-view' }
   | { kind: 'rename-view'; view: CollectionView }
@@ -305,6 +307,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
 
   const collectionMenu: MenuEntry[] = [
     ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(body.canEditRecords && !taskLike ? [{ label: 'Templates…', icon: 'copy' as const, onSelect: () => setDialog({ kind: 'templates' }) }] : []),
     ...(canBuild && tasks ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
     ...(canBuild && !tasks
       ? ([
@@ -492,6 +495,11 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       {dialog?.kind === 'forms' ? (
         <Suspense fallback={null}>
           <FormsDialog body={body} onClose={() => setDialog(null)} projectId={projectId} />
+        </Suspense>
+      ) : null}
+      {dialog?.kind === 'templates' ? (
+        <Suspense fallback={null}>
+          <TemplatesDialog body={body} onClose={() => setDialog(null)} onOpenRecord={openRecord} projectId={projectId} />
         </Suspense>
       ) : null}
       {dialog?.kind === 'field' ? (

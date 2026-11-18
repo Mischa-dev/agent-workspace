@@ -1201,6 +1201,31 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "record_templates",
+                table: "record_templates",
+                references: &[
+                    ("space_id", "projects"),
+                    ("collection_id", "collections"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "recurring_records",
+                table: "recurring_records",
+                references: &[
+                    ("space_id", "projects"),
+                    ("template_id", "record_templates"),
+                    ("created_by_actor_id", "actors"),
+                    ("external_agent_connection_id", "external_agent_connections"),
+                    ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("last_record_id", "collection_records"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "forms",
                 table: "forms",
                 references: &[

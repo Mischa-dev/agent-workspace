@@ -236,6 +236,8 @@ export type ReactionSummary = { byYou: boolean; count: number; emoji: string; na
 
 export type RecipeView = { id: string; title: string }
 
+export type RecurringView = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
+
 export type RemoveParts = "archive" | "keep"
 
 export type RequestAnswerView = { label?: string | null; optionId?: string | null; text?: string | null }
@@ -274,6 +276,8 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 
 export type SavedSearch = { id: string; name: string; position: number; query: string }
 
+export type ScheduleInput = { every?: number | null; frequency: string; monthDay?: number | null; startsOn?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] }
+
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
@@ -305,6 +309,8 @@ export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 export type Subscription = { conversationIds?: string[] | null; echoes: boolean; id: string; includesDms: boolean; kinds: string[]; minReason: string; spaceIds?: string[] | null; workspaceIds?: string[] | null }
 
 export type SubscriptionInput = { conversationIds?: string[] | null; echoes?: boolean | null; includesDms?: boolean | null; kinds?: string[] | null; minReason?: string | null; spaceIds?: string[] | null; workspaceIds?: string[] | null }
+
+export type TemplateView = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
 
 export type ThingInput = { id: string; kind: SubjectKind }
 
@@ -796,9 +802,37 @@ export type ProjectUpdateCreateInput = { channelId?: string | null; health: stri
 
 export type ProjectUpdateCreateOutput = { channelId: string; messageId: string; status: SpaceStatus; threadId: string }
 
-export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; title?: string | null }
+export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; template?: string | null; title?: string | null }
 
 export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
+export type RecordTemplateCreateInput = { collection: string; fields?: Record<string, unknown>; name: string; title: string }
+
+export type RecordTemplateCreateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
+
+export type RecordTemplateListInput = { collection: string; includeArchived?: boolean }
+
+export type RecordTemplateListOutput = { templates: TemplateView[] }
+
+export type RecordTemplateUpdateInput = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown> | null; name?: string | null; template: string; title?: string | null }
+
+export type RecordTemplateUpdateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
+
+export type RecurringRecordCreateInput = { every?: number | null; frequency: string; monthDay?: number | null; startsOn?: string | null; template: string; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] }
+
+export type RecurringRecordCreateOutput = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
+
+export type RecurringRecordDeleteInput = { recurring: string }
+
+export type RecurringRecordDeleteOutput = { id: string }
+
+export type RecurringRecordListInput = { collection: string; includeArchived?: boolean }
+
+export type RecurringRecordListOutput = { recurring: RecurringView[] }
+
+export type RecurringRecordUpdateInput = { enabled?: boolean | null; expectedVersion?: number | null; recurring: string; schedule?: ScheduleInput | null }
+
+export type RecurringRecordUpdateOutput = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
 
 export type RequestCancelInput = { requestId: string }
 
@@ -1130,6 +1164,13 @@ export type Operations = {
   project_status_set: { input: ProjectStatusSetInput; output: ProjectStatusSetOutput }
   project_update_create: { input: ProjectUpdateCreateInput; output: ProjectUpdateCreateOutput }
   record_create: { input: RecordCreateInput; output: RecordCreateOutput }
+  record_template_create: { input: RecordTemplateCreateInput; output: RecordTemplateCreateOutput }
+  record_template_list: { input: RecordTemplateListInput; output: RecordTemplateListOutput }
+  record_template_update: { input: RecordTemplateUpdateInput; output: RecordTemplateUpdateOutput }
+  recurring_record_create: { input: RecurringRecordCreateInput; output: RecurringRecordCreateOutput }
+  recurring_record_delete: { input: RecurringRecordDeleteInput; output: RecurringRecordDeleteOutput }
+  recurring_record_list: { input: RecurringRecordListInput; output: RecurringRecordListOutput }
+  recurring_record_update: { input: RecurringRecordUpdateInput; output: RecurringRecordUpdateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

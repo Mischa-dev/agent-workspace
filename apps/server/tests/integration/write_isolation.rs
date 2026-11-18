@@ -530,6 +530,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "form_create",
     "form_update",
     "form_answer_send",
+    "record_template_create",
+    "record_template_update",
+    "recurring_record_create",
+    "recurring_record_update",
+    "recurring_record_delete",
     "conversation_tab_set",
     "button_press",
     "sheet_write",
@@ -7086,6 +7091,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
             json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
+            // T1.30: nor from another workspace's template.
+            json!({"collection": a.collection, "template": b.record_template,
+                   "clientRequestId": "net-from-template-cross"}),
         ]),
         // T1.28: forms only on, and answered in, the caller's own space.
         mcp_case(
@@ -7106,6 +7114,37 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                    "clientRequestId": "net-answer"}),
             vec![json!({"form": b.form, "answers": {"title": "Net answer"},
                         "clientRequestId": "net-answer-b"})],
+        ),
+        // T1.30: templates and their schedules only in the caller's own
+        // space.
+        mcp_case(
+            "record_template_create",
+            json!({"collection": a.collection, "name": "Net template", "title": "Net {date}",
+                   "clientRequestId": "net-template"}),
+            vec![json!({"collection": b.collection, "name": "Net template", "title": "Net",
+                        "clientRequestId": "net-template-b"})],
+        ),
+        mcp_case(
+            "record_template_update",
+            json!({"template": a.record_template, "name": "Net template renamed"}),
+            vec![json!({"template": b.record_template, "name": "Net template renamed"})],
+        ),
+        mcp_case(
+            "recurring_record_create",
+            json!({"template": a.record_template, "frequency": "daily",
+                   "clientRequestId": "net-recurring"}),
+            vec![json!({"template": b.record_template, "frequency": "daily",
+                        "clientRequestId": "net-recurring-b"})],
+        ),
+        mcp_case(
+            "recurring_record_update",
+            json!({"recurring": a.recurring_record, "enabled": false}),
+            vec![json!({"recurring": b.recurring_record, "enabled": false})],
+        ),
+        mcp_case(
+            "recurring_record_delete",
+            json!({"recurring": a.recurring_record}),
+            vec![json!({"recurring": b.recurring_record})],
         ),
         mcp_case(
             "button_press",

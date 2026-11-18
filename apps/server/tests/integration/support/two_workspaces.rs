@@ -100,6 +100,9 @@ pub(crate) struct World {
     pub(crate) dashboard: Uuid,
     /// An internal form (T1.28) on `collection`.
     pub(crate) form: Uuid,
+    /// A record template (T1.30) on `collection`, made daily.
+    pub(crate) record_template: Uuid,
+    pub(crate) recurring_record: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -801,6 +804,29 @@ async fn build_workspace(
     )
     .await;
     let form = Uuid::parse_str(&string_at(&form, "/value/id")).expect("form id");
+    let record_template = call(
+        "record_template_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Weekly{m}"),
+            "title": format!("Check-in{m} {{date}}"),
+            "clientRequestId": "record-template-1",
+        }),
+    )
+    .await;
+    let record_template =
+        Uuid::parse_str(&string_at(&record_template, "/value/id")).expect("record template id");
+    let recurring_record = call(
+        "recurring_record_create",
+        json!({
+            "template": record_template.to_string(),
+            "frequency": "daily",
+            "clientRequestId": "recurring-record-1",
+        }),
+    )
+    .await;
+    let recurring_record =
+        Uuid::parse_str(&string_at(&recurring_record, "/value/id")).expect("recurring id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -1817,6 +1843,8 @@ async fn build_workspace(
         collection_view,
         dashboard,
         form,
+        record_template,
+        recurring_record,
         record,
         sheet,
         file,

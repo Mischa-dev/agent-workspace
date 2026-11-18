@@ -195,6 +195,16 @@ const KINDS: &[(&str, &str)] = &[
          WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
     ),
     (
+        "record_template",
+        "SELECT template.workspace_id, template.space_id FROM record_templates template \
+         WHERE template.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "recurring_record",
+        "SELECT recurring.workspace_id, recurring.space_id FROM recurring_records recurring \
+         WHERE recurring.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "form",
         "SELECT form.workspace_id, form.space_id FROM forms form \
          WHERE form.id = $1 AND $2::uuid IS NOT NULL",
@@ -345,6 +355,8 @@ fn what_of(kind: &str) -> &'static str {
         "sheet" => "That sheet",
         "record" => "That record",
         "form" => "That form",
+        "record_template" => "That template",
+        "recurring_record" => "That recurring record",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
