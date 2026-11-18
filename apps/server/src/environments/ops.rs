@@ -310,7 +310,10 @@ impl Operation for EnvironmentCheck {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "runs";
     const PERMISSION: Option<Perm> = None;
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Not the dispatcher's: a check can ask the harness's provider, and its
+    // transaction would be held across the call. Checking again only
+    // records a newer result.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Check environment";
     const DESCRIPTION: &'static str = "Check an environment with your own signed-in account \
         for its harness, and record the result (checkOk, checkMessage).";
@@ -325,6 +328,8 @@ impl Operation for EnvironmentCheck {
     ) -> Result<EnvironmentWriteValue, OpError> {
         let mut arguments = write_arguments(input.project_id, Some(input.environment));
         arguments.check = Some(true);
-        write(call, arguments, false).await
+        let value = write(call, arguments, false).await?;
+        call.key_honoured();
+        Ok(value)
     }
 }
