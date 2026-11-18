@@ -210,6 +210,19 @@ pub(crate) async fn ask_for_replies(
             let followers = thread_followers(transaction, &message).await?;
             insert_requests(transaction, &message, &followers, false, true, depth).await?;
         }
+        // A2.9: a message nobody prompted invites those in ambient mode
+        // here, unless they have a request open or answered just now.
+        if depth == 0 {
+            let ambient = crate::follows::ambient::invited(
+                transaction,
+                message.project_id,
+                message.conversation_id,
+                message.author_actor_id,
+                message.mentioned_actor_ids,
+            )
+            .await?;
+            insert_requests(transaction, &message, &ambient, false, false, depth).await?;
+        }
         return Ok(());
     }
     let required = depth == 0 && message.conversation_kind == "dm";

@@ -2731,9 +2731,14 @@ pub async fn add_watcher(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO work_item_watchers (project_id, work_item_id, actor_id)
-        SELECT $1, $2, membership.actor_id
+        INSERT INTO follows (
+            workspace_id, space_id, account_id, target_kind, target_id, level,
+            created_by_account_id
+        )
+        SELECT space.organization_id, $1, membership.actor_id, 'task', $2, 'everything',
+               membership.actor_id
         FROM project_memberships membership
+        JOIN projects space ON space.id = membership.project_id
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1 AND membership.actor_id = $3
           AND membership.enabled AND actor.status = 'active'

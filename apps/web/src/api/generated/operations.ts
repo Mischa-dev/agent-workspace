@@ -20,6 +20,8 @@ export type Envelope<T> =
 
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
+export type AgentSettingsView = { accountId: string; ambient: boolean; displayName: string; handle: string; replyCooldownSeconds: number }
+
 export type AgentTemplateView = { definition: unknown; id: string; installId?: string | null; key: string; name: string; purpose: string; spaceId?: string | null }
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
@@ -95,6 +97,12 @@ export type FigureGroup = { color?: string | null; count: number; key: string; n
 export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
 
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
+
+export type FollowKind = "space" | "task" | "page" | "sheet" | "record" | "whiteboard" | "conversation"
+
+export type FollowLevel = "changes" | "everything"
+
+export type FollowView = { id: string; kind: FollowKind; level: FollowLevel; spaceId?: string | null }
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
@@ -396,6 +404,14 @@ export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: nu
 
 export type ConnectionUpdateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConversationAgentSettingsListInput = { conversation: string }
+
+export type ConversationAgentSettingsListOutput = { accounts: AgentSettingsView[] }
+
+export type ConversationAgentSettingsSetInput = { account: string; ambient?: boolean | null; conversation: string; replyCooldownSeconds?: number | null }
+
+export type ConversationAgentSettingsSetOutput = { accountId: string; ambient: boolean; displayName: string; handle: string; replyCooldownSeconds: number }
+
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
 export type ConversationMarkReadOutput = { conversationId: string; lastReadSequence: number; unreadCount: number }
@@ -467,6 +483,14 @@ export type EventListOutput = { connectionId: string; events: Array<Record<strin
 export type FileLinkGetInput = { fileId: string }
 
 export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
+export type FollowListInput = { space?: string | null }
+
+export type FollowListOutput = { follows: FollowView[] }
+
+export type FollowSetInput = { id: string; kind: FollowKind; level?: FollowLevel | null; on?: boolean | null }
+
+export type FollowSetOutput = { changed: boolean; id: string; kind: FollowKind; level?: FollowLevel | null }
 
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
@@ -879,6 +903,8 @@ export type Operations = {
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
   connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
+  conversation_agent_settings_list: { input: ConversationAgentSettingsListInput; output: ConversationAgentSettingsListOutput }
+  conversation_agent_settings_set: { input: ConversationAgentSettingsSetInput; output: ConversationAgentSettingsSetOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversation_member_list: { input: ConversationMemberListInput; output: ConversationMemberListOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
@@ -897,6 +923,8 @@ export type Operations = {
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  follow_list: { input: FollowListInput; output: FollowListOutput }
+  follow_set: { input: FollowSetInput; output: FollowSetOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }

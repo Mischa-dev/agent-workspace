@@ -46,6 +46,7 @@ pub mod external_agents;
 pub mod external_execution;
 pub mod fields;
 pub mod files;
+pub mod follows;
 pub mod forwarding;
 pub use agent_workspace_builtin_host::git as git_runtime;
 pub mod github;

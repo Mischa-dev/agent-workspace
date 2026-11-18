@@ -19,6 +19,7 @@ import { getConversationTimeline, retryReplyRequest, searchMentionableActors, st
 import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ChannelMembers } from './ChannelMembers'
+import { AmbientAgentsDialog } from './AmbientAgentsDialog'
 import { ChannelTopicDialog } from './ChannelTopicDialog'
 import { ConversationHeader } from './ConversationHeader'
 import { useProjectConversationSidebar } from './hooks'
@@ -180,6 +181,7 @@ export function ChannelPage() {
   // Starring it, or keeping it in a section you named (C2.9).
   const placement = useSidebarPlacement(validBoundary ? channelId : '', useProjectExperience(projectId).shows('talk.sidebar_sections'))
   const [topicOpen, setTopicOpen] = useState(false)
+  const [ambientOpen, setAmbientOpen] = useState(false)
   const [joining, setJoining] = useState(false)
   const joinChannel = (join: boolean) => {
     setJoining(true)
@@ -200,6 +202,7 @@ export function ChannelPage() {
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
   // A layout without threads keeps the threads already here reachable but doesn't offer new ones.
   const threadsShown = useProjectExperience(projectId).shows('talk.threads')
+  const agentsShown = useProjectExperience(projectId).shows('talk.agent_mentions')
   const canStartThread = canPost && threadsShown
   const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
@@ -362,6 +365,7 @@ export function ChannelPage() {
           ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
           ...(details.data?.canEdit ? [{ label: topic ? 'Change topic' : 'Set a topic', icon: 'pencil' as const, onSelect: () => setTopicOpen(true) }] : []),
           ...(browseShown && details.data?.joined ? [{ label: 'Leave channel', icon: 'arrow-left' as const, onSelect: () => joinChannel(false) }] : []),
+          ...(agentsShown && validBoundary ? [{ label: 'Ambient mode…', icon: 'users' as const, onSelect: () => setAmbientOpen(true) }] : []),
           ...placement.menu,
           ...tools.levelMenu,
           { separator: true as const },
@@ -384,6 +388,7 @@ export function ChannelPage() {
         title={name}
       />
       {placement.dialog}
+      {ambientOpen ? <AmbientAgentsDialog conversationId={channelId} onClose={() => setAmbientOpen(false)} open /> : null}
       {topicOpen && details.data ? (
         <ChannelTopicDialog
           autoJoin={details.data.autoJoin}

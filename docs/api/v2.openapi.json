@@ -41,6 +41,36 @@
         ],
         "type": "object"
       },
+      "AgentSettingsView": {
+        "description": "One account's settings in a conversation.",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "ambient": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "replyCooldownSeconds": {
+            "description": "Seconds it waits after answering before it is invited again.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accountId",
+          "displayName",
+          "handle",
+          "ambient",
+          "replyCooldownSeconds"
+        ],
+        "type": "object"
+      },
       "AgentTemplateView": {
         "description": "An agent template, as agent_template_list shows it.",
         "properties": {
@@ -1403,6 +1433,60 @@
         "required": [
           "field",
           "op"
+        ],
+        "type": "object"
+      },
+      "FollowKind": {
+        "description": "What can be followed.",
+        "enum": [
+          "space",
+          "task",
+          "page",
+          "sheet",
+          "record",
+          "whiteboard",
+          "conversation"
+        ],
+        "type": "string"
+      },
+      "FollowLevel": {
+        "description": "How much of it.",
+        "oneOf": [
+          {
+            "const": "changes",
+            "description": "Its own changes.",
+            "type": "string"
+          },
+          {
+            "const": "everything",
+            "description": "Its changes and its discussion.",
+            "type": "string"
+          }
+        ]
+      },
+      "FollowView": {
+        "description": "One thing an account follows.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FollowKind"
+          },
+          "level": {
+            "$ref": "#/components/schemas/FollowLevel"
+          },
+          "spaceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "level"
         ],
         "type": "object"
       },
@@ -17169,6 +17253,704 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/conversation_agent_settings_list": {
+      "post": {
+        "description": "In a channel or thread: the accounts that take reply requests and can see it, each with whether it is in ambient mode and its cooldown. Change one with conversation_agent_settings_set.",
+        "operationId": "conversation_agent_settings_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversation": {
+                    "description": "The channel or thread, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversation"
+                ],
+                "title": "ConversationAgentSettingsListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accounts": {
+                              "description": "The accounts that take reply requests and can see it.",
+                              "items": {
+                                "$ref": "#/components/schemas/AgentSettingsView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "accounts"
+                          ],
+                          "title": "ConversationAgentSettingsListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accounts": {
+                              "description": "The accounts that take reply requests and can see it.",
+                              "items": {
+                                "$ref": "#/components/schemas/AgentSettingsView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "accounts"
+                          ],
+                          "title": "ConversationAgentSettingsListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Ambient mode here",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/conversation_agent_settings_set": {
+      "post": {
+        "description": "Turn ambient mode on or off for an account in a channel or thread: when on, it hears every new message there and each one nobody prompted invites it to reply (an optional reply request), unless it already has one open there or answered within replyCooldownSeconds. It answers with reply_send or reply_pass. conversation_agent_settings_list shows who could be and who is. Needs \"Steer replies\" where it acts.",
+        "operationId": "conversation_agent_settings_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "The account (one that takes reply requests and can see the\nconversation).",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "ambient": {
+                    "description": "true: invited to speak on every new message nobody prompted.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "conversation": {
+                    "description": "The channel or thread, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "replyCooldownSeconds": {
+                    "description": "Seconds it waits after answering before it is invited again (0 to\n86400). Left out: unchanged (300 at first).",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation",
+                  "account"
+                ],
+                "title": "ConversationAgentSettingsSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One account's settings in a conversation.",
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "ambient": {
+                              "type": "boolean"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "handle": {
+                              "type": "string"
+                            },
+                            "replyCooldownSeconds": {
+                              "description": "Seconds it waits after answering before it is invited again.",
+                              "format": "int32",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "accountId",
+                            "displayName",
+                            "handle",
+                            "ambient",
+                            "replyCooldownSeconds"
+                          ],
+                          "title": "AgentSettingsView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One account's settings in a conversation.",
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "ambient": {
+                              "type": "boolean"
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "handle": {
+                              "type": "string"
+                            },
+                            "replyCooldownSeconds": {
+                              "description": "Seconds it waits after answering before it is invited again.",
+                              "format": "int32",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "accountId",
+                            "displayName",
+                            "handle",
+                            "ambient",
+                            "replyCooldownSeconds"
+                          ],
+                          "title": "AgentSettingsView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set ambient mode",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/conversation_mark_read": {
       "post": {
         "description": "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing; its mention notifications are read with it. To come back to something later, pass unread: true: the conversation is unread again from fromMessageId (default: its newest message) onward. Marking unread never marks anything read.",
@@ -23778,6 +24560,705 @@
           "workspace"
         ],
         "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/follow_list": {
+      "post": {
+        "description": "The spaces and things you follow in this workspace (or one space), newest first, with how much of each (changes or everything). Change one with follow_set.",
+        "operationId": "follow_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "space": {
+                    "description": "Only what you follow in this space. Left out: the whole workspace.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "FollowListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "follows": {
+                              "items": {
+                                "$ref": "#/components/schemas/FollowView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "follows"
+                          ],
+                          "title": "FollowListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "follows": {
+                              "items": {
+                                "$ref": "#/components/schemas/FollowView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "follows"
+                          ],
+                          "title": "FollowListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "What you follow",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/follow_set": {
+      "post": {
+        "description": "Follow a space, task, page, sheet, record, whiteboard or conversation to hear about it in your events and notifications: level changes hears its updates, everything adds its comments and messages. on: false stops. Following never shows you more than you can already see. follow_list lists what you follow.",
+        "operationId": "follow_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "description": "Its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/FollowKind",
+                    "description": "What it is: space, task, page, sheet, record, whiteboard or\nconversation (a channel or thread)."
+                  },
+                  "level": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/FollowLevel"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "changes (its own updates) or everything (its comments and messages\ntoo). Left out: changes."
+                  },
+                  "on": {
+                    "description": "false stops following. Left out: true.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "title": "FollowSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "changed": {
+                              "description": "Whether this call changed anything.",
+                              "type": "boolean"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/FollowKind"
+                            },
+                            "level": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/FollowLevel"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "How you follow it now; null when you don't."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "changed"
+                          ],
+                          "title": "FollowSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "changed": {
+                              "description": "Whether this call changed anything.",
+                              "type": "boolean"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/FollowKind"
+                            },
+                            "level": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/FollowLevel"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "How you follow it now; null when you don't."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "changed"
+                          ],
+                          "title": "FollowSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Follow",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/formula_preview": {

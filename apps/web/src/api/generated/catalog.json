@@ -523,6 +523,36 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "channels",
+    "name": "conversation_agent_settings_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Ambient mode here"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "conversation_agent_settings_set",
+    "permission": "replies.steer",
+    "preview": false,
+    "proposable": false,
+    "title": "Set ambient mode"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [
       "conversation.read"
     ],
@@ -789,6 +819,36 @@
     "preview": false,
     "proposable": false,
     "title": "Link to a file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "follow_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "What you follow"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "follows.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "follow_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Follow"
   },
   {
     "automation": false,

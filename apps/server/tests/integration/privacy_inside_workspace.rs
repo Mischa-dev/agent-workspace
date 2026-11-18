@@ -2693,3 +2693,87 @@ async fn channel_writes_keep_to_private_channels() {
 
     world.finish().await;
 }
+
+/// A2.9: following and ambient mode keep to what the caller may see and
+/// do. A member can't follow a DM they aren't in, nor set ambient mode
+/// there; a viewer (no `replies.steer`) can't set it in a channel; and what
+/// the member follows never lists the DM.
+#[tokio::test]
+async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("vera", "viewer")
+        .agent("rook", "member")
+        .build("privacy_follows")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/channels", world.project("WORK")),
+            Some("privacy-follows-channel"),
+            json!({ "name": "general" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let channel = made["conversation"]["id"]
+        .as_str()
+        .or_else(|| made["id"].as_str())
+        .expect("channel")
+        .to_owned();
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    let vera = &world.people["vera"].browser;
+    for (who, name, body) in [
+        (
+            lena,
+            "follow_set",
+            json!({ "kind": "conversation", "id": dm, "level": "everything" }),
+        ),
+        (
+            lena,
+            "conversation_agent_settings_set",
+            json!({ "conversation": dm, "account": rook, "ambient": true }),
+        ),
+        (
+            vera,
+            "conversation_agent_settings_set",
+            json!({ "conversation": channel, "account": rook, "ambient": true }),
+        ),
+    ] {
+        let key = Uuid::now_v7().to_string();
+        let (status, body) =
+            send(&world.app, who.request("POST", &op(name), Some(&key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+    }
+    let (_, listed) = send(
+        &world.app,
+        lena.request("POST", &op("follow_list"), None, json!({})),
+    )
+    .await;
+    assert!(!listed.to_string().contains(&dm), "{listed}");
+    let settings = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_agent_settings")
+        .fetch_one(world.pool())
+        .await
+        .expect("settings");
+    assert_eq!(settings, 0);
+    world.finish().await;
+}

@@ -64,7 +64,9 @@ pub const SUBJECTS: &[Subject] = &[
              WHERE page.id = $1 AND subject_visible_to('page', page.id, $2) \
              FOR SHARE OF page",
         followers_sql: "SELECT created_by_actor_id FROM project_pages \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'page' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Sheet,
@@ -75,7 +77,9 @@ pub const SUBJECTS: &[Subject] = &[
              WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2) \
              FOR SHARE OF sheet",
         followers_sql: "SELECT created_by_actor_id FROM sheets \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'sheet' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Whiteboard,
@@ -86,7 +90,9 @@ pub const SUBJECTS: &[Subject] = &[
              WHERE board.id = $1 AND subject_visible_to('whiteboard', board.id, $2) \
              FOR SHARE OF board",
         followers_sql: "SELECT created_by_actor_id FROM whiteboards \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'whiteboard' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Record,
@@ -97,7 +103,9 @@ pub const SUBJECTS: &[Subject] = &[
              WHERE record.id = $1 AND subject_visible_to('record', record.id, $2) \
              FOR SHARE OF record",
         followers_sql: "SELECT created_by_actor_id FROM collection_records \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'record' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Task,
@@ -110,7 +118,8 @@ pub const SUBJECTS: &[Subject] = &[
                  WHERE id = $1 AND assignee_actor_id IS NOT NULL \
              UNION SELECT created_by_actor_id FROM work_items \
                  WHERE id = $1 AND created_by_actor_id IS NOT NULL \
-             UNION SELECT actor_id FROM work_item_watchers WHERE work_item_id = $1",
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'task' AND target_id = $1 AND level = 'everything'",
     },
 ];
 

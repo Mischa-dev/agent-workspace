@@ -392,7 +392,9 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     assert_eq!(watched[0]["count"], 2);
 
     // Once Ben stops watching, changes stop reaching him.
-    sqlx::query("DELETE FROM work_item_watchers WHERE work_item_id = $1::uuid AND actor_id = $2")
+    sqlx::query(
+        "DELETE FROM follows WHERE target_kind = 'task' AND target_id = $1::uuid AND account_id = $2",
+    )
         .bind(&task)
         .bind(ben)
         .execute(&setup.pool)
