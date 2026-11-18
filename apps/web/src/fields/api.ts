@@ -30,9 +30,25 @@ export type ButtonInput = { label?: string; steps: Array<{ operation: string; ar
 
 export type OptionInput = { id?: string; name: string; color?: string; category?: StatusCategory }
 
+/** A rollup as written: the relation, the related records' field (left out to count them), and how. */
+export type RollupInput = { relation: string; field?: string; aggregate: string }
+
 export async function createField(
   scope: FieldScope,
-  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; formula?: string; button?: ButtonInput; idempotencyKey: string },
+  input: {
+    name: string
+    type: string
+    description?: string
+    options?: OptionInput[]
+    target?: string
+    formula?: string
+    button?: ButtonInput
+    rollup?: RollupInput
+    /** A relation also listed on the other collection, as `pairName` (that collection's name when left out). */
+    twoWay?: boolean
+    pairName?: string
+    idempotencyKey: string
+  },
 ) {
   const { idempotencyKey, ...json } = input
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))
@@ -52,6 +68,8 @@ export async function updateField(
     formula?: string
     /** A button field's new label and steps. */
     button?: ButtonInput
+    /** A rollup field's new settings. */
+    rollup?: RollupInput
     idempotencyKey: string
   },
 ) {

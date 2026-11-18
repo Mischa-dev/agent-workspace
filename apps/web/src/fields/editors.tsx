@@ -104,6 +104,15 @@ export function LinkFieldEditor(props: EditorProps) {
   )
 }
 
+/** Records of a relation's collection: several, picked and unpicked in place. */
+export function RelationFieldEditor(props: EditorProps) {
+  return (
+    <EditorPopover anchor={props.anchor} field={props.field} onClose={props.onClose} width={320}>
+      <RecordEditor field={props.field} multiple onClose={props.onClose} onSet={(next) => props.onSet(next)} projectId={props.projectId} value={props.value} />
+    </EditorPopover>
+  )
+}
+
 /** A day on a calendar. (The task page edits a date with its own DatePicker; this is the same calendar.) */
 export function DateFieldEditor(props: EditorProps) {
   return (
@@ -258,17 +267,21 @@ type RecordHit = { id: string; title: string; number: number }
 /** A record of the collection a record link holds (AWD-110), found by its title. */
 function RecordEditor({
   field,
+  multiple = false,
   onClose,
   onSet,
   projectId,
   value,
 }: {
   field: FieldDefinition
+  /** A relation: several records, each pick adding or taking one away. */
+  multiple?: boolean
   onClose: () => void
   onSet: (value: FieldValue | null, label: string | null) => void
   projectId: string
   value: FieldValue | undefined
 }) {
+  const [chosen, setChosen] = useState<string[]>(Array.isArray(value) ? value : typeof value === 'string' ? [value] : [])
   const [query, setQuery] = useState('')
   const debounced = useDebouncedValue(query, 200)
   const collection = field.collection ?? ''
@@ -294,18 +307,25 @@ function RecordEditor({
       emptyText={records.isError ? 'Records didn’t load. Try again.' : 'No records match'}
       label={field.name}
       loading={records.isFetching}
-      onClose={onClose}
+      multiple={multiple}
+      onClose={multiple ? undefined : onClose}
       onQueryChange={setQuery}
       onSelect={(id) => {
         const record = (records.data ?? []).find((entry) => entry.id === id)
+        if (multiple && id !== '__none') {
+          const next = chosen.includes(id) ? chosen.filter((entry) => entry !== id) : [...chosen, id]
+          setChosen(next)
+          onSet(next.length ? next : null, null)
+          return
+        }
         onSet(id === '__none' ? null : id, record ? label(record) : null)
       }}
       options={[
-        ...(isEmpty(value) || query.trim() ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
+        ...(isEmpty(value) || query.trim() || multiple ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
         ...(records.data ?? []).map((record) => ({ value: record.id, label: label(record), description: `#${record.number}` })),
       ]}
-      placeholder="Find a record"
-      selected={typeof value === 'string' ? [value] : []}
+      placeholder={multiple ? 'Find records' : 'Find a record'}
+      selected={multiple ? chosen : typeof value === 'string' ? [value] : []}
     />
   )
 }

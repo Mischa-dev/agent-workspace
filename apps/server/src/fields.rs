@@ -34,7 +34,9 @@ use uuid::Uuid;
 use crate::{error::AppError, work_item_labels};
 
 pub mod button;
+pub mod dependencies;
 pub mod formula;
+pub mod rollup;
 
 /// Active fields one record kind of a project can have.
 pub const MAX_ACTIVE_FIELDS: i64 = 50;
@@ -110,6 +112,13 @@ pub enum FieldType {
     Checkbox,
     // A link to a task or a page in the same project (`FieldConfig::target`).
     Link,
+    /// Records of one collection (`FieldConfig::collection`), up to
+    /// `MAX_RELATED`; two-way when `FieldConfig::inverse` names its pair on
+    /// the other side (T1.18).
+    Relation,
+    /// Worked out from the records a relation names (T1.18, `rollup`); kept
+    /// in `computed_values`, never written.
+    Rollup,
     /// When the record was made (system).
     CreatedTime,
     /// When the record last changed (system).
@@ -129,7 +138,7 @@ pub enum FieldType {
 }
 
 impl FieldType {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -143,6 +152,8 @@ impl FieldType {
         Self::Phone,
         Self::Checkbox,
         Self::Link,
+        Self::Relation,
+        Self::Rollup,
         Self::CreatedTime,
         Self::EditedTime,
         Self::CreatedBy,
@@ -155,7 +166,7 @@ impl FieldType {
     /// Every type, with the ones only module manifests name: the list the
     /// web app's field registry is checked against (T1.13a,
     /// `apps/web/src/fields/fieldTypes.generated.json`).
-    pub const EVERY: [Self; 22] = [
+    pub const EVERY: [Self; 24] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -169,6 +180,8 @@ impl FieldType {
         Self::Phone,
         Self::Checkbox,
         Self::Link,
+        Self::Relation,
+        Self::Rollup,
         Self::CreatedTime,
         Self::EditedTime,
         Self::CreatedBy,
@@ -240,6 +253,8 @@ impl FieldType {
             Self::Phone => "phone",
             Self::Checkbox => "checkbox",
             Self::Link => "link",
+            Self::Relation => "relation",
+            Self::Rollup => "rollup",
             Self::CreatedTime => "created_time",
             Self::EditedTime => "edited_time",
             Self::CreatedBy => "created_by",
@@ -274,7 +289,9 @@ impl FieldType {
             "email" | "emailaddress" | "mail" => Self::Email,
             "phone" | "phonenumber" | "telephone" | "tel" | "mobile" => Self::Phone,
             "checkbox" | "boolean" | "bool" => Self::Checkbox,
-            "link" | "relation" | "reference" => Self::Link,
+            "link" | "reference" => Self::Link,
+            "relation" | "relations" | "linkedrecords" | "records" => Self::Relation,
+            "rollup" | "lookup" | "aggregate" => Self::Rollup,
             "createdtime" | "createdat" | "created" | "createdon" => Self::CreatedTime,
             "editedtime" | "lasteditedtime" | "updatedat" | "updated" | "edited" | "lastedited"
             | "modified" => Self::EditedTime,
@@ -294,13 +311,16 @@ impl FieldType {
         // them when they move onto the Tasks collection (T1.11).
         self.is_stored()
             && !self.is_system()
-            && !matches!(self, Self::Status | Self::Formula | Self::Button)
+            && !matches!(
+                self,
+                Self::Status | Self::Formula | Self::Button | Self::Relation | Self::Rollup
+            )
     }
 
     /// Whether nobody writes a value of it: the record's own columns, a
     /// formula's result, or a button (which has none).
     pub fn is_read_only(self) -> bool {
-        self.is_system() || matches!(self, Self::Formula | Self::Button)
+        self.is_system() || matches!(self, Self::Formula | Self::Rollup | Self::Button)
     }
 
     pub fn has_options(self) -> bool {
@@ -335,15 +355,18 @@ impl FieldType {
             | Self::Labels
             | Self::Person
             | Self::People
-            | Self::Link => &[Is, IsNot, Empty, NotEmpty],
+            | Self::Link
+            | Self::Relation => &[Is, IsNot, Empty, NotEmpty],
             Self::Checkbox => &[Is, Empty, NotEmpty],
             Self::CreatedTime
             | Self::EditedTime
             | Self::CreatedBy
             | Self::EditedBy
             | Self::AutoId
-            // A formula filters as its result does (`FieldDefinition::ops`).
-            | Self::Formula => &[Empty, NotEmpty],
+            // A formula or rollup filters as its result does
+            // (`FieldDefinition::ops`).
+            | Self::Formula
+            | Self::Rollup => &[Empty, NotEmpty],
             // Nothing to filter by.
             Self::Button => &[],
         }
@@ -489,6 +512,13 @@ pub struct FieldConfig {
     /// Button fields: what pressing it runs (T1.21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button: Option<button::ButtonConfig>,
+    /// Two-way relation fields: the paired relation on the other
+    /// collection, kept in step with this one (T1.18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<Uuid>,
+    /// Rollup fields: what they read and how (T1.18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollup: Option<rollup::RollupConfig>,
 }
 
 /// Where a field's value comes from in SQL (T1.5), so stored values, a
@@ -547,21 +577,34 @@ impl FieldDefinition {
     /// The type it filters, sorts and groups like: its type's
     /// (`FieldType::behaves_as`), or for a formula its result's.
     pub fn behaves_as(&self) -> FieldType {
-        match (&self.field_type, &self.config.formula) {
-            (FieldType::Formula, Some(formula)) => match formula.result {
-                formula::ResultType::Number => FieldType::Number,
-                formula::ResultType::Date => FieldType::Date,
-                formula::ResultType::Boolean => FieldType::Checkbox,
-                formula::ResultType::Text | formula::ResultType::List => FieldType::Text,
-            },
-            (field_type, _) => field_type.behaves_as(),
+        match self.result() {
+            Some(formula::ResultType::Number) => FieldType::Number,
+            Some(formula::ResultType::Date) => FieldType::Date,
+            Some(formula::ResultType::Boolean) => FieldType::Checkbox,
+            Some(formula::ResultType::Text | formula::ResultType::List) => FieldType::Text,
+            None => self.field_type.behaves_as(),
         }
+    }
+
+    /// A formula's or rollup's result type; None for every other field.
+    pub fn result(&self) -> Option<formula::ResultType> {
+        match self.field_type {
+            FieldType::Formula => self.config.formula.as_ref().map(|formula| formula.result),
+            FieldType::Rollup => self.config.rollup.as_ref().map(|rollup| rollup.result),
+            _ => None,
+        }
+    }
+
+    /// Whether its value is worked out (a formula or a rollup) and kept in
+    /// `computed_values`.
+    pub fn is_computed(&self) -> bool {
+        matches!(self.field_type, FieldType::Formula | FieldType::Rollup)
     }
 
     /// The filter operations the field takes: its type's, and
     /// `categoryIs`/`categoryIsNot` wherever a status's category is known.
     pub fn ops(&self) -> Vec<FieldOp> {
-        let mut ops = if self.field_type == FieldType::Formula {
+        let mut ops = if self.is_computed() {
             self.behaves_as().ops().to_vec()
         } else {
             self.field_type.ops().to_vec()
@@ -676,7 +719,10 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
             position: row.position,
             archived: row.archived,
             version: row.version,
-            accessor: if matches!(field_type, FieldType::Formula | FieldType::Button) {
+            accessor: if matches!(
+                field_type,
+                FieldType::Formula | FieldType::Rollup | FieldType::Button
+            ) {
                 Accessor::Computed
             } else {
                 field_type.system_accessor().unwrap_or_default()
@@ -711,6 +757,12 @@ pub struct FieldView {
     /// Button fields: what it says and the operations it runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button: Option<button::ButtonView>,
+    /// Two-way relations: the paired field on the other collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<String>,
+    /// Rollup fields: what they read and how.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollup: Option<rollup::RollupView>,
     /// 1 is first.
     pub position: i32,
     pub archived: bool,
@@ -757,6 +809,8 @@ impl From<&FieldDefinition> for FieldView {
                 .as_ref()
                 .map(formula::FormulaView::from),
             button: field.config.button.as_ref().map(button::ButtonView::from),
+            inverse: field.config.inverse.map(|id| id.to_string()),
+            rollup: field.config.rollup.as_ref().map(rollup::RollupView::from),
             position: field.position + 1,
             archived: field.archived,
             version: field.version,
@@ -877,8 +931,11 @@ pub fn normalize_config(
 ) -> Result<FieldConfig, ConfigProblem> {
     let mut config = current.cloned().unwrap_or_default();
     if let Some(target) = target {
-        if field_type != FieldType::Link {
-            return Err(problem("target", "Only link fields have a target."));
+        if !matches!(field_type, FieldType::Link | FieldType::Relation) {
+            return Err(problem(
+                "target",
+                "Only link and relation fields have a target.",
+            ));
         }
         // A record link names its collection: "record:<collection ID>".
         let (kind, collection) = match target.split_once(':') {
@@ -921,6 +978,12 @@ pub fn normalize_config(
         }
         config.target = Some(target);
         config.collection = collection;
+    }
+    if field_type == FieldType::Relation && config.target != Some(LinkTarget::Record) {
+        return Err(problem(
+            "target",
+            "Say which collection's records a relation names: \"record:<collection>\".",
+        ));
     }
     if field_type == FieldType::Link && config.target.is_none() {
         return Err(problem(
@@ -1070,7 +1133,13 @@ pub enum Normalized {
     /// A task or page, as written (an ID, a key such as AWD-12, a link);
     /// the record's module finds it where the record lives.
     Link(String),
+    /// Records of a relation's collection, each as written (an ID, a
+    /// #number, a title, a link), at most `MAX_RELATED`.
+    Relation(Vec<String>),
 }
+
+/// Records one relation field names on one record.
+pub const MAX_RELATED: usize = 100;
 
 fn text_is_clean(value: &str) -> bool {
     !value
@@ -1234,6 +1303,41 @@ pub fn normalize_value_keeping(
         FieldType::Formula => Err(format!(
             "\"{name}\" is worked out by its formula, so it can't be written."
         )),
+        FieldType::Rollup => Err(format!(
+            "\"{name}\" is rolled up from related records, so it can't be written."
+        )),
+        FieldType::Relation => {
+            let written = match input {
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| match item {
+                        Value::String(text) => Ok(text.trim().to_owned()),
+                        Value::Number(number) => Ok(format!("#{number}")),
+                        _ => Err(()),
+                    })
+                    .filter(|item| item.as_ref().map_or(true, |text| !text.is_empty()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|()| {
+                        format!(
+                            "\"{name}\" takes records: a list of their titles, #numbers, IDs or links."
+                        )
+                    })?,
+                Value::String(text) if text.trim().is_empty() => Vec::new(),
+                Value::String(text) => vec![text.trim().to_owned()],
+                _ => {
+                    return Err(format!(
+                        "\"{name}\" takes records: a list of their titles, #numbers, IDs or links."
+                    ));
+                }
+            };
+            if written.is_empty() {
+                return Ok(Normalized::Clear);
+            }
+            if written.len() > MAX_RELATED {
+                return Err(format!("\"{name}\" names at most {MAX_RELATED} records."));
+            }
+            Ok(Normalized::Relation(written))
+        }
         FieldType::Button => Err(format!(
             "\"{name}\" is a button: it runs when pressed and has no value to write."
         )),
@@ -1436,6 +1540,17 @@ pub fn display_value(
                 None => Value::Null,
             }
         }
+        FieldType::Relation => Value::Array(
+            value
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(|id| Value::String(name_of(id).unwrap_or_else(|| id.to_owned())))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
         _ => value.clone(),
     }
 }
@@ -1458,10 +1573,23 @@ pub fn display_text(value: &Value) -> String {
 
 /// The IDs of people and linked records a stored value names, for the
 /// record's module to look up in one go.
-pub fn referenced_id(field: &FieldDefinition, value: &Value) -> Option<Uuid> {
-    matches!(field.behaves_as(), FieldType::Person | FieldType::Link)
-        .then(|| value.as_str()?.parse().ok())
-        .flatten()
+pub fn referenced_ids(field: &FieldDefinition, value: &Value) -> Vec<Uuid> {
+    match field.behaves_as() {
+        FieldType::Person | FieldType::Link => value
+            .as_str()
+            .and_then(|id| id.parse().ok())
+            .into_iter()
+            .collect(),
+        FieldType::Relation => value
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str()?.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1652,7 +1780,9 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
             FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
                 field.option(value).is_some()
             }
-            FieldType::Person | FieldType::Link => value.parse::<Uuid>().is_ok(),
+            FieldType::Person | FieldType::Link | FieldType::Relation => {
+                value.parse::<Uuid>().is_ok()
+            }
             FieldType::Checkbox => value == "true",
             FieldType::Text
             | FieldType::LongText
@@ -1667,6 +1797,7 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
             | FieldType::EditedBy
             | FieldType::AutoId
             | FieldType::Formula
+            | FieldType::Rollup
             | FieldType::Button => false,
         };
         if !ok {
@@ -2337,8 +2468,19 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         | FieldType::EditedBy
         | FieldType::AutoId
         | FieldType::Formula
+        | FieldType::Rollup
         | FieldType::Button => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
+            "text",
+        ),
+        // By the first related record's title.
+        FieldType::Relation => key(
+            format!(
+                "left(lower(COALESCE((SELECT sort_record.title FROM collection_records sort_record \
+                 WHERE sort_record.project_id = {project} \
+                   AND sort_record.id::text = ({} ->> 0)), '')), {SORT_PREFIX_CHARACTERS})",
+                value_at(column, field.id)
+            ),
             "text",
         ),
         FieldType::Date => match &field.accessor {
@@ -2817,6 +2959,11 @@ pub struct NewField {
     pub formula: Option<String>,
     /// A button field's button, as written.
     pub button: Option<button::ButtonInput>,
+    /// A rollup field's rollup, as written (fields by name).
+    pub rollup: Option<rollup::RollupInput>,
+    /// A relation made two-way: its pair on the other collection, called
+    /// this ("" for that collection's own name).
+    pub pair: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2924,6 +3071,87 @@ async fn button_config(
     ))
 }
 
+/// Checks a rollup written for a field of `kind` (`own` once it exists)
+/// and gives its settings, or what to fix.
+async fn rollup_config(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    own: Option<(Uuid, &str)>,
+    field_type: FieldType,
+    input: Option<&rollup::RollupInput>,
+) -> Result<Result<rollup::RollupConfig, String>, AppError> {
+    if field_type != FieldType::Rollup {
+        return Ok(Err("Only a rollup field takes a rollup.".to_owned()));
+    }
+    if plain_collection_title(connection, project_id, kind)
+        .await?
+        .is_none()
+    {
+        return Ok(Err(
+            "Rollup fields are for collections whose records aren't tasks, for now.".to_owned(),
+        ));
+    }
+    let Some(input) = input else {
+        return Ok(Err(
+            "Say what it rolls up: the relation, the related records' field, and how (sum, count…)."
+                .to_owned(),
+        ));
+    };
+    let definitions = list(&mut *connection, project_id, kind, true).await?;
+    let computed = definitions
+        .iter()
+        .filter(|field| {
+            field.is_computed() && !field.archived && Some(field.id) != own.map(|(id, _)| id)
+        })
+        .count();
+    if computed >= formula::limits::MAX_FORMULA_FIELDS {
+        return Ok(Err(format!(
+            "A collection has at most {} formula and rollup fields. Archive one first.",
+            formula::limits::MAX_FORMULA_FIELDS
+        )));
+    }
+    let relation = match rollup::find_relation(&definitions, &input.relation) {
+        Ok(relation) => relation,
+        Err(message) => return Ok(Err(message)),
+    };
+    let Some(related_collection) = relation.config.collection else {
+        return Ok(Err("That relation names no collection.".to_owned()));
+    };
+    let related = list(
+        &mut *connection,
+        project_id,
+        RecordKind::Collection(related_collection),
+        true,
+    )
+    .await?;
+    let config = match rollup::compile(
+        input,
+        &rollup::Scope {
+            fields: &definitions,
+            related: &related,
+        },
+    ) {
+        Ok(config) => config,
+        Err(message) => return Ok(Err(message)),
+    };
+    if let Some((own, name)) = own {
+        let reads = dependencies::reads(
+            FieldType::Rollup,
+            &FieldConfig {
+                rollup: Some(config.clone()),
+                ..FieldConfig::default()
+            },
+        );
+        if let Err(message) =
+            dependencies::check(connection, project_id, own, name, FieldType::Rollup, reads).await?
+        {
+            return Ok(Err(message));
+        }
+    }
+    Ok(Ok(config))
+}
+
 /// The title's name in a collection whose records aren't tasks; None for
 /// tasks, task-like and built-in collections.
 async fn plain_collection_title(
@@ -2955,7 +3183,7 @@ async fn recompute_after(
         return Ok(());
     };
     let definitions = list(&mut *connection, project_id, kind, false).await?;
-    if formula::has_formulas(&definitions) {
+    if formula::has_computed(&definitions) {
         crate::collections::computed::enqueue(connection, project_id, collection_id).await?;
     }
     Ok(())
@@ -2994,6 +3222,34 @@ pub async fn create(
             return Err(AppError::NotFound("collection"));
         }
     }
+    // Relations are kept in step on both sides by record writes, which
+    // tasks and task-like records don't take.
+    if new.field_type == FieldType::Relation {
+        let plain = plain_collection_title(connection, project_id, kind)
+            .await?
+            .is_some()
+            && match new.config.collection {
+                Some(collection) => plain_collection_title(
+                    connection,
+                    project_id,
+                    RecordKind::Collection(collection),
+                )
+                .await?
+                .is_some(),
+                None => false,
+            };
+        if !plain {
+            return Ok(CreateFieldOutcome::InvalidSetting(
+                "target",
+                "Relations are between collections whose records aren't tasks, for now.".to_owned(),
+            ));
+        }
+    } else if new.pair.is_some() {
+        return Ok(CreateFieldOutcome::InvalidSetting(
+            "twoWay",
+            "Only a relation field can be two-way.".to_owned(),
+        ));
+    }
     let existing = list(&mut *connection, project_id, kind, false).await?;
     if let Some(taken) = existing
         .iter()
@@ -3012,7 +3268,23 @@ pub async fn create(
     if existing.len() as i64 >= MAX_ACTIVE_FIELDS || total >= MAX_FIELD_ROWS {
         return Ok(CreateFieldOutcome::ProjectFull);
     }
+    let id = Uuid::now_v7();
     let mut config = new.config;
+    if new.field_type == FieldType::Rollup || new.rollup.is_some() {
+        match rollup_config(
+            connection,
+            project_id,
+            kind,
+            Some((id, &new.name)),
+            new.field_type,
+            new.rollup.as_ref(),
+        )
+        .await?
+        {
+            Ok(rollup) => config.rollup = Some(rollup),
+            Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("rollup", message)),
+        }
+    }
     if new.field_type == FieldType::Formula || new.formula.is_some() {
         match formula_config(
             connection,
@@ -3043,7 +3315,10 @@ pub async fn create(
             Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("button", message)),
         }
     }
-    let id = Uuid::now_v7();
+    let pair = match (&new.pair, config.collection) {
+        (Some(name), Some(collection)) => Some((name.trim().to_owned(), collection)),
+        _ => None,
+    };
     let config =
         serde_json::to_value(&config).map_err(|_| AppError::Internal("encode field config"))?;
     sqlx::query(
@@ -3074,13 +3349,98 @@ pub async fn create(
     if let Some(position) = new.position {
         move_to(connection, project_id, kind, id, position).await?;
     }
-    if new.field_type == FieldType::Formula {
+    if let Some((name, collection)) = pair
+        && let Err(message) = make_pair(
+            connection, project_id, kind, id, actor_id, &name, collection,
+        )
+        .await?
+    {
+        return Ok(CreateFieldOutcome::InvalidSetting("twoWay", message));
+    }
+    if new.field_type.is_read_only() && new.field_type != FieldType::Button {
         recompute_after(connection, project_id, kind).await?;
     }
     let created = definition(connection, project_id, kind, id)
         .await?
         .ok_or(AppError::Internal("created field is missing"))?;
     Ok(CreateFieldOutcome::Created(created))
+}
+
+/// Makes the other side of the new relation `own` (on `kind`) on
+/// `collection`, called `name` ("" for `kind`'s collection's own name), and
+/// pairs the two. The caller drops the transaction on a refusal.
+async fn make_pair(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    own: Uuid,
+    actor_id: Uuid,
+    name: &str,
+    collection: Uuid,
+) -> Result<Result<(), String>, AppError> {
+    let Some(own_collection) = kind.collection_id() else {
+        return Ok(Err("Tasks have no relations yet.".to_owned()));
+    };
+    let name = if name.is_empty() {
+        sqlx::query_scalar::<_, String>("SELECT name FROM collections WHERE id = $1")
+            .bind(own_collection)
+            .fetch_one(&mut *connection)
+            .await?
+    } else {
+        name.to_owned()
+    };
+    let Some(name) = normalize_name(&name) else {
+        return Ok(Err(format!(
+            "Give the other side a name of 1 to {MAX_NAME_CHARACTERS} characters on one line."
+        )));
+    };
+    let outcome = Box::pin(create(
+        connection,
+        project_id,
+        RecordKind::Collection(collection),
+        actor_id,
+        NewField {
+            name: name.clone(),
+            description: String::new(),
+            field_type: FieldType::Relation,
+            config: FieldConfig {
+                target: Some(LinkTarget::Record),
+                collection: Some(own_collection),
+                inverse: Some(own),
+                ..FieldConfig::default()
+            },
+            position: None,
+            formula: None,
+            button: None,
+            rollup: None,
+            pair: None,
+        },
+    ))
+    .await?;
+    let pair = match outcome {
+        CreateFieldOutcome::Created(pair) => pair,
+        CreateFieldOutcome::NameTaken(_) => {
+            return Ok(Err(format!(
+                "The other collection already has a field called \"{name}\". Name the other side something else."
+            )));
+        }
+        CreateFieldOutcome::ProjectFull => {
+            return Ok(Err(
+                "The other collection has as many fields as it can. Archive one first.".to_owned(),
+            ));
+        }
+        CreateFieldOutcome::InvalidSetting(_, message) => return Ok(Err(message)),
+    };
+    sqlx::query(
+        "UPDATE field_definitions SET config = jsonb_set(config, '{inverse}', to_jsonb($3::text)) \
+         WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(own)
+    .bind(pair.id.to_string())
+    .execute(&mut *connection)
+    .await?;
+    Ok(Ok(()))
 }
 
 /// Puts a field at a 1-based place among the active fields (archived ones
@@ -3147,6 +3507,8 @@ pub struct FieldChange {
     pub formula: Option<String>,
     /// A button field's new button, as written.
     pub button: Option<button::ButtonInput>,
+    /// A rollup field's new rollup, as written.
+    pub rollup: Option<rollup::RollupInput>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -3239,6 +3601,51 @@ pub async fn change(
             Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("formula", message)),
         }
     }
+    let restoring_rollup = current.field_type == FieldType::Rollup && current.archived && !archived;
+    if change.rollup.is_some() || restoring_rollup {
+        // A restored rollup is checked again: its relation or the field it
+        // reads may be gone.
+        let input = match &change.rollup {
+            Some(input) => Some(input.clone()),
+            None => current
+                .config
+                .rollup
+                .as_ref()
+                .map(|rollup| rollup::RollupInput {
+                    relation: rollup.relation.to_string(),
+                    field: rollup.target.map(|id| id.to_string()),
+                    aggregate: rollup.aggregate.as_str().to_owned(),
+                }),
+        };
+        match rollup_config(
+            connection,
+            project_id,
+            kind,
+            Some((field_id, &name)),
+            current.field_type,
+            input.as_ref(),
+        )
+        .await?
+        {
+            Ok(rollup) => config.rollup = Some(rollup),
+            Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("rollup", message)),
+        }
+    }
+    if current.field_type == FieldType::Formula
+        && !archived
+        && config.formula != current.config.formula
+        && let Err(message) = dependencies::check(
+            connection,
+            project_id,
+            field_id,
+            &name,
+            FieldType::Formula,
+            dependencies::reads(FieldType::Formula, &config),
+        )
+        .await?
+    {
+        return Ok(ChangeFieldOutcome::InvalidSetting("formula", message));
+    }
     if let Some(input) = &change.button {
         match button_config(
             connection,
@@ -3283,9 +3690,13 @@ pub async fn change(
     if config.button != current.config.button {
         changed.push("button");
     }
+    if config.rollup != current.config.rollup {
+        changed.push("rollup");
+    }
     let options_part = |config: &FieldConfig| FieldConfig {
         formula: None,
         button: None,
+        rollup: None,
         ..config.clone()
     };
     if options_part(&config) != options_part(&current.config) {
@@ -3347,7 +3758,7 @@ pub async fn change(
     // Formulas read option names, and each other.
     if changed
         .iter()
-        .any(|part| matches!(*part, "options" | "formula" | "archived"))
+        .any(|part| matches!(*part, "options" | "formula" | "rollup" | "archived"))
     {
         recompute_after(connection, project_id, kind).await?;
     }
@@ -3650,7 +4061,8 @@ mod tests {
             Some(FieldType::SingleChoice)
         );
         assert_eq!(FieldType::parse("boolean"), Some(FieldType::Checkbox));
-        assert_eq!(FieldType::parse("relation"), Some(FieldType::Link));
+        assert_eq!(FieldType::parse("relation"), Some(FieldType::Relation));
+        assert_eq!(FieldType::parse("reference"), Some(FieldType::Link));
         assert_eq!(FieldType::parse("formula"), Some(FieldType::Formula));
         for field_type in FieldType::ALL {
             assert_eq!(FieldType::parse(field_type.as_str()), Some(field_type));

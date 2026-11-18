@@ -159,6 +159,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("push_deliveries", WORKSPACE_ID),
     ("push_receipts", WORKSPACE_ID),
     ("push_subscriptions", ORGANIZATION_ID),
+    ("record_recalculations", WORKSPACE_ID),
     ("recurring_task_occurrences", WORKSPACE_ID),
     ("recurring_tasks", WORKSPACE_ID),
     ("reply_requests", WORKSPACE_ID),

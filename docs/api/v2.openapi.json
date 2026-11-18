@@ -1392,6 +1392,13 @@
               "null"
             ]
           },
+          "pairName": {
+            "description": "A two-way relation's pair's name (the other collection's field);\nthis collection's name when left out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "position": {
             "description": "Its place among the fields, 1 being first.",
             "format": "int32",
@@ -1400,10 +1407,28 @@
               "null"
             ]
           },
+          "rollup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RollupInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A rollup field's rollup: the relation it reads, the related records'\nfield, and how to put their values together."
+          },
           "target": {
             "description": "For a new link field: \"task\", \"page\", or \"record:<collection>\" for\nthe records of one of the project's collections, by name or ID.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "twoWay": {
+            "description": "For a new relation field: also add its pair on the other collection,\nlisting the records that name each of its records, kept in step.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -3713,6 +3738,32 @@
           "text",
           "writtenBy",
           "writtenAt"
+        ],
+        "type": "object"
+      },
+      "RollupInput": {
+        "additionalProperties": false,
+        "description": "A rollup as someone writes it: fields by name or ID.",
+        "properties": {
+          "aggregate": {
+            "description": "count, count_values, count_unique, sum, average, min, max, earliest,\nlatest, percent_checked, percent_empty or list.",
+            "type": "string"
+          },
+          "field": {
+            "description": "The field of the related records it reads. Leave it out to count\nthe records.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "relation": {
+            "description": "The relation field (on this collection) whose records it reads.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relation",
+          "aggregate"
         ],
         "type": "object"
       },

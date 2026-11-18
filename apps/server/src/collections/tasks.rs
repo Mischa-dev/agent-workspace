@@ -243,6 +243,8 @@ fn builtin(
             collection: None,
             formula: None,
             button: None,
+            inverse: None,
+            rollup: None,
         },
         position,
         archived: false,

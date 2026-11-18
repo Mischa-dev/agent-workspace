@@ -29,6 +29,7 @@ pub mod definition;
 pub mod http;
 pub mod ops;
 pub mod records;
+pub mod relations;
 pub mod task_like;
 pub mod task_query;
 pub mod task_writes;

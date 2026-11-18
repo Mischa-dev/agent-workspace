@@ -798,6 +798,13 @@ struct CreateFieldRequest {
     formula: Option<String>,
     /// A button field's label and steps.
     button: Option<crate::fields::button::ButtonInput>,
+    /// A rollup field's relation, field and aggregate.
+    rollup: Option<crate::fields::rollup::RollupInput>,
+    /// A relation that's two-way: its pair on the other collection is
+    /// called `pairName` (that collection's own name when left out).
+    #[serde(default)]
+    two_way: bool,
+    pair_name: Option<String>,
 }
 
 fn field_name_message() -> String {
@@ -888,6 +895,10 @@ async fn create_field(
             position: request.position,
             formula: request.formula.clone(),
             button: request.button.clone(),
+            rollup: request.rollup.clone(),
+            pair: request
+                .two_way
+                .then(|| request.pair_name.clone().unwrap_or_default()),
         },
     )
     .await?
@@ -950,6 +961,8 @@ struct UpdateFieldRequest {
     formula: Option<String>,
     /// A button field's new label and steps.
     button: Option<crate::fields::button::ButtonInput>,
+    /// A rollup field's new relation, field and aggregate.
+    rollup: Option<crate::fields::rollup::RollupInput>,
 }
 
 async fn update_field(
@@ -1042,6 +1055,7 @@ async fn update_field(
             archived: request.archived,
             formula: request.formula.clone(),
             button: request.button.clone(),
+            rollup: request.rollup.clone(),
             expected_version: Some(request.expected_version),
         },
     )

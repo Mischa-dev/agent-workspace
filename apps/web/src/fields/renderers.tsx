@@ -1,5 +1,5 @@
 import { Icon } from '../ui'
-import { chosenOptions, displayText, isFormulaError, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import { chosenOptions, displayText, isFormulaError, resultOf, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
 import '../styles/work.css'
 
 /**
@@ -89,7 +89,21 @@ export function TextRenderer({ field, references, value }: RendererProps) {
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
 }
 
-/** A formula's result, by what it gives; an error for this record says so, with its message. */
+/** Related records: their titles, as chips. */
+export function RelationRenderer({ field, references, value }: RendererProps) {
+  const ids = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
+  return (
+    <ul aria-label={field.name} className="aw-labels">
+      {ids.map((id) => (
+        <li className="aw-label" key={id}>
+          <span className="aw-label__name">{references.find((entry) => entry.id === id)?.label ?? 'An archived record'}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** A formula's or rollup's result, by what it gives; an error for this record says so, with its message. */
 export function FormulaRenderer({ field, references, value }: RendererProps) {
   if (isFormulaError(value)) {
     return (
@@ -98,6 +112,6 @@ export function FormulaRenderer({ field, references, value }: RendererProps) {
       </span>
     )
   }
-  if (field.formula?.result === 'boolean' && value === true) return <CheckRenderer />
+  if (resultOf(field) === 'boolean' && value === true) return <CheckRenderer />
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
 }

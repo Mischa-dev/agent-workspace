@@ -51,8 +51,10 @@ function fieldOf(type: FieldType, extra: Partial<FieldDefinition> = {}): FieldDe
     description: '',
     type,
     options: type === 'single_choice' || type === 'multiple_choice' || type === 'status' ? options : [],
-    target: type === 'link' ? 'task' : null,
+    target: type === 'link' ? 'task' : type === 'relation' ? 'record' : null,
+    collection: type === 'relation' ? 'c1' : null,
     formula: type === 'formula' ? { source: '{#title}', result: 'number' } : null,
+    rollup: type === 'rollup' ? { relation: 'f-relation', target: null, aggregate: 'count', result: 'number' } : null,
     position: 1,
     archived: false,
     version: 1,
@@ -75,6 +77,8 @@ const SAMPLES: Record<FieldType, FieldValue> = {
   phone: '+44 20 7946 0958',
   checkbox: true,
   link: 't1',
+  relation: ['r9'],
+  rollup: 3,
   // A button has no value; drawn as text if one ever arrives.
   button: 'Ship it',
   created_time: '2026-11-14 10:00:00+00',
@@ -134,6 +138,8 @@ function editOf(field: FieldDefinition): Edit | null {
         : field.target === 'record'
           ? { act: pickOption(/Crash on start/), expected: 'r1' }
           : { act: pickOption(/Fix the login/), expected: 't1' }
+    case 'relation':
+      return { act: pickOption(/Crash on start/), expected: ['r9', 'r1'] }
     default:
       return null
   }

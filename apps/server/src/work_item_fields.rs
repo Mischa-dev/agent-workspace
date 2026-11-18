@@ -344,6 +344,15 @@ pub async fn resolve_for(
                     }
                 }
             }
+            Normalized::Relation(_) => {
+                return Ok(Err(value_problem(
+                    &at,
+                    format!(
+                        "\"{}\" is a relation, which tasks don't have yet.",
+                        field.name
+                    ),
+                )));
+            }
             Normalized::Link(written) => {
                 let target = field.config.target.unwrap_or(LinkTarget::Task);
                 match find_link(connection, project_id, writer, field, &written).await? {
@@ -446,7 +455,7 @@ pub async fn member_id(
 }
 
 /// The first UUID in what someone wrote: an ID, or a link that holds one.
-fn uuid_in(written: &str) -> Option<Uuid> {
+pub(crate) fn uuid_in(written: &str) -> Option<Uuid> {
     if let Ok(id) = written.trim().parse::<Uuid>() {
         return Some(id);
     }
@@ -586,15 +595,15 @@ pub async fn references<'a>(
             let Some(field) = by_id.get(key) else {
                 continue;
             };
-            let Some(id) = fields::referenced_id(field, value) else {
-                continue;
-            };
-            match (field.behaves_as(), field.config.target) {
-                (FieldType::Person, _) => people.insert(id),
-                (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
-                (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),
-                _ => tasks.insert(id),
-            };
+            for id in fields::referenced_ids(field, value) {
+                match (field.behaves_as(), field.config.target) {
+                    (FieldType::Person, _) => people.insert(id),
+                    (FieldType::Relation, _) => records.insert(id),
+                    (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
+                    (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),
+                    _ => tasks.insert(id),
+                };
+            }
         }
     }
     let mut found = HashMap::new();
@@ -753,7 +762,7 @@ pub async fn shown_before(
     let Some(value) = value else {
         return Ok(Value::Null);
     };
-    if fields::referenced_id(field, value).is_none() {
+    if fields::referenced_ids(field, value).is_empty() {
         return Ok(fields::display_value(field, value, &|_| None));
     }
     let wrapper = Value::Object(Map::from_iter([(field.id.to_string(), value.clone())]));

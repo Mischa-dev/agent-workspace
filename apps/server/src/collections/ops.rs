@@ -601,7 +601,7 @@ fn fill(
         FieldType::CreatedBy => Value::String(record.created_by_actor_id.to_string()),
         FieldType::EditedBy => Value::String(record.updated_by_actor_id.to_string()),
         FieldType::AutoId => Value::from(record.number),
-        FieldType::Formula => match record.computed_values.get(&key) {
+        FieldType::Formula | FieldType::Rollup => match record.computed_values.get(&key) {
             Some(Value::Object(_)) | None => Value::Null,
             Some(value) => value.clone(),
         },

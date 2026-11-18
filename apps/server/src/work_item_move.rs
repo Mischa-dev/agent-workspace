@@ -767,8 +767,9 @@ async fn carry_value(
         | FieldType::CreatedBy
         | FieldType::EditedBy
         | FieldType::AutoId => None,
-        // Worked out where it lands, never carried.
-        FieldType::Formula => None,
+        // Worked out where it lands, never carried; relations name records
+        // of the old project's collections.
+        FieldType::Formula | FieldType::Rollup | FieldType::Relation => None,
         // A button has no value.
         FieldType::Button => None,
         FieldType::Text
@@ -2753,6 +2754,8 @@ mod tests {
                 collection: None,
                 formula: None,
                 button: None,
+                inverse: None,
+                rollup: None,
             },
             position: 0,
             archived: false,

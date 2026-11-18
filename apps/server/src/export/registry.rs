@@ -264,6 +264,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (queues, leases, retries)",
             ),
             (
+                "record_recalculations",
+                "runtime state of this server (records waiting for their rollups to be worked out again)",
+            ),
+            (
                 "event_staging",
                 "the server's event log on its way in; what happened is carried by the rows it describes",
             ),

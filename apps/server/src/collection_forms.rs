@@ -411,6 +411,8 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
         | FieldType::EditedBy
         | FieldType::AutoId
         | FieldType::Formula
+        | FieldType::Relation
+        | FieldType::Rollup
         | FieldType::Button => return Err(wrong("nothing on a form")),
     })
 }

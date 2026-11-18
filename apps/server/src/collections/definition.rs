@@ -85,6 +85,18 @@ pub struct FieldWrite {
     /// operation and its arguments, filled from the record when pressed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button: Option<fields::button::ButtonInput>,
+    /// A rollup field's rollup: the relation it reads, the related records'
+    /// field, and how to put their values together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollup: Option<fields::rollup::RollupInput>,
+    /// For a new relation field: also add its pair on the other collection,
+    /// listing the records that name each of its records, kept in step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub two_way: Option<bool>,
+    /// A two-way relation's pair's name (the other collection's field);
+    /// this collection's name when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_name: Option<String>,
 }
 
 /// A filter by field name, as agents write one.
@@ -975,6 +987,9 @@ pub async fn apply(
                     position: write.position,
                     formula: write.formula.clone(),
                     button: write.button.clone(),
+                    rollup: write.rollup.clone(),
+                    pair: (write.two_way == Some(true))
+                        .then(|| write.pair_name.clone().unwrap_or_default()),
                 },
             )
             .await?
@@ -1080,6 +1095,7 @@ pub async fn apply(
                 archived: write.archived,
                 formula: write.formula.clone(),
                 button: write.button.clone(),
+                rollup: write.rollup.clone(),
                 expected_version: None,
             },
         )
@@ -1430,6 +1446,8 @@ mod tests {
                 collection: None,
                 formula: None,
                 button: None,
+                inverse: None,
+                rollup: None,
             },
             position: 0,
             archived: false,

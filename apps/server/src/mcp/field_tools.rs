@@ -306,6 +306,8 @@ pub(super) async fn field_write(
                     position: arguments.position,
                     formula: None,
                     button: None,
+                    rollup: None,
+                    pair: None,
                 },
             )
             .await?;
@@ -422,6 +424,7 @@ pub(super) async fn field_write(
                 archived: arguments.archived,
                 formula: None,
                 button: None,
+                rollup: None,
                 expected_version: arguments.expected_version,
             },
         )

@@ -119,11 +119,8 @@ impl Record {
     /// back: system values aren't stored.
     pub fn shown_values(&self, definitions: &[FieldDefinition]) -> Value {
         let mut values = self.field_values.as_object().cloned().unwrap_or_default();
-        // Formula results, an error as `{"error": ...}`.
-        for field in definitions
-            .iter()
-            .filter(|field| field.field_type == FieldType::Formula)
-        {
+        // Formula and rollup results, an error as `{"error": ...}`.
+        for field in definitions.iter().filter(|field| field.is_computed()) {
             let key = field.id.to_string();
             match self.computed_values.get(&key) {
                 Some(value) => values.insert(key, value.clone()),
@@ -699,6 +696,48 @@ pub async fn resolve_values(
                     }
                 }
             }
+            Normalized::Relation(written) => {
+                let held = kept
+                    .map(|kept| fields::referenced_ids(field, kept))
+                    .unwrap_or_default();
+                let mut ids = Vec::with_capacity(written.len());
+                let mut shown = Vec::with_capacity(written.len());
+                for one in &written {
+                    let (id, label) = match work_item_fields::find_link(
+                        connection, project_id, writer, field, one,
+                    )
+                    .await?
+                    {
+                        Some(found) => found,
+                        // A record it names already stays, even archived.
+                        None => match work_item_fields::uuid_in(one).filter(|id| held.contains(id))
+                        {
+                            Some(id) => (id, "An archived record".to_owned()),
+                            None => {
+                                return Ok(Err(problem(
+                                    &at,
+                                    format!(
+                                        "\"{}\" names records of its collection by title, #number, ID or link. {} isn't one.",
+                                        field.name,
+                                        echo(one)
+                                    ),
+                                )));
+                            }
+                        },
+                    };
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                        shown.push(Value::String(label));
+                    }
+                }
+                FieldValueChange {
+                    field: field.clone(),
+                    value: (!ids.is_empty()).then(|| {
+                        Value::Array(ids.iter().map(|id| Value::String(id.to_string())).collect())
+                    }),
+                    shown: Value::Array(shown),
+                }
+            }
             Normalized::Link(written) => {
                 let target = field.config.target.unwrap_or(LinkTarget::Task);
                 match work_item_fields::find_link(connection, project_id, writer, field, &written)
@@ -830,6 +869,7 @@ pub async fn write(
     let mut next_number = collection.next_number;
     let mut written = Vec::with_capacity(inputs.len());
     let mut touched = HashSet::new();
+    let mut pairs = Vec::new();
     for (index, input) in inputs.iter().enumerate() {
         let stop = |kind: ProblemKind, field: &str, message: String| {
             Ok(Err(WriteProblem {
@@ -903,6 +943,20 @@ pub async fn write(
                 &values,
             )
             .await?;
+            match super::relations::write_pairs(
+                connection,
+                project_id,
+                writer.actor_id,
+                record.id,
+                definitions,
+                None,
+                &values,
+            )
+            .await?
+            {
+                Ok(changes) => pairs.extend(changes),
+                Err(message) => return stop(ProblemKind::Invalid, values_argument, message),
+            }
             if let Some(computed) =
                 super::computed::refresh(connection, project_id, record.id, definitions).await?
             {
@@ -1065,6 +1119,20 @@ pub async fn write(
         .bind(writer.actor_id)
         .execute(&mut *connection)
         .await?;
+        match super::relations::write_pairs(
+            connection,
+            project_id,
+            writer.actor_id,
+            current.id,
+            definitions,
+            Some(&current.field_values),
+            &values,
+        )
+        .await?
+        {
+            Ok(changes) => pairs.extend(changes),
+            Err(message) => return stop(ProblemKind::Invalid, values_argument, message),
+        }
         super::computed::refresh(connection, project_id, current.id, definitions).await?;
         let action = if archiving {
             "archived"
@@ -1095,6 +1163,15 @@ pub async fn write(
         .ok_or(AppError::Internal("changed record is missing"))?;
         written.push(Written::Changed { record, changed });
     }
+    // Records whose rollups read these, and the other side of two-way
+    // relations.
+    let changed = written
+        .iter()
+        .filter(|written| !matches!(written, Written::Unchanged(_)))
+        .map(|written| written.record().id)
+        .collect::<Vec<_>>();
+    super::computed::mark_dependents(connection, project_id, collection.id, &changed, 1).await?;
+    super::relations::after_pairs(connection, project_id, pairs).await?;
     if next_number != collection.next_number {
         sqlx::query("UPDATE collections SET next_number = $3 WHERE project_id = $1 AND id = $2")
             .bind(project_id)

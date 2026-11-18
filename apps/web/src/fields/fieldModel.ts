@@ -53,6 +53,10 @@ export type FieldDefinition = {
   formula?: FormulaSettings | null
   /** Button fields: what it says and the operations pressing it runs (placeholders as stored). */
   button?: ButtonSettings | null
+  /** Two-way relations: the paired field on the other collection. */
+  inverse?: string | null
+  /** Rollup fields: the relation they read, the related records' field, and how. */
+  rollup?: RollupSettings | null
   /** 1 is first. */
   position: number
   archived: boolean
@@ -66,6 +70,24 @@ export type ButtonSettings = { label: string; steps: ButtonStep[] }
 /** What a formula gives, which decides how it filters, sorts and groups. */
 export type FormulaResult = 'number' | 'text' | 'boolean' | 'date' | 'list'
 export type FormulaSettings = { source: string; result: FormulaResult }
+
+/** How a rollup puts the related records' values together. */
+export const ROLLUP_AGGREGATES = [
+  { aggregate: 'count', label: 'Count records', needs: null },
+  { aggregate: 'count_values', label: 'Count filled in', needs: 'any' },
+  { aggregate: 'count_unique', label: 'Count different values', needs: 'any' },
+  { aggregate: 'sum', label: 'Sum', needs: 'number' },
+  { aggregate: 'average', label: 'Average', needs: 'number' },
+  { aggregate: 'min', label: 'Lowest', needs: 'number' },
+  { aggregate: 'max', label: 'Highest', needs: 'number' },
+  { aggregate: 'earliest', label: 'Earliest date', needs: 'date' },
+  { aggregate: 'latest', label: 'Latest date', needs: 'date' },
+  { aggregate: 'percent_checked', label: 'Percent checked', needs: 'checkbox' },
+  { aggregate: 'percent_empty', label: 'Percent empty', needs: 'any' },
+  { aggregate: 'list', label: 'Show the values', needs: 'any' },
+] as const
+export type RollupAggregate = (typeof ROLLUP_AGGREGATES)[number]['aggregate']
+export type RollupSettings = { relation: string; target: string | null; aggregate: RollupAggregate; result: FormulaResult }
 
 /** A formula's error for one record ("Divide by zero"): shown in the cell, filtered as empty. */
 export type FormulaError = { error: string }
@@ -99,18 +121,25 @@ export function isSystemType(type: FieldType) {
 
 /** Whether nobody fills in a field of the type: a system field, a formula the server works out, or a button. */
 export function isReadOnlyType(type: FieldType) {
-  return typeInfo(type).system || type === 'formula' || type === 'button'
+  return typeInfo(type).system || type === 'formula' || type === 'rollup' || type === 'button'
 }
 
 /** A field, or only its type. */
-export type TypeOrField = FieldType | Pick<FieldDefinition, 'type' | 'formula'>
+export type TypeOrField = FieldType | (Pick<FieldDefinition, 'type' | 'formula'> & Partial<Pick<FieldDefinition, 'rollup'>>)
 
 const RESULT_LIKE: Record<FormulaResult, FieldType> = { number: 'number', date: 'date', boolean: 'checkbox', text: 'text', list: 'text' }
 
 /** The type a field reads like: a formula's result's, any other field's own. */
 export function likeOf(of: TypeOrField): FieldType {
   if (typeof of === 'string') return of
-  return of.type === 'formula' && of.formula ? RESULT_LIKE[of.formula.result] : of.type
+  if (of.type === 'formula' && of.formula) return RESULT_LIKE[of.formula.result]
+  if (of.type === 'rollup' && of.rollup) return RESULT_LIKE[of.rollup.result]
+  return of.type
+}
+
+/** A formula's or rollup's result type, or null for any other field. */
+export function resultOf(field: FieldDefinition): FormulaResult | null {
+  return field.formula?.result ?? field.rollup?.result ?? null
 }
 
 /** The type it filters, sorts and groups like (the server's `behaves_as`). */
@@ -155,6 +184,8 @@ export function normalizeField(value: unknown): FieldDefinition {
     collection: typeof field.collection === 'string' ? field.collection : null,
     formula: formulaOf(field.formula),
     button: buttonOf(field.button),
+    inverse: typeof field.inverse === 'string' ? field.inverse : null,
+    rollup: rollupOf(field.rollup),
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
@@ -198,6 +229,14 @@ function buttonOf(value: unknown): ButtonSettings | null {
 }
 
 const FORMULA_RESULTS: readonly FormulaResult[] = ['number', 'text', 'boolean', 'date', 'list']
+
+function rollupOf(value: unknown): RollupSettings | null {
+  const rollup = asRecord(value)
+  if (typeof rollup.relation !== 'string') return null
+  const aggregate = ROLLUP_AGGREGATES.find((entry) => entry.aggregate === rollup.aggregate)?.aggregate ?? 'count'
+  const result = FORMULA_RESULTS.includes(rollup.result as FormulaResult) ? (rollup.result as FormulaResult) : 'text'
+  return { relation: rollup.relation, target: typeof rollup.target === 'string' ? rollup.target : null, aggregate, result }
+}
 
 function formulaOf(value: unknown): FormulaSettings | null {
   const formula = asRecord(value)
@@ -301,9 +340,13 @@ export function displayText(
   references: readonly FieldReference[] = [],
 ): string {
   if (isEmpty(value)) return ''
-  if (field.type === 'formula') return formulaText(field, value!)
+  if (field.type === 'formula' || field.type === 'rollup') return formulaText(field, value!)
   if (isFormulaError(value)) return ''
   switch (field.type) {
+    case 'relation': {
+      const ids = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
+      return ids.map((id) => references.find((entry) => entry.id === id)?.label ?? 'An archived record').join(', ')
+    }
     case 'number':
       return typeof value === 'number' ? formatNumber(value) : String(value)
     case 'date':
