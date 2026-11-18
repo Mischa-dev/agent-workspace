@@ -133,6 +133,7 @@
 
 .aw-initiative__milestones .aw-progress__text,
 .aw-initiative__milestones .aw-initiative__count {
+  color: var(--content-fg-muted);
   font: var(--t-small);
 }
 
@@ -144,4 +145,19 @@
   .aw-initiative__space {
     display: none;
   }
+}
+
+.aw-initiative__progress {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.aw-initiative__progress .aw-progress__bar {
+  width: min(240px, 50%);
+}
+
+.aw-initiative__progress .aw-progress__text {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
 }
