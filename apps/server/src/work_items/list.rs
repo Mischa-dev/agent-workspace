@@ -1712,7 +1712,7 @@ async fn column_values(
                     0::bigint AS count, NULL::text AS color \
              FROM project_memberships membership JOIN actors actor ON actor.id = membership.actor_id \
              WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active' \
-               AND actor.kind IN ('human', 'external_agent') \
+               AND actor.kind IN ('human', 'external_agent') /* // kind-check: mechanical (accounts only) */ \
              ORDER BY lower(membership.display_name), membership.actor_id::text"
                 .to_owned()
         }

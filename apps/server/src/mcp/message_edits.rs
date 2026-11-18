@@ -147,7 +147,8 @@ pub struct RevisionItem {
 }
 
 fn actor_label(actor: &ActorView) -> String {
-    if actor.kind == "external_agent" {
+    let agent = actor.kind == "external_agent"; // kind-check: mechanical (a display label)
+    if agent {
         format!("{} (@{}, agent)", actor.display_name, actor.handle)
     } else {
         format!("{} (@{})", actor.display_name, actor.handle)

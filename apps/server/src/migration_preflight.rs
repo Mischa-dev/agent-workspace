@@ -252,12 +252,13 @@ pub async fn prepare_m3_upgrade(
                NOT connection.enabled
                OR profile.status <> 'available'
                OR NOT membership.enabled
-               OR membership.role <> 'worker'
+               OR membership.role <> $1
                OR actor.status <> 'active'
                OR actor.kind <> 'execution_worker' -- // kind-check: mechanical (a worker row's own account)
            )
         "#,
     )
+    .bind(crate::policy::MembershipRole::Worker.key())
     .execute(&mut *transaction)
     .await?
     .rows_affected();

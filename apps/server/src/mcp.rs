@@ -54,9 +54,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     error::AppError,
-    policy::{
-        Action, ActorKind, AgentLimits, Permission, PermissionSet, RoleGrant, with_agent_limits,
-    },
+    policy::{Action, ActorKind, AgentLimits, PermissionSet, RoleGrant, with_agent_limits},
 };
 
 mod admin;
@@ -4941,17 +4939,8 @@ async fn validate_issue_command(
             role_permissions.as_deref(),
             Action::McpRead,
         ) && (!wants_write
-            || RoleGrant::stored(&role, role_permissions.as_deref()).is_ok_and(|grant| {
-                grant.permissions().iter().any(|permission| {
-                    !permission.only_sees()
-                        && !matches!(
-                            permission,
-                            Permission::RunsReport
-                                | Permission::RequestsRaise
-                                | Permission::RequestsAnswer
-                        )
-                })
-            }))
+            || RoleGrant::stored(&role, role_permissions.as_deref())
+                .is_ok_and(crate::access::writes))
     }) {
         return Err(AppError::NotFound("project_membership"));
     }

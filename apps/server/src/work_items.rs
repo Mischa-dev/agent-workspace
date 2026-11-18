@@ -2230,7 +2230,7 @@ async fn named_assignees(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1
           AND membership.actor_id = ANY($2)
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         ORDER BY lower(membership.display_name), lower(membership.handle), actor.id
         "#,
     )
@@ -2254,7 +2254,7 @@ async fn assignee_search(
         WHERE membership.project_id = $1
           AND membership.enabled
           AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
           AND (
               $2 = ''
               OR strpos(lower(membership.display_name), $2) > 0

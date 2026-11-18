@@ -175,7 +175,7 @@ pub async fn open_for_run(
 }
 
 /// Open a request: `request` holds its kind, title, detail, options,
-/// allowText, audience ({accounts, roles}), expiresInSeconds, onExpiry and
+/// allowText, sensitive, audience ({accounts, roles}), expiresInSeconds, onExpiry and
 /// clientRequestId. A repeat of the same `clientRequestId` (or run
 /// activity) returns the request already open.
 pub async fn open(
@@ -447,7 +447,9 @@ pub async fn open(
     .bind(Value::Array(options))
     .bind(allow_text)
     .bind(
-        if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
+        if request.get("sensitive").and_then(Value::as_bool) == Some(true) {
+            SENSITIVE
+        } else if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
             "runs.approve"
         } else {
             "requests.answer"
@@ -918,10 +920,14 @@ async fn holds_addressed_role(
     .await?)
 }
 
-/// Who may answer an open request they can see: an account it names; else
-/// a holder of one of the roles it names who has its permission; else,
-/// when it names nobody, anyone with its permission there. Never the
-/// account that raised it.
+/// The permission a sensitive request asks of whoever answers it (K1.14b).
+const SENSITIVE: &str = "requests.answer_sensitive";
+
+/// Who may answer an open request they can see: an account it names (for
+/// a sensitive one, only while it holds its permission); else a holder of
+/// one of the roles it names who has its permission; else, when it names
+/// nobody, anyone with its permission there. Never the account that raised
+/// it.
 pub async fn may_answer(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &crate::access::Caller,
@@ -931,7 +937,9 @@ pub async fn may_answer(
         return Ok(false);
     }
     if row.addressed_account_ids.contains(&caller.account_id) {
-        return Ok(true);
+        return Ok(
+            row.answer_permission != SENSITIVE || holds(transaction, caller, row, true).await?
+        );
     }
     if !row.addressed_role_keys.is_empty() {
         return Ok(

@@ -43,7 +43,7 @@ pub fn router() -> Router<AppState> {
             get(authorization_server_metadata),
         )
         .route("/oauth/register", post(register_client))
-        .route("/oauth/authorize", get(authorize).post(consent))
+        .route("/oauth/authorize", get(authorize_page).post(consent))
         .route("/oauth/consent.css", get(consent_stylesheet))
         .route("/connect/confirm", post(consent))
         .route("/oauth/token", post(token))
@@ -319,7 +319,7 @@ struct ClientRow {
     redirect_uris: Vec<String>,
 }
 
-async fn authorize(
+async fn authorize_page(
     State(state): State<AppState>,
     principal: Result<AuthenticatedActor, AppError>,
     headers: HeaderMap,
@@ -800,10 +800,10 @@ async fn exchange_code(
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.status = 'active' AND membership.enabled
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND code.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND code.external_agent_connection_id IS NOT NULL)
+              (actor.kind = 'external_agent' AND code.external_agent_connection_id IS NOT NULL) -- // kind-check: mechanical (how each kind of account signs in)
           )
         FOR UPDATE OF code
     "#,
@@ -960,10 +960,10 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.status = 'active' AND membership.enabled
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND grant_row.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND connection.status = 'active')
+              (actor.kind = 'external_agent' AND connection.status = 'active') -- // kind-check: mechanical (how each kind of account signs in)
           )
         FOR UPDATE OF token, grant_row
     "#,
@@ -1424,15 +1424,15 @@ pub async fn resolve_access_token(
           -- checked against their current memberships. Project-scoped and
           -- agent grants still need their own project.
           AND (
-              (actor.kind = 'human' AND grant_row.account_wide)
+              (actor.kind = 'human' AND grant_row.account_wide) -- // kind-check: mechanical (how each kind of account signs in)
               OR (project.archived_at IS NULL AND membership.enabled
                   AND organization_membership.enabled)
           )
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND grant_row.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND connection.status = 'active'
+              (actor.kind = 'external_agent' AND connection.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND backing.status = 'active' AND backing.expires_at > now())
           )
     "#,

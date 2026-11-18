@@ -18,10 +18,11 @@ use crate::{
     agent_profiles::{self, ProfileRequest},
     environments,
     error::AppError,
-    policy::{Action, ActorKind},
+    policy::Action,
 };
 
-const PEOPLE_ONLY: &str = "Agents read the project's agents, but only people make or change them: the project's owners and admins, on the web or through an app connected as themselves.";
+const MANAGERS_ONLY: &str =
+    "Only someone whose role manages the project's settings makes or changes its agents.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -125,9 +126,6 @@ pub(super) async fn agent_profile_write(
 ) -> ToolResult<AgentProfileWriteValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -266,7 +264,7 @@ pub(super) async fn agent_profile_write(
     .await;
     match result {
         Ok(result) => result,
-        Err(AppError::Forbidden) => ToolResult::denied(PEOPLE_ONLY),
+        Err(AppError::Forbidden) => ToolResult::denied(MANAGERS_ONLY),
         Err(AppError::NotFound("project")) => ToolResult::not_found("That project"),
         Err(AppError::NotFound(_)) => ToolResult::not_found("That agent"),
         Err(error) => ToolResult::from_error(error, "agent_profile_write"),

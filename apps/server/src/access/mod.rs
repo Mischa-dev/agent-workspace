@@ -433,6 +433,19 @@ pub fn membership_allows(
         && !limit_hides(account, space, permission)
 }
 
+/// Whether a role lets its holder change anything: any permission beyond
+/// seeing. Reporting one's own runs and raising or answering requests come
+/// with every role, a Viewer's too, so they don't count as writing.
+pub fn writes(grant: crate::policy::RoleGrant) -> bool {
+    grant.permissions().iter().any(|permission| {
+        !permission.only_sees()
+            && !matches!(
+                permission,
+                Permission::RunsReport | Permission::RequestsRaise | Permission::RequestsAnswer
+            )
+    })
+}
+
 /// `membership_allows` for a workspace membership: its role, an enabled
 /// membership, and the delegation limit an app acting for `account` has in
 /// `workspace`.

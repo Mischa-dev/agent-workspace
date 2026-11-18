@@ -315,7 +315,7 @@ async fn list_execution_workers(
         JOIN project_memberships membership
           ON membership.project_id = worker.project_id
          AND membership.actor_id = worker.actor_id
-         AND membership.role = 'worker'
+         AND membership.role = $5
         JOIN provider_connections connection
           ON connection.project_id = worker.project_id
          AND connection.id = worker.provider_connection_id
@@ -366,6 +366,7 @@ async fn list_execution_workers(
             .map(|manifest| manifest.kind.clone())
             .collect::<Vec<_>>(),
     )
+    .bind(crate::policy::MembershipRole::Worker.key())
     .fetch_all(&mut *transaction)
     .await?;
 

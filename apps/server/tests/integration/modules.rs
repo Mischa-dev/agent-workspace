@@ -1764,6 +1764,12 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
     assert!(status.is_success(), "{status}: {body}");
     narrow_in_project(&setup, &work, bea, &["pages", "whiteboards"], "p07-narrow").await;
     assert!(off(get(&bea_browser, format!("/api/v1/pages/{page}")).await));
+    // K1.11: the live editor's document follows the role's switches too.
+    assert!(off(get(
+        &bea_browser,
+        format!("/api/v1/pages/{page}/document")
+    )
+    .await));
     assert!(off(get(
         &bea_browser,
         format!("/api/v1/whiteboards/{board}")

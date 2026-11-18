@@ -21061,6 +21061,13 @@
                     },
                     "type": "array"
                   },
+                  "sensitive": {
+                    "description": "Sensitive: only someone holding \"answer sensitive requests\" may\nanswer it, even when it names them.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "spaceId": {
                     "description": "The space (project): its id or link. Not needed with conversationId.",
                     "maxLength": 2048,
@@ -31100,7 +31107,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_comment_create": {
       "post": {
-        "description": "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. @handles of people in the space are notified. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told. Needs \"Edit tasks\" where it acts.",
+        "description": "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. @handles of people in the space are notified. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told. Needs \"Comment on tasks\" where it acts.",
         "operationId": "task_comment_create",
         "parameters": [
           {

@@ -672,8 +672,8 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
     let key = IdempotencyKey::parse(&format!("scheduled-message-{}", row.id))?;
     // A person's app or script scheduled it: it goes out within that app's
     // agent limit as it is now, as the tool call that scheduled it did.
-    let limits = if row.made_through_app && row.author_kind == "human" {
-        // kind-check: mechanical (an app acting for a person sends within that app's limit)
+    let person = row.author_kind == "human"; // kind-check: mechanical (an app acting for a person sends within that app's limit)
+    let limits = if row.made_through_app && person {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Some(
             crate::roles::app_access(&mut connection, row.author_actor_id)
@@ -813,8 +813,8 @@ async fn fail(
     .bind(reason)
     .execute(&mut **transaction)
     .await?;
-    if row.author_kind != "human" {
-        // kind-check: mechanical (how they are told: a failure goes to a person's inbox)
+    let person = row.author_kind == "human"; // kind-check: mechanical (how they are told: a failure goes to a person's inbox)
+    if !person {
         return Ok(());
     }
     // Told in their workspace's own space: the conversation may be one

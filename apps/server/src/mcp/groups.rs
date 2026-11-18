@@ -50,16 +50,12 @@ pub(super) struct MemberRef {
 
 impl From<ActorView> for MemberRef {
     fn from(actor: ActorView) -> Self {
+        let agent = actor.kind == "external_agent"; // kind-check: mechanical (a display label)
         Self {
             id: actor.id.to_string(),
             name: actor.display_name,
             handle: actor.handle,
-            kind: if actor.kind == "external_agent" {
-                "agent"
-            } else {
-                "person"
-            }
-            .to_owned(),
+            kind: if agent { "agent" } else { "person" }.to_owned(),
         }
     }
 }

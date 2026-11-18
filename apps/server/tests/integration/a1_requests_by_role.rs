@@ -466,3 +466,75 @@ async fn a_run_waiting_on_a_request_goes_on_when_it_is_answered_or_runs_out() {
         "{read}"
     );
 }
+
+/// K1.14b: a request marked sensitive is answered only by someone holding
+/// "answer sensitive requests", even when it names them; the kind of
+/// account never decides it.
+#[tokio::test]
+async fn a_sensitive_request_needs_its_permission_even_when_it_names_you() {
+    let Some(setup) = setup("a1_requests_sensitive").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "SEN", "Sensitive").await;
+    let space = space(&setup).await;
+    let (scout, scout_token) = create_agent(app, &setup.browser, &space, "Scout", "scout").await;
+    add_member(&setup, &project, scout, "member").await;
+    let scout_session = initialize(app, &scout_token).await.expect("Scout MCP");
+    let (vee, vee_token) = create_agent(app, &setup.browser, &space, "Vee", "vee").await;
+    add_member(&setup, &project, vee, "viewer").await;
+    let vee_session = initialize(app, &vee_token).await.expect("Vee MCP");
+    let (other, other_token) = create_agent(app, &setup.browser, &space, "Other", "other").await;
+    add_member(&setup, &project, other, "member").await;
+    let other_session = initialize(app, &other_token).await.expect("Other MCP");
+
+    let raise = |sensitive: bool, id: &'static str| {
+        let token = scout_token.clone();
+        let session = scout_session.clone();
+        let project = project.clone();
+        async move {
+            let raised = tool(
+                app,
+                &token,
+                &session,
+                "request_create",
+                json!({
+                    "spaceId": project,
+                    "kind": "approval",
+                    "title": "Rotate the deploy key?",
+                    "options": [{"id": "yes", "label": "Rotate"}, {"id": "no", "label": "Leave it"}],
+                    "sensitive": sensitive,
+                    "audience": {"accounts": ["@vee", "@other"]},
+                    "clientRequestId": id,
+                }),
+            )
+            .await;
+            assert_eq!(raised["outcome"], "ok", "{raised}");
+            raised["value"]["id"].as_str().expect("request").to_owned()
+        }
+    };
+    let answer = |token: String, session: String, request: String| async move {
+        tool(
+            app,
+            &token,
+            &session,
+            "request_respond",
+            json!({"requestId": request, "optionId": "yes"}),
+        )
+        .await
+    };
+
+    // A viewer named on an ordinary request answers it.
+    let plain = raise(false, "plain-1").await;
+    let answered = answer(vee_token.clone(), vee_session.clone(), plain).await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+
+    // Named on a sensitive one, the viewer (no "answer sensitive requests")
+    // is refused; a member, who holds it, answers.
+    let sensitive = raise(true, "sensitive-1").await;
+    let refused = answer(vee_token.clone(), vee_session.clone(), sensitive.clone()).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let answered = answer(other_token.clone(), other_session.clone(), sensitive).await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    let _ = other;
+}

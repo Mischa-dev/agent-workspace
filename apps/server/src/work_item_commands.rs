@@ -2742,7 +2742,7 @@ pub async fn add_watcher(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1 AND membership.actor_id = $3
           AND membership.enabled AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -2766,7 +2766,7 @@ pub async fn notify_watching_agents(
         r#"
         SELECT watcher.actor_id
         FROM work_item_watchers watcher
-        JOIN actors actor ON actor.id = watcher.actor_id AND actor.kind = 'external_agent'
+        JOIN actors actor ON actor.id = watcher.actor_id AND actor.kind = 'external_agent' -- // kind-check: mechanical (how they're told: agents are woken)
         JOIN task_rows item ON item.id = watcher.work_item_id
         WHERE watcher.work_item_id = $1 AND watcher.actor_id <> $2
           AND item.assignee_actor_id IS DISTINCT FROM watcher.actor_id
@@ -2819,7 +2819,7 @@ pub async fn validate_assignee(
               AND membership.actor_id = $2
               AND membership.enabled
               AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         )
         "#,
     )

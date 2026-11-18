@@ -202,6 +202,33 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     );
     let profile_id = uuid_field(&reviewer.2, "id");
     let reviewer_actor = uuid_field(&reviewer.2, "actorId");
+    // K1.8: the profile's agent is an agent account of the workspace: in its
+    // directory with the Member role, owned by the workspace, with its maker
+    // among its managers, and in the workspace's own space.
+    let (role, owned, listed_account, managed, in_own_space) =
+        sqlx::query_as::<_, (String, bool, bool, bool, bool)>(
+            r#"
+            SELECT membership.role,
+                   account.owner_workspace_id = membership.organization_id,
+                   account.listed,
+                   EXISTS (SELECT 1 FROM account_managers manager
+                           WHERE manager.account_id = account.id),
+                   EXISTS (SELECT 1 FROM project_memberships seat
+                           JOIN projects space ON space.id = seat.project_id
+                           WHERE seat.actor_id = account.id AND space.kind = 'workspace'
+                             AND space.organization_id = membership.organization_id)
+            FROM actors account
+            JOIN organization_memberships membership
+              ON membership.actor_id = account.id AND membership.enabled
+            WHERE account.id = $1
+            "#,
+        )
+        .bind(reviewer_actor)
+        .fetch_one(&pool)
+        .await
+        .expect("the profile agent is a member of the workspace");
+    assert_eq!(role, "member");
+    assert!(owned && listed_account && managed && in_own_space);
     let second = send(
         &application,
         owner,

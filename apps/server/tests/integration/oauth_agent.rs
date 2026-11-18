@@ -219,7 +219,7 @@ impl Fixture {
             browser(&cookie, &csrf, "GET", "/api/v1/direct", Value::Null),
         )
         .await
-        .1["projectId"]
+        .1["workspaceSpaceId"]
             .as_str()
             .expect("space")
             .to_owned();

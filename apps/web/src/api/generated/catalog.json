@@ -1351,7 +1351,7 @@
     "long": false,
     "module": "tasks",
     "name": "task_comment_create",
-    "permission": "tasks.edit",
+    "permission": "tasks.comment",
     "preview": false,
     "proposable": false,
     "title": "Comment on task"

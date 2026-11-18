@@ -29,11 +29,7 @@ use super::{
         role_allows, scope_projects, snippet,
     },
 };
-use crate::{
-    AppState,
-    error::AppError,
-    policy::{Action, ActorKind},
-};
+use crate::{AppState, error::AppError, policy::Action};
 
 const DEFAULT_AGENTS: i64 = 50;
 const MAX_AGENTS: i64 = 100;
@@ -241,7 +237,7 @@ pub(super) async fn agent_list(
                       AND membership.project_id = ANY($1)
                 ) shared ON shared.name IS NOT NULL
                 -- Turning an agent off in the web app also disables its actor.
-                WHERE actor.kind = 'external_agent' AND actor.status IN ('active', 'disabled')
+                WHERE actor.kind = 'external_agent' AND actor.status IN ('active', 'disabled') -- // kind-check: mechanical (this lists agents)
                   AND actor.id <> $2
                   AND ($3 = '' OR EXISTS (
                       SELECT 1 FROM project_memberships membership
@@ -449,17 +445,13 @@ pub(super) async fn agent_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "agent_list"))
 }
 
-/// The agents' home projects in which the caller manages agents the way the
-/// web app allows it: a person, an owner or admin of the organization, whose
-/// role there allows ExternalAgentManage, in a project the call can reach.
+/// The agents' home projects in which the caller's role allows managing
+/// agents (any kind of account), in a project the call can reach.
 async fn managed_projects(
     state: &AppState,
     principal: &McpPrincipal,
     agents: &[AgentRow],
 ) -> Result<HashSet<Uuid>, AppError> {
-    if principal.actor_kind != ActorKind::Human {
-        return Ok(HashSet::new());
-    }
     let homes = agents
         .iter()
         .map(|agent| agent.home_project_id)
@@ -476,7 +468,6 @@ async fn managed_projects(
           ON organization.organization_id = project.organization_id
          AND organization.actor_id = $1
          AND organization.enabled
-         AND organization.role IN ('owner', 'admin')
         JOIN project_memberships membership
           ON membership.project_id = project.id
          AND membership.actor_id = $1

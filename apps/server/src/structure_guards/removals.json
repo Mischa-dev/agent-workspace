@@ -1,39 +1,19 @@
 {
   "raw_role_checks": {
-    "api.rs": "K1.8: the worker role joined to find an execution worker's own membership; goes when worker agents become agent accounts",
-    "execution.rs": "K1.8: the worker role joined to find an execution worker's own membership; goes when worker agents become agent accounts",
-    "mcp/agents.rs": "K1.6: a built-in role named in SQL; asks access_allows or the role tier instead",
-    "migration_preflight.rs": "K1.8: the worker role checked on an execution worker's own membership; goes when worker agents become agent accounts"
   },
   "custom_role_allows": {
   },
   "workspace_role_enum": {
   },
   "rust_role_checks": {
-    "external_agents.rs": "K1.6: a role compared by name in Rust; becomes a permission or the role tier"
   },
   "access_bypasses": {
-    "external_agents.rs": "K1.6: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
-    "mcp/oauth.rs": "K1.6: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter"
   },
   "account_kind_checks": {
-    "agent_profiles.rs": "K1.8: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "auth/mod.rs": "K1.22: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "external_agents.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "mcp/agent_profile_tools.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "mcp/agents.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "mcp/oauth.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "policy.rs": "K1.31: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "push/actions.rs": "K1.31: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "work_item_commands.rs": "K1.16: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts"
+    "push/actions.rs": "K1.31: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts"
   },
   "account_kind_strings": {
-    "agent_profiles.rs": "K1.8: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "mcp/groups.rs": "K1.15: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "mcp/message_edits.rs": "K1.15: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "scheduled_messages.rs": "K1.15: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "work_item_commands.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "work_items.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "work_items/list.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts"
   }
 }

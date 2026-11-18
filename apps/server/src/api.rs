@@ -886,7 +886,7 @@ pub(crate) async fn select_run_setup_for(
         JOIN project_memberships worker_membership
           ON worker_membership.project_id = ew.project_id
          AND worker_membership.actor_id = ew.actor_id
-         AND worker_membership.role = 'worker'
+         AND worker_membership.role = $7
          AND worker_membership.enabled
         JOIN actors worker_actor
           ON worker_actor.id = ew.actor_id
@@ -930,6 +930,7 @@ pub(crate) async fn select_run_setup_for(
     .bind(harness)
     .bind(provider_account_id)
     .bind(worker_id)
+    .bind(crate::policy::MembershipRole::Worker.key())
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)
