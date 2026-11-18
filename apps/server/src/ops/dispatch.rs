@@ -485,14 +485,16 @@ async fn pipeline<O: Operation>(
     // rolls back).
     let mut guard_hold = None;
     if writes && !request.preview {
-        match crate::guards::check(
+        // Boxed: every operation's dispatch would otherwise carry the
+        // check's whole state on its stack.
+        match Box::pin(crate::guards::check(
             state,
             &ctx.caller,
             &located,
             O::NAME,
             target.audit(&located),
             &canonical,
-        )
+        ))
         .await?
         {
             crate::guards::Verdict::Allow { hold } => guard_hold = hold,

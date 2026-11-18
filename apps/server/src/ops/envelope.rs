@@ -124,7 +124,10 @@ pub fn schema(mut output: Value) -> Value {
             },
         },
         "required": ["outcome", "value"],
-        "anyOf": [{ "required": ["paused"] }, { "required": ["pendingReview"] }],
+        "anyOf": [
+            { "properties": { "paused": { "const": true } }, "required": ["paused"] },
+            { "properties": { "pendingReview": { "const": true } }, "required": ["pendingReview"] },
+        ],
     }));
     let mut schema = json!({ "type": "object", "oneOf": branches });
     for (key, found) in definitions {
