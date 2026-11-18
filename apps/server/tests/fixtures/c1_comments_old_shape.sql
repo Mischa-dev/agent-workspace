@@ -123,3 +123,20 @@ VALUES ('00000000-0000-7000-8000-000000000051', '00000000-0000-7000-8000-0000000
         '00000000-0000-7000-8000-000000000060', '00000000-0000-7000-8000-000000000003',
         '{"pageCommentId": "00000000-0000-7000-8000-000000000061", "threadId": "00000000-0000-7000-8000-000000000061"}',
         'page-comments:00000000-0000-7000-8000-000000000060');
+
+-- A comment posted to the task's comments conversation before this ran:
+-- the moved comments take their places after it.
+INSERT INTO conversations (id, project_id, kind, name, visibility, subject_kind, subject_id,
+                           next_entry_sequence, created_at, updated_at)
+VALUES ('00000000-0000-7000-8000-000000000070', '00000000-0000-7000-8000-000000000010', 'comments',
+        'Comments', 'subject', 'task', '00000000-0000-7000-8000-000000000020', 2,
+        '2026-11-03 09:00+00', '2026-11-03 09:00+00');
+INSERT INTO messages (id, project_id, conversation_id, author_actor_id, content_version, content,
+                      plain_text, created_at)
+VALUES ('00000000-0000-7000-8000-000000000035', '00000000-0000-7000-8000-000000000010',
+        '00000000-0000-7000-8000-000000000070', '00000000-0000-7000-8000-000000000002', 1,
+        '{"version": 1, "nodes": [{"type": "text", "text": "Posted since"}]}', 'Posted since',
+        '2026-11-03 09:00+00');
+INSERT INTO conversation_entries (id, conversation_id, sequence, kind, message_id, created_at)
+VALUES (gen_random_uuid(), '00000000-0000-7000-8000-000000000070', 1, 'message',
+        '00000000-0000-7000-8000-000000000035', '2026-11-03 09:00+00');

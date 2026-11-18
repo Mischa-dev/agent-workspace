@@ -229,11 +229,14 @@ WHERE notifications.kind = 'page_comment'
 
 -- ---------------------------------------------------------------------------
 -- Every moved comment takes its place in its conversation, oldest first,
--- and nobody finds old comments unread.
+-- after any entries the conversation already holds (comments posted to it
+-- before this ran), and nobody finds old comments unread.
 
 INSERT INTO conversation_entries (id, conversation_id, sequence, kind, message_id, created_at)
 SELECT gen_random_uuid(), moved.conversation_id,
-       row_number() OVER (PARTITION BY moved.conversation_id ORDER BY moved.created_at, moved.id),
+       COALESCE((SELECT max(held.sequence) FROM conversation_entries held
+                 WHERE held.conversation_id = moved.conversation_id), 0)
+       + row_number() OVER (PARTITION BY moved.conversation_id ORDER BY moved.created_at, moved.id),
        'message', moved.id, moved.created_at
 FROM moved_comment moved;
 
