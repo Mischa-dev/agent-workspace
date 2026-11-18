@@ -324,9 +324,6 @@ async fn open_dm(
     ApiJson(request): ApiJson<OpenDmRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    if request.actor_id == principal.actor_id {
-        return Err(AppError::Validation("DM recipient"));
-    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ChannelCreate)?;
@@ -834,9 +831,8 @@ pub(crate) async fn open_dm_in(
     actor_id: Uuid,
     other_actor_id: Uuid,
 ) -> Result<(Uuid, bool), AppError> {
-    if other_actor_id == actor_id {
-        return Err(AppError::Validation("DM recipient"));
-    }
+    // A DM with yourself is your note to self (C2.32): one member, kept
+    // like any other DM.
     join_reachable_agents(transaction, project_id, actor_id, &[other_actor_id]).await?;
     lock_people(transaction, project_id, &[other_actor_id]).await?;
     // One DM per pair: the sorted pair is unique within the space, so a

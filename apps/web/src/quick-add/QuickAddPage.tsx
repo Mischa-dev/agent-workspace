@@ -7,7 +7,7 @@ import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
 import { formatBytes } from '../files/api'
-import { QuickMessageForm, QuickTaskForm } from './QuickAddForms'
+import { QuickMessageForm, QuickNoteForm, QuickTaskForm } from './QuickAddForms'
 import { takeSharedFiles } from './sharedFiles'
 import { readSharedContent, type SharedContent } from './sharedContent'
 import './quickAdd.css'
@@ -36,7 +36,7 @@ export function QuickAddPage() {
       current = false
     }
   }, [fileCount])
-  const [mode, setMode] = useState<'task' | 'message'>('task')
+  const [mode, setMode] = useState<'task' | 'message' | 'note' | 'later'>('task')
   const projects = useProjects()
   const active = useMemo(() => (projects.data?.projects ?? []).filter((project) => !project.archivedAt), [projects.data])
 
@@ -61,6 +61,8 @@ export function QuickAddPage() {
     )
   } else if (mode === 'task') {
     body = <QuickTaskForm files={files} projects={active} shared={shared} />
+  } else if (mode === 'note' || mode === 'later') {
+    body = <QuickNoteForm files={files} key={mode} mode={mode} shared={shared} viewerId={session.user.actorId} />
   } else {
     body = <QuickMessageForm files={files} projects={active} shared={shared} viewerId={session.user.actorId} />
   }
@@ -68,7 +70,7 @@ export function QuickAddPage() {
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--reading aw-quick">
-        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : 'New task'} />
+        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : mode === 'note' ? 'Note to self' : mode === 'message' ? 'New message' : 'New task'} />
         {shared ? <SharedPreview shared={shared} /> : null}
         {files?.length ? (
           <ul aria-label="Shared files" className="aw-quick__files">
@@ -81,17 +83,17 @@ export function QuickAddPage() {
             ))}
           </ul>
         ) : null}
-        {sharing ? (
-          <SegmentedControl
-            label="Share as"
-            onChange={setMode}
-            options={[
-              { value: 'task', label: 'New task', icon: 'work' },
-              { value: 'message', label: 'Message', icon: 'message' },
-            ]}
-            value={mode}
-          />
-        ) : null}
+        <SegmentedControl
+          label={sharing ? 'Share as' : 'Add'}
+          onChange={setMode}
+          options={[
+            { value: 'task', label: 'New task', icon: 'work' },
+            { value: 'message', label: sharing ? 'Send to…' : 'Message…', icon: 'message' },
+            { value: 'note', label: 'Note to self', icon: 'pencil' },
+            ...(sharing ? [{ value: 'later' as const, label: 'Save to Later', icon: 'bookmark' as const }] : []),
+          ]}
+          value={mode}
+        />
         {body}
       </div>
     </AppShell>

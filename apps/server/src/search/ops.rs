@@ -526,8 +526,13 @@ impl Operation for PlaceSearch {
         .map_err(AppError::from)?;
         for (id, kind, name, space, space_name, people) in rows {
             let channel = kind == "channel";
+            // A DM is named by the other person in it (or is your note to
+            // self); a group by its name, else its people.
+            let people = people.filter(|people| !people.trim().is_empty());
             let title = if channel {
                 format!("#{name}")
+            } else if kind == "dm" {
+                people.unwrap_or_else(|| "Note to self".to_owned())
             } else if name.trim().is_empty() {
                 people.unwrap_or_default()
             } else {

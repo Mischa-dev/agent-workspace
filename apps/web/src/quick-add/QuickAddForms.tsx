@@ -8,7 +8,9 @@ import { useRetryWhenOnline } from '../app/useRetryWhenOnline'
 import { getProjectConversationSidebar, sendConversationMessage } from '../conversations/api'
 import { BLANK_MESSAGE_CONTENT, buildMessageContent, MAX_MESSAGE_SCALAR_VALUES } from '../conversations/composerModel'
 import type { ConversationKind } from '../conversations/types'
-import { conversationTitle, useDirectOverview } from '../direct/api'
+import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
+import { saveForLater } from '../later/api'
+import { readRecentPlaces } from '../shell/recentPlaces'
 import type { Project } from '../projects/types'
 import type { FileAttachment } from '../files/api'
 import { Banner, Button, ButtonLink, SelectField, TextArea, TextField, describeError } from '../ui'
@@ -181,22 +183,35 @@ export function QuickMessageForm({
     enabled: scope !== DIRECT,
   })
   const places = useMemo<Place[]>(() => {
+    // Send to…: the conversations you opened lately come first.
+    const recent = readRecentPlaces(viewerId).map((place) => place.path)
+    const rank = (place: Place) => {
+      const at = recent.findIndex((path) => path === place.href || path.endsWith(place.href))
+      return at < 0 ? recent.length : at
+    }
+    const byRecent = (list: Place[]) =>
+      list
+        .map((place, index) => ({ place, index }))
+        .sort((left, right) => rank(left.place) - rank(right.place) || left.index - right.index)
+        .map(({ place }) => place)
     if (scope === DIRECT) {
-      return (direct.data?.conversations ?? []).map((conversation) => ({
+      return byRecent((direct.data?.conversations ?? []).map((conversation) => ({
         id: conversation.id,
         kind: conversation.kind,
         label: conversationTitle(conversation, viewerId) || 'Conversation',
         href: `/messages/${encodeURIComponent(conversation.id)}`,
-      }))
+      })))
     }
-    return (sidebar.data?.channels ?? [])
-      .filter((channel) => !channel.archivedAt)
-      .map((channel) => ({
-        id: channel.id,
-        kind: 'channel' as const,
-        label: `#${channel.name}`,
-        href: `/projects/${encodeURIComponent(scope)}/channels/${encodeURIComponent(channel.id)}`,
-      }))
+    return byRecent(
+      (sidebar.data?.channels ?? [])
+        .filter((channel) => !channel.archivedAt)
+        .map((channel) => ({
+          id: channel.id,
+          kind: 'channel' as const,
+          label: `#${channel.name}`,
+          href: `/projects/${encodeURIComponent(scope)}/channels/${encodeURIComponent(channel.id)}`,
+        })),
+    )
   }, [direct.data, scope, sidebar.data, viewerId])
   const [placeId, setPlaceId] = useState('')
   const place = places.find((candidate) => candidate.id === placeId) ?? places[0]
@@ -295,6 +310,99 @@ export function QuickMessageForm({
       <div className="aw-quick__actions">
         <Button busy={post.isPending} disabled={!place || !content} icon="send" size="lg" type="submit" variant="primary">
           Post
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+/** The most a Later note holds. */
+const MAX_NOTE = 1000
+
+/**
+ * Capture for yourself (C2.32): a note to self (your DM with yourself, files
+ * and all), or, when something was shared, a note in Later.
+ */
+export function QuickNoteForm({
+  files = NO_FILES,
+  mode,
+  shared,
+  viewerId,
+}: {
+  files?: File[]
+  mode: 'note' | 'later'
+  shared: SharedContent | null
+  viewerId: string
+}) {
+  const navigate = useNavigate()
+  const [text, setText] = useState(() => (shared ? messageFromShare(shared) : ''))
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
+  const [offline, setOffline] = useState(false)
+  const [uploaded, setUploaded] = useState<{ conversationId: string; attachments: FileAttachment[] } | null>(null)
+  const typed = [...text.trim()].length <= MAX_MESSAGE_SCALAR_VALUES ? buildMessageContent(text, []) : null
+  const content = typed ?? (files.length && !text.trim() ? BLANK_MESSAGE_CONTENT : null)
+  const note = text.trim()
+  const ready = mode === 'later' ? note.length > 0 && [...note].length <= MAX_NOTE : Boolean(content)
+
+  const capture = useMutation({
+    mutationFn: async () => {
+      if (mode === 'later') {
+        await saveForLater({ note })
+        return '/later'
+      }
+      if (!content) throw new Error('Write something to keep.')
+      const conversationId = await openDm(viewerId)
+      let attachments = uploaded?.conversationId === conversationId ? uploaded.attachments : []
+      if (files.length && !attachments.length) {
+        attachments = await uploadShared(files, { kind: 'conversation', conversationId })
+        setUploaded({ conversationId, attachments })
+      }
+      await sendConversationMessage({ conversationId, kind: 'dm', content, idempotencyKey, attachments })
+      return `/messages/${encodeURIComponent(conversationId)}`
+    },
+    onSuccess: (href) => {
+      setOffline(false)
+      setIdempotencyKey(crypto.randomUUID())
+      navigate(href, { replace: true })
+    },
+    onError: (reason) => setOffline(isConnectionError(reason)),
+  })
+  const send = () => {
+    if (ready && !capture.isPending) capture.mutate()
+  }
+  useRetryWhenOnline(offline, send)
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    send()
+  }
+
+  return (
+    <form className="aw-form aw-card aw-formcard aw-quick__form" noValidate onSubmit={submit}>
+      <TextArea
+        hint={
+          mode === 'later'
+            ? files.length
+              ? 'Later keeps the note, not the files: a note to self keeps both.'
+              : 'It waits in Later until you mark it done.'
+            : 'Only you see your notes to self.'
+        }
+        id="quick-note-text"
+        label={mode === 'later' ? 'Note' : 'Note to self'}
+        maxLength={mode === 'later' ? MAX_NOTE : undefined}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={mode === 'later' ? 'What to come back to' : 'Write it down'}
+        rows={5}
+        value={text}
+      />
+      {offline ? (
+        <OfflineNote what={mode === 'later' ? 'note' : 'note to self'} />
+      ) : capture.isError ? (
+        <Banner tone="danger">It wasn’t kept. {describeError(capture.error).message}</Banner>
+      ) : null}
+      <div className="aw-quick__actions">
+        <Button busy={capture.isPending} disabled={!ready} icon={mode === 'later' ? 'bookmark' : 'send'} size="lg" type="submit" variant="primary">
+          {mode === 'later' ? 'Save to Later' : 'Keep note'}
         </Button>
       </div>
     </form>

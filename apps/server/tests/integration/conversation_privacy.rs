@@ -838,3 +838,74 @@ async fn group_mentions_reach_only_members_who_can_read() {
 
     world.finish().await;
 }
+
+/// C2.32: a note to self is a DM with only its writer in it. Opening it
+/// again finds the same one, and nobody else reads, lists or finds it.
+#[tokio::test]
+async fn a_note_to_self_is_read_only_by_its_writer() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .build("c2_32_note_to_self")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let open = || async {
+        let (status, opened) = send(
+            app,
+            lena.browser.request(
+                "POST",
+                "/api/v1/direct/dms",
+                None,
+                json!({"actorId": lena.actor}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{opened}");
+        opened["conversation"]["id"]
+            .as_str()
+            .expect("note to self")
+            .to_owned()
+    };
+    let note = open().await;
+    assert_eq!(open().await, note, "one note to self each");
+    let word = format!("zqnote{}", &Uuid::now_v7().simple().to_string()[20..]);
+    let (status, sent) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{note}/messages"),
+            Some("note-to-self"),
+            json!({"content": text(&format!("remember {word}"))}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+
+    let found = get(app, lena, &format!("/api/v1/search?q={word}")).await;
+    assert!(found.to_string().contains(&word), "{found}");
+    let found = get(app, mara, &format!("/api/v1/search?q={word}")).await;
+    assert_eq!(found["hits"], json!([]), "{found}");
+    let (status, read) = send(
+        app,
+        mara.browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{note}/messages"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{read}");
+    let listed = get(app, mara, "/api/v1/direct").await;
+    assert!(!listed.to_string().contains(&note), "{listed}");
+    let listed = get(app, lena, "/api/v1/direct").await;
+    assert!(listed.to_string().contains(&note), "{listed}");
+
+    world.finish().await;
+}
