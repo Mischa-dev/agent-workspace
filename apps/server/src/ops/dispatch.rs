@@ -549,6 +549,20 @@ async fn pipeline<O: Operation>(
         keyed: false,
         audited: false,
     };
+    // A2.14: a call through the API or an agent tool spends its caller's
+    // budgets (the app's own pages are bounded by people's hands). Before
+    // the call's transaction opens: see `budgets::admit_call`.
+    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) && !request.preview {
+        crate::budgets::admit_call(
+            &state.pool,
+            ctx.workspace_id,
+            ctx.space_id,
+            ctx.caller.account_id,
+            writes,
+            ctx.request_id.as_deref(),
+        )
+        .await?;
+    }
     let mut reservation = None;
     if let Some(key) = key.as_ref()
         && O::IDEMPOTENCY == Idempotency::Dispatcher
@@ -624,19 +638,6 @@ async fn pipeline<O: Operation>(
     if let Some(hold) = guard_hold {
         let tx = call.tx().await?;
         crate::guards::use_hold(tx, hold).await?;
-    }
-    // A2.14: a call through the API or an agent tool spends its caller's
-    // budgets (the app's own pages are bounded by people's hands).
-    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) && !request.preview {
-        let tx = call.tx().await?;
-        crate::budgets::admit_call(
-            tx,
-            ctx.workspace_id,
-            ctx.space_id,
-            ctx.caller.account_id,
-            writes,
-        )
-        .await?;
     }
     let output =
         crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))

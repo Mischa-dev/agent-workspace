@@ -28,13 +28,16 @@ pub async fn admit(
     ask: Ask<'_>,
 ) -> Result<(), AppError> {
     let workspace = ask.workspace_id;
-    if let Admission::AllowedNearLimit { notice } = metering::admit(&mut **transaction, ask).await? {
+    if let Admission::AllowedNearLimit { notice } = metering::admit(&mut **transaction, ask).await?
+    {
         warn(transaction, workspace, &notice).await?;
     }
     Ok(())
 }
 
 /// One message sent by `account` in `conversation`, counted once.
+/// In the send's own transaction: a send that fails counts nothing (and a
+/// separate one would wait on the conversation the send holds).
 pub async fn admit_message(
     transaction: &mut Transaction<'_, Postgres>,
     space: Uuid,
@@ -62,15 +65,24 @@ pub async fn admit_message(
 }
 
 /// One call through the API or an agent tool, and one write when it
-/// changes something.
+/// changes something: counted when asked, in its own short transaction
+/// before the call's begins, so the counter rows are never held while the
+/// call runs (a call it sets off, as the same account, would wait on them).
+/// A call that then fails still counts; a retry with the same request id
+/// counts once.
 pub async fn admit_call(
-    transaction: &mut Transaction<'_, Postgres>,
+    pool: &sqlx::PgPool,
     workspace: Uuid,
     space: Option<Uuid>,
     account: Uuid,
     writes: bool,
+    request_id: Option<&str>,
 ) -> Result<(), AppError> {
-    let call = Uuid::now_v7();
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let call = request_id.map_or_else(
+        || Uuid::now_v7().to_string(),
+        |key| format!("{account}:{}", key.chars().take(120).collect::<String>()),
+    );
     let meters: &[&'static str] = if writes {
         &["operations", "writes"]
     } else {
@@ -79,7 +91,7 @@ pub async fn admit_call(
     for meter in meters {
         let key = format!("{meter}:{call}");
         admit(
-            transaction,
+            &mut transaction,
             Ask {
                 account_id: Some(account),
                 space_id: space,
@@ -93,6 +105,7 @@ pub async fn admit_call(
         )
         .await?;
     }
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -182,11 +195,11 @@ pub async fn admit_delivery(
     };
     match admit(transaction, ask).await {
         Ok(()) => Ok(None),
-        Err(AppError::LimitReached(refusal)) => Ok(Some(
-            refusal
-                .resets_at
-                .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(1)),
-        )),
+        Err(AppError::LimitReached(refusal)) => {
+            Ok(Some(refusal.resets_at.unwrap_or_else(|| {
+                chrono::Utc::now() + chrono::Duration::hours(1)
+            })))
+        }
         Err(error) => Err(error),
     }
 }

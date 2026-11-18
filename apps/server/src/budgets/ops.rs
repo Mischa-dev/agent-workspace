@@ -300,13 +300,12 @@ impl Operation for BudgetSet {
                            AND conversation_visible_to(conversation.id, $3))"
                     }
                 };
-                let found = sqlx::query_scalar::<_, bool>(sql)
-                    .bind(workspace)
-                    .bind(id)
-                    .bind(account)
-                    .fetch_one(&mut **tx)
-                    .await
-                    .map_err(AppError::from)?;
+                let mut query = sqlx::query_scalar::<_, bool>(sql).bind(workspace).bind(id);
+                // Only spaces and conversations ask who's looking.
+                if scope != BudgetScope::Account {
+                    query = query.bind(account);
+                }
+                let found = query.fetch_one(&mut **tx).await.map_err(AppError::from)?;
                 if !found {
                     return Err(OpError::not_found(match scope {
                         BudgetScope::Account => "That account",

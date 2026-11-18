@@ -68,12 +68,7 @@ async fn person_says(
     .await
 }
 
-async fn agent_says(
-    app: &axum::Router,
-    agent: &Agent,
-    conversation: &str,
-    text: &str,
-) -> Value {
+async fn agent_says(app: &axum::Router, agent: &Agent, conversation: &str, text: &str) -> Value {
     let (_, body) = agent
         .call(
             app,
@@ -405,7 +400,11 @@ async fn a_deliveries_budget_holds_pushes_until_the_next_period() {
         .await
         .expect("due again");
     push().await;
-    assert_eq!(received.lock().expect("lock").len(), 2, "released next period");
+    assert_eq!(
+        received.lock().expect("lock").len(),
+        2,
+        "released next period"
+    );
     world.finish().await;
 }
 
