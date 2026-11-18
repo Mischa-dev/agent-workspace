@@ -55,6 +55,7 @@ mod emoji;
 mod event_archive;
 mod event_log;
 mod export_declarations;
+mod export_round_trip;
 mod files_links;
 mod first_run;
 mod followed_threads;
