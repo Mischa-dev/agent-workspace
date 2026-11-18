@@ -83,6 +83,9 @@ export function normalizeProject(value: unknown): Project {
     icon: typeof record.icon === 'string' && record.icon ? record.icon : null,
     archivedAt,
     role: asString(record.role),
+    permissions: Array.isArray(record.permissions)
+      ? record.permissions.filter((entry): entry is string => typeof entry === 'string')
+      : [],
     version: Math.max(0, asNumber(record.version)),
     attentionCount: Math.max(0, asNumber(record.attentionCount)),
     modulesOff: record.modulesOff as string[] | undefined,

@@ -2024,6 +2024,9 @@ struct RolesResponse {
     starting_points: Vec<StartingPoint>,
     /// Whether the caller may make and change roles.
     can_manage: bool,
+    /// Whether they may also make or change admin-based roles (the owner
+    /// tier), so the web offers them without reading a role's name.
+    can_manage_admin_roles: bool,
     /// The caller's own workspace permissions.
     your_permissions: Vec<&'static str>,
 }
@@ -2043,6 +2046,7 @@ async fn list_roles(
         permissions,
         starting_points: starting_points(),
         can_manage: caller.may(Permission::RolesManage),
+        can_manage_admin_roles: caller.may(Permission::RolesManage) && caller.is_owner(),
         your_permissions: caller.permissions.keys(),
     }))
 }

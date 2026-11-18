@@ -133,7 +133,7 @@ export function DirectConversationPage() {
     setSearchParams(next)
   }
   const lastEntry = entries.at(-1)
-  const waitingForContinue = page?.agentTurnsRemaining === 0 && lastEntry?.message?.author.kind === 'external_agent'
+  const waitingForContinue = page?.agentTurnsRemaining === 0 && actorKind(lastEntry?.message?.author.kind ?? '') === 'agent'
 
   const onSeen = useCallback(() => queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
   useAutoMarkSeen(

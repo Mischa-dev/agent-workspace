@@ -165,7 +165,7 @@ export async function removeGroupMember(
 export function useDirectOverview() {
   const workspaceId = useWorkspaceId()
   return useQuery({
-    queryKey: [...directQueryKey, workspaceId] as const,
+    queryKey: queryKeys.directIn(workspaceId),
     queryFn: () => getDirectOverview(workspaceId),
     staleTime: 15_000,
     retry: false,

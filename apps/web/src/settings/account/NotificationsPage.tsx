@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import { describeError, toastError } from '../../app/mutations'
 import { callOp, opKey, opQuery } from '../../api/ops'
 import { pauseChoices, pausedUntilLabel, useNotificationPause } from '../../shell/notificationPause'
@@ -72,7 +73,7 @@ export default function NotificationsPage({ projects, session, workspace }: Sett
   // Notification settings belong to one workspace: the default one.
   const shownWorkspace =
     session.organizations.find((organization) => organization.id === settings.data?.organizationId) ?? workspace
-  const ownsWorkspace = shownWorkspace?.role === 'owner'
+  const setsUpEmail = can(shownWorkspace, 'settings.manage')
   return (
     <>
       <PageHeader icon="inbox" title="Notifications">
@@ -89,7 +90,7 @@ export default function NotificationsPage({ projects, session, workspace }: Sett
         <ErrorState error={settings.error} onRetry={() => void settings.refetch()} title="Notification settings didn’t load" />
       ) : (
         <>
-          <ChannelsSection canSetUpEmail={ownsWorkspace} settings={settings.data} />
+          <ChannelsSection canSetUpEmail={setsUpEmail} settings={settings.data} />
           <DevicesSection />
           <PauseSection />
           <QuietHoursSection settings={settings.data} />

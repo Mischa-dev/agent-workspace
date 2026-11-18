@@ -14,7 +14,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::{Action, RoleGrant},
+    policy::{Action, MembershipRole, RoleGrant},
     spaces::{SpaceKind, SpaceVisibility, manage},
 };
 
@@ -83,6 +83,10 @@ pub struct ProjectView {
     icon: Option<String>,
     archived_at: Option<String>,
     role: String,
+    /// What the caller's role lets them do here (K1.26), before any app's
+    /// limit: the web asks this, never the role's name.
+    #[serde(default)]
+    permissions: Vec<String>,
     version: i64,
     capabilities: ProjectCapabilities,
     navigation: NavigationView,
@@ -529,7 +533,13 @@ async fn create_project(
         name,
         icon: None,
         archived_at: None,
-        role: "owner".to_owned(),
+        role: MembershipRole::Owner.key().to_owned(),
+        permissions: RoleGrant::built_in(MembershipRole::Owner)
+            .permissions()
+            .keys()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         version: 1,
         capabilities: ProjectCapabilities {
             view: true,
@@ -1267,6 +1277,12 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         icon: row.icon,
         archived_at: row.archived_at,
         role: row.role,
+        permissions: role
+            .permissions()
+            .keys()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         version: row.version,
         capabilities: ProjectCapabilities {
             view,

@@ -55,8 +55,7 @@ use crate::{
     AppState,
     error::AppError,
     policy::{
-        Action, ActorKind, AgentLimits, Decision, Membership, MembershipRole, Permission,
-        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize, with_agent_limits,
+        Action, ActorKind, AgentLimits, Permission, PermissionSet, RoleGrant, with_agent_limits,
     },
 };
 
@@ -3228,7 +3227,8 @@ pub(crate) async fn caller_reach(
     principal: &McpPrincipal,
 ) -> Result<(PermissionSet, Option<AgentLimits>), AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let (reach, limits) = if principal.actor_kind == ActorKind::Human {
+    let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (an app acts as the person who connected it)
+    let (reach, limits) = if person {
         let access = crate::roles::app_access(&mut connection, principal.actor_id).await?;
         (access.union, Some(access.limits))
     } else {
@@ -4920,7 +4920,7 @@ async fn validate_issue_command(
           AND pm.actor_id = $2
           AND pm.enabled
           AND p.archived_at IS NULL
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a personal credential signs a person in; agents use their own secrets)
           AND a.status = 'active'
         "#,
     )
@@ -4936,7 +4936,6 @@ async fn validate_issue_command(
     if !role.is_some_and(|(role, role_permissions)| {
         mcp_policy_allows(
             command.actor_id,
-            ActorKind::Human,
             command.project_id,
             &role,
             role_permissions.as_deref(),
@@ -4961,30 +4960,14 @@ async fn validate_issue_command(
 
 fn mcp_policy_allows(
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
     role: &str,
     role_permissions: Option<&[String]>,
     action: Action,
 ) -> bool {
-    let role = match RoleGrant::stored(role, role_permissions) {
-        Ok(role) if role.role() != MembershipRole::Worker => role,
-        _ => return false,
-    };
-    matches!(
-        authorize(
-            &Subject::new(
-                actor_id,
-                actor_kind,
-                true,
-                Some(Membership::project(project_id, role, true)),
-                None,
-            ),
-            action,
-            Resource::Project(ProjectScope::project(project_id)),
-        ),
-        Decision::Allow
-    )
+    RoleGrant::stored(role, role_permissions).is_ok_and(|grant| {
+        crate::access::membership_allows(actor_id, project_id, grant, true, action.permission())
+    })
 }
 
 pub(crate) fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
@@ -5551,18 +5534,26 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Stopping or retrying a reply request is for anyone who can see its
+/// conversation (the tools check `replies.steer`), whichever account it asks.
+const STEER_SCOPES: &[(&str, &str)] = &[(
+    "requestId",
+    r#"SELECT COALESCE(request.project_id, direct_scope_id()) FROM reply_requests request
+       WHERE request.id = $1
+         AND conversation_visible_to(request.conversation_id, $2)"#,
+)];
+
 const OTHER_SCOPES: &[(&str, &str)] = &[
-    // A reply request names its project only to someone it's for, as the
-    // reply tools check: the agent it asks, or a person who can see the
-    // conversation (who may stop it). Anyone else, like a missing one, gets
-    // the tool's own answer, never a module refusal.
+    // A reply request names its project only to the agent it asks; the
+    // tools that stop or retry one look it up through STEER_SCOPES. Anyone
+    // else, like a missing one, gets the tool's own answer, never a module
+    // refusal.
     (
         "requestId",
         r#"SELECT COALESCE(request.project_id, direct_scope_id()) FROM reply_requests request
            WHERE request.id = $1
              AND conversation_visible_to(request.conversation_id, $2)
-             AND (request.agent_actor_id = $2
-                  OR EXISTS (SELECT 1 FROM actors actor WHERE actor.id = $2 AND actor.kind = 'human'))"#,
+             AND request.agent_actor_id = $2"#,
     ),
     (
         "workItemId",
@@ -5659,9 +5650,14 @@ async fn scoped_project(
     if target.is_none() {
         target = match first_scope(state, principal, args, PRIMARY_SCOPES).await? {
             Some(found) => found,
-            None => first_scope(state, principal, args, OTHER_SCOPES)
-                .await?
-                .flatten(),
+            None => {
+                let scopes = if matches!(tool, "reply_stop" | "reply_retry") {
+                    STEER_SCOPES
+                } else {
+                    OTHER_SCOPES
+                };
+                first_scope(state, principal, args, scopes).await?.flatten()
+            }
         };
     }
     if target.is_none()
@@ -5673,10 +5669,10 @@ async fn scoped_project(
     // person may since have left it, so it's checked like any other.
     // DMs and groups (the direct scope) are in no space: the lookup above
     // already checked the caller sees the one named.
+    let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's grant or an agent's connection)
     if let Some(target) = target
         && target != crate::spaces::DIRECT
-        && (target != principal.project_id
-            || (principal.actor_kind == ActorKind::Human && principal.account_wide))
+        && (target != principal.project_id || (person && principal.account_wide))
     {
         // People connected for their whole account reach every Project they
         // belong to; agents reach the Projects their connection allows.

@@ -400,7 +400,7 @@ function ComposerBox({
               .searchActors(trigger.query)
               .then((actors) =>
                 actors
-                  .filter((actor) => !peopleOnly || actor.kind === 'human')
+                  .filter((actor) => !peopleOnly || actorKind(actor.kind) === 'person')
                   .slice(0, 8)
                   .map((actor) => ({ kind: 'mention', actor })),
               )

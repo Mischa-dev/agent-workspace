@@ -892,17 +892,13 @@ pub(super) async fn pull_request_list(
                 (reach, Some(ids))
             }
         };
-        let github_login = if principal.actor_kind == crate::policy::ActorKind::Human {
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT github_login FROM users WHERE actor_id = $1",
-            )
-            .bind(principal.actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-            .flatten()
-        } else {
-            None
-        };
+        let github_login = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT github_login FROM users WHERE actor_id = $1",
+        )
+        .bind(principal.actor_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?
+        .flatten();
         let rows = sqlx::query_as::<_, PullRequestRow>(&pull_requests_sql())
             .bind(&pr_projects)
             .bind(principal.actor_id)
@@ -920,9 +916,8 @@ pub(super) async fn pull_request_list(
         let total = rows.first().map_or(0, |row| row.total);
         let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
         let mut details = page_details(state, principal, &ids).await?;
-        let note = (needs_me
-            && principal.actor_kind == crate::policy::ActorKind::Human
-            && github_login.is_none())
+        let has_login_setting = principal.actor_kind == crate::policy::ActorKind::Human; // kind-check: mechanical (only a person's account settings hold a GitHub username)
+        let note = (needs_me && has_login_setting && github_login.is_none())
         .then(|| {
             format!(
                 "Add your GitHub username in Account settings ({}) to also see pull requests that ask for your review.",

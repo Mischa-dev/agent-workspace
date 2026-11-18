@@ -1,23 +1,14 @@
 {
   "access_bypasses": {
-    "auth/mod.rs": 2,
     "external_agents.rs": 2,
-    "mcp.rs": 2,
     "mcp/oauth.rs": 1
   },
   "account_kind_checks": {
     "agent_profiles.rs": 5,
     "auth/mod.rs": 2,
     "external_agents.rs": 1,
-    "mcp.rs": 6,
     "mcp/agent_profile_tools.rs": 2,
     "mcp/agents.rs": 3,
-    "mcp/batch_tools.rs": 4,
-    "mcp/code.rs": 2,
-    "mcp/collaboration.rs": 4,
-    "mcp/common.rs": 2,
-    "mcp/later_tools.rs": 6,
-    "mcp/module_tools.rs": 1,
     "mcp/oauth.rs": 7,
     "policy.rs": 2,
     "push/actions.rs": 1,
@@ -25,7 +16,6 @@
   },
   "account_kind_strings": {
     "agent_profiles.rs": 1,
-    "mcp/common.rs": 1,
     "mcp/groups.rs": 1,
     "mcp/message_edits.rs": 1,
     "scheduled_messages.rs": 2,

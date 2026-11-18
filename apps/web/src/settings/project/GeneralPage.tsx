@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
 import { callOp } from '../../api/ops'
@@ -74,10 +75,10 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
             ...(workspace ? [{ label: 'Workspace', value: workspace.name }] : []),
           ]}
         />
-        {current.role === 'viewer' && (
+        {!can(current, 'tasks.edit') && (
           <Banner role="note" tone="info">
-            Viewer access is read-only. You can look at the project and its repositories, but members, agents, runs and
-            GitHub are managed by members and admins.
+            Your role here is read-only. You can look at the project and its repositories; members, agents, runs and
+            GitHub are managed by people whose role allows it.
           </Banner>
         )}
       </Section>

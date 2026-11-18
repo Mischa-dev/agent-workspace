@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import { queryKeys } from '../../api/queryKeys'
 import { isApiError } from '../../api/errors'
 import { describeError, toastError } from '../../app/mutations'
@@ -87,7 +88,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
             />
           </Section>
           {workspace.data.capabilities.rename && <RenameSection workspace={workspace.data} />}
-          {summary.role === 'owner' || summary.role === 'admin' ? <SetupSection organizationId={summary.id} /> : null}
+          {can(summary, 'settings.manage') ? <SetupSection organizationId={summary.id} /> : null}
           {session.organizations.length > 1 && <DefaultSection current={summary.id} session={session} />}
           {workspace.data.capabilities.transferOwnership && <TransferSection workspace={workspace.data} />}
           <LeaveSection workspace={workspace.data} />
@@ -229,7 +230,7 @@ function TransferSection({ workspace }: { workspace: Workspace }) {
     queryFn: () => listWorkspaceMembers(workspace.id),
     enabled: open,
   })
-  const candidates = (members.data?.members ?? []).filter((member) => member.kind === 'human' && member.enabled && !member.isYou)
+  const candidates = (members.data?.members ?? []).filter((member) => member.enabled && !member.isYou)
   const chosen = candidates.find((member) => member.actorId === actorId) ?? null
   // Handing over a workspace can't be taken back by you, so the name is typed to confirm.
   const confirmed = typed.trim() === workspace.name
@@ -312,7 +313,7 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
-  const lastOwner = workspace.role === 'owner' && !workspace.capabilities.leave
+  const lastOwner = workspace.capabilities.transferOwnership && !workspace.capabilities.leave
   const leave = useMutation({
     mutationFn: () => leaveWorkspace(workspace.id),
     onSuccess: async () => {

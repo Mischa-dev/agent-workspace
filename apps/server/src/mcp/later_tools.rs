@@ -130,13 +130,19 @@ fn scheduled_line(state: &AppState, message: ScheduledMessageView) -> ScheduledL
     }
 }
 
+/// Whether a person's app made this call (its limit then applies).
+fn through_app(principal: &McpPrincipal) -> bool {
+    principal.actor_kind == ActorKind::Human // kind-check: mechanical (an app acts as the person who connected it)
+}
+
 /// The projects this call reads in: the one it's confined to, or (for an
 /// agent) the ones its connection reaches; a person's app reads everywhere.
 async fn within(state: &AppState, principal: &McpPrincipal) -> Result<Option<Vec<Uuid>>, AppError> {
     if let Some(project_id) = confined_project(principal) {
         return Ok(Some(vec![project_id]));
     }
-    if principal.actor_kind == ActorKind::Human {
+    let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's app or an agent's connection)
+    if person {
         return Ok(None);
     }
     accessible_project_ids(state, principal).await.map(Some)
@@ -573,7 +579,7 @@ pub(super) async fn message_schedule(
             conversation_id,
             content,
             &arguments.send_at,
-            principal.actor_kind == ActorKind::Human,
+            through_app(principal),
         )
         .await?;
         complete_create(&mut transaction, reservation.as_ref(), id).await?;
@@ -706,7 +712,7 @@ pub(super) async fn scheduled_message_update(
                 id,
                 content,
                 arguments.send_at.as_deref(),
-                principal.actor_kind == ActorKind::Human,
+                through_app(principal),
             )
             .await
             {

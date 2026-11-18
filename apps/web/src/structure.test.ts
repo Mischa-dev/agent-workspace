@@ -56,13 +56,13 @@ const rules: Rule[] = [
   {
     id: "web_role_name_gates",
     what: "a check on a built-in role name; ask for a permission instead",
-    ceiling: 63,
+    ceiling: 13,
     count: (source) => countAll(squeeze(source), roleNeedles),
   },
   {
     id: "web_account_kind_gates",
     what: "a check on the account kind; ask for a permission instead",
-    ceiling: 10,
+    ceiling: 1,
     count: (source) => countAll(squeeze(source), kindNeedles),
   },
   {

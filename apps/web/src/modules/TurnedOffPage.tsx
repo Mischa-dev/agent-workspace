@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 
+import { can } from '../auth/can'
 import { useAuthenticatedSession } from '../auth/session'
 import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { AppShell } from '../shell/AppShell'
@@ -17,7 +18,7 @@ export function TurnedOffPage({ module }: { module: string }) {
   const href = useWorkspaceHref()
   const name = moduleName(module)
   const manages = session.organizations.some(
-    (organization) => organization.id === workspaceId && (organization.role === 'owner' || organization.role === 'admin'),
+    (organization) => organization.id === workspaceId && can(organization, 'modules.manage'),
   )
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>

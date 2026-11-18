@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import { ExecutionAccountSettings } from '../../execution/ExecutionAccountSettings'
 import { PageHeader, Section, SelectField } from '../../ui'
 import type { SettingsPageProps } from '../types'
@@ -7,7 +8,7 @@ import type { SettingsPageProps } from '../types'
 /** Account › Accounts for runs: the services your agents run on, signed in as you, and which one each project uses. */
 export default function ProviderAccountsPage({ projects, session }: SettingsPageProps) {
   const [parameters, setParameters] = useSearchParams()
-  const usable = projects.filter((project) => project.role !== 'viewer')
+  const usable = projects.filter((project) => can(project, 'runs.launch'))
   const chosen = usable.find((project) => project.id === parameters.get('project')) ?? usable[0] ?? null
 
   return (

@@ -52,9 +52,8 @@ function choiceOf(value: string, customRoles: WorkspaceRoleView[]): RoleChoice {
   return custom ? { role: custom.baseRole as TeamRole, roleId: custom.id } : {}
 }
 
-function CustomRoleOptions({ roles, agent = false }: { roles: WorkspaceRoleView[]; agent?: boolean }) {
-  const shown = roles.filter((role) => !agent || role.baseRole === 'member' || role.baseRole === 'viewer')
-  return shown.map((role) => (
+function CustomRoleOptions({ roles }: { roles: WorkspaceRoleView[] }) {
+  return roles.map((role) => (
     <option key={role.id} value={role.id}>
       {role.name}
     </option>
@@ -72,25 +71,15 @@ function runReadiness(readiness: string) {
   return `Run account ${humanize(readiness).toLocaleLowerCase()}`
 }
 
-export function TeamSettings({
-  organizationId,
-  organizationRole,
-  projectId,
-}: {
-  organizationId?: string
-  organizationRole: string
-  projectId: string
-}) {
+export function TeamSettings({ organizationId, projectId }: { organizationId?: string; projectId: string }) {
   const queryClient = useQueryClient()
   const roles = useQuery({
     queryKey: roleKeys.roles(organizationId ?? ''),
     queryFn: () => listRoles(organizationId ?? ''),
     enabled: Boolean(organizationId),
   })
-  // Custom roles you may give: admin-based ones only owners give.
-  const customRoles = (roles.data?.roles ?? []).filter(
-    (role) => !role.builtIn && role.capabilities.assign && (role.baseRole !== 'admin' || organizationRole === 'owner'),
-  )
+  // Custom roles you may give (the server applies the tiers).
+  const customRoles = (roles.data?.roles ?? []).filter((role) => !role.builtIn && role.capabilities.assign)
   // Roles you may invite someone to, built-in ones included: inviting needs
   // "invite members", not "manage members" (the server works it out as the
   // invitation endpoint does).
@@ -202,7 +191,6 @@ export function TeamSettings({
           </OneTimeValue>
         )}
         <InviteForm
-          canInviteAdmin={organizationRole === 'owner'}
           inviteRoles={inviteRoles}
           rolesLoaded={Boolean(roles.data)}
           disabled={issueMutation.isPending}
@@ -295,13 +283,11 @@ export function TeamSettings({
 }
 
 function InviteForm({
-  canInviteAdmin,
   inviteRoles,
   rolesLoaded,
   disabled,
   onSubmit,
 }: {
-  canInviteAdmin: boolean
   inviteRoles: WorkspaceRoleView[]
   rolesLoaded: boolean
   disabled: boolean
@@ -312,8 +298,8 @@ function InviteForm({
   const offers = (key: string) => !rolesLoaded || inviteRoles.some((entry) => entry.builtIn && entry.key === key)
   const offersMember = offers('member')
   const offersViewer = offers('viewer')
-  const offersAdmin = canInviteAdmin && inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
-  const customRoles = inviteRoles.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || canInviteAdmin))
+  const offersAdmin = inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = inviteRoles.filter((entry) => !entry.builtIn)
   const firstOffered = offersMember
     ? 'member'
     : offersViewer
@@ -390,10 +376,10 @@ function MemberRow({
             value={held?.id ?? member.role}
           >
             {member.role === 'owner' && <option value="owner">Owner</option>}
-            {member.actorKind !== 'external_agent' && <option value="admin">Admin</option>}
+            <option value="admin">Admin</option>
             <option value="member">Member</option>
             <option value="viewer">Viewer</option>
-            <CustomRoleOptions agent={member.actorKind === 'external_agent'} roles={options} />
+            <CustomRoleOptions roles={options} />
           </SelectField>
           {member.capabilities.disable && (
             <Button

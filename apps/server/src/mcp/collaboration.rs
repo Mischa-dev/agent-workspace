@@ -36,7 +36,8 @@ pub(super) async fn begin_authorized_read<'a>(
     let connection_id = principal
         .external_agent_connection_id
         .ok_or(ReadFailure::Authorization)?;
-    if principal.actor_kind != ActorKind::ExternalAgent || !principal.has_scope(required_scope) {
+    let through_connection = principal.actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (agents sign in through connections)
+    if !through_connection || !principal.has_scope(required_scope) {
         return Err(ReadFailure::Authorization);
     }
     let mut transaction = crate::db::scoped_tx(&state.pool)
@@ -72,7 +73,7 @@ pub(super) async fn begin_authorized_read<'a>(
           AND connection.project_id = credential.project_id
           AND connection.actor_id = credential.actor_id
           AND connection.scopes = credential.scopes
-          AND actor.kind = 'external_agent' AND actor.status = 'active'
+          AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (agents sign in through connections)
           AND project.archived_at IS NULL
           AND membership.enabled AND organization_membership.enabled
         FOR SHARE OF credential, connection, actor, project, membership,
@@ -90,7 +91,6 @@ pub(super) async fn begin_authorized_read<'a>(
     .ok_or(ReadFailure::Authorization)?;
     if !super::mcp_policy_allows(
         principal.actor_id,
-        principal.actor_kind,
         principal.project_id,
         &authorization.membership_role,
         authorization.membership_role_permissions.as_deref(),
@@ -327,7 +327,7 @@ async fn revalidate_connection(
           AND credential.scopes @> ARRAY['events']::text[]
           AND connection.status = 'active'
           AND connection.scopes = credential.scopes
-          AND actor.kind = 'external_agent'
+          AND actor.kind = 'external_agent' -- // kind-check: mechanical (agents sign in through connections)
           AND actor.status = 'active'
           AND project.archived_at IS NULL
           AND membership.enabled

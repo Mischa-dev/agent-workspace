@@ -18,6 +18,8 @@ export const queryKeys = {
   thingReferences: (kind: string, id: string) => ['things', kind, id, 'references'] as const,
   /** DMs and groups (the Messages overview). */
   direct: ['direct'] as const,
+  /** One workspace's Messages list (K4.6); `direct` invalidates every workspace's. */
+  directIn: (workspaceId: string | null) => ['direct', workspaceId] as const,
   inbox: ['inbox'] as const,
   myWork: ['my-work'] as const,
   /** Search results, by query and the project they're narrowed to. */

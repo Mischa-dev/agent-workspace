@@ -60,7 +60,7 @@ function jsonResponse(body: unknown) {
   )
 }
 
-function renderTeam(organizationRole = 'owner') {
+function renderTeam() {
   return render(
     <QueryClientProvider
       client={
@@ -69,7 +69,7 @@ function renderTeam(organizationRole = 'owner') {
         })
       }
     >
-      <TeamSettings organizationRole={organizationRole} projectId={projectId} />
+      <TeamSettings projectId={projectId} />
     </QueryClientProvider>,
   )
 }
@@ -173,7 +173,7 @@ describe('TeamSettings', () => {
           : jsonResponse([invitation]),
       ),
     )
-    renderTeam('admin')
+    renderTeam()
     await screen.findByText('Invitation history')
     expect(
       within(screen.getByLabelText('Invitation role')).queryByRole('option', {

@@ -15,7 +15,7 @@ use super::support::db::schema_pool;
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// The move: everything before it is the old shape.
-const FIRST_NEW: i64 = 20261117173000;
+const FIRST_NEW: i64 = 20261117173117;
 
 const WORKSPACE: &str = "00000000-0000-7000-8000-0000000000a1";
 const ANN: &str = "00000000-0000-7000-8000-0000000000b1";

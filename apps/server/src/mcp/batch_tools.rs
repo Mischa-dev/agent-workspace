@@ -17,15 +17,11 @@ use crate::{
     error::AppError,
     idempotency::IdempotencyKey,
     launch::LaunchCaller,
-    policy::ActorKind,
     usage::{
         self,
         batch::{self, BatchLaunchRequest, BatchPick},
     },
 };
-
-const NOT_FOR_AGENTS: &str =
-    "Provider accounts belong to people; ask a person to launch with run_request.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -158,9 +154,6 @@ pub(super) async fn usage_batch(
     if !principal.can_read() {
         return ToolResult::denied("This connection can't read.");
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
-    }
     let Some(account_id) = parse_id(&arguments.account_id) else {
         return ToolResult::invalid("accountId", "Use a provider account ID.");
     };
@@ -205,9 +198,6 @@ pub(super) async fn usage_batch_launch(
 ) -> ToolResult<UsageBatchLaunchValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
     }
     let Some(account_id) = parse_id(&arguments.account_id) else {
         return ToolResult::invalid("accountId", "Use a provider account ID.");

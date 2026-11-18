@@ -143,6 +143,8 @@ export type RolesResponse = {
   permissions: PermissionInfo[]
   startingPoints: StartingPoint[]
   canManage: boolean
+  /** May also make or change admin-based roles (the owner tier). */
+  canManageAdminRoles?: boolean
   yourPermissions: PermissionKey[]
 }
 
