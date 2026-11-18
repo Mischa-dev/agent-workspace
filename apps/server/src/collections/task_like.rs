@@ -10,9 +10,11 @@
 //!
 //! Switching on makes a task for each record
 //! (`collection_make_task_like`, migration 20261114070000). Switching off
-//! is only allowed while the collection has no records, so a task never
-//! loses its record; a collection whose records are tasks is archived
-//! after its records are.
+//! puts its tasks away with their keys and history (`task_rows` shows only
+//! tasks of collections that act like one), and switching on again brings
+//! them back (migration 20261118145917). A collection can also use only
+//! some of the space's statuses and start new tasks in one of them
+//! (`Workflow`).
 
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -177,4 +179,126 @@ pub async fn names(
     .bind(project_id)
     .fetch_all(executor)
     .await?)
+}
+
+/// A task-like collection's own workflow within its space's (T1.25): the
+/// statuses its tasks use (None is all) and the one they start in (None is
+/// the space's default).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Workflow {
+    pub statuses: Option<Vec<Uuid>>,
+    pub start: Option<Uuid>,
+}
+
+/// Why a collection can't take this workflow, if it can't.
+pub async fn workflow_refusal(
+    connection: &mut PgConnection,
+    current: &Collection,
+    acts_like_task: bool,
+    workflow: &Workflow,
+) -> Result<Option<String>, AppError> {
+    if current.is_tasks() {
+        return Ok(Some(
+            "Tasks follows the space's workflow; change that in workflow settings.".to_owned(),
+        ));
+    }
+    if !acts_like_task {
+        return Ok(Some(format!(
+            "{}'s records don't act like tasks, so it has no statuses to choose.",
+            current.name
+        )));
+    }
+    let enabled = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_statuses WHERE project_id = $1 AND enabled",
+    )
+    .bind(current.project_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let chosen = workflow.statuses.clone().unwrap_or_else(|| enabled.clone());
+    if chosen.is_empty() {
+        return Ok(Some("Keep at least one status.".to_owned()));
+    }
+    if chosen.iter().any(|id| !enabled.contains(id)) {
+        return Ok(Some(
+            "Choose from the space's statuses (workflow_get lists them).".to_owned(),
+        ));
+    }
+    if workflow.start.is_some_and(|start| !chosen.contains(&start)) {
+        return Ok(Some(
+            "New tasks start in one of the statuses it uses.".to_owned(),
+        ));
+    }
+    Ok(None)
+}
+
+pub async fn set_workflow(
+    connection: &mut PgConnection,
+    collection_id: Uuid,
+    workflow: &Workflow,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE collections SET task_statuses = $2, start_status_id = $3 WHERE id = $1")
+        .bind(collection_id)
+        .bind(workflow.statuses.as_deref())
+        .bind(workflow.start)
+        .execute(&mut *connection)
+        .await?;
+    Ok(())
+}
+
+/// The statuses a collection's tasks use and the one they start in, read
+/// for a task write; None for a task of the built-in Tasks collection or of
+/// a collection that uses the whole workflow.
+pub async fn workflow_of(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Option<Uuid>,
+) -> Result<Option<(Option<Vec<Uuid>>, Option<Uuid>)>, AppError> {
+    let Some(collection_id) = collection_id else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_as::<_, (Option<Vec<Uuid>>, Option<Uuid>)>(
+        "SELECT task_statuses, start_status_id FROM collections WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .filter(|(statuses, start)| statuses.is_some() || start.is_some()))
+}
+
+/// Status names or IDs to IDs, among the space's enabled statuses; Err
+/// names the one that isn't there.
+pub async fn resolve_statuses(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    references: &[String],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    let statuses = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    let mut ids = Vec::new();
+    for reference in references {
+        let reference = reference.trim();
+        let found = statuses.iter().find(|(id, name)| {
+            id.to_string() == reference.to_lowercase() || name.eq_ignore_ascii_case(reference)
+        });
+        match found {
+            Some((id, _)) if !ids.contains(id) => ids.push(*id),
+            Some(_) => {}
+            None => {
+                return Ok(Err(format!(
+                    "There is no status \"{reference}\" here. Statuses: {}.",
+                    statuses
+                        .iter()
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+    }
+    Ok(Ok(ids))
 }

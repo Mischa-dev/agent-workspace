@@ -404,6 +404,105 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         .expect("added");
     assert!(back.iter().filter(|(_, number)| *number == added.1).count() == 1);
 
+    // Bugs uses only some of the space's statuses and starts its tasks in
+    // one of them; plain tasks keep the whole workflow.
+    let statuses = sqlx::query_as::<_, (Uuid, String, bool)>(
+        "SELECT id, name, is_default FROM work_item_statuses \
+             WHERE project_id = $1::uuid AND enabled ORDER BY position",
+    )
+    .bind(&work)
+    .fetch_all(pool)
+    .await
+    .expect("statuses");
+    let others: Vec<&(Uuid, String, bool)> =
+        statuses.iter().filter(|(_, _, default)| !default).collect();
+    assert!(others.len() >= 2, "{statuses:?}");
+    let (start, start_name, _) = others[0];
+    let (kept, kept_name, _) = others[1];
+    let unknown = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs", "taskStatuses": ["Nope"]}),
+    )
+    .await;
+    assert_eq!(unknown["outcome"], "invalid_request", "{unknown}");
+    let outside = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs",
+               "taskStatuses": [kept_name], "startStatus": start_name}),
+    )
+    .await;
+    assert_eq!(outside["outcome"], "conflict", "{outside}");
+    let narrowed = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs",
+               "taskStatuses": [start_name, kept_name], "startStatus": start_name}),
+    )
+    .await;
+    assert_eq!(narrowed["outcome"], "ok", "{narrowed}");
+    let (own, own_start) = sqlx::query_as::<_, (Option<Vec<Uuid>>, Option<Uuid>)>(
+        "SELECT task_statuses, start_status_id FROM collections WHERE id = $1",
+    )
+    .bind(bugs)
+    .fetch_one(pool)
+    .await
+    .expect("workflow");
+    assert_eq!(own, Some(vec![*start, *kept]));
+    assert_eq!(own_start, Some(*start));
+    let started = call(
+        "task_create",
+        json!({"projectId": "WORK", "collection": "Bugs", "title": "Starts in its own status",
+               "clientRequestId": "own-start"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    let (started_id, started_status) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT id, status_id FROM task_rows WHERE title = 'Starts in its own status'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("started");
+    assert_eq!(started_status, *start);
+    let default_status = statuses
+        .iter()
+        .find(|(_, _, default)| *default)
+        .expect("default");
+    let not_used = call(
+        "task_create",
+        json!({"projectId": "WORK", "collection": "Bugs", "title": "Wrong status",
+               "status": default_status.1, "clientRequestId": "wrong-status"}),
+    )
+    .await;
+    assert_eq!(not_used["outcome"], "invalid_request", "{not_used}");
+    let opened = call("task_open", json!({"taskId": started_id.to_string()})).await;
+    let version = opened["value"]["task"]["version"].clone();
+    let moved = call(
+        "task_update",
+        json!({"taskId": started_id.to_string(), "expectedVersion": version,
+               "status": default_status.1}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "invalid_request", "{moved}");
+    let plain_task = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Plain default", "clientRequestId": "plain-default"}),
+    )
+    .await;
+    assert_eq!(plain_task["outcome"], "ok", "{plain_task}");
+    let plain_status = sqlx::query_scalar::<_, Uuid>(
+        "SELECT status_id FROM task_rows WHERE title = 'Plain default'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("plain");
+    assert_eq!(plain_status, default_status.0);
+    // [] uses them all again.
+    let widened = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs", "taskStatuses": [], "startStatus": ""}),
+    )
+    .await;
+    assert_eq!(widened["outcome"], "ok", "{widened}");
+
     // Every task still has exactly one record, and keys stay unique.
     let unmatched = sqlx::query_scalar::<_, i64>(
         r#"

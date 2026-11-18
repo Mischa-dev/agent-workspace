@@ -900,3 +900,22 @@ button.aw-filtergroup__text:hover {
   color: var(--content-fg-muted);
   font: var(--t-small);
 }
+
+.aw-collection-workflow {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-collection-workflow legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+.aw-collection-workflow__hint {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font-size: var(--text-sm);
+}

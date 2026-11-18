@@ -614,6 +614,17 @@ struct UpdateCollectionRequest {
     position: Option<i32>,
     archived: Option<bool>,
     acts_like_task: Option<bool>,
+    /// The statuses its tasks use and the one they start in; both are
+    /// replaced together.
+    workflow: Option<WorkflowRequest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkflowRequest {
+    /// [] uses all of the space's statuses.
+    statuses: Vec<Uuid>,
+    start_status_id: Option<Uuid>,
 }
 
 async fn update_collection(
@@ -698,6 +709,13 @@ async fn update_collection(
             position: request.position,
             archived: request.archived,
             acts_like_task: request.acts_like_task,
+            workflow: request
+                .workflow
+                .as_ref()
+                .map(|workflow| super::task_like::Workflow {
+                    statuses: (!workflow.statuses.is_empty()).then(|| workflow.statuses.clone()),
+                    start: workflow.start_status_id,
+                }),
             expected_version: Some(request.expected_version),
         },
     )

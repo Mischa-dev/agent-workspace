@@ -600,13 +600,41 @@ pub async fn create_work_item_with_id(
         command.type_id,
     )
     .await?;
-    let status_id = select_definition(
+    let status_id = match crate::collections::task_like::workflow_of(
         transaction,
         actor.project_id,
-        DefinitionKind::Status,
-        command.status_id,
+        command.collection_id,
     )
-    .await?;
+    .await?
+    {
+        None => {
+            select_definition(
+                transaction,
+                actor.project_id,
+                DefinitionKind::Status,
+                command.status_id,
+            )
+            .await?
+        }
+        // A collection with its own workflow starts its tasks in its start
+        // status, else the space's default if it uses it, else its first.
+        Some((statuses, start)) => {
+            let status_id = select_status_in(
+                transaction,
+                actor.project_id,
+                statuses.as_deref(),
+                command.status_id.or(start),
+            )
+            .await?;
+            if command
+                .status_id
+                .is_some_and(|requested| requested != status_id)
+            {
+                return Err(STATUS_NOT_USED);
+            }
+            status_id
+        }
+    };
     let board_rank = match command.board_placement {
         None => {
             sqlx::query_scalar::<_, i64>(
@@ -843,6 +871,16 @@ pub async fn update_locked_work_item(
         }
         None => current.status_id,
     };
+    if status_id != current.status_id {
+        let collection_id = task_collection(transaction, current.id).await?;
+        if let Some((Some(statuses), _)) =
+            crate::collections::task_like::workflow_of(transaction, actor.project_id, collection_id)
+                .await?
+            && !statuses.contains(&status_id)
+        {
+            return Err(STATUS_NOT_USED);
+        }
+    }
     if status_id != current.status_id
         && !transition_allowed(transaction, actor.project_id, current.status_id, status_id).await?
     {
@@ -2717,6 +2755,49 @@ impl ChangePayload {
 enum DefinitionKind {
     Type,
     Status,
+}
+
+const STATUS_NOT_USED: AppError = AppError::Refused {
+    field: "status",
+    message: "This task's collection doesn't use that status.",
+};
+
+/// The collection a task belongs to; None for the built-in Tasks.
+async fn task_collection(
+    transaction: &mut Transaction<'_, Postgres>,
+    work_item_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT collection_id FROM work_items WHERE id = $1")
+            .bind(work_item_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .flatten(),
+    )
+}
+
+/// An enabled status among `allowed` (all when None): `preferred` if it is
+/// one, else the default if it is one, else the first by position.
+async fn select_status_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    allowed: Option<&[Uuid]>,
+    preferred: Option<Uuid>,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar(
+        r#"
+        SELECT id FROM work_item_statuses
+        WHERE project_id = $1 AND enabled AND ($2::uuid[] IS NULL OR id = ANY($2))
+        ORDER BY id = $3 IS TRUE DESC, is_default DESC, position
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(allowed)
+    .bind(preferred)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::Validation("Work Item definition"))
 }
 
 async fn select_definition(

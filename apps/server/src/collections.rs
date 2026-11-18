@@ -229,6 +229,10 @@ pub struct Collection {
     pub builtin: Option<String>,
     /// Its records are tasks (always, for the built-in Tasks collection).
     pub acts_like_task: bool,
+    /// The space's statuses its tasks use (T1.25); None is all of them.
+    pub task_statuses: Option<Vec<Uuid>>,
+    /// The status its new tasks start in; None is the space's default.
+    pub start_status_id: Option<Uuid>,
 }
 
 impl Collection {
@@ -258,7 +262,8 @@ const COLUMNS: &str = "collection.id, collection.project_id, collection.name, \
      collection.description, collection.title_name, collection.next_number, \
      collection.position, collection.archived_at IS NOT NULL AS archived, collection.version, \
      collection.created_at::text AS created_at, collection.updated_at::text AS updated_at, \
-     collection.builtin, collection.acts_like_task";
+     collection.builtin, collection.acts_like_task, collection.task_statuses, \
+     collection.start_status_id";
 
 /// A collection as the web app and agents see it.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -286,6 +291,13 @@ pub struct CollectionSummary {
     /// and labels, keys like AWD-12, and change with the task tools.
     #[serde(default)]
     pub acts_like_task: bool,
+    /// The statuses its tasks use, by ID; left out when they use all of the
+    /// space's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_statuses: Option<Vec<String>>,
+    /// The status its new tasks start in; left out for the space's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_status_id: Option<String>,
 }
 
 impl CollectionSummary {
@@ -303,6 +315,11 @@ impl CollectionSummary {
             updated_at: collection.updated_at.clone(),
             builtin: collection.builtin.clone(),
             acts_like_task: collection.acts_like_task,
+            task_statuses: collection
+                .task_statuses
+                .as_ref()
+                .map(|ids| ids.iter().map(Uuid::to_string).collect()),
+            start_status_id: collection.start_status_id.map(|id| id.to_string()),
         }
     }
 }
@@ -552,6 +569,8 @@ pub struct CollectionChange {
     pub archived: Option<bool>,
     /// Whether its records are tasks (see `task_like`).
     pub acts_like_task: Option<bool>,
+    /// The statuses its tasks use and the one they start in (T1.25).
+    pub workflow: Option<task_like::Workflow>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -564,6 +583,7 @@ impl CollectionChange {
             && self.position.is_none()
             && self.archived.is_none()
             && self.acts_like_task.is_none()
+            && self.workflow.is_none()
     }
 }
 
@@ -654,6 +674,12 @@ pub async fn change(
     if acts_like_task != current.acts_like_task {
         changed.push("actsLikeTask");
     }
+    let workflow = change.workflow.clone().filter(|workflow| {
+        workflow.statuses != current.task_statuses || workflow.start != current.start_status_id
+    });
+    if workflow.is_some() {
+        changed.push("workflow");
+    }
     if changed.is_empty() {
         return Ok(ChangeOutcome::Unchanged(current));
     }
@@ -679,6 +705,15 @@ pub async fn change(
         task_like::refusal(&mut *connection, &current, acts_like_task, archived).await?
     {
         return Ok(ChangeOutcome::TaskLike(refusal));
+    }
+    if let Some(workflow) = &workflow {
+        if let Some(refusal) =
+            task_like::workflow_refusal(&mut *connection, &current, acts_like_task, workflow)
+                .await?
+        {
+            return Ok(ChangeOutcome::TaskLike(refusal));
+        }
+        task_like::set_workflow(&mut *connection, collection_id, workflow).await?;
     }
     sqlx::query(
         r#"

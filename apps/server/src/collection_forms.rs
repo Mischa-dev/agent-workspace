@@ -530,6 +530,8 @@ mod tests {
             version: 1,
             builtin: None,
             acts_like_task: false,
+            task_statuses: None,
+            start_status_id: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

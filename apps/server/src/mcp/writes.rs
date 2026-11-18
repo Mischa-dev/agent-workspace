@@ -2904,6 +2904,7 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
                     .to_owned(),
             ),
         },
+        AppError::Refused { field, message } => WriteResult::invalid(field, message),
         error => {
             let (database_code, database_constraint) = error.database_log_fields();
             tracing::error!(

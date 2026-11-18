@@ -29,6 +29,10 @@ export type CollectionSummary = {
   builtin?: 'tasks' | null
   /** Its records are tasks (AWD-110): a status, assignee and the rest, a key like AWD-12, and a task page. */
   actsLikeTask?: boolean
+  /** The statuses its tasks use, by ID; left out when they use all of the space's. */
+  taskStatuses?: string[]
+  /** The status its new tasks start in; left out for the space's default. */
+  startStatusId?: string
 }
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
@@ -150,6 +154,8 @@ export function normalizeCollection(value: unknown): CollectionSummary {
     updatedAt: asString(raw.updatedAt),
     builtin: raw.builtin === 'tasks' ? 'tasks' : null,
     actsLikeTask: raw.actsLikeTask === true || raw.builtin === 'tasks',
+    ...(Array.isArray(raw.taskStatuses) ? { taskStatuses: raw.taskStatuses.filter((id): id is string => typeof id === 'string') } : {}),
+    ...(typeof raw.startStatusId === 'string' ? { startStatusId: raw.startStatusId } : {}),
   }
 }
 
@@ -351,7 +357,16 @@ export async function getCollection(projectId: string, collectionId: string) {
 export async function updateCollection(
   projectId: string,
   collectionId: string,
-  input: { expectedVersion: number; name?: string; description?: string; titleName?: string; archived?: boolean; actsLikeTask?: boolean },
+  input: {
+    expectedVersion: number
+    name?: string
+    description?: string
+    titleName?: string
+    archived?: boolean
+    actsLikeTask?: boolean
+    /** The statuses its tasks use ([] for all) and the one they start in, replaced together. */
+    workflow?: { statuses: string[]; startStatusId: string | null }
+  },
 ) {
   return normalizeBody(await requestJson<unknown>(collectionPath(projectId, collectionId), { method: 'PATCH', idempotencyKey: crypto.randomUUID(), json: input }))
 }
