@@ -395,7 +395,14 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(HostError::CommandUnknown)?;
-    if matches!(row.state.as_str(), "expired" | "superseded") || row.expires_at <= Utc::now() {
+    // A command's lifetime bounds how long it waits to be carried out. A
+    // start the host accepted stays fetchable past it while its run is
+    // live, since fetching it is how the host gets a fresh credential for
+    // a run that outlasts a day (no credential is minted once it ends).
+    let accepted_start = row.kind == "start" && row.state == "acked";
+    if matches!(row.state.as_str(), "expired" | "superseded")
+        || (row.expires_at <= Utc::now() && !accepted_start)
+    {
         return Err(HostError::CommandClosed);
     }
     if row.state == "pending" {
