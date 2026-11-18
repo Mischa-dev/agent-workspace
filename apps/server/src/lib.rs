@@ -19,6 +19,7 @@ pub mod automations;
 pub mod backup;
 pub mod billing;
 pub mod bootstrap;
+pub mod budgets;
 pub mod bug_reports;
 pub mod change_sets;
 pub mod client_config;

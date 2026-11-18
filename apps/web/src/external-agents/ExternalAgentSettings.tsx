@@ -5,6 +5,8 @@ import { useHostOffers, useJoinableAccounts } from './addPaths'
 import { HostOfferList } from './HostOfferList'
 import { JoinAgentList } from './JoinAgentList'
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
+import { AgentBudgets } from './AgentBudgets'
+import { useProjectExperience } from '../experience/layout'
 import { toastError } from '../app/mutations'
 import { useWorkspaceId } from '../app/workspace'
 import { opQuery, useOp } from '../api/ops'
@@ -634,6 +636,7 @@ function AgentCard({
     onSuccess: () => showToast({ title: `${connection.displayName} resumed`, description: 'What it missed arrives now, in order.' }),
   })
   const pausing = pause.isPending || resume.isPending
+  const budgetsShown = useProjectExperience(projectId).shows('workspace.budgets')
   const menu: MenuEntry[] = [
     ...(active
       ? [
@@ -701,6 +704,7 @@ function AgentCard({
             projectId={projectId}
           />
           <WorkOsAgentSettings connection={connection} />
+          {budgetsShown ? <AgentBudgets accountId={connection.actorId} name={connection.displayName} /> : null}
         </div>
       ) : null}
       {connection.status !== 'removed' && (

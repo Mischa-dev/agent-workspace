@@ -2085,6 +2085,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "schedule_list",
     "follow_list",
     "guard_list",
+    "budget_list",
     "memory_page_open",
     "conversation_agent_settings_list",
     "conversation_list",
@@ -3154,6 +3155,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         // A2.27: the guards of the workspace called.
         case("guard_list", vec![json!({})], vec![], vec![]),
+        // A2.14: the budgets of the workspace called; B's never show.
+        case(
+            "budget_list",
+            vec![json!({}), json!({"account": a.agent})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         // A2.16: memory of A's channel or space; B's aren't found.
         case(
             "memory_page_open",

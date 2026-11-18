@@ -381,6 +381,16 @@ pub struct GuardsChangedPayload {
     pub project_id: Uuid,
 }
 
+/// A workspace's budgets changed (A2.14): one set, changed or removed.
+/// Sent to the workspace's own space; budget lists read them again. Ids
+/// only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BudgetsChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+}
+
 /// Someone's draft changed (C2.28): saved or cleared on one of their
 /// devices. Their id only, delivered to them alone; their open draft lists
 /// read again over HTTP.
@@ -480,6 +490,7 @@ pub enum OutboxEventPayload {
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
     GuardsChanged(GuardsChangedPayload),
+    BudgetsChanged(BudgetsChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     SidebarChanged(SidebarChangedPayload),
@@ -519,6 +530,7 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::GuardsChanged(_) => "guards.changed",
+            Self::BudgetsChanged(_) => "budgets.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
@@ -561,6 +573,7 @@ impl OutboxEventPayload {
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::GuardsChanged(_)
+            | Self::BudgetsChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_)
@@ -625,7 +638,8 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
             Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
-            | Self::GuardsChanged(_) => OutboxResourceKind::Project,
+            | Self::GuardsChanged(_)
+            | Self::BudgetsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
@@ -661,6 +675,7 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
             Self::GuardsChanged(payload) => payload.project_id,
+            Self::BudgetsChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
@@ -803,6 +818,7 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::GuardsChanged(payload) => serde_json::to_value(payload),
+            Self::BudgetsChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
@@ -896,6 +912,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "guards.changed" => Self::GuardsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "budgets.changed" => Self::BudgetsChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "message_draft.changed" => Self::MessageDraftChanged(

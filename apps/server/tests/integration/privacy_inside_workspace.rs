@@ -3430,6 +3430,14 @@ async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
             "guard_set",
             json!({ "name": "Mine", "action": "deny", "accounts": [rook] }),
         ),
+        // A2.14: budgets are set by those who manage the workspace's
+        // settings; a DM someone isn't in isn't one they can budget.
+        (
+            lena,
+            "budget_set",
+            json!({ "scope": "account", "scopeId": rook, "meter": "messages",
+                    "period": "day", "hardLimit": 1 }),
+        ),
         // A2.16: a viewer doesn't write a channel's memory.
         (
             vera,

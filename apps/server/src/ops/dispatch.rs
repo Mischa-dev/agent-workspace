@@ -625,6 +625,19 @@ async fn pipeline<O: Operation>(
         let tx = call.tx().await?;
         crate::guards::use_hold(tx, hold).await?;
     }
+    // A2.14: a call through the API or an agent tool spends its caller's
+    // budgets (the app's own pages are bounded by people's hands).
+    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) && !request.preview {
+        let tx = call.tx().await?;
+        crate::budgets::admit_call(
+            tx,
+            ctx.workspace_id,
+            ctx.space_id,
+            ctx.caller.account_id,
+            writes,
+        )
+        .await?;
+    }
     let output =
         crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))
             .await?;

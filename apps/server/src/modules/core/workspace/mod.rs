@@ -30,6 +30,7 @@ impl CoreModule for Module {
         module.operations(crate::files::ops::register_ops);
         module.operations(crate::export::ops::register_ops);
         module.operations(crate::metering::ops::register_ops);
+        module.operations(crate::budgets::ops::register_ops);
         module.routes(crate::export::transfer::router);
         module.operations(crate::accounts::claims::register_ops);
         module.routes(crate::accounts::claims::router);

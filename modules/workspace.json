@@ -54,6 +54,8 @@
     "workspace_transfer_get": "describe",
     "workspace_transfer_list": "query",
     "workspace_usage_get": "describe",
+    "budget_list": "query",
+    "budget_set": "change",
     "module_list": "describe",
     "module_create": "create",
     "module_open": "describe",
@@ -141,10 +143,10 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "follows.changed", "link.created", "link.deleted", "saved_searches.changed", "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
+    "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "budgets.changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "follows.changed", "link.created", "link.deleted", "saved_searches.changed", "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
     "listens": []
   },
-  "notifications": ["thing_update"],
+  "notifications": ["thing_update", "budget_warning"],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },
   "things": [],

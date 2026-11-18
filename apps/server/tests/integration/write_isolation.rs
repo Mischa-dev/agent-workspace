@@ -603,6 +603,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "schedule_update",
     "follow_set",
     "guard_set",
+    "budget_set",
     "memory_page_set",
     "request_create",
     "request_respond",
@@ -6432,6 +6433,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "guard_set",
             json!({"name": "Net guard", "action": "deny", "terms": ["zq-net-guard"]}),
             vec![json!({"space": b.project, "name": "Net guard", "action": "deny"})],
+        ),
+        // A2.14: a budget on A's agent; B's agent, space and channel aren't
+        // found from A.
+        mcp_case(
+            "budget_set",
+            json!({"scope": "account", "scopeId": a.agent, "meter": "operations",
+                   "period": "month", "hardLimit": 1000000}),
+            vec![
+                json!({"scope": "account", "scopeId": b.agent, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "space", "scopeId": b.project, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "conversation", "scopeId": b.channel, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+            ],
         ),
         // A2.16: memory of A's channel or space; B's aren't found from A.
         mcp_case(

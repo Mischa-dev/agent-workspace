@@ -1996,6 +1996,16 @@ pub(crate) async fn append_message_command_with(
     };
 
     let message_id = Uuid::now_v7();
+    // A2.14: the sender's budgets, and the default message rate that holds
+    // two agents answering each other.
+    crate::budgets::admit_message(
+        &mut transaction,
+        conversation.project_id,
+        conversation.id,
+        actor.actor_id,
+        message_id,
+    )
+    .await?;
     let notify_everyone =
         may_notify_everyone(&mut *transaction, actor.actor_id, conversation.project_id).await?;
     sqlx::query(

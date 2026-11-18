@@ -66,6 +66,12 @@ pub(crate) enum ToolResult<T> {
     TemporarilyUnavailable {
         message: String,
     },
+    /// A limit or budget refused it (H1.25, A2.14): the numbers, when it
+    /// resets and who can raise it.
+    LimitReached {
+        message: String,
+        limit: Box<crate::metering::LimitRefusal>,
+    },
 }
 
 impl<T> ToolResult<T> {
@@ -123,6 +129,10 @@ impl<T> ToolResult<T> {
     pub(super) fn from_error(error: AppError, operation: &'static str) -> Self {
         match error {
             AppError::NotFound(what) => Self::not_found(what),
+            AppError::LimitReached(limit) => Self::LimitReached {
+                message: limit.message.clone(),
+                limit,
+            },
             AppError::Validation(field) | AppError::Invalid(field) => {
                 Self::invalid(field, format!("{field} isn't valid."))
             }

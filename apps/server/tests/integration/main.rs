@@ -42,6 +42,7 @@ mod awd96_workspace_pages;
 mod backbone;
 mod backup_restore;
 mod billing;
+mod budgets;
 mod bug_report_links;
 mod bug_sweep;
 mod built_modules;

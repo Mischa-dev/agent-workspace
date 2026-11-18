@@ -437,6 +437,13 @@
       "label": "Hosts",
       "description": "Machines and services that run agents, linked to the workspace or to you, in settings.",
       "default": true
+    },
+    {
+      "id": "workspace.budgets",
+      "group": "workspace",
+      "label": "Budgets",
+      "description": "Limits on what an agent may use, on its card in settings.",
+      "default": true
     }
   ],
   "nouns": [
