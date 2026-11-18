@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { HANDLERS, SELF_HANDLED } from '../handlers'
+import { SELF_HANDLED } from '../handlers'
+import { HANDLERS } from '../handlers/table'
 import { parseLegacyRealtimeEvent, parseRealtimeEnvelope } from '../realtimeModel'
 import { parseFrames, replay, type Seed } from './replay'
 
