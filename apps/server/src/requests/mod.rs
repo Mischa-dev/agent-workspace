@@ -1265,12 +1265,9 @@ async fn follow(
     if row.subject_kind.as_deref() == Some(crate::hosts::register::REGISTER_SUBJECT) {
         crate::hosts::register::settled(transaction, row, by).await?;
     }
-    // A run on the built-in host goes on in process (A1.14).
-    if let Some(run_id) = row.run_id
-        && crate::runs::ops::is_builtin(transaction, run_id).await?
-    {
-        crate::hosts::builtin::requests::settled(transaction, row).await?;
-    } else if let Some(run_id) = row.run_id {
+    // A run waiting on it goes on, and its host (the built-in one too,
+    // A1.16) hears the answer.
+    if let Some(run_id) = row.run_id {
         let summary = match status {
             "answered" => "Answered.",
             "expired" => "No answer came in time.",

@@ -585,7 +585,9 @@ pub struct RunActivityInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// A JSON object, by kind: run_finished {outcome: done, failed or
-    /// cancelled}; text_message and reasoning {text}; tool_call {toolCallRef,
+    /// cancelled}; text_message and reasoning {text}, and a text_message
+    /// with inThread: true is also posted in the run's thread as its agent
+    /// (answering the reply request it was launched from); tool_call {toolCallRef,
     /// tool, status, ...}, the same toolCallRef for every report of one call;
     /// plan {items: [{title, status}]}, the whole list each time; interrupt
     /// {request: {kind: question or approval, title, detail?, options?:

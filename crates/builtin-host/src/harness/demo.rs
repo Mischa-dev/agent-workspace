@@ -31,8 +31,8 @@ use super::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
         RunOptionSupport, SpeedOption, VersionRange,
     },
-    registry::ShutdownSignal,
     run_config::RunConfig,
+    shutdown::ShutdownSignal,
 };
 
 pub const DEMO_KIND: &str = "demo";
@@ -657,11 +657,11 @@ mod tests {
     use uuid::Uuid;
 
     use super::{DemoAdapter, DemoHarness};
-    use crate::provider::{
+    use crate::harness::{
         adapter::{AccountHandle, HarnessAnswer, HarnessEvent},
         contract_tests::adapter_contract,
-        registry::ShutdownSignal,
         run_config::RunConfig,
+        shutdown::ShutdownSignal,
     };
 
     fn account(max_concurrent_runs: u16) -> AccountHandle {
@@ -695,7 +695,7 @@ mod tests {
             ..RunConfig::default()
         };
         let mut run =
-            crate::provider::adapter::HarnessAdapter::acquire_run(&adapter, account.clone())
+            crate::harness::adapter::HarnessAdapter::acquire_run(&adapter, account.clone())
                 .await
                 .expect("run session");
         let thread = run

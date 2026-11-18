@@ -230,10 +230,17 @@ const KINDS: &[(&str, &str)] = &[
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
-    // A2.12: a file, in its space; who may read it is `files::readable_file`.
+    // A2.12: a file, in its space, or in the DM or group it was sent in
+    // (K4.15), which is found as the conversation is; who may read it is
+    // `files::readable_file`.
     (
         "file",
-        "SELECT organization_id, project_id FROM files WHERE id = $1 AND $2::uuid IS NOT NULL",
+        "SELECT COALESCE(conversation.workspace_id, file.organization_id), file.project_id \
+         FROM files file \
+         LEFT JOIN conversations conversation \
+           ON conversation.id = file.conversation_id AND file.project_id IS NULL \
+         WHERE file.id = $1 AND $2::uuid IS NOT NULL \
+           AND (conversation.id IS NULL OR conversation_visible_to(conversation.id, $2))",
     ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
@@ -337,6 +344,15 @@ async fn thing(
         .fetch_optional(&mut *connection)
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?,
+        ("file", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the file's conversation was just checked through conversation_visible_to\n\
+                 SELECT conversation_id FROM files WHERE id = $1 AND project_id IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?
+        .flatten(),
         // A registry thing with no space: a DM's or group's conversation,
         // message or file is located at it.
         ("thing", None) => sqlx::query_scalar::<_, Option<Uuid>>(

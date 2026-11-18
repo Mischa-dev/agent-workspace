@@ -340,6 +340,7 @@ async fn forward_http(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         message_id,
         request.conversation_id,

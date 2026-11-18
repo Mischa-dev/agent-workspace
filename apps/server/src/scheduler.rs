@@ -1,6 +1,5 @@
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
-use serde_json::json;
 use sqlx::{FromRow, Postgres, Transaction};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -10,56 +9,21 @@ use crate::{
     cluster::{Cluster, Lease, LeaseName},
     domain::RunState,
     error::AppError,
-    git_runtime::{
-        self, RegisteredRepository, expected_repository_mirror_path, managed_worktree_path,
-    },
     outbox,
     policy::{Action, RoleGrant, within_agent_limits},
-    provider,
 };
 
 const SCHEDULER_LEASE: Duration = Duration::from_secs(30);
 /// How long a claim waits for a run's thread before leaving the run for the
 /// next pass.
 const THREAD_LOCK_TIMEOUT: &str = "1s";
-const WORKTREE_START_FAILURE_REASON: &str =
-    "Worktree creation failed; inspect the retained repository workspace.";
-const PROVIDER_START_FAILURE_REASON: &str =
-    "The agent harness could not start. The worktree was preserved.";
-const UNKNOWN_HARNESS_REASON: &str =
-    "This run's harness is not installed on the server. Nothing was started.";
 const REQUESTER_REFUSED_REASON: &str =
     "Cancelled before it started: whoever started it can no longer start runs in this project.";
 const SPONSORED_REQUESTER_REFUSED_REASON: &str = "Cancelled before it started: the agent that asked for it can no longer start runs in this project.";
 const SPONSOR_REFUSED_REASON: &str = "Cancelled before it started: the person who approved it can no longer start runs in this project.";
 const REQUESTER_APP_REFUSED_REASON: &str = "Cancelled before it started: whoever started it, or the app it was started from, can no longer start runs in this project.";
-const CLEANED_RETRY_REASON: &str = "The previous worktree was removed by retention cleanup before the retry could use it. Start a new Thread to continue.";
 /// Run states that hold a harness turn (and count against limits).
 const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
-const UNSAFE_RETRY_REASON: &str = "The previous worktree is dirty, missing, or no longer has its owned branch. It was preserved; start a new Thread or inspect it before retrying.";
-
-enum RetryWorkspace {
-    FreshAllocation,
-    Reuse(Uuid, Uuid, std::path::PathBuf),
-    Unsafe,
-}
-
-#[derive(Debug, FromRow)]
-struct ClaimedRun {
-    run_id: Uuid,
-    project_id: Uuid,
-    conversation_id: Uuid,
-    repository_id: Uuid,
-    mirror_path: String,
-    clone_url: String,
-    default_branch: String,
-    project_key: String,
-    execution_profile_id: Uuid,
-    adapter_kind: String,
-    prompt: String,
-    predecessor_run_id: Option<Uuid>,
-    claim_id: Uuid,
-}
 
 /// Something may be ready to start: the built-in host's holder looks now
 /// (K5.3). Here when this instance holds it; otherwise a wake on the control
@@ -118,6 +82,7 @@ async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), App
     let result = async {
         crate::recovery::reconcile_owned(&state, &cluster, &lease).await?;
         let jobs = crate::jobs::default_registry();
+        let builtin = crate::hosts::builtin::transport::client(&state);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
@@ -126,7 +91,7 @@ async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), App
                 () = cluster.released() => {}
                 () = lease.lost.cancelled() => return Ok(()),
             }
-            if let Err(error) = drain(&state, Some((&cluster, &lease))).await {
+            if let Err(error) = drain_with(&state, Some((&cluster, &lease)), &builtin).await {
                 tracing::error!(
                     error_category = error.log_category(),
                     "Agent Run scheduler pass failed"
@@ -172,19 +137,28 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
 /// Admit what can start. With a lease, every claim is fenced by it, and a
 /// lost lease admits nothing more.
 async fn drain(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<(), AppError> {
-    while let Some(run) = claim_next(state, fence).await? {
+    drain_with(
+        state,
+        fence,
+        &crate::hosts::builtin::transport::client(state),
+    )
+    .await
+}
+
+/// [`drain`] with the built-in host's client already made.
+async fn drain_with(
+    state: &AppState,
+    fence: Option<(&Cluster, &Lease)>,
+    builtin: &agent_workspace_host_protocol::HostClient,
+) -> Result<(), AppError> {
+    while claim_next(state, fence).await? {
         if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
             return Err(AppError::LeaseLost);
         }
-        let run_id = run.run_id;
-        if let Err(error) = admit(state, run).await {
-            tracing::error!(
-                %run_id,
-                error_category = error.log_category(),
-                "Agent Run admission failed"
-            );
-        }
     }
+    // A1.16: the built-in host carries out the starts it was just sent
+    // (and anything else waiting for it), through the host protocol.
+    crate::hosts::builtin::driver::pump_with(state, builtin).await?;
     Ok(())
 }
 
@@ -288,21 +262,20 @@ async fn may_start_runs(
 
 /// What one look at the queue found.
 enum Claim {
-    Run(Box<ClaimedRun>),
+    /// A run was claimed and its start command written.
+    Started,
     /// The oldest eligible run was cancelled (`admission_refusal`): look again.
     Cancelled,
     Nothing,
 }
 
-async fn claim_next(
-    state: &AppState,
-    fence: Option<(&Cluster, &Lease)>,
-) -> Result<Option<ClaimedRun>, AppError> {
+/// Claim the next run that can start; whether one was.
+async fn claim_next(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<bool, AppError> {
     loop {
         match claim_one(state, fence).await? {
-            Claim::Run(run) => return Ok(Some(*run)),
+            Claim::Started => return Ok(true),
             Claim::Cancelled => {}
-            Claim::Nothing => return Ok(None),
+            Claim::Nothing => return Ok(false),
         }
     }
 }
@@ -358,15 +331,7 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         run_id: Uuid,
         project_id: Uuid,
         conversation_id: Uuid,
-        repository_id: Uuid,
-        mirror_path: String,
-        clone_url: String,
-        default_branch: String,
-        project_key: String,
-        execution_profile_id: Uuid,
-        adapter_kind: String,
         prompt: String,
-        predecessor_run_id: Option<Uuid>,
         requesting_actor_id: Uuid,
         requester_kind: String,
         sponsoring_actor_id: Option<Uuid>,
@@ -377,11 +342,8 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
     // local harnesses, while the host has room.
     let candidate = sqlx::query_as::<_, Candidate>(&format!(
         r#"
-        SELECT run.id AS run_id, run.project_id, run.conversation_id,
-               run.repository_id, repository.mirror_path, repository.clone_url,
-               repository.default_branch, project.project_key,
-               run.execution_profile_id, account.adapter_kind, run.prompt,
-               run.predecessor_run_id, run.requesting_actor_id,
+        SELECT run.id AS run_id, run.project_id, run.conversation_id, run.prompt,
+               run.requesting_actor_id,
                requester.kind AS requester_kind,
                run.sponsoring_actor_id, run.made_through_app
         FROM agent_runs run
@@ -515,446 +477,37 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         candidate.run_id,
     )
     .await?;
+    // A1.16: the built-in host is told to start it, as any host is.
+    issue_start(&mut transaction, candidate.run_id, &candidate.prompt).await?;
     transaction.commit().await?;
-    Ok(Claim::Run(Box::new(ClaimedRun {
-        run_id: candidate.run_id,
-        project_id: candidate.project_id,
-        conversation_id: candidate.conversation_id,
-        repository_id: candidate.repository_id,
-        mirror_path: candidate.mirror_path,
-        clone_url: candidate.clone_url,
-        default_branch: candidate.default_branch,
-        project_key: candidate.project_key,
-        execution_profile_id: candidate.execution_profile_id,
-        adapter_kind: candidate.adapter_kind,
-        prompt: candidate.prompt,
-        predecessor_run_id: candidate.predecessor_run_id,
-        claim_id,
-    })))
+    Ok(Claim::Started)
 }
 
-async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    if let Err(error) = tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))?
-    {
-        fail_admission(
-            state,
-            &run,
-            "Run admission stopped because the host storage watermark blocks new work.",
-            None,
-        )
-        .await?;
-        return Err(error);
-    }
-    let mirror = expected_repository_mirror_path(&state.config.data_root, run.repository_id)?;
-    if Path::new(&run.mirror_path) != mirror {
-        fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
-        return Err(AppError::Conflict(
-            "repository",
-            "stored mirror path does not match the runtime root",
-        ));
-    }
-    let repository = RegisteredRepository {
-        id: run.repository_id,
-        clone_url: run.clone_url.clone(),
-        default_branch: run.default_branch.clone(),
-        mirror_path: mirror.clone(),
-    };
-    let data_root = state.config.data_root.clone();
-    let prepared = tokio::task::spawn_blocking(move || {
-        git_runtime::inspect_prepared_repository(&data_root, &repository)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join repository preparation"))?;
-    let prepared = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
-            return Err(error);
-        }
-    };
-
-    if let Some(predecessor_run_id) = run.predecessor_run_id {
-        match reusable_retry_workspace(state, &run, predecessor_run_id, &mirror).await? {
-            RetryWorkspace::Reuse(workspace_id, worktree_id, worktree) => {
-                let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-                let owned = sqlx::query_scalar::<_, bool>(
-                    r#"
-                    SELECT EXISTS (
-                        SELECT 1 FROM agent_runs
-                         WHERE id = $1 AND state = 'starting'
-                           AND scheduler_claim_id = $2
-                           AND repository_workspace_id IS NULL
-                    )
-                    "#,
-                )
-                .bind(run.run_id)
-                .bind(run.claim_id)
-                .fetch_one(&mut *transaction)
-                .await?;
-                if !owned {
-                    return Err(AppError::Conflict("agent_run", "scheduler claim was lost"));
-                }
-                // Retention cleanup removes retained worktrees under this
-                // lock. Take it, then claim only if the workspace is still
-                // retained: one cleaned up since the inspection is gone.
-                crate::retention::lock_repository_retention(&mut transaction, run.repository_id)
-                    .await?;
-                // The retry publishes its own commit: the predecessor's
-                // publication must not stand in for it, or a pull request
-                // could open from a commit this run never made.
-                let claimed = sqlx::query(
-                    "UPDATE repository_workspaces SET state = 'active', published_commit = NULL, published_at = NULL, published_by_actor_id = NULL, publish_failure_category = NULL, publish_version = publish_version + 1, updated_at = now() WHERE id = $1 AND state = 'retained'",
-                )
-                .bind(workspace_id)
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected()
-                    == 1
-                    && sqlx::query(
-                        "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1 AND state IN ('ready', 'dirty', 'missing', 'failed')",
-                    )
-                    .bind(worktree_id)
-                    .execute(&mut *transaction)
-                    .await?
-                    .rows_affected()
-                        == 1;
-                if !claimed {
-                    transaction.rollback().await?;
-                    fail_admission(state, &run, CLEANED_RETRY_REASON, None).await?;
-                    return Err(AppError::Conflict(
-                        "git_worktree",
-                        "previous worktree was cleaned up before the retry claimed it",
-                    ));
-                }
-                sqlx::query(
-                    "UPDATE agent_runs SET repository_workspace_id = $2, updated_at = now() WHERE id = $1",
-                )
-                .bind(run.run_id)
-                .bind(workspace_id)
-                .execute(&mut *transaction)
-                .await?;
-                transaction.commit().await?;
-
-                start_admitted_run(state, &run, worktree).await?;
-                clear_claim(state, run.run_id, run.claim_id).await?;
-                return Ok(());
-            }
-            RetryWorkspace::FreshAllocation => {}
-            RetryWorkspace::Unsafe => {
-                fail_admission(state, &run, UNSAFE_RETRY_REASON, None).await?;
-                return Err(AppError::Conflict(
-                    "git_worktree",
-                    "previous worktree is not safe to reuse",
-                ));
-            }
-        }
-    }
-
-    let workspace_id = Uuid::now_v7();
-    let worktree_id = Uuid::now_v7();
-    let Some(branch_prefix) = state
-        .supervisors
-        .manifest(&run.adapter_kind)
-        .map(|manifest| manifest.branch_prefix.clone())
-    else {
-        fail_admission(state, &run, UNKNOWN_HARNESS_REASON, None).await?;
-        return Err(AppError::Conflict("agent_run", "harness is not installed"));
-    };
-    let branch = git_runtime::unique_run_branch(&branch_prefix, &run.project_key)?;
-    let worktree = managed_worktree_path(&state.config.data_root, run.repository_id, workspace_id)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let owned = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs
-            WHERE id = $1 AND state = 'starting'
-              AND scheduler_claim_id = $2
-              AND repository_workspace_id IS NULL
-        )
-        "#,
-    )
-    .bind(run.run_id)
-    .bind(run.claim_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !owned {
-        return Err(AppError::Conflict("agent_run", "scheduler claim was lost"));
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO repository_workspaces (
-            id, repository_id, conversation_id, branch_name, base_commit
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-    )
-    .bind(workspace_id)
-    .bind(run.repository_id)
-    .bind(run.conversation_id)
-    .bind(&branch)
-    .bind(&prepared.base_commit)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO git_worktrees (id, repository_workspace_id, path, state)
-        VALUES ($1, $2, $3, 'creating')
-        "#,
-    )
-    .bind(worktree_id)
-    .bind(workspace_id)
-    .bind(worktree.to_string_lossy().as_ref())
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        "UPDATE agent_runs SET repository_workspace_id = $2, updated_at = now() WHERE id = $1",
-    )
-    .bind(run.run_id)
-    .bind(workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-
-    let mirror_for_add = mirror.clone();
-    let worktree_for_add = worktree.clone();
-    let branch_for_add = branch.clone();
-    let commit_for_add = prepared.base_commit.clone();
-    let creation = tokio::task::spawn_blocking(move || {
-        git_runtime::create_worktree(
-            &mirror_for_add,
-            &worktree_for_add,
-            &branch_for_add,
-            &commit_for_add,
-        )
-    })
-    .await;
-    if !matches!(creation, Ok(Ok(()))) {
-        fail_admission(
-            state,
-            &run,
-            WORKTREE_START_FAILURE_REASON,
-            Some(worktree_id),
-        )
-        .await?;
-        return Err(AppError::Conflict(
-            "git_worktree",
-            "worktree creation failed",
-        ));
-    }
-    sqlx::query(
-        r#"
-        UPDATE git_worktrees
-        SET state = 'ready', last_inspected_at = now(), updated_at = now()
-        WHERE id = $1 AND state = 'creating'
-        "#,
-    )
-    .bind(worktree_id)
-    .execute(crate::db::scoped(&state.pool))
-    .await?;
-
-    start_admitted_run(state, &run, worktree).await?;
-    clear_claim(state, run.run_id, run.claim_id).await?;
-    Ok(())
-}
-
-async fn start_admitted_run(
-    state: &AppState,
-    run: &ClaimedRun,
-    worktree: std::path::PathBuf,
-) -> Result<(), AppError> {
-    if let Err(error) = provider::start_run(
-        state,
-        run.project_id,
-        run.run_id,
-        run.conversation_id,
-        run.execution_profile_id,
-        worktree,
-        run.prompt.clone(),
-    )
-    .await
-    {
-        fail_admission(state, run, PROVIDER_START_FAILURE_REASON, None).await?;
-        return Err(error);
-    }
-    Ok(())
-}
-
-async fn reusable_retry_workspace(
-    state: &AppState,
-    run: &ClaimedRun,
-    predecessor_run_id: Uuid,
-    mirror: &Path,
-) -> Result<RetryWorkspace, AppError> {
-    let workspace = sqlx::query_as::<
-        _,
-        (
-            Option<Uuid>,
-            Option<Uuid>,
-            Option<String>,
-            Option<Uuid>,
-            Option<String>,
-        ),
-    >(
-        r#"
-        SELECT predecessor.repository_workspace_id,
-               workspace.id, workspace.branch_name, worktree.id, worktree.path
-          FROM agent_runs predecessor
-          LEFT JOIN repository_workspaces workspace
-            ON workspace.id = predecessor.repository_workspace_id
-           AND workspace.state = 'retained'
-          LEFT JOIN git_worktrees worktree
-            ON worktree.repository_workspace_id = workspace.id
-           AND worktree.state IN ('ready', 'dirty', 'missing', 'failed')
-         WHERE predecessor.id = $1
-           AND predecessor.project_id = $2
-           AND predecessor.conversation_id = $3
-           AND predecessor.repository_id = $4
-           AND predecessor.state IN ('completed', 'failed', 'canceled', 'interrupted')
-        "#,
-    )
-    .bind(predecessor_run_id)
-    .bind(run.project_id)
-    .bind(run.conversation_id)
-    .bind(run.repository_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
-    let Some(workspace) = workspace else {
-        return Ok(RetryWorkspace::Unsafe);
-    };
-    let (workspace_id, branch, worktree_id, path) = match workspace {
-        (None, None, None, None, None) => return Ok(RetryWorkspace::FreshAllocation),
-        (
-            Some(predecessor_workspace_id),
-            Some(workspace_id),
-            Some(branch),
-            Some(worktree_id),
-            Some(path),
-        ) if predecessor_workspace_id == workspace_id => (workspace_id, branch, worktree_id, path),
-        _ => return Ok(RetryWorkspace::Unsafe),
-    };
-    let mirror = mirror.to_path_buf();
-    let worktree = std::path::PathBuf::from(path);
-    let inspection_path = worktree.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        git_runtime::inspect_worktree(&mirror, &inspection_path)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join retry worktree inspection"))?;
-    let Ok(inspection) = inspection else {
-        sqlx::query(
-            "UPDATE git_worktrees SET state = 'missing', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1",
-        )
-        .bind(worktree_id)
-        .execute(crate::db::scoped(&state.pool))
-        .await?;
-        return Ok(RetryWorkspace::Unsafe);
-    };
-    if inspection.dirty || inspection.branch != branch {
-        sqlx::query(
-            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1",
-        )
-        .bind(worktree_id)
-        .bind(if inspection.dirty { "dirty" } else { "failed" })
-        .bind(inspection.dirty)
-        .execute(crate::db::scoped(&state.pool))
-        .await?;
-        return Ok(RetryWorkspace::Unsafe);
-    }
-    Ok(RetryWorkspace::Reuse(workspace_id, worktree_id, worktree))
-}
-
-async fn fail_admission(
-    state: &AppState,
-    run: &ClaimedRun,
-    reason: &'static str,
-    failed_worktree_id: Option<Uuid>,
-) -> Result<(), AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let current =
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-            .bind(run.run_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if matches!(
-        current.as_str(),
-        "completed" | "failed" | "canceled" | "interrupted"
-    ) {
-        transaction.commit().await?;
-        return Ok(());
-    }
-    crate::hosts::builtin::transition(&mut transaction, run.run_id, RunState::Failed, Some(reason))
-        .await?;
-    provider::idle_provider_session_for_terminal_run(&mut transaction, run.run_id).await?;
-    if let Some(worktree_id) = failed_worktree_id {
-        sqlx::query("UPDATE git_worktrees SET state = 'failed', updated_at = now() WHERE id = $1")
-            .bind(worktree_id)
-            .execute(&mut *transaction)
-            .await?;
-    }
-    sqlx::query(
-        r#"
-        UPDATE repository_workspaces workspace
-        SET state = 'retained', updated_at = now()
-        FROM agent_runs run
-        WHERE run.id = $1 AND workspace.id = run.repository_workspace_id
-        "#,
-    )
-    .bind(run.run_id)
-    .execute(&mut *transaction)
-    .await?;
-    clear_claim_in_transaction(&mut transaction, run.run_id, run.claim_id).await?;
-    let event_id = crate::runs::steps::record_new(
-        &mut transaction,
-        run.run_id,
-        "run_failed",
-        reason,
-        json!({}),
-    )
-    .await?;
-    crate::runs::steps::show_in_thread(&mut transaction, run.conversation_id, event_id).await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        run.project_id,
-        run.conversation_id,
-        run.run_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
-async fn clear_claim(state: &AppState, run_id: Uuid, claim_id: Uuid) -> Result<(), AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    clear_claim_in_transaction(&mut transaction, run_id, claim_id).await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
-async fn clear_claim_in_transaction(
+/// The built-in host's `start` command for a claimed run: its input and
+/// cause, as a host elsewhere would get them (`hosts::dispatch`).
+pub async fn issue_start(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
-    claim_id: Uuid,
+    prompt: &str,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE agent_runs
-        SET scheduler_claim_id = NULL,
-            scheduler_claimed_at = NULL,
-            scheduler_lease_expires_at = NULL,
-            updated_at = now()
-        WHERE id = $1 AND scheduler_claim_id = $2
-        "#,
-    )
-    .bind(run_id)
-    .bind(claim_id)
-    .execute(&mut **transaction)
-    .await?;
+    use crate::hosts::dispatch::{Host, RemoteHost, StartInput};
+    let run = crate::runs::ops::locked(transaction, run_id)
+        .await
+        .map_err(|_| AppError::Internal("load the claimed run"))?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    let host_id = run
+        .host_id
+        .ok_or(AppError::Internal("a built-in run without its host"))?;
+    RemoteHost { id: host_id }
+        .start(
+            transaction,
+            &run,
+            "builtin",
+            StartInput {
+                prompt: Some(prompt.to_owned()),
+                settings: None,
+            },
+        )
+        .await?;
     Ok(())
 }

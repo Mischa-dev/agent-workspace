@@ -68,7 +68,11 @@ pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
         scopes.push("write".to_owned());
     }
     McpPrincipal {
-        credential_id: credential_id.unwrap_or_else(Uuid::nil),
+        // A narrow token (K1.24) is no MCP credential, but it is the
+        // credential the call came through.
+        credential_id: credential_id
+            .or(ctx.caller.credential_id)
+            .unwrap_or_else(Uuid::nil),
         mcp_credential_id: credential_id,
         oauth_grant_id: oauth_grant_id.or(ctx.caller.via_grant_id),
         actor_id: ctx.caller.account_id,

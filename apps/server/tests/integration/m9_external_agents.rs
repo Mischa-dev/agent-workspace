@@ -653,7 +653,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         ("answered".to_owned(), Some(second_actor_id))
     );
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+        sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
             .bind(question_run_id)
             .fetch_one(&pool)
             .await
@@ -662,6 +662,15 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         "an answered question lets its run go on"
     );
     let mut question_terminal = pool.begin().await.expect("begin question run end");
+    // The built-in host goes on when its harness hears the answer.
+    transition_run(
+        &mut question_terminal,
+        question_run_id,
+        RunState::Working,
+        None,
+    )
+    .await
+    .expect("question run goes on");
     transition_run(
         &mut question_terminal,
         question_run_id,
@@ -1468,7 +1477,7 @@ fn read_request(uri: &str, cookie: &str) -> Request<Body> {
 
 async fn response_json(response: axum::response::Response) -> Value {
     let status = response.status();
-    let body = to_bytes(response.into_body(), 1_000_000)
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read response body");
     serde_json::from_slice(&body).unwrap_or_else(|error| {
@@ -1624,7 +1633,7 @@ async fn mcp_request(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
-    let body = to_bytes(response.into_body(), 1_000_000)
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");
     let text = String::from_utf8(body.to_vec()).expect("MCP UTF-8");

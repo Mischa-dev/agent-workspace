@@ -1772,6 +1772,7 @@ pub(super) fn message_actor(principal: &McpPrincipal) -> Result<MessageCommandAc
                     connection_id,
                 }),
                 via_grant_id: None,
+                run_id: None,
             })
         }
         ActorKind::Human => Ok(MessageCommandActor {
@@ -1779,6 +1780,7 @@ pub(super) fn message_actor(principal: &McpPrincipal) -> Result<MessageCommandAc
             actor_kind: "human".to_owned(),
             mcp_credential: None,
             via_grant_id: principal.via_grant_id(),
+            run_id: None,
         }),
         _ => Err("This connection can't send messages."),
     }

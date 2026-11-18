@@ -33,6 +33,11 @@ function manifestName(text: string) {
   return typeof name === 'string' ? name.trim() : ''
 }
 
+/** A command-line harness and an Agent Client Protocol agent both run a program here. */
+function runsProgram(transport: HarnessTransport): boolean {
+  return transport === 'command' || transport === 'acp'
+}
+
 /** Registers a harness, or edits one. Its transport can't change once registered. */
 export function HarnessForm({
   harness,
@@ -59,7 +64,7 @@ export function HarnessForm({
       const parsed = parseManifest(manifest)
       if ('error' in parsed) throw new Error(parsed.error)
       const pieces =
-        transport === 'command'
+        runsProgram(transport)
           ? { command: splitLines(command), secretNames: splitLines(secrets, true) }
           : { runnerActorId: runner || undefined }
       // The name shown defaults to the manifest's, so it isn't asked for twice.
@@ -81,8 +86,8 @@ export function HarnessForm({
     save.mutate()
   }
 
-  const commandBlocked = transport === 'command' && !list.commandsAllowed
-  const missing = !(name.trim() || manifestName(manifest)) || (transport === 'command' ? splitLines(command).length === 0 : !runner)
+  const commandBlocked = runsProgram(transport) && !list.commandsAllowed
+  const missing = !(name.trim() || manifestName(manifest)) || (runsProgram(transport) ? splitLines(command).length === 0 : !runner)
   const dirty = harness
     ? name !== harness.name ||
       manifest !== JSON.stringify(harness.manifest, null, 2) ||
@@ -129,17 +134,18 @@ export function HarnessForm({
             onChange={setTransport}
             options={[
               { value: 'command', label: 'Command on this server' },
+              { value: 'acp', label: 'Agent Client Protocol' },
               { value: 'runner', label: 'Connected runner' },
             ]}
             value={transport}
           />
         )}
         {commandBlocked ? <CommandsOffNote /> : null}
-        {transport === 'command' ? (
+        {runsProgram(transport) ? (
           <>
             <TextArea
               className="aw-harnessform__code"
-              hint="One argument per line, starting with the program. It must sit in a folder the server owner allowed. Use {model}, {reasoning}, {speed} or {option:NAME} for launch settings."
+              hint={`${transport === 'acp' ? 'The agent program, spoken to over the Agent Client Protocol. ' : ''}One argument per line, starting with the program. It must sit in a folder the server owner allowed. Use {model}, {reasoning}, {speed} or {option:NAME} for launch settings.`}
               label="Command"
               onChange={(event) => setCommand(event.target.value)}
               rows={4}

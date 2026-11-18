@@ -1040,6 +1040,29 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     .await;
     assert_eq!(started["outcome"], "ok", "{started}");
     assert_eq!(run_state(&setup.pool, run).await, "working");
+    // A run that outlasts its start command's lifetime still gets a fresh
+    // credential from the start it accepted.
+    sqlx::query("UPDATE host_commands SET expires_at = now() - interval '1 second' WHERE run_id = $1 AND kind = 'start'")
+        .bind(run)
+        .execute(&setup.pool)
+        .await
+        .expect("age the start");
+    let (status, refreshed) = host.fetch(&command_id).await;
+    assert_eq!(status, StatusCode::OK, "{refreshed}");
+    assert!(
+        refreshed["workspaceCredential"]["token"]
+            .as_str()
+            .is_some_and(
+                |token| token.starts_with(agent_workspace_server::access::tokens::TOKEN_PREFIX)
+            ),
+        "{refreshed}"
+    );
+    credentials.push(
+        refreshed["workspaceCredential"]["token"]
+            .as_str()
+            .expect("credential")
+            .to_owned(),
+    );
     // It reaches the run's space only, even where the agent itself is a
     // member too.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;

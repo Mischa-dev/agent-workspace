@@ -3090,6 +3090,7 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
     let base = job.base_commit.clone();
     let intended = job.intended_commit.clone();
     let remote_url = job.clone_url.clone();
+    let remote_is_safe = crate::code_host::is_safe_remote(&remote_url);
     let push_token = token.secret.clone();
     let push = tokio::task::spawn_blocking(move || {
         push_publishable_commit(PublishPush {
@@ -3100,6 +3101,7 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
             base_commit: &base,
             intended_commit: &intended,
             remote_url: &remote_url,
+            remote_is_safe,
             token: &push_token,
         })
     })

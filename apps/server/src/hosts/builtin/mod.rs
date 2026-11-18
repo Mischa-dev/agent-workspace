@@ -16,8 +16,11 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
+pub mod driver;
 pub mod http;
+pub mod report;
 pub mod requests;
+pub mod transport;
 
 use crate::{
     AppState,
@@ -327,5 +330,69 @@ pub async fn transition(
         crate::runs::finished::announce(transaction, run_id).await?;
     }
 
+    Ok(next)
+}
+
+/// A1.16: move only the built-in host's own detail row along its state
+/// machine. The run's record (`runs`) follows from what the host reports
+/// through the protocol (`report::RunReports`), never from here.
+pub async fn move_detail(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    next: RunState,
+    reason: Option<&str>,
+) -> Result<RunState, AppError> {
+    let current = lock(transaction, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    if current == next {
+        return Ok(current);
+    }
+    if !current.can_transition_to(next) {
+        return Err(AppError::Conflict("agent_run", "invalid state transition"));
+    }
+    sqlx::query(
+        r#"
+        UPDATE agent_runs
+           SET state = $2,
+               failure_reason = COALESCE($3, failure_reason),
+               started_at = CASE
+                   WHEN $2 IN ('starting', 'working') THEN COALESCE(started_at, now())
+                   ELSE started_at
+               END,
+               finished_at = CASE WHEN $4 THEN now() ELSE finished_at END,
+               updated_at = now()
+         WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(next.to_string())
+    .bind(reason)
+    .bind(next.is_terminal())
+    .execute(&mut **transaction)
+    .await?;
+    if next.is_terminal() {
+        // Its driver, wherever it runs, hears at once that it should stop.
+        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+            .execute(&mut **transaction)
+            .await?;
+    }
+    // Open screens showing the run's card in its thread refresh it.
+    let place = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT conversation.project_id, conversation.id
+        -- visibility: the run's own thread, to tell its open screens
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some((space_id, conversation_id)) = place {
+        crate::outbox::enqueue_agent_run_updated(transaction, space_id, conversation_id, run_id)
+            .await?;
+    }
     Ok(next)
 }

@@ -20,7 +20,7 @@ mcp/channels.rs::conversation_update | locks a conversation by id after the mode
 mcp/channels.rs::conversation_value | the kind of a thread's parent the caller already read
 mcp/replies.rs::conflict_reason | the agent's own reply request, by id, scoped to the agent
 mcp/replies.rs::from_failure | the agent's own reply requests, scoped to the agent; K4.4 reviews the conversation name
-mcp/replies.rs::reply_claim | the agent's own reply request, by id, scoped to the agent
+mcp/replies.rs::claim_in | the agent's own reply request, by id, scoped to the agent
 mcp/replies.rs::unusable | the agent's own reply request, by id, scoped to the agent
 mcp/talk.rs::message_items | messages of a conversation the caller opened after a readable check; quotes from elsewhere are checked one by one
 mcp/tasks.rs::task_link_inner | whether an id is a thread in the task's own project, before linking

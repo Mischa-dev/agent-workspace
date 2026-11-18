@@ -434,6 +434,29 @@ pub fn membership_allows(
         && !limit_hides(account, space, permission)
 }
 
+/// [`membership_allows`] for an account speaking as one of its runs, in the
+/// run's space (`runs::say`): a worker membership holds what the run hands
+/// it (seeing the space and sending what its agent says, as
+/// [`holding::RUN_DELEGATION`] does for the rest); any other role holds its
+/// own permissions.
+pub fn run_membership_allows(
+    account: Uuid,
+    space: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    action: crate::policy::Action,
+) -> bool {
+    if grant.role() == MembershipRole::Worker {
+        enabled
+            && matches!(
+                action,
+                crate::policy::Action::ProjectView | crate::policy::Action::MessageSend
+            )
+    } else {
+        membership_allows(account, space, grant, enabled, action.permission())
+    }
+}
+
 /// Whether a role lets its holder change anything: any permission beyond
 /// seeing. Reporting one's own runs and raising or answering requests come
 /// with every role, a Viewer's too, so they don't count as writing.

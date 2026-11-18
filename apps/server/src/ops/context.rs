@@ -227,22 +227,20 @@ impl From<&OpContext> for crate::conversations::MessageCommandActor {
             actor_kind: actor_kind_key(ctx.caller.kind).to_owned(),
             mcp_credential: match (&ctx.edge, ctx.caller.connection_id) {
                 (
-                    Edge::Mcp {
-                        credential_id: Some(credential_id),
-                        ..
-                    }
-                    | Edge::PublicApi {
-                        credential_id: Some(credential_id),
-                        ..
-                    },
+                    Edge::Mcp { credential_id, .. } | Edge::PublicApi { credential_id, .. },
                     Some(connection_id),
-                ) => Some(crate::conversations::MessageMcpCredential {
-                    credential_id: *credential_id,
-                    connection_id,
-                }),
+                ) => credential_id
+                    // A narrow token (K1.24) is the credential the call came
+                    // through, though it is no MCP credential.
+                    .or(ctx.caller.credential_id)
+                    .map(|credential_id| crate::conversations::MessageMcpCredential {
+                        credential_id,
+                        connection_id,
+                    }),
                 _ => None,
             },
             via_grant_id: ctx.caller.via_grant_id,
+            run_id: None,
         }
     }
 }

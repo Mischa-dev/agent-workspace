@@ -966,10 +966,9 @@ async fn keyword_messages(
             SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
                    message.conversation_id,
                    message.author_actor_id, message.plain_text,
-                   project.organization_id AS workspace_id
+                   message.workspace_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
-            JOIN projects project ON project.id = message.project_id
             WHERE message.id = $1 AND message.removed_at IS NULL
               AND conversation.kind NOT IN ('dm', 'group')
               AND message.plain_text IS NOT NULL
@@ -977,7 +976,11 @@ async fn keyword_messages(
         matched AS (
             SELECT DISTINCT keyword.account_id
             FROM message
-            JOIN notification_keywords keyword ON keyword.workspace_id = message.workspace_id
+            -- A thread in a personal DM or group (the direct scope) hears
+            -- its members' keywords from any workspace.
+            JOIN notification_keywords keyword
+              ON keyword.workspace_id = message.workspace_id
+              OR message.workspace_id = direct_scope_id()
             WHERE keyword.account_id <> message.author_actor_id
               AND message.plain_text ~* ('(^|[^[:alnum:]_])'
                   || regexp_replace(keyword.keyword, '([^[:alnum:][:space:]])', '\\\1', 'g')

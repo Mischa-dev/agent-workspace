@@ -64,12 +64,14 @@ pub async fn open(
         INSERT INTO runs (
             id, workspace_id, space_id, account_id, title, cause_kind, conversation_id,
             requested_by_account_id, sponsored_by_account_id, predecessor_run_id, state,
-            settings, last_report_at
+            settings, last_report_at, host_id
         )
         SELECT $1, project.organization_id, project.id, worker.actor_id, $4, $5, $6,
-               $7, $8, $9, 'queued', $10, now()
+               $7, $8, $9, 'queued', $10, now(), host.id
           FROM projects project
           JOIN execution_workers worker ON worker.id = $3
+          -- A1.16: the workspace's built-in host runs it, as a host does.
+          JOIN hosts host ON host.owner_workspace_id = project.organization_id AND host.builtin
          WHERE project.id = $2
         "#,
     )
@@ -92,6 +94,26 @@ pub async fn open(
     if opened.rows_affected() != 1 {
         return Err(AppError::NotFound("execution_worker"));
     }
+    // A1.16: the run's agent reports on it through the host protocol, as
+    // itself, so it must see where it works: in a members-only channel (or
+    // a thread of one) it joins, added by whoever asked for the run.
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        SELECT root.project_id, root.id, worker.actor_id, COALESCE($3, worker.actor_id)
+          -- visibility: the run's own conversation, which its requester could start it in
+          FROM conversations conversation
+          JOIN conversations root ON root.id = COALESCE(conversation.parent_channel_id, conversation.id)
+          JOIN execution_workers worker ON worker.id = $2
+         WHERE conversation.id = $1 AND root.kind = 'channel' AND root.visibility = 'members'
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(run.conversation_id)
+    .bind(run.execution_worker_id)
+    .bind(run.requested_by)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

@@ -88,7 +88,10 @@ pub async fn dispatch(
     let Some(call) = registry().get(name).map(|entry| entry.call) else {
         return Answer::error(&OpError::not_found("That operation"));
     };
-    call(state, request, input).await
+    // K1.25: every write the operation makes says which credential it came
+    // through, and for a run's token, the run and who asked for it.
+    let acting = crate::access::acting::Acting::of(&request.caller);
+    crate::access::acting::within(acting, call(state, request, input)).await
 }
 
 /// A space's key (such as "AWD") in the input's `spaceId` or `projectId`,

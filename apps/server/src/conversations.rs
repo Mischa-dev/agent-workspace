@@ -245,6 +245,27 @@ impl ConversationAccessRow {
     }
 }
 
+impl ConversationAccessRow {
+    /// [`Self::allows`] for an account speaking as one of its runs, in the
+    /// run's space (`runs::say`): a run hands a worker membership what its
+    /// agent says there.
+    fn allows_for_run(&self, actor_id: Uuid, action: Action) -> Result<bool, AppError> {
+        let Some(space) = self.project_id else {
+            return Ok(false);
+        };
+        Ok(crate::access::run_membership_allows(
+            actor_id,
+            space,
+            RoleGrant::stored(
+                &self.membership_role,
+                self.membership_role_permissions.as_deref(),
+            )?,
+            self.membership_enabled,
+            action,
+        ))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateChannelRequest {
@@ -1733,6 +1754,7 @@ async fn send_direct_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         None,
@@ -1766,6 +1788,7 @@ async fn send_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         Some(expected_kind),
@@ -1789,6 +1812,9 @@ pub(crate) struct MessageCommandActor {
     pub(crate) mcp_credential: Option<MessageMcpCredential>,
     /// The connected app a person is sending through, if any.
     pub(crate) via_grant_id: Option<Uuid>,
+    /// Sent as a run's agent, in the run's space (`runs::say`): the run is
+    /// the proof, and a worker gets message sending delegated for it.
+    pub(crate) run_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1847,6 +1873,9 @@ pub(crate) struct AppendExtras {
     /// The client chose the idempotency key (`clientRequestId`): it goes
     /// out on `message.created` as `clientMessageId` (A2.12).
     pub(crate) client_keyed: bool,
+    /// The run whose agent said it (a host reporting a `text_message` for
+    /// the thread, `runs::say`): the message links to the run.
+    pub(crate) agent_run_id: Option<Uuid>,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -2010,9 +2039,9 @@ pub(crate) async fn append_message_command_with(
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
             content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
-            reply_to_message_id, may_notify_everyone
+            reply_to_message_id, may_notify_everyone, agent_run_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11)
         "#,
     )
     .bind(message_id)
@@ -2025,6 +2054,7 @@ pub(crate) async fn append_message_command_with(
     .bind(extras.forwarded_message_id)
     .bind(extras.reply_to_message_id)
     .bind(notify_everyone)
+    .bind(extras.agent_run_id)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -2517,10 +2547,34 @@ pub(crate) async fn lock_message_conversation(
         .bind(actor.actor_id)
         .execute(&mut **transaction)
         .await?;
+    // Sent as a run (`runs::say`): the run is the proof, it names the space,
+    // and a run's agent needs no workspace membership of its own (a worker
+    // on the built-in host has none), though a disabled one still refuses.
+    let run_space = match actor.run_id {
+        Some(run_id) => {
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
+        }
+        None => None,
+    };
+    let access_from = if actor.run_id.is_some() {
+        let relaxed = ACCESS_FROM.replace(
+            "OR (organization_membership.actor_id IS NOT NULL",
+            "OR ((organization_membership.actor_id IS NOT NULL OR NOT EXISTS (\n\
+                          SELECT 1 FROM organization_memberships disabled\n\
+                          WHERE disabled.organization_id = project.organization_id\n\
+                            AND disabled.actor_id = $2 AND NOT disabled.enabled))",
+        );
+        if relaxed == ACCESS_FROM {
+            return Err(AppError::Internal("run message access"));
+        }
+        relaxed
+    } else {
+        ACCESS_FROM.to_owned()
+    };
     let row = sqlx::query_as::<_, ConversationAccessRow>(&format!(
         r#"
         SELECT {ACCESS_COLUMNS}
-        {ACCESS_FROM}
+        {access_from}
           AND EXISTS (
               SELECT 1 FROM actors actor
               WHERE actor.id = $2 AND actor.kind = $3 AND actor.status = 'active'
@@ -2528,9 +2582,12 @@ pub(crate) async fn lock_message_conversation(
                     -- Browser authentication, including the loopback-only
                     -- development principal, was validated before entering
                     -- this command path.
-                    ($4::boolean IS NULL AND actor.kind = 'human') -- // kind-check: mechanical (signed in through the browser)
+                    ($4::boolean IS NULL AND $5::uuid IS NULL AND actor.kind = 'human') -- // kind-check: mechanical (signed in through the browser)
                     OR
                     ($4::boolean AND actor.kind = 'external_agent') -- // kind-check: mechanical (signed in through an agent connection)
+                    OR
+                    -- A run's agent, in the run's space (`runs::say`).
+                    ($4::boolean IS NULL AND $5::uuid = conversation.project_id)
                 ))
         FOR UPDATE OF conversation
         "#,
@@ -2539,10 +2596,16 @@ pub(crate) async fn lock_message_conversation(
     .bind(actor.actor_id)
     .bind(&actor.actor_kind)
     .bind(mcp_checked)
+    .bind(run_space)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    if !row.allows(actor.actor_id, action)? {
+    let allowed = if actor.run_id.is_some() {
+        row.allows_for_run(actor.actor_id, action)?
+    } else {
+        row.allows(actor.actor_id, action)?
+    };
+    if !allowed {
         // A DM whose two no longer share a workspace (or who blocked one
         // another) is still read, but says why it takes nothing new.
         if row.project_id.is_none()

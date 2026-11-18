@@ -2317,6 +2317,7 @@ async fn hand_off(
             // An agent posts with its own credential; a person needs none.
             mcp_credential: caller.mcp_credential,
             via_grant_id: launch.via_oauth_grant_id,
+            run_id: None,
         },
         thread_id,
         None,
@@ -2429,7 +2430,7 @@ struct QueuedLaunch {
     made_through_app: bool,
 }
 
-fn actor_kind(value: &str) -> Option<ActorKind> {
+pub(crate) fn actor_kind(value: &str) -> Option<ActorKind> {
     match value {
         "human" => Some(ActorKind::Human),
         "external_agent" => Some(ActorKind::ExternalAgent),

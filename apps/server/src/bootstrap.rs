@@ -425,14 +425,22 @@ pub async fn bootstrap_admin(
     }))
     .execute(&mut *transaction)
     .await?;
-    // Whoever sets the server up from its terminal runs it (K1.30).
-    sqlx::query(
-        "INSERT INTO server_roles (account_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(actor_id)
-    .bind(crate::server_status::OPERATOR)
-    .execute(&mut *transaction)
-    .await?;
+    // Whoever sets the server up from its terminal runs it (K1.30). On a
+    // database from before server roles, the audit row above is what
+    // migration `20261118074537` turns into the role.
+    let roles_kept =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('server_roles') IS NOT NULL")
+            .fetch_one(&mut *transaction)
+            .await?;
+    if roles_kept {
+        sqlx::query(
+            "INSERT INTO server_roles (account_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(actor_id)
+        .bind(crate::server_status::OPERATOR)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
 
     Ok(BootstrapResult {

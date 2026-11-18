@@ -8,8 +8,16 @@ use uuid::Uuid;
 use super::{Caller, Holding, Reach, Scope, Tier};
 use crate::{
     error::AppError,
-    policy::{MembershipRole, PermissionSet, RoleGrant},
+    policy::{MembershipRole, Permission, PermissionSet, RoleGrant},
 };
+
+/// What a run delegates to its agent in the run's space when the agent
+/// holds only a worker membership there (the built-in host's agents, A1.16):
+/// seeing the space, reporting on the run and asking people through it.
+pub const RUN_DELEGATION: PermissionSet = PermissionSet::EMPTY
+    .with(Permission::ProjectsView)
+    .with(Permission::RunsReport)
+    .with(Permission::RequestsRaise);
 
 #[derive(sqlx::FromRow)]
 struct RoleRow {
@@ -167,6 +175,27 @@ async fn load_with(
             {
                 return Ok(None);
             }
+            // A run's agent on the built-in host is a member of the run's
+            // space only (a worker membership); acting for its run, it needs
+            // no workspace membership, but a disabled one still stops it.
+            // (Its credential was checked against the run, its binding and
+            // this space when it signed in.)
+            let (workspace_membership, reaches) = if caller.for_run {
+                (
+                    "LEFT JOIN organization_memberships workspace_membership
+                  ON workspace_membership.organization_id = project.organization_id
+                 AND workspace_membership.actor_id = $1",
+                    "($3::uuid IS NULL OR TRUE)",
+                )
+            } else {
+                (
+                    "JOIN organization_memberships workspace_membership
+                  ON workspace_membership.organization_id = project.organization_id
+                 AND workspace_membership.actor_id = $1
+                 AND workspace_membership.enabled",
+                    "actor_can_access_project($1, $3, $2)",
+                )
+            };
             sqlx::query_as::<_, RoleRow>(&format!(
                 r#"
                 SELECT project.organization_id AS workspace_id, membership.role,
@@ -174,15 +203,13 @@ async fn load_with(
                        {WITHIN_REQUESTER}
                 FROM project_memberships membership
                 JOIN projects project ON project.id = membership.project_id
-                JOIN organization_memberships workspace_membership
-                  ON workspace_membership.organization_id = project.organization_id
-                 AND workspace_membership.actor_id = $1
-                 AND workspace_membership.enabled
+                {workspace_membership}
                 JOIN actors actor ON actor.id = $1 AND actor.status = 'active'
                 WHERE membership.project_id = $2 AND membership.actor_id = $1 AND membership.enabled
                   AND (project.archived_at IS NULL OR $4)
+                  AND workspace_membership.enabled IS DISTINCT FROM false
                   AND (
-                      actor_can_access_project($1, $3, $2)
+                      {reaches}
                       -- An archived space, for bringing it back: its members
                       -- with an active sign-in, as they were.
                       OR ($4 AND project.archived_at IS NOT NULL
@@ -244,7 +271,11 @@ async fn load_with(
     // A worker membership holds nothing of its own: it acts only within
     // what a run delegates (the role's tier, not the account's kind).
     let mut permissions = if grant.role() == MembershipRole::Worker {
-        PermissionSet::EMPTY
+        if caller.for_run && matches!(scope, Scope::Space(_)) {
+            RUN_DELEGATION
+        } else {
+            PermissionSet::EMPTY
+        }
     } else {
         grant.permissions()
     };

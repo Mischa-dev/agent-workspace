@@ -148,7 +148,7 @@ async fn a_narrow_token_holds_only_what_it_was_given() {
         json!({"projectId": "WORK", "title": "Not from a seeing token", "clientRequestId": "k124-seeing"}),
     )
     .await;
-    assert_ne!(made["outcome"], "applied", "{made}");
+    assert_ne!(made["outcome"], "ok", "{made}");
 
     // A whole token acts in its space, and stops when revoked.
     let whole = issue(&world, request(rook.actor, world.organization, work))
@@ -163,7 +163,7 @@ async fn a_narrow_token_holds_only_what_it_was_given() {
         json!({"projectId": "WORK", "title": "From a narrow token", "clientRequestId": "k124-whole"}),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let id = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM access_tokens WHERE token_digest = sha256(convert_to($1, 'UTF8'))",
     )
@@ -204,18 +204,13 @@ async fn a_token_carries_who_asked_and_holds_to_them() {
     let work: Uuid = world.project("WORK").parse().expect("work");
 
     // Asked for by Lena: the message rook sends records her and the token.
-    // The token starts where their DM lives.
-    let dm_space =
-        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM conversations WHERE id = $1::uuid")
-            .bind(&world.conversations["lena+rook"])
-            .fetch_one(pool)
-            .await
-            .expect("the DM's space");
+    // A DM is in no space, so the token isn't narrowed to listed spaces.
     let token = issue(
         &world,
         ScopedTokenRequest {
             requested_by: Some(lena),
-            ..request(rook.actor, world.organization, dm_space)
+            spaces: None,
+            ..request(rook.actor, world.organization, work)
         },
     )
     .await

@@ -218,18 +218,19 @@ pub async fn resolve(
             r#"
             SELECT conversation.id
             FROM conversations conversation
-            WHERE conversation.project_id = ANY($2)
+            WHERE COALESCE(conversation.project_id, direct_scope_id()) = ANY($2)
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $1)
               AND (
                   (conversation.kind = 'channel'
                    AND (lower(conversation.name) = ANY($3)
                         OR lower(replace(conversation.name, ' ', '-')) = ANY($3)))
+                  -- A DM is in no space (K4.15): the other person goes by
+                  -- their handle in any workspace.
                   OR (conversation.kind = 'dm' AND EXISTS (
                       SELECT 1
                       FROM conversation_members them
-                      JOIN project_memberships person
-                        ON person.project_id = them.project_id AND person.actor_id = them.actor_id
+                      JOIN organization_actor_profiles person ON person.actor_id = them.actor_id
                       WHERE them.conversation_id = conversation.id
                         AND them.actor_id <> $1
                         AND lower(person.handle) = ANY($4)))

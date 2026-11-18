@@ -1,6 +1,7 @@
 //! Registering your own harness (X2): a command on this server (H7's
-//! protocol) or a connected runner (an agent with a runner, X1), with a
-//! manifest. A registered harness gets its own adapter kind (`x_<name>`),
+//! protocol), an agent on this server that speaks the Agent Client
+//! Protocol (A1.21), or a connected runner (an agent with a runner, X1),
+//! with a manifest. A registered harness gets its own adapter kind (`x_<name>`),
 //! so accounts, the model catalog, run settings, agent profiles and the
 //! Launch dialog treat it like Codex. Only its own workspace sees it.
 //!
@@ -77,25 +78,38 @@ fn command_of(row: &HarnessRow) -> Vec<String> {
 }
 
 fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, String> {
-    let runs_on = if row.transport == "runner" {
-        RunLocation::Cloud
-    } else {
-        RunLocation::LocalHost
+    let spec = |manifest| CommandSpec {
+        manifest,
+        command: command_of(row),
+        secret_names: row.secret_names.clone(),
+        allowed_dirs: state.config.command_harness_dirs.clone(),
     };
-    let manifest = command_line::build_manifest(&row.kind, &row.name, &row.manifest, runs_on)?;
-    let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = if row.transport == "runner" {
-        Arc::new(RunnerAdapter::new(manifest))
-    } else {
-        Arc::new(CommandAdapter::new(
-            CommandSpec {
-                manifest,
-                command: command_of(row),
-                secret_names: row.secret_names.clone(),
-                allowed_dirs: state.config.command_harness_dirs.clone(),
-            },
+    let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = match row.transport.as_str() {
+        "runner" => Arc::new(RunnerAdapter::new(command_line::build_manifest(
+            &row.kind,
+            &row.name,
+            &row.manifest,
+            RunLocation::Cloud,
+        )?)),
+        "acp" => Arc::new(crate::provider::acp::AcpAdapter::new(
+            spec(crate::provider::acp::build_manifest(
+                &row.kind,
+                &row.name,
+                &row.manifest,
+            )?),
             state.config.codex_host_concurrency_limit,
             state.supervisors.host_cell(),
-        ))
+        )),
+        _ => Arc::new(CommandAdapter::new(
+            spec(command_line::build_manifest(
+                &row.kind,
+                &row.name,
+                &row.manifest,
+                RunLocation::LocalHost,
+            )?),
+            state.config.codex_host_concurrency_limit,
+            state.supervisors.host_cell(),
+        )),
     };
     Ok(CustomAdapter {
         organization_id: row.organization_id,
@@ -204,7 +218,7 @@ async fn view(state: &AppState, row: HarnessRow) -> Result<HarnessView, AppError
         }
         None => None,
     };
-    let command = (row.transport == "command").then(|| command_of(&row));
+    let command = runs_program(&row.transport).then(|| command_of(&row));
     Ok(HarnessView {
         id: row.id,
         kind: row.kind,
@@ -377,7 +391,7 @@ async fn valid_runner(
 async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
     valid_secret_names(&row.secret_names)?;
     match row.transport.as_str() {
-        "command" => {
+        "command" | "acp" => {
             command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
                 .map_err(|_| AppError::Validation("command"))?;
         }
@@ -395,18 +409,32 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
 
 /// The reason a registration was refused, for the settings page.
 fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
-    if row.transport == "command"
+    if runs_program(&row.transport)
         && let Err(reason) =
             command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
     {
         return Some(reason);
     }
-    let runs_on = if row.transport == "runner" {
-        RunLocation::Cloud
-    } else {
-        RunLocation::LocalHost
-    };
-    command_line::build_manifest(&row.kind, &row.name, &row.manifest, runs_on).err()
+    match row.transport.as_str() {
+        "acp" => crate::provider::acp::build_manifest(&row.kind, &row.name, &row.manifest).err(),
+        "runner" => {
+            command_line::build_manifest(&row.kind, &row.name, &row.manifest, RunLocation::Cloud)
+                .err()
+        }
+        _ => command_line::build_manifest(
+            &row.kind,
+            &row.name,
+            &row.manifest,
+            RunLocation::LocalHost,
+        )
+        .err(),
+    }
+}
+
+/// Whether a registration runs a program on this host: a command-line
+/// harness or an agent spoken to over the Agent Client Protocol.
+fn runs_program(transport: &str) -> bool {
+    matches!(transport, "command" | "acp")
 }
 
 #[derive(Debug, Serialize)]
@@ -443,7 +471,7 @@ async fn create(
         command: request
             .command
             .clone()
-            .filter(|_| request.transport == "command")
+            .filter(|_| runs_program(&request.transport))
             .map(|command| json!(command)),
         secret_names: request.secret_names.clone(),
         runner_actor_id: request
@@ -576,7 +604,7 @@ async fn update(
         row.manifest = manifest;
     }
     if let Some(command) = request.command {
-        if row.transport != "command" {
+        if !runs_program(&row.transport) {
             return Err(AppError::Validation("command"));
         }
         row.command = Some(json!(command));

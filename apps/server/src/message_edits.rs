@@ -1124,6 +1124,7 @@ fn browser_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
         actor_kind: principal.actor_kind.clone(),
         mcp_credential: None,
         via_grant_id: None,
+        run_id: None,
     }
 }
 

@@ -96,9 +96,17 @@ pub async fn issue_scoped(
     .bind(request.account_id)
     .fetch_optional(&mut **transaction)
     .await?
-    .and_then(|kind| crate::mcp::parse_mcp_actor_kind(&kind).ok())
+    .and_then(|kind| match kind.as_str() {
+        // The built-in host's agents are execution workers (A1.16); a run's
+        // token signs them in like any host's agent.
+        "execution_worker" => Some(crate::policy::ActorKind::ExecutionWorker), // kind-check: mechanical (which account a run's token signs in)
+        other => crate::mcp::parse_mcp_actor_kind(other).ok(),
+    })
     .ok_or(AppError::Forbidden)?;
     let mut account = Caller::person(request.account_id, kind);
+    // A run's token holds what the run delegates in its space: a worker
+    // membership there is enough, as it is when the token is used.
+    account.for_run = request.run.is_some();
     // An agent reaches spaces through its connection in the workspace, as
     // the token will when it's used.
     account.connection_id =
@@ -262,10 +270,9 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
                 ORDER BY connection.id LIMIT 1) AS connection_id
         FROM access_tokens token
         JOIN actors account ON account.id = token.account_id
-        JOIN organization_memberships workspace_membership
+        LEFT JOIN organization_memberships workspace_membership
           ON workspace_membership.organization_id = token.workspace_id
          AND workspace_membership.actor_id = token.account_id
-         AND workspace_membership.enabled
         JOIN projects space ON space.id = token.space_id
         JOIN project_memberships membership
           ON membership.project_id = token.space_id AND membership.actor_id = token.account_id
@@ -277,6 +284,10 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
           AND token.revoked_at IS NULL AND token.expires_at > now()
           AND account.status = 'active'
           AND space.archived_at IS NULL AND membership.enabled
+          -- An enabled workspace membership; a run's agent may have none
+          -- (a worker on the built-in host), though a disabled one stops it.
+          AND (workspace_membership.enabled
+               OR (token.run_id IS NOT NULL AND workspace_membership.actor_id IS NULL))
           AND (token.credential_id IS NULL
                OR (credential.status = 'active' AND credential.expires_at > now()))
           AND (token.host_id IS NULL
