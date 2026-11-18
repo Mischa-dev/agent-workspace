@@ -158,6 +158,8 @@ export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
 
+export type PlaceHit = { detail?: string | null; id: string; kind: string; path?: string | null; title: string }
+
 export type PlanItem = { action: string; existingId?: string | null; key: string; kind: string; name: string; needsAdmin: boolean; reason?: string | null }
 
 export type PressedStep = { operation: string; value: unknown }
@@ -197,6 +199,8 @@ export type RunCauseInput = { conversationId?: string | null; kind: string; mess
 export type RunRecord = { activityCount: number; cancelRequestedAt?: string | null; clientRunId?: string | null; externalUrl?: string | null; finishedAt?: string | null; liveness: string; reportIntervalSeconds: number; runId: string; state: string; statusLine?: string | null; title: string; version: number }
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
+
+export type SavedSearch = { id: string; name: string; position: number; query: string }
 
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
@@ -538,6 +542,10 @@ export type PersonCreateInput = { displayName: string; handle: string; roleId?: 
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
+export type PlaceSearchInput = { q: string }
+
+export type PlaceSearchOutput = { hits: PlaceHit[] }
+
 export type ProfileAvatarListInput = Record<string, never>
 
 export type ProfileAvatarListOutput = { avatars: AvatarLine[] }
@@ -605,6 +613,14 @@ export type RunUpdateOutput = { idempotentReplay?: boolean; run: RunRecord }
 export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: number | null; currency?: string | null; inputTokens?: number | null; model: string; outputTokens?: number | null; reportKey: string; runId?: string | null; spaceId?: string | null; windowEnd?: string | null; windowStart?: string | null }
 
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
+
+export type SavedSearchListInput = Record<string, never>
+
+export type SavedSearchListOutput = { searches: SavedSearch[] }
+
+export type SavedSearchSetInput = { delete?: boolean | null; name?: string | null; position?: number | null; query?: string | null; savedSearchId?: string | null }
+
+export type SavedSearchSetOutput = { searches: SavedSearch[] }
 
 export type ScheduleCreateInput = { about?: string | null; at?: string | null; everyMinutes?: number | null; inMinutes?: number | null; note?: string | null }
 
@@ -813,6 +829,7 @@ export type Operations = {
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
+  place_search: { input: PlaceSearchInput; output: PlaceSearchOutput }
   profile_avatar_list: { input: ProfileAvatarListInput; output: ProfileAvatarListOutput }
   profile_get: { input: ProfileGetInput; output: ProfileGetOutput }
   profile_update: { input: ProfileUpdateInput; output: ProfileUpdateOutput }
@@ -830,6 +847,8 @@ export type Operations = {
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
+  saved_search_list: { input: SavedSearchListInput; output: SavedSearchListOutput }
+  saved_search_set: { input: SavedSearchSetInput; output: SavedSearchSetOutput }
   schedule_create: { input: ScheduleCreateInput; output: ScheduleCreateOutput }
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }

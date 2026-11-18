@@ -280,6 +280,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "message_draft.changed"
                 | "notification_keywords.changed"
                 | "sidebar.changed"
+                | "saved_searches.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -315,6 +316,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "message_draft.changed"
                 | "notification_keywords.changed"
                 | "sidebar.changed"
+                | "saved_searches.changed"
                 | "workspace.lifecycle.changed"
         );
         let project_scoped_event = matches!(
@@ -336,6 +338,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "message_draft.changed"
                 | "notification_keywords.changed"
                 | "sidebar.changed"
+                | "saved_searches.changed"
                 | "workspace.lifecycle.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {

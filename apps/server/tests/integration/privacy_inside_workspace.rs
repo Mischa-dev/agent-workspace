@@ -2566,6 +2566,32 @@ async fn channel_writes_keep_to_private_channels() {
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert!(!listed.to_string().contains(&secret), "{listed}");
     assert!(listed.to_string().contains(&open), "{listed}");
+    // C2.26: jump-to finds the open channel by name, never the private one.
+    let (status, places) = op(&omar.browser, "place_search", json!({"q": "plans"})).await;
+    assert_eq!(status, StatusCode::OK, "{places}");
+    assert!(!places.to_string().contains(&secret), "{places}");
+    assert!(places.to_string().contains(&open), "{places}");
+    // Saved searches are each account's own: Omar can't change Lena's.
+    let (status, saved) = op(
+        &lena.browser,
+        "saved_search_set",
+        json!({"name": "Plans", "query": "plans in:#secret-plans"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let lenas = saved["value"]["searches"][0]["id"]
+        .as_str()
+        .expect("saved")
+        .to_owned();
+    for input in [
+        json!({"savedSearchId": lenas, "name": "Mine now"}),
+        json!({"savedSearchId": lenas, "delete": true}),
+    ] {
+        let (status, refused) = op(&omar.browser, "saved_search_set", input).await;
+        assert!(!status.is_success(), "{refused}");
+    }
+    let (_, omars) = op(&omar.browser, "saved_search_list", json!({})).await;
+    assert_eq!(omars["value"]["searches"], json!([]), "{omars}");
 
     // Nate reads but can't post, so sets no topic, even on an open channel.
     let (status, refused) = op(

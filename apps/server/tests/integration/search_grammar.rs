@@ -1,7 +1,8 @@
 //! C2.25: the search grammar. Each filter narrows to what it names, over
 //! HTTP and the agents' `search` tool alike, and a filter never widens what
 //! someone can see: `in:#channel` for a private channel they aren't in finds
-//! nothing, as does `from:` for messages in a DM that isn't theirs.
+//! nothing, as does `from:` for messages in a DM that isn't theirs. Jump-to
+//! and saved searches (C2.26) keep to the same rules.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -58,6 +59,19 @@ async fn say(app: &axum::Router, who: &Person, conversation: &str, words: &str) 
     .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
     sent["message"]["id"].as_str().expect("message").to_owned()
+}
+
+async fn op(app: &axum::Router, by: &Person, name: &str, input: Value) -> (StatusCode, Value) {
+    send(
+        app,
+        by.browser.request(
+            "POST",
+            &format!("/api/v2/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await
 }
 
 fn sorted(ids: &[&String]) -> Vec<String> {
@@ -252,6 +266,73 @@ async fn each_filter_narrows_and_none_widens() {
         )
         .await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
+
+    // C2.26: jump-to finds places by name, only those the caller can open.
+    let (status, places) = op(app, lena, "place_search", json!({"q": "design"})).await;
+    assert_eq!(status, StatusCode::OK, "{places}");
+    let first = &places["value"]["hits"][0];
+    assert_eq!(first["kind"], "channel", "{places}");
+    assert_eq!(first["id"], design.as_str(), "{places}");
+    assert!(first["path"].as_str().is_some_and(|path| path.contains(&design)));
+    let (_, places) = op(app, lena, "place_search", json!({"q": "mara"})).await;
+    let kinds = places["value"]["hits"]
+        .as_array()
+        .expect("hits")
+        .iter()
+        .map(|hit| (hit["kind"].as_str().unwrap_or("").to_owned(), hit["id"].clone()))
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&("person".to_owned(), json!(mara.actor))), "{places}");
+    assert!(kinds.contains(&("dm".to_owned(), json!(dm))), "{places}");
+    for q in ["secret", "mara", "lena"] {
+        let (status, places) = op(app, nina, "place_search", json!({"q": q})).await;
+        assert_eq!(status, StatusCode::OK, "{places}");
+        assert!(!places.to_string().contains(&secret), "{q}: {places}");
+        assert!(!places.to_string().contains(&dm), "{q}: {places}");
+    }
+
+    // Saved searches: saved, renamed, moved and removed, each account's own.
+    let query = format!("{word} in:#design");
+    let (status, saved) = op(
+        app,
+        lena,
+        "saved_search_set",
+        json!({"name": "Design talk", "query": query}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let id = saved["value"]["searches"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (status, refused) = op(
+        app,
+        lena,
+        "saved_search_set",
+        json!({"name": "Bad", "query": "has:banana"}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    let (status, renamed) = op(
+        app,
+        lena,
+        "saved_search_set",
+        json!({"savedSearchId": id, "name": "Design"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["value"]["searches"][0]["name"], "Design");
+    assert_eq!(renamed["value"]["searches"][0]["query"], query.as_str());
+    let (_, maras) = op(app, mara, "saved_search_list", json!({})).await;
+    assert_eq!(maras["value"]["searches"], json!([]), "{maras}");
+    let (status, removed) = op(
+        app,
+        lena,
+        "saved_search_set",
+        json!({"savedSearchId": id, "delete": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["value"]["searches"], json!([]), "{removed}");
 
     world.finish().await;
 }

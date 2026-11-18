@@ -391,6 +391,14 @@ pub struct SidebarChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's saved searches changed (C2.26). Their id only, delivered to
+/// them alone; their other tabs read the list again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedSearchesChangedPayload {
+    pub actor_id: Uuid,
+}
+
 /// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
 /// scheduled or kept. Ids and the state only; open screens refetch the
 /// session. Delivered in the workspace's own space.
@@ -434,6 +442,7 @@ pub enum OutboxEventPayload {
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     SidebarChanged(SidebarChangedPayload),
+    SavedSearchesChanged(SavedSearchesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
@@ -468,6 +477,7 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
+            Self::SavedSearchesChanged(_) => "saved_searches.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
@@ -505,6 +515,7 @@ impl OutboxEventPayload {
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_)
+            | Self::SavedSearchesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
@@ -521,6 +532,7 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
+            Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -543,6 +555,7 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
+            Self::SavedSearchesChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
             | Self::AccountProfileChanged(_) => OutboxResourceKind::Account,
@@ -593,6 +606,7 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
             Self::SidebarChanged(payload) => payload.actor_id,
+            Self::SavedSearchesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
@@ -729,6 +743,7 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
+            Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -821,6 +836,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sidebar.changed" => Self::SidebarChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "saved_searches.changed" => Self::SavedSearchesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(

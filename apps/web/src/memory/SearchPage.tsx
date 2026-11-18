@@ -11,12 +11,14 @@ import {
   Button,
   EmptyState,
   Icon,
+  IconButton,
   ListSkeleton,
   PageHeader,
   Row,
   RowList,
   StatusChip,
   TextField,
+  showToast,
   describeLoadError,
   formatFullDate,
   formatRelative,
@@ -24,6 +26,7 @@ import {
   withEllipses,
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
 import { describeFilter, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
 
@@ -130,6 +133,18 @@ export function SearchPage() {
   useListKeys(resultsRef, '.aw-row__link')
   useShellPage({ mainClassName: 'aw-main--page', project: scope })
   const filters = queryFilters(query)
+  const savedSearches = useSavedSearches()
+  const setSaved = useSetSavedSearch()
+  const saved = savedSearches.data?.searches ?? []
+  const savedHere = saved.find((search) => search.query.trim() === query.trim()) ?? null
+  const failed = (title: string) => (reason: unknown) =>
+    showToast({ tone: 'danger', title, description: reason instanceof Error ? reason.message : 'Try again.' })
+  const saveThis = () =>
+    void setSaved({ name: savedSearchName(query), query: query.trim() }).then(
+      () => showToast({ tone: 'success', title: 'Search saved', description: 'It’s under Saved searches here and in the command menu.' }),
+      failed('The search wasn’t saved'),
+    )
+  const forget = (id: string) => void setSaved({ savedSearchId: id, delete: true }).catch(failed('The saved search wasn’t removed'))
   const searchFor = (next: string) => {
     const search = new URLSearchParams(params)
     search.set('q', next)
@@ -178,7 +193,32 @@ export function SearchPage() {
                 </Button>
               ))
             : null}
+          {query.trim() ? (
+            savedHere ? (
+              <Button icon="star" onClick={() => forget(savedHere.id)} size="sm" variant="ghost">
+                Saved · remove
+              </Button>
+            ) : (
+              <Button icon="star" onClick={saveThis} size="sm" variant="secondary">
+                Save search
+              </Button>
+            )
+          ) : null}
         </div>
+        {!query.trim() && saved.length ? (
+          <section aria-label="Saved searches" className="aw-search__saved">
+            <h2>Saved searches</h2>
+            <ul>
+              {saved.map((search) => (
+                <li key={search.id}>
+                  <Link to={`?${new URLSearchParams({ q: search.query })}`}>{search.name}</Link>
+                  {search.name !== search.query ? <code>{search.query}</code> : null}
+                  <IconButton icon="x" label={`Remove saved search ${search.name}`} onClick={() => forget(search.id)} size="sm" />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <p className="aw-search__help">
           Narrow with <code>from:@name</code>, <code>in:#channel</code>, <code>during:2026-10</code>, <code>has:link</code>, <code>is:unread</code> or{' '}
           <code>kind:task</code>.

@@ -1136,6 +1136,20 @@
     "kind": "query",
     "long": false,
     "module": "workspace",
+    "name": "place_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Jump to a place"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
     "name": "profile_avatar_list",
     "permission": null,
     "preview": false,
@@ -1387,6 +1401,36 @@
     "preview": false,
     "proposable": false,
     "title": "Report usage"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved searches"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "saved_searches.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save a search"
   },
   {
     "automation": true,

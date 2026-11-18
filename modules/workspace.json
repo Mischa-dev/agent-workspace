@@ -21,6 +21,9 @@
     "profile_update": "change",
     "profile_avatar_list": "query",
     "group_list": "query",
+    "saved_search_list": "query",
+    "saved_search_set": "change",
+    "place_search": "query",
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",
@@ -107,7 +110,8 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "account.status_changed", "account.profile_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
+    "emits": ["file.attached", "file.removed", "account.status_changed", "account.profile_changed", "custom_emoji.changed",
+      "saved_searches.changed", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],

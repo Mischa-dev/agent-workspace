@@ -568,6 +568,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "settings_set",
     "sidebar_item_move",
     "sidebar_section_set",
+    "saved_search_set",
     "profile_update",
     "status_delete",
     "status_set",
@@ -6237,6 +6238,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sidebar_item_move",
             json!({"conversationId": a.channel, "starred": true}),
             vec![json!({"conversationId": b.channel, "starred": true})],
+        ),
+        // C2.26: saved searches are kept per workspace; B's never change from A.
+        mcp_case(
+            "saved_search_set",
+            json!({"name": "Net search", "query": "net"}),
+            vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
         ),
         // C2.17: an agent's profile is set by those who manage it; B's
         // agent isn't A's to change.

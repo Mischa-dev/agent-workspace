@@ -220,6 +220,12 @@ pub static SIDEBAR_CHANGED: EventType = signal(
     None,
     "Someone's sidebar sections changed",
 );
+pub static SAVED_SEARCHES_CHANGED: EventType = signal(
+    "saved_searches.changed",
+    "workspace",
+    None,
+    "Someone's saved searches changed",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -619,6 +625,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MESSAGE_DRAFT_CHANGED,
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
+        &SAVED_SEARCHES_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,

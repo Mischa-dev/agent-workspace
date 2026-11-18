@@ -232,6 +232,15 @@ pub async fn stage(
             None,
             Some(p.actor_id),
         ),
+        P::SavedSearchesChanged(p) => (
+            &catalog::SAVED_SEARCHES_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
         P::AccountStatusChanged(p) => (
             &catalog::ACCOUNT_STATUS_CHANGED,
             "account",

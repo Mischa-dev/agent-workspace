@@ -2090,6 +2090,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "profile_get",
     "profile_avatar_list",
     "group_list",
+    "saved_search_list",
+    "place_search",
     "package_export",
     "package_list",
     "package_preview",
@@ -2702,6 +2704,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "group_list",
             vec![json!({}), json!({"members": true})],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.26: saved searches, and places to jump to, stay in their workspace.
+        case(
+            "saved_search_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "place_search",
+            vec![json!({"q": "a"})],
+            vec![json!({"workspace": b.organization, "q": "a"})],
             vec![],
         ),
         // C2.9: sidebar sections are kept per workspace; B's never list in A.

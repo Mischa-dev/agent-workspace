@@ -22,6 +22,7 @@ use crate::{
 };
 
 pub mod grammar;
+pub mod ops;
 
 pub const MAX_QUERY_CHARACTERS: usize = 200;
 

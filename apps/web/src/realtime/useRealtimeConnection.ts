@@ -370,6 +370,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
             })
             return
           }
+          if (envelope.type === 'saved_searches.changed') {
+            // Your saved searches changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'saved_search_list',
+            })
+            return
+          }
           if (envelope.type === 'account.profile_changed') {
             // Someone's profile or avatar changed: profiles and avatars read again.
             void queryClient.invalidateQueries({
