@@ -1,5 +1,5 @@
 //! A1.11: managing hosts as operations (K2): list them, make an enrolment
-//! code, bind and unbind agents, unlink. The Hosts settings pages and agents
+//! code, link an A2A agent (A1.20), bind and unbind agents, unlink. The Hosts settings pages and agents
 //! call these; a host's own calls (enrol, describe, heartbeat, notices) stay
 //! its routes, with its own credential (`routes`).
 //!
@@ -21,6 +21,7 @@ pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<HostList>()
         .add::<HostEnrolmentCreate>()
+        .add::<HostLink>()
         .add::<HostAgentBind>()
         .add::<HostAgentUnbind>()
         .add::<HostUnlink>();
@@ -158,6 +159,85 @@ impl Operation for HostEnrolmentCreate {
             json!({ "owner": code.owner.kind }),
         );
         Ok(code)
+    }
+}
+
+// ---------------------------------------------------------------- host_link (A2A)
+
+pub struct HostLink;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostLinkInput {
+    /// person (a host you own) or workspace (one the workspace owns).
+    pub owner: HostOwnerChoice,
+    /// The agent's A2A Agent Card: its address, or the agent's own address
+    /// (its card is then read from /.well-known/agent-card.json).
+    pub card_url: String,
+    /// A bearer token the agent asks for, if any. Kept sealed; never shown
+    /// again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// An agent account to bind to it now (its id), as host_agent_bind would.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<IdRef>,
+}
+
+impl Targeted for HostLinkInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+impl Operation for HostLink {
+    const NAME: &'static str = "host_link";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Link an A2A agent";
+    const DESCRIPTION: &'static str = "Link an agent that speaks the A2A protocol, by its Agent \
+        Card's address, as a host you own (owner person) or the workspace's (owner workspace, \
+        which needs hosts.manage). The card's agent is the host's one described agent \
+        (hostAgentRef \"agent\"); bind an agent account to it here with accountId or later with \
+        host_agent_bind, and mentions and launches of that account then run on the A2A agent.";
+    const EMITS: &'static [&'static str] = &["host.linked"];
+
+    type Input = HostLinkInput;
+    type Output = HostView;
+
+    async fn run(call: &mut OpCall<'_>, input: HostLinkInput) -> Result<HostView, OpError> {
+        let caller = call.account_id();
+        let caller_kind = call.ctx.caller.kind;
+        let workspace = call.ctx.workspace_id;
+        let owner = match input.owner {
+            HostOwnerChoice::Person => Owner::Account(caller),
+            HostOwnerChoice::Workspace => Owner::Workspace(workspace),
+        };
+        // The card is read before anything is written: no transaction
+        // waits on the network.
+        let card = super::a2a::fetch_card(call.state, &input.card_url).await?;
+        let state = call.state;
+        let tx = call.tx().await?;
+        let host = super::a2a::link(
+            state,
+            tx,
+            caller,
+            caller_kind,
+            workspace,
+            owner,
+            &card,
+            input.token.as_deref(),
+        )
+        .await?;
+        let view = match input.account_id {
+            Some(account) => {
+                super::bind(tx, caller, host.id, account.id(), super::a2a::AGENT_REF).await?
+            }
+            None => super::a2a::view(tx, caller, &host).await?,
+        };
+        call.audit_target("host", host.id, json!({ "connection": "a2a" }));
+        Ok(view)
     }
 }
 

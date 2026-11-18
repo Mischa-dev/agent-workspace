@@ -314,6 +314,18 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "6",
     },
     SettingDef {
+        key: "replies.claim_window_seconds",
+        label: "Time to pick up a request",
+        description: "How long someone asked for a reply has to pick it up before it shows they haven't, and the people who manage them hear about it.",
+        kind: SettingType::Integer {
+            min: 30,
+            max: 86_400,
+        },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "120",
+    },
+    SettingDef {
         key: "messages.link_previews",
         label: "Link previews",
         description: "Show the title, description and picture of web pages linked in new messages.",
@@ -494,6 +506,20 @@ pub const REGISTRY: &[SettingDef] = &[
     // K1.12: the role a new agent gets when whoever adds it names none
     // (ruling R5: the same as a newly invited person unless changed). A role
     // id of this workspace; engine::agent_role checks it still is one.
+    // A2.18 (K1 3.11): agents and apps owned outside this workspace (and
+    // not by one of its members) join at once, after an admin approves, or
+    // not at all.
+    SettingDef {
+        key: "access.outside_accounts",
+        label: "Agents from outside",
+        description: "Whether agents and apps owned outside this workspace may be added: yes, after an admin approves, or no.",
+        kind: SettingType::Choice {
+            options: &["yes", "ask_admin", "no"],
+        },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "\"yes\"",
+    },
     SettingDef {
         key: "access.default_agent_role_id",
         label: "Role for new agents",

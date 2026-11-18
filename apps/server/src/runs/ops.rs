@@ -1448,6 +1448,44 @@ pub async fn request_cancel(
     Ok(saved)
 }
 
+/// Asks the account a launch gave a run to start it (`run.start`, heard by
+/// that account alone, `assigned`): the agent that connects by itself
+/// learns of it this way as well as from the hand-off message (A1.13). Ids
+/// only; the input is the run's cause.
+pub async fn ask_to_start(
+    transaction: &mut Transaction<'_, Postgres>,
+    run: &RunRow,
+) -> Result<(), AppError> {
+    let Some(space_id) = run.space_id else {
+        return Ok(());
+    };
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::RUN_START_ASKED,
+            space_id,
+            "run",
+            run.id,
+        )
+        .access_thing(run.id)
+        .audience(crate::events::Audience::Account(run.account_id))
+        .version(run.version)
+        .payload(serde_json::json!({
+            "runId": run.id,
+            "accountId": run.account_id,
+            "cause": {
+                "kind": run.cause_kind,
+                "taskId": run.work_item_id,
+                "conversationId": run.conversation_id,
+                "messageId": run.cause_message_id,
+            },
+            "launchId": run.launch_id,
+        })),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Asks the account that does a run to stop it (`run.cancel`, heard by
 /// that account alone). The reason stays on the run.
 pub async fn ask_to_stop(

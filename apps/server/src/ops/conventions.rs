@@ -59,6 +59,10 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            // Something already sent goes out again, unchanged (a webhook delivery).
+            "redeliver",
+            // A harmless signed ping, to check an address answers.
+            "test",
             "press",
             "remove",
             // You go into or out of something, such as a channel (C2.7).
@@ -68,6 +72,13 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "revoke",
             // A secret is replaced; the old one keeps working for a while.
             "rotate",
+            // An account stops acting and hearing until resumed (A2.10).
+            "pause",
+            "resume",
+            // An account joins a workspace (A2.18).
+            "add",
+            // A host's published action runs (A2.19).
+            "run",
         ],
     ),
     (

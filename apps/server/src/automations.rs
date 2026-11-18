@@ -233,6 +233,7 @@ pub const ACTION_KINDS: &[&str] = &[
     "notify",
     "post_message",
     "run_operation",
+    "ask_agent",
 ];
 
 impl Trigger {
@@ -425,6 +426,19 @@ pub enum Action {
     /// Run any operation the rule's maker could run, as the maker, with
     /// {{variables}} filled into its input's text.
     RunOperation { operation: String, input: Value },
+    /// Ask someone in the space, usually an agent, to do something (A2.12):
+    /// the prompt is posted as the maker, mentioning them, through the
+    /// ordinary send, so they are asked to answer with the maker as the
+    /// asker, and chain depth, turn limits and Stop apply as to any mention.
+    /// It goes in the conversation given, else as a comment on the task.
+    AskAgent {
+        #[schemars(with = "String")]
+        account_id: Uuid,
+        prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<String>")]
+        conversation_id: Option<Uuid>,
+    },
 }
 
 impl Action {
@@ -435,6 +449,7 @@ impl Action {
             Self::Notify { .. } => "notify",
             Self::PostMessage { .. } => "post_message",
             Self::RunOperation { .. } => "run_operation",
+            Self::AskAgent { .. } => "ask_agent",
         }
     }
 }
@@ -587,6 +602,7 @@ fn check_shape(
             }
             Action::Notify { message, .. } => *message = clean_text(message, "actions.message")?,
             Action::PostMessage { text, .. } => *text = clean_text(text, "actions.text")?,
+            Action::AskAgent { prompt, .. } => *prompt = clean_text(prompt, "actions.prompt")?,
             Action::RunOperation { operation, input } => {
                 let offered = crate::ops::registry()
                     .get(operation)
@@ -973,6 +989,28 @@ async fn check_references(
             Action::PostMessage {
                 conversation_id, ..
             } => conversations.push(*conversation_id),
+            Action::AskAgent {
+                account_id,
+                conversation_id,
+                ..
+            } => {
+                if let Some(id) = conversation_id {
+                    conversations.push(*id);
+                }
+                // Who is asked must be in the space now; at each run the
+                // send checks again.
+                let member = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM project_memberships \
+                     WHERE project_id = $1 AND actor_id = $2 AND enabled)",
+                )
+                .bind(project_id)
+                .bind(account_id)
+                .fetch_one(crate::db::scoped(pool))
+                .await?;
+                if !member {
+                    return Err(AppError::NotFound("account"));
+                }
+            }
             Action::Launch {
                 environment_id,
                 agent_profile_id,
@@ -1242,11 +1280,15 @@ pub(crate) async fn prepare_in(
         conversations.push(*id);
     }
     for action in &request.actions {
-        if let Action::PostMessage {
-            conversation_id, ..
-        } = action
-        {
-            conversations.push(*conversation_id);
+        match action {
+            Action::PostMessage {
+                conversation_id, ..
+            } => conversations.push(*conversation_id),
+            Action::AskAgent {
+                conversation_id: Some(id),
+                ..
+            } => conversations.push(*id),
+            _ => {}
         }
     }
     for conversation_id in conversations {
@@ -2538,7 +2580,7 @@ impl Context {
             && let Some(run_id) = subject.agent_run_id
         {
             let run_task = sqlx::query_scalar::<_, Uuid>(
-                "SELECT work_item_id FROM launches WHERE agent_run_id = $1 AND project_id = $2 LIMIT 1",
+                "SELECT work_item_id FROM launches WHERE run_id = $1 AND project_id = $2 LIMIT 1",
             )
             .bind(run_id)
             .bind(rule.project_id)
@@ -2937,6 +2979,7 @@ async fn run_action(
                     queue: false,
                     dialog: false,
                     agent_profile_id: *agent_profile_id,
+                    agent_account_id: None,
                 },
                 "automation",
                 idempotency,
@@ -3057,7 +3100,89 @@ async fn run_action(
             .await?;
             Ok(format!("Ran {operation}."))
         }
+        Action::AskAgent {
+            account_id,
+            prompt,
+            conversation_id,
+        } => {
+            ask(
+                state,
+                rule,
+                acting,
+                run_id,
+                index,
+                context,
+                *account_id,
+                prompt,
+                *conversation_id,
+            )
+            .await
+        }
     }
+}
+
+/// An ask-an-agent action: the prompt, mentioning who is asked, posted as
+/// the maker in the conversation, or as a comment on the rule's task.
+#[allow(clippy::too_many_arguments)]
+async fn ask(
+    state: &AppState,
+    rule: &RuleRow,
+    acting: &Acting,
+    run_id: Uuid,
+    index: usize,
+    context: &Context,
+    account_id: Uuid,
+    prompt: &str,
+    conversation_id: Option<Uuid>,
+) -> Result<String, String> {
+    let request_id = format!("automation-{run_id}-{index}");
+    let text = context.render(prompt);
+    if let Some(conversation_id) = conversation_id {
+        call_tool(
+            state,
+            rule,
+            acting,
+            run_id,
+            "message_send",
+            json!({
+                "conversationId": conversation_id.to_string(),
+                "content": {"version": 1, "nodes": [
+                    {"type": "mention", "actorId": account_id},
+                    {"type": "text", "text": format!(" {text}")},
+                ]},
+                "clientRequestId": request_id,
+            }),
+        )
+        .await?;
+        return Ok("Asked in the conversation.".to_owned());
+    }
+    let Some(task_id) = context.work_item_id else {
+        return Err("there is no task to ask on; pick a conversation".to_owned());
+    };
+    let handle = sqlx::query_scalar::<_, String>(
+        "SELECT handle FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = $2 AND enabled",
+    )
+    .bind(rule.project_id)
+    .bind(account_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await
+    .map_err(|_| "couldn't read who to ask".to_owned())?
+    .ok_or_else(|| "who it asks is no longer in this space".to_owned())?;
+    call_tool(
+        state,
+        rule,
+        acting,
+        run_id,
+        "task_comment_create",
+        json!({
+            "taskId": task_id.to_string(),
+            "text": format!("@{handle} {text}"),
+            "clientRequestId": request_id,
+        }),
+    )
+    .await?;
+    Ok("Asked on the task.".to_owned())
 }
 
 async fn notify(

@@ -1,11 +1,12 @@
-//! W14: the workspace events outgoing webhooks (X4) and automations (X5)
-//! hear about, read from the event log (K3.4).
+//! W14: the workspace events automations (X5) hear about, read from the
+//! event log (K3.4). A person's outgoing webhooks are connections now, told
+//! by `delivery::push` (A2.6).
 //!
 //! The [`Router`] consumer reads the log after its own cursor. For each
-//! event whose project has a webhook or an event-triggered rule, it queues
-//! one `events.route` job in the same transaction that advances its cursor,
-//! so a router that stops mid-batch loses and repeats nothing; the job
-//! turns the event (IDs only) into the events below and hands them to both.
+//! event whose project has an event-triggered rule, it queues one
+//! `events.route` job in the same transaction that advances its cursor, so
+//! a router that stops mid-batch loses and repeats nothing; the job turns
+//! the event (IDs only) into the events below and hands them to the rules.
 //! Everything after that goes through the job queue, so it survives
 //! restarts and runs on any server. The router runs under its
 //! `consumer:router` lease on whichever instance holds it.
@@ -334,8 +335,8 @@ async fn heard(
     })
 }
 
-/// The project's workspace, when anything in the project listens to its
-/// events (a webhook, or a rule triggered by events).
+/// The project's workspace, when a rule in the project is triggered by its
+/// events.
 async fn listening(
     connection: &mut sqlx::PgConnection,
     project_id: Uuid,
@@ -345,18 +346,10 @@ async fn listening(
         SELECT project.organization_id
         FROM projects project
         WHERE project.id = $1
-          AND (
-              EXISTS (
-                  SELECT 1 FROM webhook_subscriptions subscription
-                  WHERE subscription.organization_id = project.organization_id
-                    AND subscription.state = 'active'
-                    AND (subscription.project_id IS NULL OR subscription.project_id = project.id)
-              )
-              OR EXISTS (
-                  SELECT 1 FROM automation_rules rule
-                  WHERE rule.project_id = project.id AND rule.enabled
-                    AND rule.trigger_kind NOT IN ('schedule', 'capacity_window')
-              )
+          AND EXISTS (
+              SELECT 1 FROM automation_rules rule
+              WHERE rule.project_id = project.id AND rule.enabled
+                AND rule.trigger_kind NOT IN ('schedule', 'capacity_window')
           )
         "#,
     )
@@ -421,12 +414,12 @@ impl super::Consumer for Router {
     }
 }
 
-/// Hands one logged event's webhook events to webhooks and automations.
+/// Hands one logged event's events to the automations that listen.
 pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<usize, AppError> {
     let events = &payload.events;
-    // AWD-75: with Automations off (it holds webhooks too), nothing follows
-    // the workspace's events; nor do events of a module that's off. A space
-    // that turns a module off narrows it for its own events (AWD-186).
+    // AWD-75: with Automations off, no rule follows the workspace's events;
+    // nor do events of a module that's off. A space that turns a module off
+    // narrows it for its own events (AWD-186).
     let modules = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::in_space(
@@ -448,16 +441,15 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         if shut_out(modules, &event.event_type, direct) {
             continue;
         }
-        crate::webhooks::fan_out(state, event).await?;
         crate::automations::on_event(state, event).await?;
     }
     Ok(events.len())
 }
 
-/// AWD-75: whether `modules` leave an event out: Automations (which holds
-/// webhooks too) is off, or the event's own module is. A conversation's
-/// event follows Channels in a project and Messages in the direct space, as
-/// conversations do everywhere else.
+/// AWD-75: whether `modules` leave an event out: Automations is off, or
+/// the event's own module is. A conversation's event follows Channels in a
+/// project and Messages in the direct space, as conversations do everywhere
+/// else.
 pub(crate) fn shut_out(modules: crate::modules::ModuleSet, event_type: &str, direct: bool) -> bool {
     !modules.contains("automations")
         || crate::automations::in_project_kind(
@@ -468,9 +460,9 @@ pub(crate) fn shut_out(modules: crate::modules::ModuleSet, event_type: &str, dir
 }
 
 // ---------------------------------------------------------------------------
-// Who sets up a webhook or a rule
+// Who sets up a rule
 
-/// The person, app or agent making a webhook or rule, which then acts as
+/// The person, app or agent making a rule, which then acts as
 /// them. Resolved on the server from the session or the bearer token.
 #[derive(Clone, Debug)]
 pub(crate) struct Caller {

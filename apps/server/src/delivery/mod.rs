@@ -68,32 +68,52 @@ pub async fn poll(
     wait: Duration,
 ) -> Result<Page, AppError> {
     let wait = wait.min(MAX_WAIT);
-    let (delivery, after) = crate::db::scoped_one(&state.pool, async |connection| {
+    let (delivery, place) = crate::db::scoped_one(&state.pool, async |connection| {
         let delivery = connections::for_caller(connection, caller, named).await?;
         let kept_from = oldest(connection).await? - 1;
-        let after = match cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) {
+        let place = match cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) {
             Some(cursor) => {
-                let after = cursor::decode(&delivery.cursor_key, delivery.id, cursor)
+                let mut place = cursor::decode_place(&delivery.cursor_key, delivery.id, cursor)
                     .ok_or(AppError::Validation("cursor"))?;
+                // A2.10: resumed, the events held while paused come now, from
+                // where they start (what passed meanwhile comes again once).
+                if let Some(held) = place.held
+                    && crate::statuses::paused_in(connection, delivery.account_id)
+                        .await?
+                        .is_empty()
+                {
+                    place = cursor::Place {
+                        after: held,
+                        held: None,
+                    };
+                }
+                let after = place.after;
                 if after < kept_from {
                     return Err(AppError::Conflict(
                         "cursor_expired",
                         "This cursor is older than the events kept. Call briefing to catch up, then read without a cursor.",
                     ));
                 }
-                connections::mark_read(connection, delivery.id, after).await?;
-                after
+                connections::mark_read(connection, delivery.id, place.held.unwrap_or(after))
+                    .await?;
+                place
             }
             // Where it last read, unless those events are gone: then from
             // the oldest kept, which is where a read without a cursor
             // recovers after `cursor_expired`.
             None if delivery.read_cursor < kept_from => {
                 connections::mark_read(connection, delivery.id, kept_from).await?;
-                kept_from
+                cursor::Place {
+                    after: kept_from,
+                    held: None,
+                }
             }
-            None => delivery.read_cursor,
+            None => cursor::Place {
+                after: delivery.read_cursor,
+                held: None,
+            },
         };
-        Ok::<_, AppError>((delivery, after))
+        Ok::<_, AppError>((delivery, place))
     })
     .await?;
     let deadline = tokio::time::Instant::now() + wait;
@@ -104,9 +124,11 @@ pub async fn poll(
                 recipient: delivery.account_id,
                 workspaces: connections::reach(connection, &delivery).await?,
                 space: caller.confined_space,
+                limits: caller.limits.clone(),
             };
             let subscriptions = connections::subscriptions(connection, &delivery).await?;
-            let batch = read::read_batch(connection, &subscriptions, &scope, after, limit).await?;
+            let batch =
+                read::read_batch(connection, &subscriptions, &scope, place.after, limit).await?;
             let lookups = envelope::Lookups::for_batch(connection, &batch.delivered).await?;
             let head = crate::events::head(connection).await?;
             Ok::<_, AppError>((batch, lookups, head))
@@ -121,7 +143,14 @@ pub async fn poll(
                     .iter()
                     .map(|item| envelope::envelope(item, &delivery, &lookups))
                     .collect(),
-                next_cursor: cursor::encode(&delivery.cursor_key, delivery.id, batch.next),
+                next_cursor: cursor::encode_place(
+                    &delivery.cursor_key,
+                    delivery.id,
+                    cursor::Place {
+                        after: batch.next,
+                        held: place.held.or(batch.held),
+                    },
+                ),
                 has_more: batch.has_more,
                 connection_id: delivery.id,
                 positions: batch

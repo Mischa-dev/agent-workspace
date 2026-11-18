@@ -38,6 +38,11 @@ pub(super) struct TaskLaunchArguments {
     /// A harness such as `codex_cloud`, if not the environment's.
     #[serde(default)]
     pub harness: Option<String>,
+    /// The agent to give the work to (an account ID from agent_list): its
+    /// host runs it when one does, else it is handed the task in its
+    /// thread. Left out, the harness or the project's default does it.
+    #[serde(default)]
+    pub agent_account_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -274,6 +279,13 @@ pub(super) async fn task_launch(
         },
         None => None,
     };
+    let agent_account_id = match arguments.agent_account_id.as_deref() {
+        Some(value) => match parse_id(value) {
+            Some(id) => Some(id),
+            None => return ToolResult::invalid("agentAccountId", "Pass an agent's account ID."),
+        },
+        None => None,
+    };
     let request_id = arguments
         .client_request_id
         .clone()
@@ -323,6 +335,7 @@ pub(super) async fn task_launch(
                 queue: false,
                 dialog: false,
                 agent_profile_id: None,
+                agent_account_id,
             },
             "mcp",
             Ok(key),

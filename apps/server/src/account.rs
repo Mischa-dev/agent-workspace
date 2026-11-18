@@ -311,7 +311,9 @@ fn account_select(filter: &str) -> String {
         FROM provider_accounts account
         LEFT JOIN execution_profiles profile
           ON profile.provider_account_id = account.id AND profile.project_id = $1
-        WHERE {filter}
+        -- Only the built-in host's own accounts: one another host reports
+        -- (A1.24) is managed there.
+        WHERE account.home_path IS NOT NULL AND {filter}
         ORDER BY account.created_at, account.id
         LIMIT {MAX_ACCOUNTS_PER_OWNER}
         "#,
@@ -459,6 +461,7 @@ pub(crate) async fn insert_account(
         r#"
         SELECT count(*) FROM provider_accounts
         WHERE organization_id = $1 AND owner_actor_id = $2 AND hidden_at IS NULL
+          AND home_path IS NOT NULL
         "#,
     )
     .bind(organization_id)
@@ -1498,7 +1501,7 @@ pub(crate) async fn require_account_owner(
                account.account_state,
                NULL::uuid AS profile_id, NULL::text AS profile_status
         FROM provider_accounts account
-        WHERE account.id = $1
+        WHERE account.id = $1 AND account.home_path IS NOT NULL
           AND account.organization_id = $2
           AND account.owner_actor_id = $3
           AND account.hidden_at IS NULL
@@ -1700,7 +1703,7 @@ pub(crate) async fn account_access_in(
                account.account_state,
                NULL::uuid AS profile_id, NULL::text AS profile_status
         FROM provider_accounts account
-        WHERE account.id = $1
+        WHERE account.id = $1 AND account.home_path IS NOT NULL
         "#,
     )
     .bind(account_id)

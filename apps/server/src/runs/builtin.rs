@@ -95,6 +95,34 @@ pub async fn open(
     Ok(())
 }
 
+/// A launch started this built-in run: its record names the launch and, for
+/// a task, the task as its cause, as a run on any other host or agent does
+/// (A1.13).
+pub async fn launched(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    launch_id: Uuid,
+    work_item_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE runs
+           SET launch_id = $2,
+               work_item_id = COALESCE($3, work_item_id),
+               cause_kind = CASE WHEN $3::uuid IS NULL THEN cause_kind ELSE 'task' END,
+               version = version + 1,
+               updated_at = now()
+         WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(launch_id)
+    .bind(work_item_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 /// Where a built-in run is now, as its detail row says after a change.
 pub struct Moved<'a> {
     pub state: BuiltinState,

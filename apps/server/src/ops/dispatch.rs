@@ -298,7 +298,7 @@ async fn admit<O: Operation>(
     caller: &Caller,
     workspace: &mut Option<Uuid>,
     target: &Target,
-) -> Result<target::Located, OpError> {
+) -> Result<Admitted, OpError> {
     let writes = O::KIND.writes();
     let mut connection = state
         .pool
@@ -333,8 +333,22 @@ async fn admit<O: Operation>(
     // call but the ones that still work then (keeping it).
     crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
         .await?;
+    // A2.10: a paused account's changes do nothing (the caller answers ok,
+    // saying so).
+    let paused = writes
+        && !runs_while_paused(O::NAME)
+        && crate::statuses::is_paused(&mut connection, caller.account_id, located.workspace_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?;
     drop(connection);
-    Ok(located)
+    Ok(Admitted { located, paused })
+}
+
+/// What `admit` found: where the call lands, and whether the caller is
+/// paused there.
+struct Admitted {
+    located: target::Located,
+    paused: bool,
 }
 
 /// Whether `caller` may run `O` on `target`, by the checks a call makes,
@@ -385,7 +399,25 @@ async fn pipeline<O: Operation>(
     let target = decoded.target();
     let writes = O::KIND.writes();
 
-    let located = admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    let Admitted { located, paused } =
+        admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    // A2.10: a paused account's changes do nothing here; each answers ok,
+    // saying so, so a client that retries doesn't loop on a refusal.
+    if paused {
+        let mut body = Envelope::Ok {
+            value: serde_json::json!({ "status": "paused" }),
+            request_id: request.request_id,
+            replayed: false,
+            replay_safe: Some(true),
+            preview: request.preview,
+        }
+        .to_json();
+        body["paused"] = true.into();
+        return Ok(Answer {
+            status: StatusCode::OK,
+            body,
+        });
+    }
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
     if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
@@ -519,6 +551,21 @@ async fn pipeline<O: Operation>(
         crate::scheduler::kick(state.clone());
     }
     Ok(answer)
+}
+
+/// The changes a paused account still makes (A2.10): its status, lifting a
+/// pause, its connections and reporting on runs it already has.
+fn runs_while_paused(name: &str) -> bool {
+    matches!(
+        name,
+        "status_set"
+            | "status_delete"
+            | "agent_resume"
+            | "run_activity_report"
+            | "run_result_report"
+            | "run_usage_report"
+            | "run_update"
+    ) || name.starts_with("connection_")
 }
 
 /// A caller reaching several workspaces, calling an operation whose target

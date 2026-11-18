@@ -1,8 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { useHostOffers, useJoinableAccounts } from './addPaths'
+import { HostOfferList } from './HostOfferList'
+import { JoinAgentList } from './JoinAgentList'
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { toastError } from '../app/mutations'
+import { useWorkspaceId } from '../app/workspace'
+import { opQuery, useOp } from '../api/ops'
 import { apiUrl } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { OneTimeValue } from '../settings/OneTimeValue'
@@ -46,7 +51,9 @@ import {
   type ExternalAgentRole,
   type ExternalAgentScope,
   type OneTimeCredential,
+  listSetupRecipes,
   type SetupApp,
+  type SetupRecipe,
   setupMessage,
 } from './api'
 import { RUNNER_PRESETS, runnerSettings, type RunnerPresetId } from './runnerPresets'
@@ -75,11 +82,18 @@ function RoleOptions() {
 
 type Confirming = { kind: 'rotate' | 'remove' | 'setup'; connection: ExternalAgentConnection }
 
-const SETUP_APPS: { value: SetupApp; label: string }[] = [
-  { value: 'claude_code', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'other', label: 'Another app' },
-]
+/** Until the server's list arrives, and if it can't: the generic steps. */
+const FALLBACK_RECIPES: SetupRecipe[] = [{ id: 'other', title: 'Another app' }]
+
+/** The apps a setup link can be made for; the first is the default. */
+function useSetupRecipes(): SetupRecipe[] {
+  const recipes = useQuery({
+    queryKey: queryKeys.agentRecipes(),
+    queryFn: listSetupRecipes,
+    staleTime: Infinity,
+  })
+  return recipes.data?.length ? recipes.data : FALLBACK_RECIPES
+}
 
 function SetupAppField({
   disabled,
@@ -95,6 +109,7 @@ function SetupAppField({
   /** Offer showing the token instead. */
   withToken?: boolean
 }) {
+  const recipes = useSetupRecipes()
   return (
     <SelectField
       disabled={disabled}
@@ -104,9 +119,9 @@ function SetupAppField({
       onChange={(event) => onChange(event.target.value as SetupApp | '')}
       value={value}
     >
-      {SETUP_APPS.map((app) => (
-        <option key={app.value} value={app.value}>
-          {app.label}
+      {recipes.map((recipe) => (
+        <option key={recipe.id} value={recipe.id}>
+          {recipe.title}
         </option>
       ))}
       {withToken ? <option value="">Show me the token instead</option> : null}
@@ -134,7 +149,9 @@ export function ExternalAgentSettings({
     setup?: { handle: string; runner: RunnerPresetId; webhookSecret: string | null }
   } | null>(null)
   const [setupLink, setSetupLink] = useState<{ agentName: string; message: string; expiresAt: string } | null>(null)
-  const [setupApp, setSetupApp] = useState<SetupApp>('claude_code')
+  const recipes = useSetupRecipes()
+  const [pickedApp, setSetupApp] = useState<SetupApp | null>(null)
+  const setupApp = pickedApp ?? recipes[0].id
   const [creatingAs, setCreatingAs] = useState<RunnerPresetId>('agent')
   const [createError, setCreateError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<Confirming | null>(null)
@@ -277,10 +294,7 @@ export function ExternalAgentSettings({
           </div>
         )}
       </Section>
-      <Section
-        description="A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP: you get one setup message to paste into its app, or its token, shown once."
-        title="Connect an agent"
-      >
+      <AddAgentSection projectId={projectId}>
         {createError ? (
           <Banner className="aw-agents__error" tone="danger">
             {createError}
@@ -294,7 +308,7 @@ export function ExternalAgentSettings({
             createMutation.mutate(input)
           }}
         />
-      </Section>
+      </AddAgentSection>
       <ConfirmDialog
         busy={confirmMutation.isPending}
         confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}
@@ -360,6 +374,58 @@ export function ExternalAgentSettings({
   )
 }
 
+type AddPath = 'connect' | 'existing' | 'host'
+
+const ADD_PATHS: Record<AddPath, { label: string; description: string }> = {
+  connect: {
+    label: 'Connect one you run',
+    description:
+      'A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP: you get one setup message to paste into its app, or its token, shown once.',
+  },
+  existing: {
+    label: 'Add one you already have',
+    description:
+      'Agents you manage in other workspaces. Adding one keeps its identity, token and connections; it gets this workspace’s role for new agents.',
+  },
+  host: {
+    label: 'Start one on a linked host',
+    description: 'Ways to get a new agent from the hosts you’ve linked. Each host walks you through its own steps.',
+  },
+}
+
+/**
+ * A2.18: one place to add an agent, whichever way it comes: connect one you
+ * run, add one you manage elsewhere, or start one on a linked host (A2.20).
+ * A way shows only when it has something to offer. To reconnect one that
+ * lost its token, use its card's setup link or new token.
+ */
+function AddAgentSection({ children, projectId }: { children: ReactNode; projectId: string }) {
+  const joinable = useJoinableAccounts()
+  const offers = useHostOffers()
+  const available: AddPath[] = [
+    'connect',
+    ...(joinable.length > 0 ? (['existing'] as const) : []),
+    ...(offers.length > 0 ? (['host'] as const) : []),
+  ]
+  const [picked, setPicked] = useState<AddPath>('connect')
+  const path = available.includes(picked) ? picked : 'connect'
+  return (
+    <Section description={ADD_PATHS[path].description} title="Add an agent">
+      {available.length > 1 && (
+        <SegmentedControl<AddPath>
+          label="How it comes"
+          onChange={setPicked}
+          options={available.map((value) => ({ value, label: ADD_PATHS[value].label }))}
+          value={path}
+        />
+      )}
+      {path === 'connect' && children}
+      {path === 'existing' && <JoinAgentList projectId={projectId} />}
+      {path === 'host' && <HostOfferList />}
+    </Section>
+  )
+}
+
 function CreateAgentForm({
   disabled,
   onSubmit,
@@ -372,7 +438,9 @@ function CreateAgentForm({
   const [displayName, setDisplayName] = useState('')
   const [handle, setHandle] = useState('')
   const [webhookUrl, setWebhookUrl] = useState('')
-  const [setupApp, setSetupApp] = useState<SetupApp | ''>('claude_code')
+  const recipes = useSetupRecipes()
+  const [pickedApp, setSetupApp] = useState<SetupApp | '' | null>(null)
+  const setupApp = pickedApp ?? recipes[0].id
   const [role, setRole] = useState<ExternalAgentRole>('member')
   const [scopes, setScopes] = useState<ExternalAgentScope[]>(memberScopes)
   const runner = RUNNER_PRESETS.find((candidate) => candidate.id === preset)?.runner ?? false
@@ -548,9 +616,40 @@ function AgentCard({
   const active = connection.status === 'active'
   const [editing, setEditing] = useState(false)
   const [secret, setSecret] = useState<string | null>(null)
+  // A2.10: a paused agent is asked nothing new and its changes do nothing.
+  const workspaceId = useWorkspaceId() ?? undefined
+  const statuses = useQuery({ ...opQuery('status_list', { accounts: [connection.actorId] }, { workspaceId }), enabled: active })
+  const paused = statuses.data?.statuses.some((status) => status.state === 'paused') ?? false
+  const pause = useOp('agent_pause', {
+    workspaceId,
+    invalidates: ['status_list'],
+    onSuccess: () =>
+      showToast({ title: `${connection.displayName} paused`, description: 'It’s asked nothing new and its changes do nothing until you resume it.' }),
+  })
+  const resume = useOp('agent_resume', {
+    workspaceId,
+    invalidates: ['status_list'],
+    onSuccess: () => showToast({ title: `${connection.displayName} resumed`, description: 'What it missed arrives now, in order.' }),
+  })
+  const pausing = pause.isPending || resume.isPending
   const menu: MenuEntry[] = [
     ...(active
       ? [
+          paused
+            ? {
+                label: 'Resume',
+                icon: 'circle-check' as const,
+                disabled: disabled || pausing,
+                onSelect: () =>
+                  resume.mutate({ account: connection.actorId }, { onError: (reason) => toastError(`${connection.displayName} wasn’t resumed`, reason) }),
+              }
+            : {
+                label: 'Pause',
+                icon: 'stop' as const,
+                disabled: disabled || pausing,
+                onSelect: () =>
+                  pause.mutate({ account: connection.actorId }, { onError: (reason) => toastError(`${connection.displayName} wasn’t paused`, reason) }),
+              },
           { label: 'Set up in an app…', icon: 'link' as const, disabled, onSelect: () => onConfirm('setup') },
           { label: 'New token…', icon: 'retry' as const, disabled, onSelect: () => onConfirm('rotate') },
           { label: 'Disable', icon: 'circle-minus' as const, disabled, onSelect: () => onEnable(false) },
@@ -577,8 +676,8 @@ function AgentCard({
             )}
           </span>
         </div>
-        <StatusChip icon={active ? 'circle-check' : 'circle-minus'} tone={active ? 'success' : 'muted'}>
-          {active ? 'Active' : connection.status === 'removed' ? 'Removed' : 'Disabled'}
+        <StatusChip icon={active && !paused ? 'circle-check' : 'circle-minus'} tone={active && !paused ? 'success' : 'muted'}>
+          {active ? (paused ? 'Paused' : 'Active') : connection.status === 'removed' ? 'Removed' : 'Disabled'}
         </StatusChip>
       </header>
       <ul aria-label="Permissions" className="aw-agentcard__scopes">

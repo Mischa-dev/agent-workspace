@@ -21,6 +21,8 @@ import { useSheets } from '../../sheets/api'
 import { listWhiteboards, whiteboardKeys } from '../../whiteboards/api'
 import { getProjectConversationSidebar } from '../../conversations/api'
 import { listEnvironments } from '../../launch/api'
+import { queryKeys } from '../../api/queryKeys'
+import { listMembers } from '../../team/api'
 import { launchKeys } from '../../launch/hooks'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
 import '../../automations/automations.css'
@@ -66,6 +68,7 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'set_field', label: 'Change a field' },
   { kind: 'notify', label: 'Notify people' },
   { kind: 'post_message', label: 'Post a message' },
+  { kind: 'ask_agent', label: 'Ask an agent' },
 ]
 
 /** Record rules (AWD-110) and page, sheet and board rules aren't about tasks: no saved view, and only actions that don't change tasks. */
@@ -75,7 +78,7 @@ const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'page_changed' ||
   trigger.kind === 'sheet_changed' ||
   trigger.kind === 'whiteboard_changed'
-const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message']
+const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
   switch (kind) {
@@ -126,6 +129,8 @@ function defaultAction(kind: RuleActionKind, records = false): RuleAction {
       return { kind, conversationId: '', text: '' }
     case 'run_operation':
       return { kind, operation: '', input: {} }
+    case 'ask_agent':
+      return { kind, accountId: '', prompt: records ? '{{record.title}}: ' : '{{task.key}} {{task.title}}: ', conversationId: records ? '' : null }
   }
 }
 
@@ -158,6 +163,12 @@ export function RuleDialog({
     queryFn: () => listEnvironments(projectId),
   })
   const profiles = useProfiles(projectId)
+  const asking = actions.some((action) => action.kind === 'ask_agent')
+  const members = useQuery({
+    queryKey: queryKeys.members(projectId),
+    queryFn: () => listMembers(projectId),
+    enabled: asking && Boolean(projectId),
+  })
   const channels = useQuery({
     queryKey: automationKeys.channels(projectId),
     queryFn: () => getProjectConversationSidebar(projectId),
@@ -312,6 +323,7 @@ export function RuleDialog({
                 channels={channelList}
                 environments={environments.data?.environments ?? []}
                 index={index}
+                members={(members.data?.members ?? []).filter((member) => member.enabled)}
                 profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
                 projectId={projectId}
@@ -565,6 +577,7 @@ function ActionFields({
   channels,
   environments,
   index,
+  members,
   onChange,
   profiles,
   projectId,
@@ -574,6 +587,8 @@ function ActionFields({
   channels: ChannelChoice[]
   environments: { id: string; name: string; isDefault: boolean }[]
   index: number
+  /** Who an "Ask an agent" action can ask: the space's members. */
+  members: { actorId: string; displayName: string; handle: string }[]
   onChange: (action: RuleAction) => void
   profiles: { id: string; name: string; handle: string }[]
   projectId: string
@@ -699,6 +714,57 @@ function ActionFields({
             required
             rows={2}
             value={action.text}
+          />
+        </>
+      )
+    case 'ask_agent':
+      return (
+        <>
+          <SelectField
+            id={id('who')}
+            label="Who to ask"
+            onChange={(event) => onChange({ ...action, accountId: event.target.value })}
+            required
+            value={action.accountId}
+          >
+            <option disabled value="">
+              Choose someone
+            </option>
+            {members.map((member) => (
+              <option key={member.actorId} value={member.actorId}>
+                {member.displayName} (@{member.handle})
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            hint={records ? undefined : 'Left on the task, it’s asked in a comment on the task.'}
+            id={id('where')}
+            label="Where"
+            onChange={(event) => onChange({ ...action, conversationId: event.target.value || null })}
+            required={records}
+            value={action.conversationId ?? ''}
+          >
+            {records ? (
+              <option disabled value="">
+                Choose a channel
+              </option>
+            ) : (
+              <option value="">On the task</option>
+            )}
+            {channels.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                #{channel.name}
+              </option>
+            ))}
+          </SelectField>
+          <TextArea
+            hint="Posted as you, mentioning them. They answer like any mention."
+            id={id('prompt')}
+            label="What to ask"
+            onChange={(event) => onChange({ ...action, prompt: event.target.value })}
+            required
+            rows={3}
+            value={action.prompt}
           />
         </>
       )

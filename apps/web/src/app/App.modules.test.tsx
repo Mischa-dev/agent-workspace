@@ -272,7 +272,7 @@ describe('modules that are off', () => {
       expect(first.container.querySelector(runs)).toBeTruthy()
     })
     first.unmount()
-    withModulesOff(['automations', 'runs'])
+    withModulesOff(['agents', 'runs'])
     const second = render(<App />)
     expect(await screen.findByRole('link', { name: 'Profile' })).toBeVisible()
     await waitFor(() => {
@@ -285,10 +285,10 @@ describe('modules that are off', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'profile' } })
     expect(await screen.findByRole('list', { name: 'Matching settings' })).toBeVisible()
     second.unmount()
-    // And a link straight to it says Automations is turned off.
+    // And a link straight to it says Agents is turned off.
     window.history.replaceState({}, '', '/settings/account/webhooks')
     render(<App />)
-    expect(await screen.findByRole('heading', { name: 'Automations is turned off' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'Agents is turned off' })).toBeVisible()
   })
 
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
