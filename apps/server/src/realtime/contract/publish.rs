@@ -89,6 +89,7 @@ pub(crate) fn of_logged(event: &LoggedEvent) -> Vec<Publish> {
     if let Some(account) = access_changed(event) {
         return vec![Publish::Stale {
             audiences: vec![Audience::Account(account)],
+            position: Some(event.position),
         }];
     }
     let Some(route) = Route::of_logged(event) else {
@@ -112,7 +113,10 @@ pub(crate) fn of_logged(event: &LoggedEvent) -> Vec<Publish> {
     }
     let stale = stale_audiences(&route);
     if !stale.is_empty() {
-        items.push(Publish::Stale { audiences: stale });
+        items.push(Publish::Stale {
+            audiences: stale,
+            position: Some(event.position),
+        });
     }
     items
 }

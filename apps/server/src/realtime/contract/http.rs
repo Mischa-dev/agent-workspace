@@ -145,6 +145,7 @@ fn issue(
     set: &SubscriptionSet,
     documents: &[DocumentRef],
     from: i64,
+    head: i64,
 ) -> Result<TicketResponse, AppError> {
     let mut named = audiences(set);
     named.extend(
@@ -163,7 +164,7 @@ fn issue(
         audiences: named,
         from,
         expires,
-        issued_ms: chrono::Utc::now().timestamp_millis(),
+        head,
     });
     Ok(TicketResponse {
         ticket,
@@ -187,13 +188,15 @@ pub async fn ticket(
     principal: AuthenticatedActor,
     Query(query): Query<AfterQuery>,
 ) -> Result<Json<TicketResponse>, AppError> {
-    let from = match query.position()? {
-        Some(after) => after.min(head(&state).await?),
-        None => head(&state).await?,
-    };
+    // The head first: what the ticket names is read after it, so a change
+    // to the account's access past it is newer than the ticket.
+    let head = head(&state).await?;
+    let from = query.position()?.map_or(head, |after| after.min(head));
     let set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
     let documents = viewable(&state, principal.actor_id, query.documents()?).await?;
-    Ok(Json(issue(&state, &principal, &set, &documents, from)?))
+    Ok(Json(issue(
+        &state, &principal, &set, &documents, from, head,
+    )?))
 }
 
 #[derive(Debug, Serialize)]
@@ -217,6 +220,7 @@ pub async fn resume(
 ) -> Result<Json<ResumeResponse>, AppError> {
     let after = query.position()?.ok_or(AppError::Validation("after"))?;
     let asked = query.documents()?;
+    let cut = head(&state).await?;
     let mut set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
     let mut events = Vec::new();
     let mut position = after;
@@ -244,7 +248,7 @@ pub async fn resume(
         }
     };
     let documents = viewable(&state, principal.actor_id, asked).await?;
-    let ticket = issue(&state, &principal, &set, &documents, position)?;
+    let ticket = issue(&state, &principal, &set, &documents, position, cut)?;
     Ok(Json(ResumeResponse {
         events,
         position: position.to_string(),
