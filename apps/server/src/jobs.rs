@@ -401,6 +401,7 @@ pub fn default_registry() -> JobRegistry {
     crate::automations::register_jobs(&mut registry);
     crate::files::register_jobs(&mut registry);
     crate::whiteboards::store::register_jobs(&mut registry);
+    crate::whiteboards::store::register_compaction(&mut registry);
     crate::link_previews::register_jobs(&mut registry);
     crate::repositories::register_jobs(&mut registry);
     crate::workspace::lifecycle::register_jobs(&mut registry);

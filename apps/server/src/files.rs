@@ -1085,6 +1085,34 @@ pub(crate) async fn rehome_comment_uploads(
     Ok(())
 }
 
+/// Moves the author's unsent uploads in a thing's discussion to the thread
+/// under it that a comment is posted in.
+pub(crate) async fn rehome_thread_uploads(
+    transaction: &mut Transaction<'_, Postgres>,
+    comments_id: Uuid,
+    thread_id: Uuid,
+    author: Uuid,
+    file_ids: &[Uuid],
+) -> Result<(), AppError> {
+    if file_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE files SET conversation_id = $2
+        WHERE id = ANY($3) AND conversation_id = $1 AND uploaded_by_actor_id = $4
+          AND attached_at IS NULL AND removed_at IS NULL
+        "#,
+    )
+    .bind(comments_id)
+    .bind(thread_id)
+    .bind(file_ids)
+    .bind(author)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 fn check_attachment_ids(file_ids: &[Uuid]) -> Result<(), AppError> {
     let mut unique = file_ids.to_vec();
     unique.sort_unstable();

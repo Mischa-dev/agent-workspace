@@ -2355,6 +2355,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_ask",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Ask about part of a board"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "whiteboard.created"
     ],
     "idempotent": true,

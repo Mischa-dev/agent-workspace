@@ -29,8 +29,12 @@ pub const MAX_BOARD_FILE_BYTES: i64 = 64 * 1024 * 1024;
 pub const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 /// A revision is saved before an edit when the last one is older than this.
 const REVISION_INTERVAL_MINUTES: i32 = 10;
-/// Revisions kept per board; older ones are dropped.
-const REVISIONS_KEPT: i64 = 100;
+/// Saved versions older than this have their elements moved to the file
+/// store by the compaction job (C1.34); they still open and restore.
+const COMPACT_AFTER_DAYS: i32 = 30;
+/// Versions moved per compaction run.
+const COMPACT_BATCH: i64 = 200;
+const COMPACT_KIND: &str = "history.compact";
 
 /// Tells open boards (and the boards list) that a board changed.
 pub async fn notify(
@@ -355,20 +359,119 @@ pub async fn save_revision(
     .bind(note)
     .fetch_one(&mut **transaction)
     .await?;
-    sqlx::query(
-        r#"
-        DELETE FROM whiteboard_revisions
-        WHERE whiteboard_id = $1 AND revision <= (
-            SELECT revision FROM whiteboard_revisions WHERE whiteboard_id = $1
-            ORDER BY revision DESC OFFSET $2 LIMIT 1
-        )
-        "#,
+    Ok(Some(revision))
+}
+
+/// A saved version's elements, from the row or, once the compaction job
+/// moved them, from the file store. None when there is no such version.
+pub async fn revision_elements(
+    store: &files::FileStore,
+    connection: &mut sqlx::PgConnection,
+    whiteboard_id: Uuid,
+    revision: i32,
+) -> Result<Option<Value>, AppError> {
+    let Some((elements, key)) = sqlx::query_as::<_, (Value, Option<String>)>(
+        "SELECT elements, payload_key FROM whiteboard_revisions WHERE whiteboard_id = $1 AND revision = $2",
     )
     .bind(whiteboard_id)
-    .bind(REVISIONS_KEPT)
-    .execute(&mut **transaction)
+    .bind(revision)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(key) = key else {
+        return Ok(Some(elements));
+    };
+    let bytes = store.read_all(&key, MAX_PAYLOAD_BYTES).await?;
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(bytes.as_slice()),
+        &mut json,
+    )
+    .map_err(|_| AppError::Internal("a moved board version couldn't be read"))?;
+    Ok(Some(serde_json::from_slice(&json).map_err(|_| {
+        AppError::Internal("a moved board version couldn't be read")
+    })?))
+}
+
+/// The largest moved version read back, compressed.
+const MAX_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
+pub fn register_compaction(registry: &mut crate::jobs::JobRegistry) {
+    registry.register(
+        COMPACT_KIND,
+        |context: crate::jobs::JobContext| async move {
+            compact_revisions(&context.state)
+                .await
+                .map_err(|error| crate::jobs::JobError::retry(error.log_category()))?;
+            Ok(())
+        },
+    );
+    registry.every(COMPACT_KIND, std::time::Duration::from_secs(6 * 60 * 60));
+}
+
+/// Moves the elements of board versions older than 30 days into the file
+/// store, compressed, a batch per run (C1.34). The row keeps everything
+/// else; the version still opens and restores. Returns how many moved.
+pub async fn compact_revisions(state: &AppState) -> Result<u64, AppError> {
+    let due = sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+        r#"
+        SELECT board.organization_id, revision.whiteboard_id, revision.revision
+        FROM whiteboard_revisions revision
+        JOIN whiteboards board ON board.id = revision.whiteboard_id
+        WHERE revision.payload_key IS NULL
+          AND revision.created_at < now() - make_interval(days => $1)
+          AND jsonb_array_length(revision.elements) > 0
+        ORDER BY revision.created_at
+        LIMIT $2
+        "#,
+    )
+    .bind(COMPACT_AFTER_DAYS)
+    .bind(COMPACT_BATCH)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    Ok(Some(revision))
+    let store = files::FileStore::from_config(&state.config);
+    let mut moved = 0;
+    for (workspace, board, revision) in due {
+        let elements = sqlx::query_scalar::<_, Value>(
+            "SELECT elements FROM whiteboard_revisions WHERE whiteboard_id = $1 AND revision = $2",
+        )
+        .bind(board)
+        .bind(revision)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
+        let json = serde_json::to_vec(&elements)
+            .map_err(|_| AppError::Internal("a board version couldn't be written"))?;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &json)
+            .map_err(|_| AppError::Internal("a board version couldn't be compressed"))?;
+        let compressed = encoder
+            .finish()
+            .map_err(|_| AppError::Internal("a board version couldn't be compressed"))?;
+        let key = format!(
+            "{}/history/whiteboard-{}-{revision}.json.gz",
+            workspace.simple(),
+            board.simple()
+        );
+        store.put(&key, &compressed).await?;
+        // Only the version as it was read: elements never change after a
+        // version is saved, so this only guards against a second run.
+        let updated = sqlx::query(
+            r#"
+            UPDATE whiteboard_revisions SET elements = '[]'::jsonb, payload_key = $3
+            WHERE whiteboard_id = $1 AND revision = $2 AND payload_key IS NULL
+            "#,
+        )
+        .bind(board)
+        .bind(revision)
+        .bind(&key)
+        .execute(crate::db::scoped(&state.pool))
+        .await?
+        .rows_affected();
+        moved += updated;
+    }
+    Ok(moved)
 }
 
 #[derive(Clone, Debug, FromRow, Serialize, schemars::JsonSchema)]
@@ -414,19 +517,15 @@ pub async fn revisions(
 /// new versions and everything added since is deleted, so open browsers
 /// merge the restore like any edit. The current state is saved first.
 pub async fn restore_revision(
+    store: &files::FileStore,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
     revision: i32,
 ) -> Result<WriteOutcome, AppError> {
-    let saved = sqlx::query_scalar::<_, Value>(
-        "SELECT elements FROM whiteboard_revisions WHERE whiteboard_id = $1 AND revision = $2",
-    )
-    .bind(whiteboard_id)
-    .bind(revision)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("whiteboard revision"))?;
+    let saved = revision_elements(store, transaction, whiteboard_id, revision)
+        .await?
+        .ok_or(AppError::NotFound("whiteboard revision"))?;
     let scene_seq = lock(transaction, whiteboard_id).await?;
     save_revision(
         transaction,

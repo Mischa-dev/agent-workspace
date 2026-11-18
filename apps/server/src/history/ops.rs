@@ -215,9 +215,15 @@ impl Operation for HistoryShow {
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
-        let content = super::show(&mut connection, &kind, id, input.version)
-            .await?
-            .ok_or_else(|| OpError::not_found("That version"))?;
+        let content = super::show(
+            &crate::files::FileStore::from_config(&call.state.config),
+            &mut connection,
+            &kind,
+            id,
+            input.version,
+        )
+        .await?
+        .ok_or_else(|| OpError::not_found("That version"))?;
         Ok(HistoryShowOutput {
             kind,
             version: input.version,
@@ -322,6 +328,7 @@ impl Operation for HistoryRestore {
             space_id: call.ctx.space_id,
             workspace_id: call.ctx.workspace_id,
             actor_id: call.account_id(),
+            files: crate::files::FileStore::from_config(&call.state.config),
         };
         let tx = call.tx().await?;
         let version = super::restore(

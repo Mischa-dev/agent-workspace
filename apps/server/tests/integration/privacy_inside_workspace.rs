@@ -1535,6 +1535,42 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
     assert!(!status.is_success(), "nate makes tasks: {status} {refused}");
     let (status, made) = op(&world.people["lena"].browser, "whiteboard_to_tasks", notes).await;
     assert!(status.is_success(), "lena makes tasks: {status} {made}");
+
+    // Asking about part of the board (C1.31): someone out of its space
+    // neither asks nor is asked; Lena asks Mara.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(world.people["omar"].actor)
+    .execute(pool)
+    .await
+    .expect("omar leaves WORK");
+    let ask = |who: Uuid| {
+        json!({"whiteboardId": board, "elementIds": ["idea"], "accountId": who,
+               "question": "Worth it?"})
+    };
+    let (status, refused) = op(
+        &world.people["omar"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "omar asks: {status} {refused}");
+    let (status, refused) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["omar"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "lena asks omar: {status} {refused}");
+    let (status, asked) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(status.is_success(), "lena asks mara: {status} {asked}");
     world.finish().await;
 }
 

@@ -617,7 +617,14 @@ async fn restore_http(
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
-    let outcome = store::restore_revision(&mut transaction, &caller, id, revision).await?;
+    let outcome = store::restore_revision(
+        &crate::files::FileStore::from_config(&state.config),
+        &mut transaction,
+        &caller,
+        id,
+        revision,
+    )
+    .await?;
     super::audit(
         &mut transaction,
         &caller,

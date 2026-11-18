@@ -3073,7 +3073,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // C1.18: B's sheet's charts aren't read from A.
         case(
             "sheet_chart_get",
-            vec![],
+            vec![json!({"sheetId": a.sheet, "chartId": a.sheet_chart})],
             vec![json!({"sheetId": b.sheet, "chartId": "0193a0c4-0000-7000-8000-000000000001"})],
             vec![],
         ),

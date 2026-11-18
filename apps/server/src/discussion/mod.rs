@@ -313,6 +313,18 @@ pub(crate) async fn post(
             (thread_id, "thread", Some(thread_id))
         }
     };
+    // Files uploaded to the thing's discussion go with a comment posted in
+    // a thread under it.
+    if conversation_id != comments_id {
+        crate::files::rehome_thread_uploads(
+            &mut transaction,
+            comments_id,
+            conversation_id,
+            actor.actor_id,
+            attachments,
+        )
+        .await?;
+    }
     // A task's comment files were uploaded to the task (`?for=comment`);
     // they go with the comment's conversation now.
     if kind == SubjectKind::Task {

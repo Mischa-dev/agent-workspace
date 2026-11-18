@@ -871,7 +871,14 @@ pub(super) async fn whiteboard_update(
         whiteboards::change(&mut transaction, &caller, id, &change).await?;
         if let Some(revision) = arguments.restore_revision {
             let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
-            store::restore_revision(&mut transaction, &caller, id, revision).await?;
+            store::restore_revision(
+                &crate::files::FileStore::from_config(&state.config),
+                &mut transaction,
+                &caller,
+                id,
+                revision,
+            )
+            .await?;
             whiteboards::audit(
                 &mut transaction,
                 &caller,

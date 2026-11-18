@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { opPrefix, opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
+import { HistoryPanel } from '../history/HistoryPanel'
 import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
 import { outlineTitle, useRecentEdits } from '../changes/useRecentEdits'
 import { useProjectExperience } from '../experience/layout'
@@ -123,6 +124,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
   // The open discussion: by its thread's id once it has one, since rows and
   // columns moving around it move its anchor.
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string; threadId?: string } | null>(null)
   // Find and replace, and the filter view on screen (C1.16).
   const [finding, setFinding] = useState(false)
@@ -593,6 +595,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
     { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
     { label: body.ranges.length ? `Named ranges and links (${body.ranges.length})` : 'Named ranges and links', onSelect: () => setNaming(true) },
     { label: body.charts.length ? `Charts (${body.charts.length})` : 'Charts', onSelect: () => setCharting(true) },
+    { label: 'History', icon: 'clock', onSelect: () => setHistoryOpen(true) },
     ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
       ? [
@@ -835,6 +838,16 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             thingId={sheetId}
             thread={commentingThread}
             viewerId={user.actorId}
+          />
+        </SidePanel>
+      ) : null}
+      {historyOpen ? (
+        <SidePanel onClose={() => setHistoryOpen(false)} title="History">
+          <HistoryPanel
+            canRestore={editable && !body.sheet.archived}
+            currentVersion={body.sheet.revision}
+            onRestored={() => void refresh()}
+            thingId={sheetId}
           />
         </SidePanel>
       ) : null}

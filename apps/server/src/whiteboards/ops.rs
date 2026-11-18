@@ -36,7 +36,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<WhiteboardDuplicate>()
         .add::<WhiteboardLink>()
         .add::<WhiteboardTemplateList>()
-        .add::<super::to_tasks::WhiteboardToTasks>();
+        .add::<super::to_tasks::WhiteboardToTasks>()
+        .add::<super::ask::WhiteboardAsk>();
 }
 
 // ---------------------------------------------------------------------------

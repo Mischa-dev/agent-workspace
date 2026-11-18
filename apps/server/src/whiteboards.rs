@@ -12,6 +12,7 @@
 //! Every read checks `whiteboard_visible_to` (migration 20261017070000) and,
 //! for agents, `actor_can_access_project` on the board's project.
 
+pub mod ask;
 pub mod edit;
 pub mod elements;
 pub mod fractional;

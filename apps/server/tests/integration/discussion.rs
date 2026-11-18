@@ -919,3 +919,146 @@ async fn a_boards_discussion_moves_with_it() {
     .await;
     assert_eq!(after["value"]["threads"][0]["messageCount"], 3, "{after}");
 }
+
+/// C1.31: asking an agent about three stickies starts a thread anchored to
+/// them, with a picture of the three, and asks the agent to reply there.
+/// Someone outside the board's space can't be asked, and someone who can't
+/// see the board can't ask.
+#[tokio::test]
+async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("OTHER")
+        .person("lena", "member")
+        .person("nina", "member")
+        .agent("rook", "member")
+        .build("d2_board_ask")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let lena = &world.people["lena"];
+    let nina = &world.people["nina"];
+    let rook = &world.agents["rook"];
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(nina.actor)
+    .execute(pool)
+    .await
+    .expect("nina leaves WORK");
+
+    let (_, board) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_create",
+        json!({
+            "title": "Ideas",
+            "projectId": work,
+            "operations": [
+                {"op": "add", "type": "rectangle", "id": "one", "text": "Faster sync", "x": 0},
+                {"op": "add", "type": "rectangle", "id": "two", "text": "Dark mode", "x": 200},
+                {"op": "add", "type": "rectangle", "id": "three", "text": "Offline", "x": 400},
+                {"op": "add", "type": "rectangle", "id": "four", "text": "Not this", "x": 900},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let ask = |who: Uuid| {
+        json!({
+            "whiteboardId": board,
+            "elementIds": ["one", "two", "three"],
+            "accountId": who,
+            "question": "Which of these first?",
+        })
+    };
+
+    // Nina can't see the board; Lena can't ask someone outside its space.
+    let (_, refused) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(rook.actor),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let (_, refused) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(nina.actor),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let mut missing = ask(rook.actor);
+    missing["elementIds"] = json!(["one", "gone"]);
+    let (_, refused) = op(app, &lena.browser, workspace, "whiteboard_ask", missing).await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+
+    let (status, asked) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(rook.actor),
+    )
+    .await;
+    assert!(status.is_success(), "{asked}");
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    let thread = Uuid::parse_str(asked["value"]["threadId"].as_str().expect("thread")).expect("id");
+    let message =
+        Uuid::parse_str(asked["value"]["messageId"].as_str().expect("message")).expect("id");
+    let file = Uuid::parse_str(asked["value"]["fileId"].as_str().expect("file")).expect("id");
+
+    // The thread is about the three stickies.
+    let anchor = sqlx::query_scalar::<_, Value>(
+        "SELECT anchor FROM conversations WHERE id = $1 AND kind = 'thread'",
+    )
+    .bind(thread)
+    .fetch_one(pool)
+    .await
+    .expect("anchor");
+    assert_eq!(anchor["kind"], "elements", "{anchor}");
+    assert_eq!(
+        anchor["elementIds"],
+        json!(["one", "three", "two"]),
+        "{anchor}"
+    );
+
+    // The question carries the picture, sent with the message in the thread.
+    let (conversation, on_message, content_type) =
+        sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(
+            "SELECT conversation_id, message_id, content_type FROM files WHERE id = $1",
+        )
+        .bind(file)
+        .fetch_one(pool)
+        .await
+        .expect("picture");
+    assert_eq!(conversation, thread);
+    assert_eq!(on_message, Some(message));
+    assert_eq!(content_type, "image/png");
+
+    // Rook is asked to reply in that thread.
+    let requests = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM reply_requests WHERE message_id = $1 AND agent_actor_id = $2",
+    )
+    .bind(message)
+    .bind(rook.actor)
+    .fetch_one(pool)
+    .await
+    .expect("requests");
+    assert_eq!(requests, 1);
+}

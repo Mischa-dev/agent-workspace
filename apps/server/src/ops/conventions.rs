@@ -34,6 +34,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "to_tasks",
             // A change kept for someone who edits the thing to decide (C1.11).
             "propose",
+            // A question about part of a thing, put to someone (C1.31).
+            "ask",
         ],
     ),
     (

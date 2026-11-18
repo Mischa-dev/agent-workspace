@@ -634,6 +634,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_to_tasks",
+    "whiteboard_ask",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -7317,6 +7318,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         )
         .without_own("A's board has no notes; notes into tasks are checked in w16_whiteboards"),
+        // C1.31: nobody asks about B's board from A, or asks B's account
+        // about A's board.
+        mcp_case(
+            "whiteboard_ask",
+            json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": ax.wren,
+                   "question": "Net?"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+                json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+            ],
+        )
+        .without_own("A's board has no elements; asking is checked in discussion and privacy_inside_workspace"),
         mcp_case(
             "whiteboard_link",
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": a.subtask}),

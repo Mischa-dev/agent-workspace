@@ -112,7 +112,7 @@ export type GroupView = { description: string; handle: string; id: string; membe
 
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
-export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changeSetId?: string | null; changed: string[]; requestedBy?: string | null; requestedById?: string | null; runId?: string | null; summary: string; version: number; via?: string | null }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -896,6 +896,10 @@ export type ViewUpdateInput = { config?: unknown; expectedVersion?: number | nul
 
 export type ViewUpdateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
+export type WhiteboardAskInput = { accountId: string; elementIds: string[]; question: string; whiteboardId: string }
+
+export type WhiteboardAskOutput = { conversationId: string; fileId: string; messageId: string; threadId: string }
+
 export type WhiteboardCreateInput = { fromTemplateId?: string | null; linkTo?: LinkArgument | null; operations?: Operation[] | null; projectId?: string | null; title: string; workspaceId?: string | null }
 
 export type WhiteboardCreateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
@@ -1090,6 +1094,7 @@ export type Operations = {
   view_list: { input: ViewListInput; output: ViewListOutput }
   view_pin: { input: ViewPinInput; output: ViewPinOutput }
   view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }
+  whiteboard_ask: { input: WhiteboardAskInput; output: WhiteboardAskOutput }
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }

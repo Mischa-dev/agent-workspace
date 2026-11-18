@@ -5,11 +5,12 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { callOp, newRequestId, opPrefix } from '../api/ops'
+import { callOp, newRequestId, opPrefix, opQuery } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
 import { useRecentEdits } from '../changes/useRecentEdits'
+import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
@@ -47,6 +48,8 @@ import {
   type Editor,
 } from './api'
 import { HistoryDialog, LinksDialog } from './BoardPanels'
+import { AskDialog, BoardPins, SelectionActions } from './ElementComments'
+import { anchorFor, pinnedThreads, sameIds, type BoardSelection, type BoardViewport, type ElementsAnchor } from './pins'
 import { RenameDialog } from './dialogs'
 import { saveLabel, type SaveState } from './sync'
 import './whiteboards.css'
@@ -108,6 +111,14 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const [allEdits, setAllEdits] = useState(false)
   const lastDrawn = editors.reduce((latest, editor) => (editor.at > latest ? editor.at : latest), '')
   const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits })
+  // Comments on elements (C1.31): pins where threads were started, and
+  // comment or ask about what's selected.
+  const commentsShown = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
+  const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'whiteboard', id: whiteboardId } }), enabled: commentsShown })
+  const [selection, setSelection] = useState<BoardSelection | null>(null)
+  const [viewport, setViewport] = useState<BoardViewport | null>(null)
+  const [commenting, setCommenting] = useState<{ anchor: ElementsAnchor; threadId?: string } | null>(null)
+  const [asking, setAsking] = useState<BoardSelection | null>(null)
   usePageTitle(detail.data?.whiteboard.title ?? null)
   if (detail.isPending || scene.isPending) return <PageSkeleton cards={1} label="Loading whiteboard" />
   if (detail.isError || scene.isError || !detail.data || !scene.data) {
@@ -124,7 +135,19 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const { whiteboard, canEdit, links } = detail.data
   const editable = canEdit && !whiteboard.deleted
   const suggesting = !canEdit && Boolean(detail.data.canSuggest) && !whiteboard.deleted
-  const showComments = (whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
+  const showComments = commentsShown
+  const pinned = showComments && comments.data ? pinnedThreads(comments.data.threads) : []
+  const commentingThread = !commenting || !comments.data
+    ? null
+    : (comments.data.threads.find((thread) =>
+        commenting.threadId ? thread.id === commenting.threadId : pinned.some((entry) => entry.thread.id === thread.id && sameIds(entry.anchor.elementIds, commenting.anchor.elementIds)),
+      ) ?? null)
+  const commentOnSelection = () => {
+    if (!selection) return
+    const anchor = anchorFor(selection)
+    const found = pinned.find((entry) => sameIds(entry.anchor.elementIds, anchor.elementIds))
+    setCommenting({ anchor, threadId: found?.thread.id })
+  }
   // Who else has drawn here lately; you're not in your own list.
   const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId && editor.actorId !== viewerId)
   const agents = others.filter((editor) => actorKind(editor.kind) === 'agent' && now - new Date(editor.at).getTime() < DRAWING_MS)
@@ -320,15 +343,59 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             onEditors={setEditors}
             onSaveFailure={setSaveFailure}
             onSaveState={setSaveState}
+            onSelection={setSelection}
+            onViewport={setViewport}
             suggesting={suggesting}
             whiteboardId={whiteboard.id}
           />
         </Suspense>
+        {showComments ? (
+          <>
+            <BoardPins onOpen={(entry) => setCommenting({ anchor: entry.anchor, threadId: entry.thread.id })} pinned={pinned} viewport={viewport} />
+            <SelectionActions
+              canAsk={!whiteboard.deleted && Boolean(comments.data?.acceptsComments)}
+              onAsk={() => setAsking(selection)}
+              onComment={commentOnSelection}
+              selection={selection}
+              viewport={viewport}
+            />
+          </>
+        ) : null}
       </div>
       {showComments && panel === 'comments' ? (
         <SidePanel onClose={() => setPanel(null)} title="Comments">
           <ThingCommentsPanel kind="whiteboard" thingId={whiteboard.id} viewerId={viewerId} />
         </SidePanel>
+      ) : null}
+      {showComments && commenting && comments.data ? (
+        <SidePanel
+          onClose={() => setCommenting(null)}
+          title={commenting.anchor.elementIds.length === 1 ? 'Comments on an element' : `Comments on ${commenting.anchor.elementIds.length} elements`}
+        >
+          <AnchoredThreadPanel
+            acceptsComments={comments.data.acceptsComments}
+            anchor={commenting.anchor}
+            kind="whiteboard"
+            onStarted={(threadId) => setCommenting((open) => (open ? { ...open, threadId } : open))}
+            spaceId={comments.data.spaceId ?? whiteboard.projectId ?? ''}
+            thingId={whiteboard.id}
+            thread={commentingThread}
+            viewerId={viewerId}
+          />
+        </SidePanel>
+      ) : null}
+      {asking ? (
+        <AskDialog
+          onAsked={(threadId) => {
+            setAsking(null)
+            setCommenting({ anchor: anchorFor(asking), threadId })
+          }}
+          onClose={() => setAsking(null)}
+          selection={asking}
+          spaceId={comments.data?.spaceId ?? whiteboard.projectId ?? ''}
+          viewerId={viewerId}
+          whiteboardId={whiteboard.id}
+        />
       ) : null}
       {panel === 'proposals' ? (
         <BoardProposalsDialog canDecide={editable} onClose={() => setPanel(null)} proposals={proposals} userId={viewerId} />

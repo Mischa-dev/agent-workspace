@@ -3,11 +3,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
+import { HistoryPanel } from '../history/HistoryPanel'
 import { useProjects } from '../projects/hooks'
-import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, countLabel, describeError, formatFullDate, formatRelative } from '../ui'
+import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, describeError } from '../ui'
 import {
+  getWhiteboard,
   linkWhiteboard,
-  restoreRevision,
   unlinkWhiteboard,
   whiteboardKeys,
   type WhiteboardDetail,
@@ -148,20 +149,7 @@ export function HistoryDialog({
   open: boolean
 }) {
   const queryClient = useQueryClient()
-  const [busy, setBusy] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState<number | null>(null)
-  const restore = (revision: number) => {
-    setBusy(revision)
-    setError(null)
-    void restoreRevision(detail.whiteboard.id, revision)
-      .then(() => {
-        setRestored(revision)
-        void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
-      })
-      .catch((reason: unknown) => setError(describeError(reason).message))
-      .finally(() => setBusy(null))
-  }
   return (
     <Dialog
       description="The whiteboard saves a version every few minutes while people draw, and before anything removes a lot. Restoring saves the current drawing first."
@@ -171,41 +159,18 @@ export function HistoryDialog({
       title="History"
       width={560}
     >
-      {detail.revisions.length === 0 ? (
-        <EmptyState icon="clock" title="No saved versions yet">
-          The first one is saved once the whiteboard changes.
-        </EmptyState>
-      ) : (
-        <RowList label="Saved versions">
-          {detail.revisions.map((revision) => (
-            <Row
-              actions={
-                canEdit ? (
-                  <Button
-                    busy={busy === revision.revision}
-                    disabled={busy !== null}
-                    onClick={() => restore(revision.revision)}
-                    size="sm"
-                  >
-                    Restore
-                  </Button>
-                ) : null
-              }
-              key={revision.revision}
-              meta={
-                <>
-                  <span title={formatFullDate(revision.createdAt)}>{formatRelative(revision.createdAt)}</span>
-                  {revision.author ? <span>{revision.author}</span> : null}
-                  <span>{countLabel(revision.elementCount, 'element')}</span>
-                </>
-              }
-              title={revision.note ?? `Version ${revision.revision}`}
-            />
-          ))}
-        </RowList>
-      )}
+      {open ? (
+        <HistoryPanel
+          canRestore={canEdit}
+          currentVersion={() => getWhiteboard(detail.whiteboard.id).then((fresh) => fresh.whiteboard.sceneSeq)}
+          onRestored={(version) => {
+            setRestored(version)
+            void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
+          }}
+          thingId={detail.whiteboard.id}
+        />
+      ) : null}
       {restored ? <Banner tone="success">Restored. Everyone with the whiteboard open sees it now.</Banner> : null}
-      {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
   )
 }

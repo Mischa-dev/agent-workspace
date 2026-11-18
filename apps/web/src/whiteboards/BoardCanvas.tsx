@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { onWhiteboardChange } from '../realtime/liveDocuments'
 import type { Outline } from '../changes/recentEdits'
+import { sameIds, selectionBounds, type BoardSelection, type BoardViewport } from './pins'
 import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
 import { missingFiles, remember, unsaved, type Known, type SaveState } from './sync'
@@ -48,6 +49,10 @@ export type BoardCanvasProps = {
   draftRef?: MutableRefObject<DraftHandle | null>
   /** Elements someone changed recently, by id (C1.10): outlined in their name. */
   edited?: ReadonlyMap<string, Outline>
+  /** The selection changed (C1.31): its elements and their box, or null. */
+  onSelection?: (selection: BoardSelection | null) => void
+  /** The board scrolled or zoomed, to place comment pins over it. */
+  onViewport?: (viewport: BoardViewport) => void
 }
 
 type Element = OrderedExcalidrawElement
@@ -67,6 +72,8 @@ export default function BoardCanvas({
   onDraft,
   draftRef,
   edited,
+  onSelection,
+  onViewport,
 }: BoardCanvasProps) {
   const navigate = useNavigate()
   const realtime = useOptionalRealtime()
@@ -91,11 +98,11 @@ export default function BoardCanvas({
   const retryTimer = useRef<number | undefined>(undefined)
   // Once the board closes, a last save may still go out, but nothing retries.
   const closed = useRef(false)
-  const callbacks = useRef({ onSaveState, onEditors, onSaveFailure, onDraft })
+  const callbacks = useRef({ onSaveState, onEditors, onSaveFailure, onDraft, onSelection, onViewport })
   const saveRef = useRef<() => Promise<void>>(() => Promise.resolve())
   useEffect(() => {
-    callbacks.current = { onSaveState, onEditors, onSaveFailure, onDraft }
-  }, [onDraft, onEditors, onSaveFailure, onSaveState])
+    callbacks.current = { onSaveState, onEditors, onSaveFailure, onDraft, onSelection, onViewport }
+  }, [onDraft, onEditors, onSaveFailure, onSaveState, onSelection, onViewport])
   useEffect(() => {
     closed.current = false
     return () => {
@@ -257,8 +264,28 @@ export default function BoardCanvas({
     }
   }, [draftRef, known, whiteboardId])
 
+  // What's selected and where the board is, told only when they change.
+  const lastSelection = useRef<string[]>([])
+  const lastViewport = useRef<BoardViewport | null>(null)
+  const watch = useCallback((elements: readonly Element[], appState: AppState) => {
+    const ids = Object.keys(appState.selectedElementIds)
+      .filter((id) => appState.selectedElementIds[id])
+      .sort()
+    if (!sameIds(ids, lastSelection.current)) {
+      lastSelection.current = ids
+      callbacks.current.onSelection?.(ids.length ? selectionBounds(elements, ids) : null)
+    }
+    const viewport = { scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom.value }
+    const last = lastViewport.current
+    if (!last || last.scrollX !== viewport.scrollX || last.scrollY !== viewport.scrollY || last.zoom !== viewport.zoom) {
+      lastViewport.current = viewport
+      callbacks.current.onViewport?.(viewport)
+    }
+  }, [])
+
   const onChange = useCallback(
-    (elements: readonly Element[]) => {
+    (elements: readonly Element[], appState: AppState) => {
+      watch(elements, appState)
       if (suggesting) {
         callbacks.current.onDraft?.(unsaved(asStored(elements), known).length)
         return
@@ -269,7 +296,7 @@ export default function BoardCanvas({
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(() => void save(), SAVE_DELAY_MS)
     },
-    [editable, known, save, suggesting],
+    [editable, known, save, suggesting, watch],
   )
 
   // Live changes from people and agents.

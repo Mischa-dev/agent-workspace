@@ -10,4 +10,6 @@ export const whiteboardKeys = {
   /** The scene the canvas loads once. */
   scene: (id: string) => ['whiteboard-scene', id] as const,
   linked: (kind: LinkTargetKind, targetId: string) => ['whiteboards', 'linked', kind, targetId] as const,
+  /** Who in a space can be asked about part of a board (C1.31). */
+  askable: (spaceId: string) => ['whiteboards', 'askable', spaceId] as const,
 }

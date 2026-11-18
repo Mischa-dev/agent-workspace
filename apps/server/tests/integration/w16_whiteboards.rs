@@ -1575,6 +1575,61 @@ async fn board_changes_are_listed_and_undone() {
         json!(0.0),
         "{now}"
     );
+
+    // C1.34: history lists each version with its change set; a month on, old
+    // versions move out of the table into the file store and still show and
+    // restore.
+    let history = call("history_list", json!({"thing": board})).await;
+    assert_eq!(history["outcome"], "ok", "{history}");
+    let entries = history["value"]["entries"].as_array().expect("entries");
+    assert!(
+        entries.iter().any(|entry| entry["changeSetId"].is_string()),
+        "versions name their change: {history}"
+    );
+    let first = entries
+        .iter()
+        .filter_map(|entry| entry["version"].as_i64())
+        .min()
+        .expect("a first version");
+    sqlx::query(
+        "UPDATE whiteboard_revisions SET created_at = now() - interval '40 days' WHERE whiteboard_id::text = $1",
+    )
+    .bind(&board)
+    .execute(&setup.pool)
+    .await
+    .expect("age the versions");
+    let state = crate::support::app::state_on(&setup.pool);
+    let compacted = agent_workspace_server::whiteboards::store::compact_revisions(&state)
+        .await
+        .expect("compact");
+    assert!(compacted > 0, "old versions move out");
+    let inline = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM whiteboard_revisions WHERE whiteboard_id::text = $1 AND payload_key IS NULL AND jsonb_array_length(elements) > 0",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left inline");
+    assert_eq!(inline, 0);
+    let shown = call("history_show", json!({"thing": board, "version": first})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    assert!(shown.to_string().contains("plan"), "{shown}");
+    let at = scene(&setup, owner, &board, None).await["sceneSeq"]
+        .as_i64()
+        .expect("scene seq");
+    let restored = call(
+        "history_restore",
+        json!({"thing": board, "version": first, "expectedVersion": at,
+               "clientRequestId": "board-restore-compacted"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(0.0),
+        "{now}"
+    );
 }
 
 /// C1.29: a board's images are files of the board in the file store. A

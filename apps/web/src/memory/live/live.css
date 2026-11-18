@@ -277,8 +277,7 @@
 /* A block someone changed recently (C1.10): outlined, who and when on hover. */
 .aw-live__doc .aw-live__edited {
   border-radius: var(--radius-sm);
-  outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px color-mix(in oklab, var(--accent) 55%, transparent);
 }
 
 .aw-live__doc .aw-live__suggested {
