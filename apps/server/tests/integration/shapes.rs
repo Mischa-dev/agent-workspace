@@ -116,6 +116,9 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     assert_eq!(records["outcome"], "ok", "{records}");
     let before = kept(&world).await;
     assert!(before.len() >= 3, "{before:?}");
+    // Every module is on to begin with; counted here, not pinned, so a
+    // new module doesn't break this test.
+    let everything = modules_on(&world).await;
 
     // Previewing changes nothing.
     let preview = tool(
@@ -125,7 +128,7 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     )
     .await;
     assert_eq!(preview["outcome"], "ok", "{preview}");
-    assert_eq!(modules_on(&world).await.len(), 14);
+    assert_eq!(modules_on(&world).await, everything);
 
     let set = set_shape(&world, "friends").await;
     assert_eq!(set["value"]["shape"], "shapes.friends", "{set}");
@@ -201,7 +204,7 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     set_shape(&world, "team").await;
     assert_eq!(
         modules_on(&world).await.len(),
-        14,
+        everything.len(),
         "Team turns everything on"
     );
     set_shape(&world, "friends").await;

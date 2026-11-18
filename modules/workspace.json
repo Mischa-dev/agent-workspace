@@ -33,8 +33,6 @@
     "file_list": "query",
     "file_read": "describe",
     "file_link_get": "describe",
-    "agent_pause": "change",
-    "agent_resume": "change",
     "file_delete": "change",
     "history_list": "query",
     "history_show": "describe",

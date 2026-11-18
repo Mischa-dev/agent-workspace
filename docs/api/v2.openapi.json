@@ -11845,7 +11845,7 @@
         },
         "summary": "Pause agent",
         "tags": [
-          "workspace"
+          "agents"
         ],
         "x-operation-kind": "change"
       }
@@ -12858,7 +12858,7 @@
         },
         "summary": "Resume agent",
         "tags": [
-          "workspace"
+          "agents"
         ],
         "x-operation-kind": "change"
       }
