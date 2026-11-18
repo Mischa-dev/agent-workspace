@@ -1120,6 +1120,37 @@ async fn task_discussions_keep_the_task_limit() {
     assert!(read.to_string().contains("Trace attached"), "{read}");
     let fetched = call("file_read", json!({"fileId": file})).await;
     assert_eq!(fetched["outcome"], "ok", "{fetched}");
+    // A record of a collection that acts like a task is that task.
+    let chores = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Chores", "actsLikeTask": true}),
+    )
+    .await;
+    assert_eq!(chores["outcome"], "ok", "{chores}");
+    let chore = call(
+        "task_create",
+        json!({"projectId": "WORK", "collection": "Chores", "title": "Water the plants", "clientRequestId": "limit-chore"}),
+    )
+    .await;
+    let chore = chore["value"]["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{chore}"))
+        .to_owned();
+    let noted = call(
+        "comment_create",
+        json!({"thing": {"kind": "record", "id": chore}, "text": "Plants watered"}),
+    )
+    .await;
+    assert_eq!(noted["outcome"], "ok", "{noted}");
+    let chore_comments = call(
+        "comment_list",
+        json!({"thing": {"kind": "record", "id": chore}}),
+    )
+    .await;
+    let chore_conversation = chore_comments["value"]["conversationId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{chore_comments}"))
+        .to_owned();
 
     // Keep tasks from the person's apps: the same reads find nothing.
     sqlx::query(
@@ -1150,6 +1181,18 @@ async fn task_discussions_keep_the_task_limit() {
     )
     .await;
     assert_ne!(posted["outcome"], "ok", "{posted}");
+    let chore_comments = call(
+        "comment_list",
+        json!({"thing": {"kind": "record", "id": chore}}),
+    )
+    .await;
+    assert_ne!(chore_comments["outcome"], "ok", "{chore_comments}");
+    let read = call(
+        "conversation_read",
+        json!({"conversationId": chore_conversation}),
+    )
+    .await;
+    assert!(!read.to_string().contains("Plants watered"), "{read}");
     world.finish().await;
 }
 

@@ -364,7 +364,19 @@ impl Operation for CommentList {
         let Some(conversation_id) =
             crate::conversations::threads::comments_of(connection, kind.as_str(), thing_id).await?
         else {
-            if kind == SubjectKind::Task
+            let task_like = match kind {
+                SubjectKind::Task => true,
+                // A record of a collection that acts like a task is that task.
+                SubjectKind::Record => sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM work_items WHERE id = $1)",
+                )
+                .bind(thing_id)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(crate::error::AppError::from)?,
+                _ => false,
+            };
+            if task_like
                 && let Some(space) = home.project_id
                 && !crate::conversations::sees_tasks_in(&mut *connection, viewer, space).await?
             {
