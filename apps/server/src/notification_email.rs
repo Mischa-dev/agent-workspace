@@ -198,7 +198,10 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     // Counted against the workspace's email limit; over it, the inbox still
     // has the notification.
     {
-        let key = format!("email:notification:{}:{}", job.notification_id, job.recipient);
+        let key = format!(
+            "email:notification:{}:{}",
+            job.notification_id, job.recipient
+        );
         let mut connection = crate::db::scoped_tx(&state.pool)
             .await
             .map_err(AppError::from)?;

@@ -226,13 +226,11 @@ async fn seats_are_people_and_owning_workspaces_has_a_limit() {
         .await
         .expect("hosted default");
     let (workspace, owner) = workspace(pool).await;
-    sqlx::query(
-        "UPDATE workspace_plans SET overrides = '{\"people\": 2}' WHERE workspace_id = $1",
-    )
-    .bind(workspace)
-    .execute(pool)
-    .await
-    .expect("two seats");
+    sqlx::query("UPDATE workspace_plans SET overrides = '{\"people\": 2}' WHERE workspace_id = $1")
+        .bind(workspace)
+        .execute(pool)
+        .await
+        .expect("two seats");
 
     // The second person takes the last seat; a third is refused, and
     // nothing is written for them.
@@ -255,7 +253,12 @@ async fn seats_are_people_and_owning_workspaces_has_a_limit() {
         panic!("{refused:?}");
     };
     assert_eq!(
-        (refusal.meter, refusal.limit, refusal.used, refusal.who_can_change),
+        (
+            refusal.meter,
+            refusal.limit,
+            refusal.used,
+            refusal.who_can_change
+        ),
         ("people", 2, 2, Who::Owners)
     );
     // An agent never takes a seat, made here or joining from elsewhere.

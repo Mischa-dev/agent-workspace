@@ -846,13 +846,17 @@ pub async fn largest(
 ) -> Result<Option<i64>, AppError> {
     let meter = find_meter(meter)
         .filter(|meter| meter.kind == MeterKind::Each)
-        .ok_or(AppError::Internal("a size limit on a meter that isn't per thing"))?;
-    Ok(limits_for(connection, meter, &Ask::new(workspace, meter.id, 0))
-        .await?
-        .into_iter()
-        .filter(|limit| limit.scope == Scope::Workspace)
-        .filter_map(|limit| limit.hard)
-        .min())
+        .ok_or(AppError::Internal(
+            "a size limit on a meter that isn't per thing",
+        ))?;
+    Ok(
+        limits_for(connection, meter, &Ask::new(workspace, meter.id, 0))
+            .await?
+            .into_iter()
+            .filter(|limit| limit.scope == Scope::Workspace)
+            .filter_map(|limit| limit.hard)
+            .min(),
+    )
 }
 
 /// The plan a new workspace starts on, written as it is made.
