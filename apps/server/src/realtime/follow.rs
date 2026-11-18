@@ -115,7 +115,10 @@ pub fn follow(
         done: false,
     };
     futures_util::stream::unfold(follower, |mut follower| async move {
-        let item = follower.next().await?;
+        // A stream is polled outside the request that opened it; like a
+        // socket, it reads every workspace's events and keeps the ones its
+        // account may hear.
+        let item = crate::tenancy::system("realtime.connections", follower.next()).await?;
         Some((item, follower))
     })
 }

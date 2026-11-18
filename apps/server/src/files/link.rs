@@ -227,6 +227,10 @@ async fn open_link(
         Utc::now().timestamp(),
     )
     .ok_or(AppError::NotFound("file"))?;
+    // The signed link reads as the account it was made for.
+    crate::tenancy::signed_in(match claims.reader {
+        Reader::Browser { actor_id } | Reader::Mcp { actor_id, .. } => actor_id,
+    });
     let row = readable_file(&state.pool, claims.reader, claims.file).await?;
     let (key, content_type) = match (claims.variant, &row.thumbnail_key) {
         (Variant::Original, _) => (row.storage_key.as_str(), served_content_type(&row)),

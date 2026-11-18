@@ -1254,9 +1254,12 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
     let sees = |actor: uuid::Uuid| {
         let pool = setup.pool.clone();
         async move {
-            agent_workspace_server::whiteboards::visible_to(&pool, board, actor)
-                .await
-                .expect("visible_to")
+            crate::support::as_member(
+                actor,
+                agent_workspace_server::whiteboards::visible_to(&pool, board, actor),
+            )
+            .await
+            .expect("visible_to")
         }
     };
     assert!(sees(owner_id).await);

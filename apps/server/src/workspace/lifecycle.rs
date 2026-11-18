@@ -903,7 +903,11 @@ async fn delete_in_scope(
     .bind(workspace)
     .execute(&mut *connection)
     .await?;
+    // Connections reaching on into other workspaces move to one of them:
+    // finding and moving them reaches past this workspace's scope.
+    let own_scope = tenancy::widen_to_system(&mut *connection, "workspace.delete").await?;
     crate::delivery::connections::rehome_from(connection, workspace).await?;
+    tenancy::restore(&mut *connection, &own_scope).await?;
     let rows = delete_rows(connection, workspace).await?;
     sqlx::query(
         "INSERT INTO deleted_workspaces (id, requested_by_actor_id, repository_ids) \
@@ -1273,6 +1277,8 @@ async fn delete_rows(
 
     // Rows of other workspaces that point at a row going let go of it: a
     // request one workspace raised through another's host keeps itself.
+    // Only these statements reach past the workspace's own scope.
+    let own_scope = tenancy::widen_to_system(&mut *connection, "workspace.delete").await?;
     for key in &foreign_keys {
         let (Some(column), true) = (tenant_column(&key.child), key.detachable) else {
             continue;
@@ -1310,6 +1316,7 @@ async fn delete_rows(
         .execute(&mut *connection)
         .await?;
     }
+    tenancy::restore(&mut *connection, &own_scope).await?;
 
     // One statement: every table's rows at once.
     let mut parts = Vec::new();

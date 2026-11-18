@@ -164,6 +164,17 @@ fn mcp_edge() -> Edge {
     }
 }
 
+/// `ops::dispatch` as a request runs it: in its caller's scope.
+async fn dispatch(
+    state: &agent_workspace_server::AppState,
+    request: DispatchRequest,
+    name: &str,
+    input: Value,
+) -> ops::Answer {
+    let account = request.caller.account_id;
+    crate::support::as_member(account, ops::dispatch(state, request, name, input)).await
+}
+
 fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
     DispatchRequest {
         caller,
@@ -226,7 +237,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
 
     // A write runs once; the same request id answers the same again.
     let input = json!({ "space": space, "text": "hello" });
-    let first = ops::dispatch(
+    let first = dispatch(
         &state,
         request(person.clone(), Some("echo-1")),
         "echo_create",
@@ -237,7 +248,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     assert_eq!(first.body["replayed"], false);
     assert_eq!(first.body["requestId"], "echo-1");
     matches_schema(&first.body);
-    let again = ops::dispatch(
+    let again = dispatch(
         &state,
         request(person.clone(), Some("echo-1")),
         "echo_create",
@@ -265,7 +276,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     assert_eq!(correlation.as_deref(), Some("trace-1"));
 
     // The same request id with other input is a conflict, not a replay.
-    let reused = ops::dispatch(
+    let reused = dispatch(
         &state,
         request(person.clone(), Some("echo-1")),
         "echo_create",
@@ -289,7 +300,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     .execute(&setup.pool)
     .await
     .expect("age the reservation");
-    let later = ops::dispatch(
+    let later = dispatch(
         &state,
         request(person.clone(), Some("echo-1")),
         "echo_create",
@@ -301,7 +312,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     assert_eq!(rows(&setup).await, 1);
 
     // Two ids with the same input are two changes.
-    let second = ops::dispatch(
+    let second = dispatch(
         &state,
         request(person.clone(), Some("echo-1b")),
         "echo_create",
@@ -316,14 +327,14 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     // Without a request id (MCP, v1), a write runs once and says a retry
     // isn't safe: an identical second call is a second change, never a
     // guessed replay.
-    let unkeyed = ops::dispatch(
+    let unkeyed = dispatch(
         &state,
         request(person.clone(), None),
         "echo_create",
         json!({ "space": space, "text": "unkeyed" }),
     )
     .await;
-    let again_unkeyed = ops::dispatch(
+    let again_unkeyed = dispatch(
         &state,
         request(person.clone(), None),
         "echo_create",
@@ -350,7 +361,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     // An edge that requires one (the web app, v2) refuses a write without.
     let mut required = request(person.clone(), None);
     required.unkeyed = Unkeyed::Refuse("Idempotency-Key");
-    let refused_unkeyed = ops::dispatch(
+    let refused_unkeyed = dispatch(
         &state,
         required,
         "echo_create",
@@ -367,7 +378,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     assert_eq!(rows(&setup).await, 4);
 
     // A bad input names its field.
-    let invalid = ops::dispatch(
+    let invalid = dispatch(
         &state,
         request(person.clone(), Some("echo-2")),
         "echo_create",
@@ -385,7 +396,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
         .execute(&setup.pool)
         .await
         .expect("outsider");
-    let hidden = ops::dispatch(
+    let hidden = dispatch(
         &state,
         request(Caller::person(outsider, ActorKind::Human), Some("echo-3")),
         "echo_create",
@@ -398,7 +409,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     // A named workspace the space isn't in is not found either.
     let mut elsewhere = request(person.clone(), Some("echo-4"));
     elsewhere.workspace = Some(Uuid::now_v7());
-    let wrong = ops::dispatch(
+    let wrong = dispatch(
         &state,
         elsewhere,
         "echo_create",
@@ -410,7 +421,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     // A read-only credential can't write.
     let mut read_only = person.clone();
     read_only.can_write = false;
-    let refused = ops::dispatch(
+    let refused = dispatch(
         &state,
         request(read_only, Some("echo-5")),
         "echo_create",
@@ -431,7 +442,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
         actor_id: owner,
         ..Default::default()
     });
-    let narrowed = ops::dispatch(
+    let narrowed = dispatch(
         &state,
         request(limited, Some("echo-6")),
         "echo_create",
@@ -446,7 +457,7 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     );
 
     // An unknown operation is not found.
-    let unknown = ops::dispatch(&state, request(person, None), "no_such_op", json!({})).await;
+    let unknown = dispatch(&state, request(person, None), "no_such_op", json!({})).await;
     assert_eq!(unknown.outcome(), "not_found");
     assert_eq!(rows(&setup).await, 4);
 }

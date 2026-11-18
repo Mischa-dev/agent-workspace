@@ -449,6 +449,11 @@ async fn refresh_messages(state: &AppState, preview_id: Uuid) -> Result<(), AppE
 
 /// Deletes stored pictures of previews no message shows any more.
 pub(crate) async fn cleanup(state: &AppState) -> Result<u64, AppError> {
+    // Removes old link previews in every workspace.
+    crate::tenancy::system("files.sweep", cleanup_here(state)).await
+}
+
+async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     let orphans = sqlx::query_as::<_, (Uuid, String, String)>(
         r#"
         SELECT preview.id, preview.image_key, COALESCE(preview.image_store_id, 'local')

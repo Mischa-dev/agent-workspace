@@ -94,6 +94,8 @@ pub struct OpContext {
     /// Set for every write.
     pub request_id: Option<String>,
     pub op: &'static str,
+    /// [`super::Operation::ACROSS_WORKSPACES`].
+    pub across_workspaces: bool,
 }
 
 /// One running call: the state, the context, and the transaction the

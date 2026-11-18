@@ -499,6 +499,11 @@ async fn abandon(state: &AppState, store: &FileStore, upload: &UploadRow) {
 /// once that finish has recorded its file. Bytes that can't be deleted now
 /// stay pending for the next run.
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
+    // Removes abandoned uploads in every workspace.
+    crate::tenancy::system("files.sweep", sweep_here(state)).await
+}
+
+async fn sweep_here(state: &AppState) -> Result<u64, AppError> {
     let due = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM file_uploads

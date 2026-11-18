@@ -639,6 +639,11 @@ pub(super) async fn page_write(
         )
         .await?;
         if direct {
+            // A page named by id that would act here is one the caller
+            // can't see (a page of another workspace names no project).
+            if page_id.is_some() {
+                return Ok(ToolResult::not_found("That page"));
+            }
             return Ok(ToolResult::invalid(
                 "projectId",
                 "Pages live in projects, not in Messages. Pick a project.",

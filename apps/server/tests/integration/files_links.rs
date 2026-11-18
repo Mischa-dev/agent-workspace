@@ -1392,9 +1392,12 @@ async fn a_workspace_bucket_takes_new_uploads() {
     assert_eq!(bytes_of(response).await, b"in the workspace's bucket");
 
     // Deleting the workspace's files reaches its own bucket too.
-    for store in files::workspace_store::all_of(&state, setup.organization_id)
-        .await
-        .expect("stores")
+    for store in crate::support::as_job(
+        setup.organization_id,
+        files::workspace_store::all_of(&state, setup.organization_id),
+    )
+    .await
+    .expect("stores")
     {
         store
             .delete_workspace(setup.organization_id)

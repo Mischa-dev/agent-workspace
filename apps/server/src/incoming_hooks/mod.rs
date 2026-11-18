@@ -427,6 +427,20 @@ async fn receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
+    // A signed delivery: its hook, and so its workspace, is known only once it is read.
+    crate::tenancy::system(
+        "hooks.incoming",
+        receive_here(State(state), ApiPath(hook_id), headers, body),
+    )
+    .await
+}
+
+async fn receive_here(
+    State(state): State<AppState>,
+    ApiPath(hook_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
     // The hook is looked up first, by its key alone, so an address naming
     // no hook keeps no counter: per-hook counters exist only for real hooks.
     let target = sqlx::query_as::<_, Target>(

@@ -145,6 +145,19 @@ struct RegistrationResponse {
 async fn register_client(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ApiJson(request): ApiJson<RegistrationRequest>,
+) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
+    // Anonymous, rate limited: the cap and the cleanup must see which clients anyone has authorized, in every workspace.
+    crate::tenancy::system(
+        "auth.credential",
+        register_client_here(State(state), headers, ApiJson(request)),
+    )
+    .await
+}
+
+async fn register_client_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
     state

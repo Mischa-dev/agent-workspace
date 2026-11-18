@@ -989,6 +989,11 @@ async fn reply_message(state: &AppState, run_id: Uuid, message: &Value) {
 /// looked at, so two passes never look at the same one. Returns how many
 /// were looked at.
 pub async fn poll_due(state: &AppState) -> Result<usize, AppError> {
+    // Server-wide: due remote tasks of every workspace.
+    crate::tenancy::system("runs.host", poll_due_here(state)).await
+}
+
+async fn poll_due_here(state: &AppState) -> Result<usize, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let due = sqlx::query_as::<_, (Uuid, Uuid, String, i32)>(
         r#"

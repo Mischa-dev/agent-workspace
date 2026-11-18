@@ -130,7 +130,9 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
             plan: None,
         },
     );
-    usage::poll_account(state, account).await.expect("poll");
+    crate::support::as_job(setup.organization_id, usage::poll_account(state, account))
+        .await
+        .expect("poll");
     let page = inbox(setup, &setup.browser, "").await;
     let alert = page["notifications"]
         .as_array()

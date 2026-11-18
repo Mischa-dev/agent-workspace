@@ -192,6 +192,15 @@ pub(crate) async fn id_scope(
     template: &str,
     param: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<Scope>, AppError> {
+    // Where a route acts is read before its caller is known.
+    crate::tenancy::system("modules.gate", id_scope_here(state, template, param)).await
+}
+
+async fn id_scope_here(
+    state: &AppState,
+    template: &str,
+    param: impl Fn(&str) -> Option<String>,
+) -> Result<Option<Scope>, AppError> {
     let Some((_, route)) = Registry::global().id_routes().find(|(_, route)| {
         template
             .strip_prefix(route.prefix)
@@ -244,6 +253,20 @@ enum Off {
 }
 
 async fn off_module(
+    state: &AppState,
+    module: &'static Manifest,
+    scope: &Scope,
+    plumbing: bool,
+) -> Result<Off, AppError> {
+    // A workspace's switches are read before its caller is known; only its caller learns of them.
+    crate::tenancy::system(
+        "modules.gate",
+        off_module_here(state, module, scope, plumbing),
+    )
+    .await
+}
+
+async fn off_module_here(
     state: &AppState,
     module: &'static Manifest,
     scope: &Scope,

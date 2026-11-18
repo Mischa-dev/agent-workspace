@@ -246,6 +246,29 @@ pub(crate) async fn as_job<F: std::future::Future>(workspace: uuid::Uuid, work: 
     .await
 }
 
+/// Runs `work` as `account` would in a request of theirs: in the scope of
+/// every workspace they belong to. For tests that call a function a
+/// signed-in request runs.
+pub(crate) async fn as_member<F: std::future::Future>(account: uuid::Uuid, work: F) -> F::Output {
+    agent_workspace_server::tenancy::scoped(
+        agent_workspace_server::tenancy::Tenancy::Member {
+            account,
+            workspaces: None,
+        },
+        work,
+    )
+    .await
+}
+
+/// The workspace a space is in.
+pub(crate) async fn workspace_of_space(pool: &sqlx::PgPool, space: uuid::Uuid) -> uuid::Uuid {
+    sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+        .bind(space)
+        .fetch_one(pool)
+        .await
+        .expect("the space's workspace")
+}
+
 /// Runs an export as its job would: in the scope of the workspace it's for.
 pub(crate) async fn run_export(
     state: &agent_workspace_server::AppState,

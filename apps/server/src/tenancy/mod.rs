@@ -69,12 +69,26 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("auth.credential", &["mcp.rs", "mcp/oauth.rs"]),
     // The built-in host's scheduler, recovery and host jobs: they claim runs
     // of every workspace, and check each against its run's space.
-    ("runs.host", &["server.rs"]),
+    (
+        "runs.host",
+        &[
+            "server.rs",
+            "scheduler.rs",
+            "recovery.rs",
+            "launch.rs",
+            "runs/liveness.rs",
+            "runs/usage.rs",
+            "harness_host.rs",
+            "provider.rs",
+            "hosts/commands.rs",
+            "hosts/a2a.rs",
+        ],
+    ),
     // GitHub's own job queue, claimed across workspaces like the job queue.
-    ("github.jobs", &["server.rs"]),
+    ("github.jobs", &["server.rs", "github.rs"]),
     // The reply worker: expires reply leases and marks unresponsive agents
     // in every workspace.
-    ("replies.sweep", &["server.rs"]),
+    ("replies.sweep", &["server.rs", "replies.rs"]),
     // Reloading every workspace's registered harnesses on each instance.
     ("harnesses.reload", &["harnesses.rs"]),
     // Commands an operator runs on the host, and the server's own start:
@@ -87,6 +101,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "migration_preflight.rs",
             "secrets.rs",
             "metering/mod.rs",
+            "mcp.rs",
+            "main.rs",
         ],
     ),
     // A live connection outlives any one request's list of workspaces: its
@@ -94,7 +110,12 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // a document's own check), like the tail that feeds it.
     (
         "realtime.connections",
-        &["realtime/hub.rs", "realtime/contract/live.rs"],
+        &[
+            "realtime/hub.rs",
+            "realtime/contract/live.rs",
+            "realtime/follow.rs",
+            "realtime/ephemeral.rs",
+        ],
     ),
     // A whole-server backup or restore: every workspace's rows.
     ("backup", &["backup.rs"]),
@@ -131,12 +152,63 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "events/sequencer.rs",
             "realtime/tail.rs",
             "events/consumer.rs",
+            "events/upkeep.rs",
             "server.rs",
         ],
     ),
+    // Retention: old deliveries, worktrees and usage windows of every
+    // workspace.
+    ("retention", &["retention.rs"]),
+    // Requests of every workspace that ran out of time.
+    ("requests.expire", &["requests/mod.rs"]),
+    // Statuses of every account whose time to clear has come.
+    ("statuses.clear", &["statuses.rs"]),
+    // Files nothing holds any more, unfinished uploads and old link
+    // previews, in every workspace.
+    (
+        "files.sweep",
+        &["files.rs", "files/upload.rs", "link_previews.rs"],
+    ),
+    // A link someone was given (an invitation, an account claim, a setup
+    // link, a public form or report link, a password reset or email
+    // check): its token names the one row it opens, and the handler acts
+    // only on what that row says.
+    (
+        "auth.link",
+        &[
+            "workspace.rs",
+            "invitations.rs",
+            "accounts/claims.rs",
+            "password_reset.rs",
+            "bug_reports.rs",
+            "agent_setup_links.rs",
+            "spaces/invite_links.rs",
+            "github/connect.rs",
+            "push/receipts.rs",
+            "push/actions.rs",
+        ],
+    ),
+    // A signed incoming-hook delivery: its hook, and so its workspace, is
+    // known only once it is read.
+    ("hooks.incoming", &["incoming_hooks/mod.rs"]),
+    // The module gate: which workspace or space a route acts in, and that
+    // workspace's switches, read before the caller is known (only a caller
+    // who can see the place learns that a module is off there).
+    ("modules.gate", &["modules/gate.rs"]),
+    // A host's own calls (A1): it carries out commands for its agents'
+    // runs in every workspace they work in, and each route checks the
+    // command or run against the host it was written for.
+    ("hosts.protocol", &["hosts/routes.rs"]),
+    // Moving files between stores: a whole server's, or one workspace's
+    // into its own bucket.
+    ("files.move", &["files/migrate.rs"]),
     // An operator suspending or resuming a workspace from the command line
     // (H1.24), before any account is known.
     ("workspace.operator", &["workspace/lifecycle.rs"]),
+    // Deleting a workspace: other workspaces' rows that point at its rows
+    // let go of them (a request raised through its host), in the deletion's
+    // own transaction (`widen_to_system`).
+    ("workspace.delete", &["workspace/lifecycle.rs"]),
 ];
 
 impl Tenancy {
@@ -222,15 +294,29 @@ pub fn current() -> Option<Tenancy> {
 /// request scope becomes that account's member scope. A scope already set
 /// (a job, a narrower workspace scope, another account) is left alone.
 pub fn signed_in(account: Uuid) {
+    signed_in_as(Tenancy::Member {
+        account,
+        workspaces: None,
+    });
+}
+
+/// Authentication found a caller whose scope isn't an account's
+/// workspaces: a run's credential (its run's workspace, as its agent) or a
+/// host (server-wide, under a registered reason). Like [`signed_in`], it
+/// changes only an anonymous scope.
+pub fn signed_in_as(scope: Tenancy) {
+    if let Tenancy::System(reason) = &scope {
+        debug_assert!(
+            SYSTEM_REASONS.iter().any(|(known, _)| known == reason),
+            "unregistered tenancy reason {reason}"
+        );
+    }
     let _ = TENANCY.try_with(|cell| {
         let mut tenancy = cell
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *tenancy == Tenancy::Anonymous {
-            *tenancy = Tenancy::Member {
-                account,
-                workspaces: None,
-            };
+            *tenancy = scope;
         }
     });
 }
@@ -327,6 +413,43 @@ pub async fn widen_to_new_workspace(
             workspaces.push(workspace);
         }
     });
+    Ok(())
+}
+
+/// Turns the transaction in hand into server-wide work under `reason` (one
+/// of [`SYSTEM_REASONS`], registered for the calling file) until
+/// [`restore`] puts back the scope this returns: for the one step of a
+/// workspace's own work that must reach other workspaces' rows in the same
+/// transaction, such as a deletion letting go of their references to it.
+pub async fn widen_to_system(
+    connection: &mut sqlx::PgConnection,
+    reason: &'static str,
+) -> Result<String, sqlx::Error> {
+    debug_assert!(
+        SYSTEM_REASONS.iter().any(|(known, _)| *known == reason),
+        "unregistered tenancy reason {reason}"
+    );
+    let previous = sqlx::query_scalar::<_, String>(
+        "SELECT coalesce(current_setting('app.tenancy', true), '')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    sqlx::query("SELECT set_config('app.tenancy', $1, true)")
+        .bind(Tenancy::System(reason).setting())
+        .execute(&mut *connection)
+        .await?;
+    Ok(previous)
+}
+
+/// Puts back the scope [`widen_to_system`] returned.
+pub async fn restore(
+    connection: &mut sqlx::PgConnection,
+    previous: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT set_config('app.tenancy', $1, true)")
+        .bind(previous)
+        .execute(&mut *connection)
+        .await?;
     Ok(())
 }
 
@@ -465,7 +588,12 @@ mod tests {
                 if let Some(tests) = source.find("\n#[cfg(test)]\nmod tests") {
                     source.truncate(tests);
                 }
-                for opener in ["tenancy::system(\"", "Tenancy::System(\"", " system(\""] {
+                for opener in [
+                    "tenancy::system(\"",
+                    "Tenancy::System(\"",
+                    " system(\"",
+                    "widen_to_system(&mut *connection, \"",
+                ] {
                     for (index, _) in source.match_indices(opener) {
                         let rest = &source[index + opener.len()..];
                         let reason = &rest[..rest.find('"').unwrap_or(0)];

@@ -31,6 +31,11 @@ const BATCH: i64 = 1000;
 /// many it moved (0 when there was nothing, or another process held the
 /// counter).
 pub async fn step(pool: &PgPool) -> Result<u64, AppError> {
+    // Positions every workspace's events.
+    crate::tenancy::system("events.log", step_here(pool)).await
+}
+
+async fn step_here(pool: &PgPool) -> Result<u64, AppError> {
     // Skip empty rounds without taking the counter row.
     if crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, i32>("SELECT 1 FROM event_staging LIMIT 1")

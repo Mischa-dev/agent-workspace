@@ -3106,14 +3106,45 @@ impl McpServer {
 /// The scope a tool call runs in. The MCP transport serves each session on
 /// its own task, so the request's scope doesn't reach the handler; the
 /// caller's account, carried with the request, does.
-fn tool_scope(context: &RequestContext<RoleServer>) -> crate::tenancy::Tenancy {
+async fn tool_scope(
+    state: &AppState,
+    context: &RequestContext<RoleServer>,
+) -> Result<crate::tenancy::Tenancy, ErrorData> {
     match context_principal(context) {
-        Some(principal) => crate::tenancy::Tenancy::Member {
+        Some(principal) => principal_scope(state, &principal)
+            .await
+            .map_err(|_| ErrorData::internal_error("the caller's scope wasn't read", None)),
+        None => Ok(crate::tenancy::Tenancy::Anonymous),
+    }
+}
+
+/// The scope a credential's account works in: its own workspaces, or for a
+/// run's credential (no membership of its own) its run's workspace.
+async fn principal_scope(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<crate::tenancy::Tenancy, AppError> {
+    if !principal.is_run_credential() {
+        return Ok(crate::tenancy::Tenancy::Member {
             account: principal.actor_id,
             workspaces: None,
-        },
-        None => crate::tenancy::Tenancy::Anonymous,
+        });
     }
+    let space = principal.project_id;
+    let workspace = crate::tenancy::system(
+        "auth.credential",
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(space)
+                .fetch_one(connection)
+                .await
+        }),
+    )
+    .await?;
+    Ok(crate::tenancy::Tenancy::Workspace {
+        account: Some(principal.actor_id),
+        workspace,
+    })
 }
 
 impl McpServer {
@@ -3188,7 +3219,7 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let scope = tool_scope(&context);
+        let scope = tool_scope(&self.state, &context).await?;
         crate::tenancy::scoped(scope, self.list_tools_here(context)).await
     }
 
@@ -3197,7 +3228,7 @@ impl ServerHandler for McpServer {
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
-        let scope = tool_scope(&context);
+        let scope = tool_scope(&self.state, &context).await?;
         crate::tenancy::scoped(scope, run_tool(self, request, context)).await
     }
 
@@ -4480,7 +4511,7 @@ pub(crate) async fn resolve_bearer_principal(
     let principal =
         crate::tenancy::system("auth.credential", bearer_principal(state, headers)).await?;
     if let Some(principal) = &principal {
-        crate::tenancy::signed_in(principal.actor_id);
+        crate::tenancy::signed_in_as(principal_scope(state, principal).await?);
     }
     Ok(principal)
 }
@@ -4711,7 +4742,12 @@ pub async fn issue_credential(
     pool: &sqlx::PgPool,
     command: IssueCredentialCommand,
 ) -> Result<IssuedCredential, AppError> {
-    issue_credential_as(pool, command, CredentialIssuer::HostCli).await
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        issue_credential_as(pool, command, CredentialIssuer::HostCli),
+    )
+    .await
 }
 
 pub async fn issue_credential_as(
@@ -4803,6 +4839,19 @@ pub async fn revoke_credential(
     credential_id: Uuid,
     expected_version: i64,
 ) -> Result<CredentialMetadata, AppError> {
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        revoke_credential_here(pool, credential_id, expected_version),
+    )
+    .await
+}
+
+async fn revoke_credential_here(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+) -> Result<CredentialMetadata, AppError> {
     revoke_credential_as(
         pool,
         credential_id,
@@ -4856,6 +4905,20 @@ pub async fn revoke_credential_as(
 }
 
 pub async fn replace_credential(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+    expires_in_days: u16,
+) -> Result<IssuedCredential, AppError> {
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        replace_credential_here(pool, credential_id, expected_version, expires_in_days),
+    )
+    .await
+}
+
+async fn replace_credential_here(
     pool: &sqlx::PgPool,
     credential_id: Uuid,
     expected_version: i64,

@@ -27,3 +27,9 @@ CREATE POLICY tenancy_server_rows_write ON background_jobs FOR INSERT
     WITH CHECK (organization_id IS NULL);
 CREATE POLICY tenancy_server_rows_read ON background_jobs FOR SELECT
     USING (organization_id IS NULL);
+-- A request may also call off a server job it no longer wants (keeping a
+-- workspace cancels its deletion): only a queued one, and only to
+-- `canceled`.
+CREATE POLICY tenancy_server_rows_cancel ON background_jobs FOR UPDATE
+    USING (organization_id IS NULL AND state = 'queued')
+    WITH CHECK (organization_id IS NULL AND state = 'canceled');

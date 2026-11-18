@@ -490,9 +490,13 @@ async fn main() -> anyhow::Result<()> {
         Some("mcp-credential-list") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["project-id"])?;
-            let credentials = mcp::list_credentials(&pool, required_uuid(&options, "project-id")?)
-                .await
-                .context("list MCP credentials")?;
+            let project = required_uuid(&options, "project-id")?;
+            let credentials = agent_workspace_server::tenancy::system(
+                "server.operator",
+                mcp::list_credentials(&pool, project),
+            )
+            .await
+            .context("list MCP credentials")?;
             println!("{}", serde_json::to_string_pretty(&credentials)?);
             return Ok(());
         }

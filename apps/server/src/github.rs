@@ -2411,6 +2411,11 @@ async fn refresh_pull_request(
 }
 
 pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
+    // GitHub's job queue holds jobs of every workspace.
+    crate::tenancy::system("github.jobs", drain_jobs_here(state)).await
+}
+
+async fn drain_jobs_here(state: &AppState) -> Result<(), AppError> {
     loop {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one

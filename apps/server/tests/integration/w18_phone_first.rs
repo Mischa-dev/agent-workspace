@@ -41,21 +41,27 @@ async fn mint(
     recipient: Uuid,
     notification: Uuid,
 ) -> (push::actions::MintedActions, Value) {
-    let view = notifications::get_many(
-        pool,
-        agent_workspace_server::addresses::Addresses::LEGACY,
+    let view = crate::support::as_member(
         recipient,
-        &[notification],
+        notifications::get_many(
+            pool,
+            agent_workspace_server::addresses::Addresses::LEGACY,
+            recipient,
+            &[notification],
+        ),
     )
     .await
     .expect("notification")
     .into_iter()
     .next()
     .expect("visible notification");
-    let minted = push::actions::mint(pool, organization, recipient, &view)
-        .await
-        .expect("mint")
-        .expect("the notification offers actions");
+    let minted = crate::support::as_job(
+        organization,
+        push::actions::mint(pool, organization, recipient, &view),
+    )
+    .await
+    .expect("mint")
+    .expect("the notification offers actions");
     let payload = push::payload_with_actions(&view, Some(&minted));
     (minted, payload)
 }
@@ -265,11 +271,14 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     assert_eq!(still, Some(json!({"optionId": "approve"})));
 
     // An answered approval offers nothing more.
-    let view = notifications::get_many(
-        pool,
-        agent_workspace_server::addresses::Addresses::LEGACY,
+    let view = crate::support::as_member(
         dana,
-        &[notification],
+        notifications::get_many(
+            pool,
+            agent_workspace_server::addresses::Addresses::LEGACY,
+            dana,
+            &[notification],
+        ),
     )
     .await
     .expect("notification")

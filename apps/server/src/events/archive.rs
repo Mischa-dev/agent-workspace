@@ -108,6 +108,17 @@ pub async fn archive_due(state: &AppState) -> Result<usize, AppError> {
 /// Write one file of `workspace`'s facts older than `days`, from where its
 /// last file ended. Returns whether there was anything to write.
 pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Result<bool, AppError> {
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        archive_once_here(state, workspace, days),
+    )
+    .await
+}
+
+async fn archive_once_here(state: &AppState, workspace: Uuid, days: i32) -> Result<bool, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let through = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(last_position) FROM event_archives WHERE workspace_id = $1",

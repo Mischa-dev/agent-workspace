@@ -364,7 +364,7 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
         .await;
         assert!(status.is_success(), "export: {status} {started}");
         world.export = string_at(&started, "/value/id").parse().expect("export id");
-        agent_workspace_server::export::transfer::run_export(&state, world.export)
+        crate::support::run_export(&state, world.export)
             .await
             .expect("export runs");
     }

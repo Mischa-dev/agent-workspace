@@ -52,6 +52,14 @@ pub async fn clean_deliveries(
     pool: &PgPool,
     apply: bool,
 ) -> Result<DeliveryRetentionResult, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system("retention", clean_deliveries_here(pool, apply)).await
+}
+
+async fn clean_deliveries_here(
+    pool: &PgPool,
+    apply: bool,
+) -> Result<DeliveryRetentionResult, AppError> {
     let count = format!(
         "SELECT count(*) FROM deliveries \
          WHERE state <> 'pending' AND created_at < now() - interval '{DELIVERY_KEEP}'"
@@ -117,6 +125,15 @@ pub async fn lock_repository_retention(
 }
 
 pub async fn clean_worktrees(
+    pool: &PgPool,
+    data_root: &Path,
+    apply: bool,
+) -> Result<WorktreeRetentionResult, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system("retention", clean_worktrees_here(pool, data_root, apply)).await
+}
+
+async fn clean_worktrees_here(
     pool: &PgPool,
     data_root: &Path,
     apply: bool,
@@ -343,6 +360,11 @@ pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
 /// true` runs, under the same advisory lock so the two never overlap.
 /// Returns how many rows changed.
 pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system("retention", clean_database_windows_here(pool)).await
+}
+
+async fn clean_database_windows_here(pool: &PgPool) -> Result<i64, AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(470127786, 1)")
         .execute(&mut *transaction)

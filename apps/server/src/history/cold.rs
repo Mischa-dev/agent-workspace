@@ -87,6 +87,22 @@ pub async fn archive_page(
     page: Uuid,
     days: i32,
 ) -> Result<bool, AppError> {
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        archive_page_here(state, workspace, page, days),
+    )
+    .await
+}
+
+async fn archive_page_here(
+    state: &AppState,
+    workspace: Uuid,
+    page: Uuid,
+    days: i32,
+) -> Result<bool, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let versions = sqlx::query_as::<_, (i64, String)>(
         r#"

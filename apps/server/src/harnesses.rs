@@ -121,6 +121,11 @@ fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, Stri
 
 /// Loads every registered harness into the registry.
 pub async fn reload(state: &AppState) -> Result<(), AppError> {
+    // Every workspace's registered harnesses.
+    crate::tenancy::system("harnesses.reload", reload_here(state)).await
+}
+
+async fn reload_here(state: &AppState) -> Result<(), AppError> {
     let rows = sqlx::query_as::<_, HarnessRow>(&format!(
         "SELECT {COLUMNS} FROM custom_harnesses ORDER BY created_at"
     ))

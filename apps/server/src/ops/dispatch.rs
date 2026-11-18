@@ -445,6 +445,7 @@ async fn pipeline<O: Operation>(
             .map(|key| key.as_str().to_owned())
             .or(request.request_id),
         op: O::NAME,
+        across_workspaces: O::ACROSS_WORKSPACES,
     };
 
     let mut call = OpCall {
@@ -681,21 +682,27 @@ fn denied_error<O: Operation>(
 }
 
 /// Begin a call's transaction narrowed to the call's workspace
-/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20) and the connected
-/// app it acts through.
+/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20), or for an operation
+/// across the caller's workspaces to those, and the connected app it acts
+/// through.
 pub(super) async fn begin(
     state: &AppState,
     ctx: &OpContext,
 ) -> Result<Transaction<'static, Postgres>, OpError> {
-    let mut tx = crate::tenancy::scoped(
+    let scope = if ctx.across_workspaces {
+        crate::tenancy::Tenancy::Member {
+            account: ctx.caller.account_id,
+            workspaces: None,
+        }
+    } else {
         crate::tenancy::Tenancy::Workspace {
             account: Some(ctx.caller.account_id),
             workspace: ctx.workspace_id,
-        },
-        crate::db::scoped_tx(&state.pool),
-    )
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+        }
+    };
+    let mut tx = crate::tenancy::scoped(scope, crate::db::scoped_tx(&state.pool))
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
     crate::domain::set_via_grant(&mut tx, ctx.caller.via_grant_id)
         .await
         .map_err(|error| OpError::logged(ctx.op, &error))?;

@@ -108,6 +108,7 @@ impl Targeted for StatusSetInput {
 
 impl Operation for StatusSet {
     const NAME: &'static str = "status_set";
+    const ACROSS_WORKSPACES: bool = true;
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = None;
@@ -180,6 +181,7 @@ pub struct StatusCleared {
 
 impl Operation for StatusDelete {
     const NAME: &'static str = "status_delete";
+    const ACROSS_WORKSPACES: bool = true;
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = None;
