@@ -29,6 +29,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -336,9 +337,14 @@ struct Written {
 /// A stored file to copy into the archive once.
 struct Blob {
     sha256: String,
+    size: i64,
     store_id: String,
     key: String,
 }
+
+/// How long a file's store may go quiet mid-file before the export
+/// gives up on it.
+const BLOB_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn options(compress: bool) -> SimpleFileOptions {
     SimpleFileOptions::default()
@@ -459,12 +465,33 @@ async fn write_archive(
         let stored = store.get(&blob.key).await?;
         zip.start_file(format!("files/blobs/{}", blob.sha256), options(false))
             .map_err(zip_error)?;
+        // Taken only as recorded: at most the file's size, its digest
+        // checked, and a store that goes quiet is given up on. A store a
+        // workspace set can serve anything; the archive gets only the
+        // bytes the file row vouches for.
+        let size = u64::try_from(blob.size).unwrap_or(0);
+        let mut read = 0_u64;
+        let mut digest = Sha256::new();
         let mut stream = stored.body.into_data_stream();
-        while let Some(chunk) = stream.next().await {
+        loop {
+            let next = tokio::time::timeout(BLOB_IDLE, stream.next())
+                .await
+                .map_err(|_| AppError::Internal("a file's store stopped sending"))?;
+            let Some(chunk) = next else { break };
             let chunk = chunk.map_err(|_| AppError::Internal("a file could not be read"))?;
-            bytes += chunk.len() as u64;
+            read += chunk.len() as u64;
+            if read > size {
+                return Err(AppError::Internal(
+                    "a stored file is bigger than its record",
+                ));
+            }
+            digest.update(&chunk);
             zip.write_all(&chunk).map_err(zip_error)?;
         }
+        if read != size || hex::encode(digest.finalize()) != blob.sha256 {
+            return Err(AppError::Internal("a stored file doesn't match its record"));
+        }
+        bytes += read;
     }
     let manifest = json!({
         "format": FORMAT,
@@ -824,6 +851,7 @@ async fn files_index(
         if seen.insert(sha256.clone()) {
             blobs.push(Blob {
                 sha256,
+                size,
                 store_id,
                 key,
             });

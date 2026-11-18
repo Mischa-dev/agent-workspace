@@ -14,12 +14,13 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
     AppState,
     error::AppError,
-    events::archive::{gunzip, gzip},
+    events::archive::{gzip, read_cold},
     files::store::{FileStore, Readers},
     jobs::JobRegistry,
 };
@@ -32,8 +33,6 @@ pub const COLD_AFTER_DAYS: i32 = 365;
 const PAGES_PER_RUN: i64 = 100;
 /// Versions in one file, at most.
 const VERSIONS_PER_FILE: i64 = 500;
-/// The largest file read back.
-const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// One file of a page's old versions.
 #[derive(Debug, Deserialize, Serialize)]
@@ -137,13 +136,14 @@ pub async fn archive_page(
         page.simple(),
         id.simple()
     );
-    store.put(&key, &gzip(&json)?).await?;
+    let bytes = gzip(&json)?;
+    store.put(&key, &bytes).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         "INSERT INTO history_archives (id, workspace_id, kind, thing_id, first_version, \
-         last_version, version_count, store_id, object_key) \
-         VALUES ($1, $2, 'page', $3, $4, $5, $6, $7, $8)",
+         last_version, version_count, store_id, object_key, byte_size, sha256) \
+         VALUES ($1, $2, 'page', $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(id)
     .bind(workspace)
@@ -153,6 +153,8 @@ pub async fn archive_page(
     .bind(i32::try_from(numbers.len()).unwrap_or(i32::MAX))
     .bind(store.id())
     .bind(&key)
+    .bind(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
+    .bind(Sha256::digest(&bytes).to_vec())
     .execute(&mut *transaction)
     .await?;
     let moved = sqlx::query(
@@ -181,8 +183,8 @@ pub async fn archive_page(
 /// A network call: never inside a transaction.
 pub async fn warm_page(state: &AppState, page: Uuid, version: i64) -> Result<(), AppError> {
     let archive = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT archive.store_id, archive.object_key \
+        sqlx::query_as::<_, (String, String, i64, Vec<u8>)>(
+            "SELECT archive.store_id, archive.object_key, archive.byte_size, archive.sha256 \
              FROM project_page_revisions revision \
              JOIN history_archives archive ON archive.id = revision.archive_id \
              WHERE revision.page_id = $1 AND revision.version = $2 AND revision.body IS NULL",
@@ -193,12 +195,12 @@ pub async fn warm_page(state: &AppState, page: Uuid, version: i64) -> Result<(),
         .await
     })
     .await?;
-    let Some((store_id, key)) = archive else {
+    let Some((store_id, key, byte_size, sha256)) = archive else {
         return Ok(());
     };
     let store = FileStore::resolve(state, &store_id).await?;
     let file: PageFile =
-        serde_json::from_slice(&gunzip(&store.read_all(&key, MAX_FILE_BYTES).await?)?)
+        serde_json::from_slice(&read_cold(&store, &key, byte_size, &sha256).await?)
             .map_err(|_| AppError::Internal("an archived page history file is damaged"))?;
     let body = file
         .versions
@@ -239,8 +241,9 @@ pub async fn cold_page_bodies(
     workspace: Uuid,
 ) -> Result<std::collections::HashMap<(Uuid, i64), String>, AppError> {
     let archives = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (Uuid, String, String)>(
-            "SELECT DISTINCT archive.thing_id, archive.store_id, archive.object_key \
+        sqlx::query_as::<_, (Uuid, String, String, i64, Vec<u8>)>(
+            "SELECT DISTINCT archive.thing_id, archive.store_id, archive.object_key, \
+                    archive.byte_size, archive.sha256 \
              FROM history_archives archive \
              JOIN project_page_revisions revision ON revision.archive_id = archive.id \
              WHERE archive.workspace_id = $1 AND archive.kind = 'page' \
@@ -252,10 +255,10 @@ pub async fn cold_page_bodies(
     })
     .await?;
     let mut bodies = std::collections::HashMap::new();
-    for (page, store_id, key) in archives {
+    for (page, store_id, key, byte_size, sha256) in archives {
         let store = FileStore::resolve(state, &store_id).await?;
         let file: PageFile =
-            serde_json::from_slice(&gunzip(&store.read_all(&key, MAX_FILE_BYTES).await?)?)
+            serde_json::from_slice(&read_cold(&store, &key, byte_size, &sha256).await?)
                 .map_err(|_| AppError::Internal("an archived page history file is damaged"))?;
         for kept in file.versions {
             bodies.insert((page, kept.version), kept.body);
