@@ -118,6 +118,8 @@ pub struct LockedWorkItem {
     pub archived: bool,
     pub blocked_reason: Option<String>,
     pub milestone_id: Option<Uuid>,
+    /// The cycle it is planned in (T1.24).
+    pub cycle_id: Option<Uuid>,
     pub start_date: Option<NaiveDate>,
     pub due_date: Option<NaiveDate>,
     pub estimate: Option<f64>,
@@ -128,7 +130,7 @@ pub struct LockedWorkItem {
 /// The columns `LockedWorkItem` reads, for every query that locks a task.
 pub const LOCKED_WORK_ITEM_COLUMNS: &str = "id, number, version, title, description, type_id, status_id, priority, \
     assignee_actor_id, delegate_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
-    blocked_reason, milestone_id, start_date, due_date, estimate, field_values";
+    blocked_reason, milestone_id, cycle_id, start_date, due_date, estimate, field_values";
 
 /// Planning fields a new task can start with.
 #[derive(Clone, Copy, Debug, Default)]
@@ -150,6 +152,8 @@ pub struct TaskFieldChanges {
     pub blocked_reason: Option<Option<String>>,
     /// Hands the task to someone (T1.22), or takes it back.
     pub delegate_actor_id: Option<Option<Uuid>>,
+    /// Plans it in a cycle that hasn't ended (T1.24), or takes it out.
+    pub cycle_id: Option<Option<Uuid>>,
 }
 
 impl TaskFieldChanges {
@@ -160,6 +164,7 @@ impl TaskFieldChanges {
             && self.estimate.is_none()
             && self.blocked_reason.is_none()
             && self.delegate_actor_id.is_none()
+            && self.cycle_id.is_none()
     }
 }
 
@@ -862,6 +867,13 @@ pub async fn update_locked_work_item(
         .delegate_actor_id
         .unwrap_or(current.delegate_actor_id);
     let milestone_id = fields.milestone_id.unwrap_or(current.milestone_id);
+    let cycle_id = fields.cycle_id.unwrap_or(current.cycle_id);
+    if cycle_id != current.cycle_id
+        && let Some(cycle_id) = cycle_id
+        && !crate::work_items::cycles::is_open(transaction, actor.project_id, cycle_id).await?
+    {
+        return Err(AppError::Validation("cycle"));
+    }
     if milestone_id != current.milestone_id
         && let Some(milestone_id) = milestone_id
         && !milestone_is_active(transaction, actor.project_id, milestone_id).await?
@@ -997,6 +1009,9 @@ pub async fn update_locked_work_item(
     if milestone_id != current.milestone_id {
         changed_fields.push("milestone".to_owned());
     }
+    if cycle_id != current.cycle_id {
+        changed_fields.push("cycle".to_owned());
+    }
     if start_date != current.start_date {
         changed_fields.push("startDate".to_owned());
     }
@@ -1078,7 +1093,7 @@ pub async fn update_locked_work_item(
         SET description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
             board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
-            estimate = $15, delegate_actor_id = $17,
+            estimate = $15, delegate_actor_id = $17, cycle_id = $18,
             blocked_reason = $16,
             blocked_at = CASE WHEN $16::text IS NULL THEN NULL
                               WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
@@ -1107,6 +1122,7 @@ pub async fn update_locked_work_item(
     .bind(estimate)
     .bind(blocked_reason.as_deref())
     .bind(delegate_actor_id)
+    .bind(cycle_id)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -1125,6 +1141,7 @@ pub async fn update_locked_work_item(
     changes.id("assignee", current.assignee_actor_id, assignee_actor_id);
     changes.id("delegate", current.delegate_actor_id, delegate_actor_id);
     changes.id("milestone", current.milestone_id, milestone_id);
+    changes.id("cycle", current.cycle_id, cycle_id);
     changes.value(
         "startDate",
         serde_json::json!(current.start_date),

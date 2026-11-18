@@ -816,6 +816,27 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         after: &["projects", "channels"],
         kinds: &[
             KindDecl {
+                kind: "cycle_settings",
+                table: "cycle_settings",
+                references: &[("space_id", "projects"), ("updated_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "cycle_snapshots",
+                table: "cycle_snapshots",
+                references: &[("cycle_id", "cycles")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "cycles",
+                table: "cycles",
+                references: &[("space_id", "projects")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "triage_rules",
                 table: "triage_rules",
                 references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],
@@ -1045,6 +1066,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("collection_id", "collections"),
                     ("delegate_actor_id", "actors"),
                     ("triaged_by_actor_id", "actors"),
+                    ("cycle_id", "cycles"),
                 ],
                 text_references: &[],
                 exclude: &[],

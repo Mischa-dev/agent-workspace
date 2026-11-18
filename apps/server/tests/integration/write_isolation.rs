@@ -638,6 +638,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workflow_update",
     "triage_enable",
     "triage_rule_set",
+    "cycle_set",
     "workspace_template_apply",
     "workspace_template_save",
     "project_template_write",
@@ -7606,6 +7607,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"spaceId": a.project, "name": "Net", "action": {"kind": "assign", "to": b.rook}}),
             json!({"spaceId": a.project, "name": "Net", "action": {"kind": "keep"}, "filter": [{"field": b.collection_field, "op": "notEmpty"}]}),
         ])
+        .last(),
+        // Cycles (T1.24): a space's settings and its cycles' names.
+        mcp_case(
+            "cycle_set",
+            json!({"spaceId": a.project, "enabled": true}),
+            vec![json!({"spaceId": b.project, "enabled": true})],
+        )
         .last(),
         mcp_case(
             "triage_decide",

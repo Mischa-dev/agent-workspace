@@ -76,6 +76,8 @@ export type CriterionValue = { completed: boolean; completedAt?: string | null; 
 
 export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
 
+export type Cycle = { completed: number; completedAt?: string | null; endsOn: string; id: string; name: string; number: number; scope: number; snapshots: Snapshot[]; started: number; startsOn: string; state: string; title: string; version: number }
+
 export type DashboardEntry = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DateBucket = "day" | "week" | "month"
@@ -248,11 +250,15 @@ export type SectionShow = "all" | "unread"
 
 export type SectionSort = "manual" | "alpha" | "recent"
 
+export type Settings = { enabled: boolean; lengthDays: number; rollOver: boolean; startsOnWeekday: number; upcoming: number; version: number }
+
 export type SharedSpace = { id: string; name: string }
 
 export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
 export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
+
+export type Snapshot = { completed: number; completedPoints?: number | null; onDate: string; scope: number; scopePoints?: number | null; started: number }
 
 export type SortWrite = { direction?: Direction; field: string }
 
@@ -465,6 +471,14 @@ export type CustomEmojiListOutput = { emoji: CustomEmojiView[] }
 export type CustomEmojiUpdateInput = { id: string; retired: boolean }
 
 export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type CycleListInput = { spaceId: string }
+
+export type CycleListOutput = { cycles: Cycle[]; settings: Settings }
+
+export type CycleSetInput = { cycle?: string | null; enabled?: boolean | null; expectedVersion?: number | null; lengthDays?: number | null; name?: string | null; rollOver?: boolean | null; spaceId: string; startsOnWeekday?: number | null; upcoming?: number | null }
+
+export type CycleSetOutput = { cycles: Cycle[]; settings: Settings }
 
 export type DashboardCreateInput = { description?: string | null; name: string; shared?: boolean | null; spaceId: string; tiles?: TileInput[] }
 
@@ -838,7 +852,7 @@ export type TaskRestoreInput = { expectedVersion: number; taskId: string }
 
 export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 
-export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
+export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; cycle?: string | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
 
 export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 
@@ -963,6 +977,8 @@ export type Operations = {
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
+  cycle_list: { input: CycleListInput; output: CycleListOutput }
+  cycle_set: { input: CycleSetInput; output: CycleSetOutput }
   dashboard_create: { input: DashboardCreateInput; output: DashboardCreateOutput }
   dashboard_delete: { input: DashboardDeleteInput; output: DashboardDeleteOutput }
   dashboard_get: { input: DashboardGetInput; output: DashboardGetOutput }

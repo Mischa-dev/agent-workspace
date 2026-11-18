@@ -2408,6 +2408,9 @@ pub(super) struct TaskUpdateArguments {
     /// Put it in this active milestone, by name or ID (see milestone_list);
     /// "none" takes it out.
     pub milestone: Option<String>,
+    /// Put it in one of the space's cycles that hasn't ended: "current",
+    /// "next", its number or name (see cycle_list); "none" takes it out.
+    pub cycle: Option<String>,
     /// When work starts: YYYY-MM-DD, or "" to clear it.
     pub start_date: Option<String>,
     /// When it's due: YYYY-MM-DD, or "" to clear it.
@@ -2451,6 +2454,7 @@ impl TaskUpdateArguments {
             || self.before_task_id.is_some()
             || self.after_task_id.is_some()
             || self.milestone.is_some()
+            || self.cycle.is_some()
             || self.start_date.is_some()
             || self.due_date.is_some()
             || self.estimate.is_some()
@@ -2558,6 +2562,7 @@ pub(super) async fn task_update(
         before_task_id: arguments.before_task_id,
         after_task_id: arguments.after_task_id,
         milestone: arguments.milestone,
+        cycle: arguments.cycle,
         start_date: arguments.start_date,
         due_date: arguments.due_date,
         estimate: arguments.estimate,

@@ -51,7 +51,7 @@ pub const START_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000004");
 pub const DUE_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000005");
 pub const LABELS: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000006");
 // The built-in fields views over tasks read beyond the six a collection
-// lists (T1.7). 00e is kept for Cycle.
+// lists (T1.7).
 pub const TYPE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000007");
 pub const MILESTONE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000008");
 pub const PARENT: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000009");
@@ -60,6 +60,8 @@ pub const READY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000b");
 pub const CLAIMED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000c");
 /// Who the task is handed to to do (T1.22).
 pub const DELEGATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000d");
+/// The cycle it is planned in (T1.24).
+pub const CYCLE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000e");
 pub const ESTIMATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000f");
 pub const CREATED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000010");
 pub const CREATED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000011");
@@ -200,6 +202,7 @@ pub fn accessor(id: Uuid) -> Option<Accessor> {
         },
         TYPE => column("core.type_id", "uuid"),
         MILESTONE => column("core.milestone_id", "uuid"),
+        CYCLE => column("core.cycle_id", "uuid"),
         PARENT => column("core.parent_work_item_id", "uuid"),
         BLOCKED => column(
             format!(
@@ -409,6 +412,24 @@ pub async fn system_fields(
         category: None,
     })
     .collect();
+    // Ended cycles are archived options: still shown on their tasks, not
+    // offered.
+    let cycles = sqlx::query_as::<_, (Uuid, i32, String, bool)>(
+        "SELECT id, number, name, completed_at IS NOT NULL FROM cycles \
+         WHERE space_id = $1 ORDER BY number",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|(id, number, name, archived)| ChoiceOption {
+        id,
+        name: crate::work_items::cycles::title(number, &name),
+        color: "#71717a".to_owned(),
+        archived,
+        category: None,
+    })
+    .collect();
     let mut parent = builtin(PARENT, "Parent", FieldType::Link, Vec::new(), 8);
     parent.config.target = Some(LinkTarget::Task);
     found.extend([
@@ -431,6 +452,7 @@ pub async fn system_fields(
         builtin(KEY, "Key", FieldType::Number, Vec::new(), 16),
         builtin(DELEGATE, "Delegate", FieldType::Person, Vec::new(), 17),
         builtin(SNOOZED, "Snoozed", FieldType::Checkbox, Vec::new(), 18),
+        builtin(CYCLE, "Cycle", FieldType::SingleChoice, cycles, 19),
     ]);
     Ok(found)
 }
@@ -713,6 +735,20 @@ pub fn group_sql(field: Uuid) -> Option<GroupSql> {
                     ),
                     "text",
                 ),
+                order("COALESCE(group_field.id::text, '')", "text"),
+            ],
+        },
+        CYCLE => GroupSql {
+            join: " LEFT JOIN cycles group_field \
+                   ON group_field.space_id = core.project_id AND group_field.id = core.cycle_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(NULLIF(group_field.name, ''), 'Cycle ' || group_field.number, 'No cycle')"
+                .to_owned(),
+            color: "NULL::text".to_owned(),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.starts_on, 'infinity'::date)", "date"),
                 order("COALESCE(group_field.id::text, '')", "text"),
             ],
         },

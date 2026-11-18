@@ -3005,5 +3005,24 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     assert_eq!(written["outcome"], "ok", "{written}");
     let accepted = as_owner("triage_decide", accept).await;
     assert_eq!(accepted["outcome"], "ok", "{accepted}");
+
+    // Cycles (T1.24): the same split. A viewer reads them, sets nothing
+    // up and puts no task in one.
+    let refused = as_rook("cycle_set", json!({"spaceId": "TRI", "enabled": true})).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let enabled = as_owner("cycle_set", json!({"spaceId": "TRI", "enabled": true})).await;
+    assert_eq!(enabled["outcome"], "ok", "{enabled}");
+    let listed = as_rook("cycle_list", json!({"spaceId": "TRI"})).await;
+    assert_eq!(
+        listed["value"]["cycles"].as_array().map(Vec::len),
+        Some(3),
+        "{listed}"
+    );
+    let opened = as_owner("task_open", json!({"taskId": key})).await;
+    let planned = json!({"taskId": key, "expectedVersion": opened["value"]["task"]["version"], "cycle": "current"});
+    let refused = as_rook("task_update", planned.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let planned = as_owner("task_update", planned).await;
+    assert_eq!(planned["outcome"], "ok", "{planned}");
     world.finish().await;
 }

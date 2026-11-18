@@ -63,7 +63,8 @@ pub(super) const MILESTONE_MESSAGE: &str =
 pub(super) const DATES_MESSAGE: &str = "The start date must be on or before the due date.";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
 pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
-const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, delegate, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, startDate, dueDate, estimate, clearEstimate, or archived.";
+const CYCLE_MESSAGE: &str = "Pass one of this space's cycles that hasn't ended: \"current\", \"next\", its number or name (see cycle_list), or \"none\".";
+const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, delegate, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, cycle, startDate, dueDate, estimate, clearEstimate, or archived.";
 /// The most acceptance criteria one task_create call takes.
 const MAX_CRITERIA_ON_CREATE: usize = 50;
 const TASK_NOT_FOUND_MESSAGE: &str = "That task wasn't found, or you can't see it.";
@@ -133,6 +134,10 @@ pub struct UpdateWorkItemArguments {
     /// An active milestone by name or ID, or "none".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+    /// A cycle that hasn't ended ("current", "next", number, ID or name),
+    /// or "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
     /// YYYY-MM-DD, or "" to clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
@@ -1009,6 +1014,7 @@ async fn update_work_item_inner(
         && arguments.before_task_id.is_none()
         && arguments.after_task_id.is_none()
         && arguments.milestone.is_none()
+        && arguments.cycle.is_none()
         && start_date.is_none()
         && due_date.is_none()
         && estimate.is_none()
@@ -1217,6 +1223,20 @@ async fn update_work_item_inner(
         }
         None => None,
     };
+    let cycle_id = match arguments.cycle.as_deref() {
+        Some(value) => match crate::work_items::cycles::reference(
+            &mut transaction,
+            principal.project_id,
+            value,
+            chrono::Utc::now().date_naive(),
+        )
+        .await?
+        {
+            Some(cycle) => Some(cycle),
+            None => return Ok(WriteResult::invalid("cycle", CYCLE_MESSAGE)),
+        },
+        None => None,
+    };
     let field_values = match arguments
         .fields
         .as_ref()
@@ -1269,6 +1289,7 @@ async fn update_work_item_inner(
                 estimate,
                 blocked_reason: None,
                 delegate_actor_id: delegate_update,
+                cycle_id,
             },
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
@@ -3057,6 +3078,7 @@ mod tests {
             before_task_id: None,
             after_task_id: None,
             milestone: None,
+            cycle: None,
             start_date: None,
             due_date: None,
             estimate: None,

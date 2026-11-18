@@ -325,6 +325,24 @@ pub static TRIAGE_RULES_CHANGED: EventType = fact(
     None,
     "A space's triage rules were added, changed, moved or removed",
 );
+pub static CYCLES_CHANGED: EventType = fact(
+    "cycles.changed",
+    "tasks",
+    None,
+    "A space's cycle settings changed, or a cycle was renamed",
+);
+pub static CYCLE_STARTED: EventType = fact(
+    "cycle.started",
+    "tasks",
+    None,
+    "A space's next cycle started",
+);
+pub static CYCLE_ENDED: EventType = fact(
+    "cycle.ended",
+    "tasks",
+    None,
+    "A space's cycle ended, its unfinished tasks rolled into the next",
+);
 pub static TASK_SNOOZE_ENDED: EventType = addressed(
     "task.snooze_ended",
     "tasks",
@@ -690,6 +708,9 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_TRIAGED,
         &TASK_SNOOZE_ENDED,
         &TRIAGE_RULES_CHANGED,
+        &CYCLES_CHANGED,
+        &CYCLE_STARTED,
+        &CYCLE_ENDED,
         &COMMENT_MENTIONED,
         &TASK_PLACEMENT_CHANGED,
         &TASK_COMMENTED,

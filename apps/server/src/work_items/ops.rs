@@ -39,7 +39,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<TaskTriage>()
         .add::<TriageEnable>()
         .add::<TriageRuleList>()
-        .add::<TriageRuleWrite>();
+        .add::<TriageRuleWrite>()
+        .add::<CycleList>()
+        .add::<CycleSet>();
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -280,6 +282,10 @@ pub struct TaskUpdateInput {
     /// "none" takes it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+    /// Put it in one of the space's cycles that hasn't ended: "current",
+    /// "next", its number or name (see cycle_list); "none" takes it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
     /// When work starts: YYYY-MM-DD, or "" to clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
@@ -1061,6 +1067,164 @@ impl Operation for TriageRuleWrite {
         Ok(TriageRuleWriteOutput {
             rule: Some(rule),
             removed: false,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cycle_list, cycle_set
+
+pub struct CycleList;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CyclesOutput {
+    pub settings: super::cycles::Settings,
+    /// The cycles that haven't ended, and the last few that have, in order.
+    pub cycles: Vec<super::cycles::Cycle>,
+}
+
+impl Operation for CycleList {
+    const NAME: &'static str = "cycle_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksView);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List cycles";
+    const DESCRIPTION: &'static str = "A space's cycle settings and its cycles: the running \
+        one, the upcoming ones and the last few that ended, each with its task counts and a \
+        count a day while it ran (its burn-up). Put a task in one with task_update's cycle.";
+
+    type Input = TriageSpaceInput;
+    type Output = CyclesOutput;
+
+    async fn run(call: &mut OpCall<'_>, _input: TriageSpaceInput) -> Result<CyclesOutput, OpError> {
+        let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let tx = call.tx().await?;
+        Ok(CyclesOutput {
+            settings: super::cycles::settings(tx, space_id).await?,
+            cycles: super::cycles::list(tx, space_id, chrono::Utc::now().date_naive()).await?,
+        })
+    }
+}
+
+pub struct CycleSet;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CycleSetInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+    /// The settings' version you last read (cycle_list); a change since is
+    /// refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
+    /// true turns cycles on (the running one and the upcoming ones are made
+    /// at once); false stops making them, keeping those made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Days in a cycle, from 7 to 56. Cycles already made keep theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_days: Option<i32>,
+    /// The weekday the first cycle starts on: 1 is Monday, 7 is Sunday.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_on_weekday: Option<i16>,
+    /// How many cycles after the running one are kept made, from 1 to 6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upcoming: Option<i32>,
+    /// Whether a cycle's unfinished tasks move into the next when it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roll_over: Option<bool>,
+    /// A cycle to rename, by number, ID or name, with name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
+    /// The cycle's new name (at most 80 characters); "" goes back to
+    /// "Cycle N".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Targeted for CycleSetInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+impl Operation for CycleSet {
+    const NAME: &'static str = "cycle_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksWorkflow);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["cycles.changed"];
+    const TITLE: &'static str = "Set up cycles";
+    const DESCRIPTION: &'static str = "Change a space's cycles: turn them on or off, their \
+        length in days, the weekday they start on, how many are kept made ahead, and whether \
+        unfinished tasks roll into the next cycle when one ends. Or rename one cycle (cycle \
+        and name). Every day the running cycle's tasks are counted for its burn-up.";
+
+    type Input = CycleSetInput;
+    type Output = CyclesOutput;
+
+    async fn run(call: &mut OpCall<'_>, input: CycleSetInput) -> Result<CyclesOutput, OpError> {
+        let actor = locked_space(call).await?;
+        let today = chrono::Utc::now().date_naive();
+        let change = super::cycles::SettingsChange {
+            enabled: input.enabled,
+            length_days: input.length_days,
+            starts_on_weekday: input.starts_on_weekday,
+            upcoming: input.upcoming,
+            roll_over: input.roll_over,
+        };
+        if change.is_empty() && input.cycle.is_none() {
+            return Err(OpError::invalid(
+                "enabled",
+                "Pass a setting to change (enabled, lengthDays, startsOnWeekday, upcoming, \
+                 rollOver), or a cycle and its new name.",
+            ));
+        }
+        if input.cycle.is_some() != input.name.is_some() {
+            return Err(OpError::invalid(
+                "name",
+                "Pass a cycle and its new name together.",
+            ));
+        }
+        let tx = call.tx().await?;
+        if !change.is_empty() {
+            super::cycles::write_settings(tx, &actor, input.expected_version, &change, today)
+                .await?
+                .map_err(refusal)?;
+        }
+        if let (Some(cycle), Some(name)) = (input.cycle.as_deref(), input.name.as_deref()) {
+            let Some(Some(id)) = super::cycles::reference_any(tx, actor.project_id, cycle).await?
+            else {
+                return Err(OpError::invalid(
+                    "cycle",
+                    "This space has no such cycle. Name it by number, ID or name (cycle_list \
+                     lists them).",
+                ));
+            };
+            super::cycles::rename(tx, actor.project_id, id, name)
+                .await?
+                .map_err(refusal)?;
+        }
+        let mut event = crate::events::NewEvent::thing(
+            &crate::events::catalog::CYCLES_CHANGED,
+            actor.project_id,
+            "space",
+            actor.project_id,
+        )
+        .actor(actor.actor_id)
+        .audience(crate::events::Audience::Space);
+        // Cycles aren't things of their own: the event is about the space.
+        event.thing = None;
+        crate::events::emit(tx, event).await?;
+        call.audit_target("space", actor.project_id, json!({}));
+        let tx = call.tx().await?;
+        Ok(CyclesOutput {
+            settings: super::cycles::settings(tx, actor.project_id).await?,
+            cycles: super::cycles::list(tx, actor.project_id, today).await?,
         })
     }
 }

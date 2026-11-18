@@ -143,6 +143,7 @@ pub fn grouping_field(value: &str) -> Option<Uuid> {
         "priority" => tasks::PRIORITY,
         "label" | "labels" => tasks::LABELS,
         "milestone" => tasks::MILESTONE,
+        "cycle" => tasks::CYCLE,
         "parent" => tasks::PARENT,
         "type" => tasks::TYPE,
         _ => return None,
@@ -507,6 +508,7 @@ pub fn grouping_name(field: Uuid) -> String {
         tasks::PRIORITY => "priority".to_owned(),
         tasks::LABELS => "label".to_owned(),
         tasks::MILESTONE => "milestone".to_owned(),
+        tasks::CYCLE => "cycle".to_owned(),
         tasks::PARENT => "parent".to_owned(),
         tasks::TYPE => "type".to_owned(),
         other => format!("field:{other}"),
@@ -811,6 +813,7 @@ fn builtin_system(field: Uuid) -> bool {
     [
         tasks::TYPE,
         tasks::MILESTONE,
+        tasks::CYCLE,
         tasks::PARENT,
         tasks::BLOCKED,
         tasks::READY,

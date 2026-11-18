@@ -82,6 +82,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 pub(crate) mod comments;
 mod custom_fields;
+pub mod cycles;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
 pub(crate) mod list;
@@ -431,6 +432,9 @@ struct UpdateWorkItemRequest {
     /// Who the task is handed to (T1.22); null takes it back.
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     delegate_actor_id: Option<Option<Uuid>>,
+    /// The cycle it is planned in (T1.24); null takes it out.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    cycle_id: Option<Option<Uuid>>,
     #[serde(default)]
     add_label_ids: Vec<Uuid>,
     #[serde(default)]
@@ -4512,6 +4516,7 @@ fn planning_field_changes(request: &UpdateWorkItemRequest) -> Result<TaskFieldCh
             .map(|value| value.as_deref().map(normalize_blocked_reason).transpose())
             .transpose()?,
         delegate_actor_id: request.delegate_actor_id,
+        cycle_id: request.cycle_id,
     })
 }
 

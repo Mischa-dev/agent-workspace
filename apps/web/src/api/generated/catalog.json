@@ -671,6 +671,36 @@
     "title": "Retire custom emoji"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "cycle_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List cycles"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "cycles.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "cycle_set",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Set up cycles"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

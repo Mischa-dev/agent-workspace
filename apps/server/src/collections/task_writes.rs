@@ -46,6 +46,8 @@ struct TaskChange {
     start_date: Option<Option<NaiveDate>>,
     due_date: Option<Option<NaiveDate>>,
     labels: Option<Vec<Uuid>>,
+    /// The cycle (T1.24): a board by cycle sets it.
+    cycle: Option<Option<Uuid>>,
     custom: Vec<(String, Value)>,
 }
 
@@ -82,6 +84,15 @@ fn sort_values(values: &[(String, Value)]) -> Result<TaskChange, WriteProblem> {
     let mut change = TaskChange::default();
     for (reference, value) in values {
         let field = format!("values.{reference}");
+        if Uuid::parse_str(reference.trim()).ok() == Some(tasks::CYCLE) {
+            change.cycle = Some(match value {
+                Value::Null => None,
+                other => Some(
+                    id_value(other).ok_or_else(|| invalid(&field, "Name the cycle by its ID."))?,
+                ),
+            });
+            continue;
+        }
         let Some(id) = Uuid::parse_str(reference.trim())
             .ok()
             .filter(|id| tasks::is_builtin_field(*id))
@@ -382,6 +393,12 @@ async fn create(
             "archived and expectedVersion change a task that exists; name it with record.",
         )));
     }
+    if change.cycle.flatten().is_some() {
+        return Ok(Err(invalid(
+            &format!("values.{}", tasks::CYCLE),
+            "Add the task first, then put it in a cycle.",
+        )));
+    }
     let title = title.unwrap_or_else(|| UNTITLED.to_owned());
     let field_values = match custom_values(
         transaction,
@@ -491,6 +508,7 @@ async fn update(
         || change.start_date.is_some()
         || change.due_date.is_some()
         || change.labels.is_some()
+        || change.cycle.is_some()
         || !change.custom.is_empty();
     if edits && !allowed(transaction, actor, Action::WorkItemEdit, Some(task_id)).await? {
         return Ok(Err(forbidden("change")));
@@ -580,6 +598,7 @@ async fn update(
                 fields: TaskFieldChanges {
                     start_date: change.start_date,
                     due_date: change.due_date,
+                    cycle_id: change.cycle,
                     ..Default::default()
                 },
                 field_values: field_values.as_ref(),
