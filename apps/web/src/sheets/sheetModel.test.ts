@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SheetBody, SheetCell } from './api'
-import { cards, cellLook, cellMap, columnName, columnNumber, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName, shownBlock, viewRows } from './sheetModel'
+import { cards, cellLook, cellMap, columnName, columnNumber, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName, shownBlock, shownSelection, viewRows } from './sheetModel'
 import { replaced } from './sheetViews'
 
 const body = (): SheetBody => ({
@@ -225,5 +225,17 @@ describe('shownBlock', () => {
 
   it('goes straight down and across without a view', () => {
     expect(shownBlock({ row: 2, column: 2 }, 2, 2, { frozen: 0, order: null, columns: null })).toEqual({ rows: [2, 3], columns: [2, 3] })
+  })
+})
+
+describe('shownSelection', () => {
+  it('covers only the rows and columns a view shows between the corners', () => {
+    const shown = { frozen: 1, order: [2, 5, 9], columns: [1, 3, 4] }
+    // Rows 2 and 5 sit next to each other in the view: 3 and 4 are hidden.
+    expect(shownSelection({ row: 5, column: 4 }, { row: 2, column: 1 }, shown)).toEqual({ rows: [2, 5], columns: [1, 3, 4] })
+  })
+
+  it('is the plain rectangle without a view', () => {
+    expect(shownSelection({ row: 3, column: 2 }, { row: 2, column: 3 }, { frozen: 0, order: null, columns: null })).toEqual({ rows: [2, 3], columns: [2, 3] })
   })
 })

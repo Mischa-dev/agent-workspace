@@ -23,6 +23,7 @@ use crate::{
     },
 };
 
+const HELD_TO_ONE_SPACE: &str = "This connection is held to one space, so it can't use or save workspace templates. Reconnect it for your whole account.";
 const MANAGERS_USE_TEMPLATES: &str = "Only people who manage the workspace's settings and roles use or save templates. Suggest one to a workspace owner or admin instead.";
 
 /// The workspace of the project a call names, once the caller is checked
@@ -120,6 +121,14 @@ pub(super) async fn workspace_template_apply(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
+    // A template reaches the whole workspace; a connection held to one
+    // space can't.
+    if crate::access::Caller::of_principal(principal, None)
+        .confined_space
+        .is_some()
+    {
+        return ToolResult::denied(HELD_TO_ONE_SPACE);
+    }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?
         else {
@@ -136,15 +145,26 @@ pub(super) async fn workspace_template_apply(
             return Ok(ToolResult::not_found("That template"));
         };
         let auditor = Auditor::App(principal);
-        match templates::apply(
-            &mut transaction,
-            &auditor,
-            caller,
-            organization_id,
-            &template,
-        )
-        .await
-        {
+        let maker = crate::events::Caller::mcp(principal);
+        let installer = crate::packages::apply::Installer {
+            workspace: organization_id,
+            actor: principal.actor_id,
+            standing: caller,
+            auditor: &auditor,
+            writer: crate::memory::Writer {
+                actor_id: principal.actor_id,
+                actor_kind: principal.actor_kind,
+                via_grant_id: principal.via_grant_id(),
+                confined_project: super::common::confined_project(principal),
+            },
+            maker,
+            template: None,
+            source: "builtin",
+            source_ref: None,
+            confined: None,
+        };
+        // M1.11: a template is used by installing it as a package.
+        match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
             Ok(applied) => {
                 transaction.commit().await?;
                 Ok(ToolResult::ok(applied))
@@ -199,6 +219,14 @@ pub(super) async fn workspace_template_save(
 ) -> ToolResult<WorkspaceTemplateSaveValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
+    }
+    // A template reaches the whole workspace; a connection held to one
+    // space can't.
+    if crate::access::Caller::of_principal(principal, None)
+        .confined_space
+        .is_some()
+    {
+        return ToolResult::denied(HELD_TO_ONE_SPACE);
     }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?

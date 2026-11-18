@@ -146,6 +146,7 @@ export function getFile(id: string, fileId: string) {
   return requestJson<StoredFile>(`${board(id)}/files/${encodeURIComponent(fileId)}`)
 }
 
+
 export function linkWhiteboard(id: string, targetKind: LinkTargetKind, targetId: string) {
   return requestJson<WhiteboardDetail>(`${board(id)}/links`, { method: 'POST', json: { targetKind, targetId } })
 }

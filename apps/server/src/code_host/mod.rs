@@ -7,6 +7,7 @@
 //! hosts report to their runs.
 
 pub mod github;
+pub mod ops;
 pub mod pull_requests;
 
 /// A repository as its code host names it.

@@ -578,11 +578,11 @@ async fn sheet_picture(
     // embed as a link.
     let (tab_id, block) = match name.as_deref() {
         Some(name) => {
-            let mut connection = state.pool.acquire().await?;
-            match sheets::ranges::resolve(&mut connection, sheet.id, name)
-                .await?
-                .filter(|located| located.name.is_some())
-            {
+            let located = crate::db::scoped_one(&state.pool, async |connection| {
+                sheets::ranges::resolve(connection, sheet.id, name).await
+            })
+            .await?;
+            match located.filter(|located| located.name.is_some()) {
                 Some(located) => (Some(located.tab_id), Some(located.range)),
                 None => return Ok(None),
             }

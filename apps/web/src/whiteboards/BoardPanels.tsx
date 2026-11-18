@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
-import { HistoryPanel } from '../history/HistoryPanel'
+import { HistoryPanel } from '../pieces/HistoryPanel'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, describeError } from '../ui'
 import {
@@ -136,7 +136,7 @@ export function LinksDialog({
   )
 }
 
-/** Saved versions of the drawing, to put one back. */
+/** Saved versions of the drawing, to put one back, from the history panel (W1.21). */
 export function HistoryDialog({
   canEdit,
   detail,
@@ -149,7 +149,6 @@ export function HistoryDialog({
   open: boolean
 }) {
   const queryClient = useQueryClient()
-  const [restored, setRestored] = useState<number | null>(null)
   return (
     <Dialog
       description="The whiteboard saves a version every few minutes while people draw, and before anything removes a lot. Restoring saves the current drawing first."
@@ -161,16 +160,20 @@ export function HistoryDialog({
     >
       {open ? (
         <HistoryPanel
-          canRestore={canEdit}
-          currentVersion={() => getWhiteboard(detail.whiteboard.id).then((fresh) => fresh.whiteboard.sceneSeq)}
-          onRestored={(version) => {
-            setRestored(version)
-            void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
-          }}
-          thingId={detail.whiteboard.id}
+          emptyText="The first version is saved once the whiteboard changes."
+          label="Saved versions"
+          restore={
+            canEdit
+              ? {
+                  // The drawing moves while it's open: read its version when restoring.
+                  expectedVersion: () => getWhiteboard(detail.whiteboard.id).then((fresh) => fresh.whiteboard.sceneSeq),
+                  onRestored: () => void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all }),
+                }
+              : undefined
+          }
+          thing={detail.whiteboard.id}
         />
       ) : null}
-      {restored ? <Banner tone="success">Restored. Everyone with the whiteboard open sees it now.</Banner> : null}
     </Dialog>
   )
 }

@@ -116,3 +116,10 @@
 .aw-quick__file-size {
   color: var(--content-fg-muted, var(--content-fg));
 }
+
+/* W1.32: the other things to start from here, as quiet links. */
+.aw-quick__others {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

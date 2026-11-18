@@ -117,6 +117,10 @@ pub(crate) struct World {
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
     pub(crate) package_install: Uuid,
+    /// The workspace's own package list (M1.11), never read.
+    pub(crate) directory_source: Uuid,
+    /// A long call of the owner's (K2.21), answered.
+    pub(crate) job: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -1792,6 +1796,42 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("package install");
+    let directory_source = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO directory_sources (id, workspace_id, kind, location, name) \
+         VALUES ($1, $2, 'url_list', $3, $4)",
+    )
+    .bind(directory_source)
+    .bind(organization)
+    .bind(format!("https://lists.example/{tag}.json"))
+    .bind(format!("Lists{m}"))
+    .execute(pool)
+    .await
+    .expect("directory source");
+
+    let job = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO operation_tasks (
+            id, workspace_id, space_id, account_id, op, status, input_hash, caller, result,
+            finished_at
+        )
+        SELECT $1, $2, $3::uuid, membership.actor_id, 'task_create_many', 'completed', 'sha256',
+               jsonb_build_object('accountId', membership.actor_id),
+               jsonb_build_object('outcome', 'ok', 'value', jsonb_build_object('note', $4::text)),
+               now()
+        FROM organization_memberships membership
+        WHERE membership.organization_id = $2 AND membership.role = 'owner'
+        LIMIT 1
+        "#,
+    )
+    .bind(job)
+    .bind(organization)
+    .bind(&project)
+    .bind(format!("Job{m}"))
+    .execute(pool)
+    .await
+    .expect("operation task");
 
     World {
         marker,
@@ -1848,6 +1888,8 @@ async fn build_workspace(
         custom_emoji,
         module,
         package_install,
+        job,
+        directory_source,
     }
 }
 

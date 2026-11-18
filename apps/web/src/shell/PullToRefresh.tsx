@@ -79,7 +79,7 @@ function usePullToRefresh(ref: RefObject<HTMLElement | null>, enabled: boolean):
 
 /**
  * Pull down at the top of a page to refresh it, in the installed app on a
- * phone, where there's no reload button. AppShell loads this only there.
+ * phone, where there's no reload button. The shell frame loads this only there.
  * Nothing happens when anything under your finger is scrolled down.
  */
 export default function PullToRefresh({ enabled, target }: { enabled: boolean; target: RefObject<HTMLElement | null> }) {

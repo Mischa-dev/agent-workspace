@@ -59,3 +59,10 @@
   flex-direction: column;
   gap: var(--space-4);
 }
+
+/* M1.17: setup asks what the workspace is for, then offers templates. */
+.aw-templates__start {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}

@@ -1,0 +1,68 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "shapes.documents",
+  "version": "1.0.0",
+  "name": "Documents",
+  "description": "Writing and organising: documents, sheets, whiteboards and the conversations around them. No tasks or agents.",
+  "publisher": {
+    "name": "Agent Workspace"
+  },
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": [
+          "tasks",
+          "code",
+          "runs",
+          "agents",
+          "automations",
+          "suggestions"
+        ]
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "writing",
+        "changes": {},
+        "words": {
+          "page": {
+            "one": "document",
+            "many": "documents"
+          }
+        }
+      }
+    },
+    {
+      "kind": "space",
+      "key": "documents",
+      "body": {
+        "name": "Documents",
+        "key": "DOCS"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "page",
+      "key": "start_here",
+      "body": {
+        "title": "Start here",
+        "markdown": "Write documents here, keep data in sheets and sketch on whiteboards. Talk about any of it in #general.\n"
+      }
+    }
+  ]
+}

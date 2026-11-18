@@ -113,7 +113,8 @@ const sessionRoutes: AppRoute[] = [
 ]
 
 const inWorkspace = (route: AppRoute) => Boolean(route.path && isWorkspacePath(route.path))
-const framed = (route: AppRoute) => route.handle?.layout === 'shell'
+/** In the persistent shell: shell pages and canvases (a canvas draws the rail but no sidebar). */
+const framed = (route: AppRoute) => route.handle?.layout === 'shell' || route.handle?.layout === 'canvas'
 
 /** The old root address of each workspace page, and `/`: the same page in the current workspace. */
 const workspaceRedirects: AppRoute[] = [
@@ -125,7 +126,7 @@ const workspaceRedirects: AppRoute[] = [
   })),
 ]
 
-/** `/w/:ws` and the workspace pages under it, in the shell or on their own canvas. */
+/** `/w/:ws` and the workspace pages under it, in the shell or not (redirects). */
 function workspaceRoutes(shell: boolean): AppRoute {
   const children: AppRoute[] = sessionRoutes
     .filter((route) => inWorkspace(route) && framed(route) === shell)
@@ -135,6 +136,8 @@ function workspaceRoutes(shell: boolean): AppRoute {
 }
 
 const atRoot = sessionRoutes.filter((route) => !inWorkspace(route))
+/** Workspace pages outside the shell (redirects), if any. */
+const offShell = workspaceRoutes(false)
 
 /** The whole app's addresses, as data (W1.10). */
 export const appRoutes: RouteObject[] = [
@@ -153,7 +156,7 @@ export const appRoutes: RouteObject[] = [
               // and sidebar stay mounted from page to page.
               { element: <ShellLayout />, children: [...atRoot.filter(framed), workspaceRoutes(true)] },
               ...atRoot.filter((route) => !framed(route)),
-              workspaceRoutes(false),
+              ...(offShell.children?.length ? [offShell] : []),
               ...workspaceRedirects,
             ],
           },

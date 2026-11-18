@@ -19,6 +19,7 @@ import {
   type Position,
   type Selection,
   shownBlock,
+  shownSelection,
 } from './sheetModel'
 import { markTitle, ruleBook } from './sheetValidation'
 
@@ -207,12 +208,16 @@ export function SheetGrid({
     onEdits([{ row, column, input: /^true$/i.test(inputAt(row, column).trim()) ? 'FALSE' : 'TRUE', revision }])
   }
 
+  /** The rows and columns the selection covers as shown. */
+  const selected = () => shownSelection(selection.anchor, selection.focus, { frozen, order, columns: hidden ? columns : null })
+
   const clearSelection = () => {
     if (!editable) return
-    const box = bounds(selection)
+    // Only what's shown: a view's hidden rows and columns between keep their cells.
+    const { rows, columns: across } = selected()
     const edits: GridEdit[] = []
-    for (let row = box.top; row <= box.bottom; row += 1) {
-      for (let column = box.left; column <= box.right; column += 1) {
+    for (const row of rows) {
+      for (const column of across) {
         if (cells.has(cellKey(row, column)) || pending.get(cellKey(row, column))) edits.push({ row, column, input: '' })
       }
     }
@@ -258,13 +263,8 @@ export function SheetGrid({
 
   const onCopy = (event: ClipboardEvent<HTMLDivElement>, cut = false) => {
     if (editing) return
-    const box = bounds(selection)
-    const rows: string[][] = []
-    for (let row = box.top; row <= box.bottom; row += 1) {
-      const line: string[] = []
-      for (let column = box.left; column <= box.right; column += 1) line.push(pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? '')
-      rows.push(line)
-    }
+    const shown = selected()
+    const rows = shown.rows.map((row) => shown.columns.map((column) => pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? ''))
     event.clipboardData.setData('text/plain', formatTable(rows))
     event.preventDefault()
     if (cut) clearSelection()

@@ -53,9 +53,9 @@ const MAX_REPOSITORIES: i64 = 200;
 // ---------------------------------------------------------------------------
 // Arguments and results
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RepositoryListArguments {
+pub(crate) struct RepositoryListArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// Only this project (ID, link or key such as "AWD"). Leave it out for
@@ -67,13 +67,13 @@ pub(super) struct RepositoryListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepositoryListValue {
+pub(crate) struct RepositoryListValue {
     pub repositories: Vec<RepositoryItem>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepositoryItem {
+pub(crate) struct RepositoryItem {
     pub id: String,
     pub project_id: String,
     pub project_key: String,
@@ -109,9 +109,9 @@ pub(super) struct RepositoryItem {
     pub settings_url: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PullRequestListArguments {
+pub(crate) struct PullRequestListArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// Only this project (ID, link or key such as "AWD").
@@ -136,7 +136,7 @@ pub(super) struct PullRequestListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PullRequestListValue {
+pub(crate) struct PullRequestListValue {
     pub pull_requests: Vec<PullRequestLine>,
     /// How many match, before limit.
     pub total: i64,
@@ -148,7 +148,7 @@ pub(super) struct PullRequestListValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PullRequestLine {
+pub(crate) struct PullRequestLine {
     pub id: String,
     pub project_id: String,
     pub project_key: String,
@@ -202,7 +202,7 @@ pub(super) struct PullRequestLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LinkedTask {
+pub(crate) struct LinkedTask {
     pub id: String,
     pub key: String,
     pub title: String,
@@ -211,7 +211,7 @@ pub(super) struct LinkedTask {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LinkedThread {
+pub(crate) struct LinkedThread {
     pub id: String,
     pub name: String,
     pub url: String,
@@ -272,7 +272,7 @@ async fn repository_projects(
 
 /// What the run tools and the lists say about a pull request's checks.
 #[derive(Clone, Debug, Default)]
-pub(super) struct CheckSummary {
+pub(crate) struct CheckSummary {
     /// Failing check names, sorted, at most `MAX_FAILING_CHECKS`.
     pub failing: Vec<String>,
     /// Checks not yet completed.
@@ -394,7 +394,7 @@ fn not_ready_because(row: &RepositoryRow) -> Option<String> {
     }
 }
 
-pub(super) async fn repository_list(
+pub(crate) async fn repository_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RepositoryListArguments,
@@ -750,7 +750,7 @@ struct RunLinkRow {
     run_id: Uuid,
 }
 
-pub(super) async fn pull_request_list(
+pub(crate) async fn pull_request_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PullRequestListArguments,

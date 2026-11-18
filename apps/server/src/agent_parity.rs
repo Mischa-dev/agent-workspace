@@ -89,27 +89,27 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/environments",
-            Tool("environment_write"),
+            Tool("environment_create"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Tool("environment_write"),
+            Tool("environment_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Tool("environment_write"),
+            Tool("environment_archive"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Tool("environment_write"),
+            Tool("environment_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Tool("environment_write"),
+            Tool("environment_check"),
         ),
         (
             Post,
@@ -395,22 +395,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_create"),
         ),
         (
             Patch,
             "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Delete,
             "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Post,
             "/api/v1/bug-report-links/{link_id}/replace",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Post,
@@ -700,12 +700,12 @@ mod tests {
         (
             Post,
             "/api/v1/conversations/{id}/members",
-            Tool("conversation_members"),
+            Tool("conversation_members_update"),
         ),
         (
             Post,
             "/api/v1/conversations/{id}/members/{actor_id}/remove",
-            Tool("conversation_members"),
+            Tool("conversation_members_update"),
         ),
         (
             Post,
@@ -866,22 +866,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/repositories",
-            Tool("repository_write"),
+            Tool("repository_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Tool("repository_write"),
+            Tool("repository_prepare"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Tool("repository_write"),
+            Tool("repository_archive"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/sync",
-            Tool("github_integration_write"),
+            Tool("github_installation_link"),
         ),
         (
             Post,
@@ -891,12 +891,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/repositories",
-            Tool("repository_write"),
+            Tool("repository_create"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/integrations/github/automation",
-            Tool("github_integration_write"),
+            Tool("github_automation_update"),
         ),
         (
             Post,
@@ -1125,22 +1125,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/automations",
-            Tool("automation_write"),
+            Tool("automation_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_write"),
+            Tool("automation_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_write"),
+            Tool("automation_delete"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-            Tool("automation_write"),
+            Tool("automation_run_start"),
         ),
         (
             Post,
@@ -1220,17 +1220,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            Tool("task_depend"),
+            Tool("task_link"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            Tool("task_relate"),
+            Tool("task_link"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            Tool("task_watch"),
+            Tool("task_watch_set"),
         ),
         (
             Post,
@@ -1240,22 +1240,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/labels",
-            Tool("label_write"),
+            Tool("label_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/labels/{label_id}",
-            Tool("label_write"),
+            Tool("label_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/fields",
-            Tool("field_write"),
+            Tool("field_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/fields/{field_id}",
-            Tool("field_write"),
+            Tool("field_update"),
         ),
         (
             Post,
@@ -1310,12 +1310,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/milestones",
-            Tool("milestone_write"),
+            Tool("milestone_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-            Tool("milestone_write"),
+            Tool("milestone_update"),
         ),
         (
             Post,
@@ -1380,12 +1380,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/task-templates",
-            Tool("template_write"),
+            Tool("template_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            Tool("template_write"),
+            Tool("template_update"),
         ),
         (
             Post,
@@ -1420,17 +1420,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/recurring-tasks",
-            Tool("recurring_write"),
+            Tool("recurring_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_write"),
+            Tool("recurring_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_write"),
+            Tool("recurring_update"),
         ),
         (
             Put,

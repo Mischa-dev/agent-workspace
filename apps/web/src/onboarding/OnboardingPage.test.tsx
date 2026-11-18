@@ -11,7 +11,6 @@ import { getWorkspace, renameWorkspace, type Workspace } from '../settings/works
 import { getOnboarding, updateOnboarding, type Onboarding, type OnboardingStepId } from './api'
 import { OnboardingPage } from './OnboardingPage'
 
-vi.mock('../shell/AppShell', () => ({ AppShell: ({ children }: { children: React.ReactNode }) => children }))
 vi.mock('../projects/hooks', () => ({ useProjects: vi.fn(), useCreateProject: vi.fn(() => ({ isPending: false })) }))
 vi.mock('../work-items/api', () => ({ createWorkItem: vi.fn() }))
 vi.mock('./api', async (actual) => ({ ...(await actual<typeof import('./api')>()), getOnboarding: vi.fn(), updateOnboarding: vi.fn() }))

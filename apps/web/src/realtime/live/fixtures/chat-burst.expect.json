@@ -1,0 +1,5 @@
+{
+  "about": "Five messages and a read mark in a busy channel: its timeline, unread marks and the rail refetch once for the burst; documents, tasks, thread boards and the Messages overview are left alone.",
+  "fetched": { "channel timeline": 1, "sidebar": 1, "rail": 1 },
+  "untouched": ["page list", "sheet list", "collections", "task board", "thread board", "members", "messages overview"]
+}

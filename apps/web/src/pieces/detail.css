@@ -1,0 +1,131 @@
+/* The detail view and thing chips (W1.21). */
+
+.aw-detail {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  min-height: 100%;
+  padding: 0 var(--space-4) var(--space-10);
+}
+
+.aw-detail__bar {
+  position: sticky;
+  top: 0;
+  z-index: var(--layer-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 48px;
+  margin: 0 calc(-1 * var(--space-4));
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+  background: var(--content-bg);
+}
+
+.aw-detail.is-sheet .aw-detail__bar {
+  padding-left: var(--space-2);
+}
+
+.aw-detail__eyebrow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-detail__tablist {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-detail__tab {
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--content-fg-muted);
+  font: var(--t-ui);
+  cursor: pointer;
+}
+
+.aw-detail__tab[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--content-fg);
+}
+
+.aw-detail__tabpanel {
+  padding-top: var(--space-3);
+}
+
+/* On a phone a panel takes the whole screen, with its own Back. */
+@media (max-width: 860px) {
+  .aw-panel:has(.aw-detail--panel) {
+    width: 100vw;
+  }
+
+  .aw-panel:has(.aw-detail--panel) .aw-panel__close {
+    display: none;
+  }
+}
+
+.aw-thingchip__wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.aw-thingchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--content-fg);
+  font: var(--t-small);
+  text-decoration: none;
+}
+
+.aw-thingchip:hover,
+.aw-thingchip:focus-visible {
+  background: var(--accent-soft);
+}
+
+.aw-thingchip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-thingchip__card {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: var(--layer-popover);
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  max-width: 280px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--content-bg);
+  box-shadow: var(--shadow-popover);
+  font: var(--t-small);
+  white-space: normal;
+}
+
+.aw-thingchip__kind,
+.aw-thingchip__details {
+  color: var(--content-fg-muted);
+}
+
+.aw-thingchip__title {
+  font: var(--t-ui-strong);
+}

@@ -7,9 +7,6 @@ import { AuthenticatedSessionProvider, type AuthenticatedSession } from '../auth
 import type { Suggestion } from './api'
 import { SuggestionsPage } from './PlanningPages'
 
-vi.mock('../shell/AppShell', () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => children,
-}))
 
 vi.mock('../projects/hooks', () => ({
   useProject: () => ({

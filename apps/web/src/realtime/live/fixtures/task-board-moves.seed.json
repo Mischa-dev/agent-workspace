@@ -1,0 +1,14 @@
+{
+  "open": [
+    { "name": "my work", "key": ["myWork"] },
+    { "name": "channel timeline", "key": ["timeline", "$project", "$channel"], "data": { "conversation": { "kind": "channel", "parentKind": null }, "linkedWorkItems": [], "entries": [] } },
+    { "name": "page list", "key": ["pages", "$project"] },
+    { "name": "sheet list", "key": ["sheets", "$project"] }
+  ],
+  "cached": [
+    { "name": "task A history", "key": ["workItemTimeline", "$project", "$taskA"] },
+    { "name": "task A card", "key": ["thing", "task", "$taskA"] },
+    { "name": "planning", "key": ["planning", "$project", {}] },
+    { "name": "sidebar", "key": ["sidebar", "$project", "$channel"] }
+  ]
+}

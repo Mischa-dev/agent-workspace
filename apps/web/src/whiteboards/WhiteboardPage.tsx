@@ -11,9 +11,9 @@ import { useAuthenticatedSession } from '../auth/session'
 import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
 import { useRecentEdits } from '../changes/useRecentEdits'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
+import { useShellPage } from '../shell/shellStore'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
-import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { projectLocationHref } from '../projects/locations'
 import { useTheme } from '../theme/themeContext'
@@ -72,10 +72,9 @@ function useNow() {
 export function WhiteboardPage() {
   const { whiteboardId = '' } = useParams()
   const session = useAuthenticatedSession()
+  useShellPage({ mainClassName: 'aw-main--whiteboard' })
   return (
-    <AppShell mainClassName="aw-main--whiteboard" user={session.user}>
-      <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
-    </AppShell>
+    <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
   )
 }
 
