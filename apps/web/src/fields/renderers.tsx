@@ -1,4 +1,5 @@
-import { ThingChip } from '../pieces/ThingChip'
+import { lazy, Suspense } from 'react'
+
 import { Icon } from '../ui'
 import { chosenOptions, displayText, isFormulaError, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
 import '../styles/work.css'
@@ -103,9 +104,18 @@ export function FormulaRenderer({ field, references, value }: RendererProps) {
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
 }
 
+// The chip loads with the first linked value shown, not with every screen
+// that draws fields (such as the field settings).
+const ThingChip = lazy(() => import('../pieces/ThingChip').then((module) => ({ default: module.ThingChip })))
+
 /** A linked task, page or record: a chip with a card on hover (W1.21). */
 export function LinkRenderer({ field, references, value }: RendererProps) {
   const reference = references.find((entry) => entry.id === value)
-  if (!reference) return <TextRenderer field={field} references={references} value={value} />
-  return <ThingChip details={reference.kind === 'task' ? reference.key : null} kind={reference.kind} label={reference.label} />
+  const text = <TextRenderer field={field} references={references} value={value} />
+  if (!reference) return text
+  return (
+    <Suspense fallback={text}>
+      <ThingChip details={reference.kind === 'task' ? reference.key : null} kind={reference.kind} label={reference.label} />
+    </Suspense>
+  )
 }
