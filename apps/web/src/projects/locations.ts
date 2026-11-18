@@ -52,6 +52,22 @@ export function projectLocationHref(
   return `/projects/${project}${PLACE_PATHS[location.kind]}`
 }
 
+/**
+ * A project area's address, or one thing in it: `projectAreaHref(p, 'dashboards', d)`
+ * is `/projects/<p>/dashboards/<d>`. `search` adds query parameters, such as
+ * the view a collection opens on.
+ */
+export function projectAreaHref(
+  projectId: string,
+  area: 'collections' | 'dashboards' | 'sheets',
+  id?: string,
+  search?: Record<string, string>,
+): string {
+  const path = `/projects/${encodeURIComponent(projectId)}/${area}${id ? `/${encodeURIComponent(id)}` : ''}`
+  const query = search ? new URLSearchParams(search).toString() : ''
+  return query ? `${path}?${query}` : path
+}
+
 export function safeProjectHref(
   projectId: string,
   href: string | null | undefined,

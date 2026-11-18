@@ -372,8 +372,12 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
     );
     let again = tool(app, &person, &desk, "run_cancel", cancel).await;
     assert_eq!(again["value"]["idempotentReplay"], true, "{again}");
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("sequence events");
     let heard = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM external_agent_events WHERE kind = 'run.cancel' AND resource_id = $1",
+        "SELECT count(*) FROM events WHERE type = 'run.cancel' AND thing_id = $1 \
+         AND audience_account_id IS NOT NULL",
     )
     .bind(run_id.parse::<Uuid>().expect("run UUID"))
     .fetch_one(&setup.pool)
@@ -528,7 +532,10 @@ async fn a_replay_rechecks_the_conversation_its_run_is_in() {
 
     // The channel turns members-only without the agent: a replay of the
     // same update, and any other report, finds nothing.
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1) UPDATE conversations SET visibility = 'members' WHERE id = $1",
+    )
         .bind(channel_id.parse::<Uuid>().expect("channel UUID"))
         .execute(&setup.pool)
         .await

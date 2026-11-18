@@ -170,6 +170,7 @@ pub(super) async fn run(pool: &PgPool, seed: &DevSeed, thread: Uuid, branch: &st
     .await
     .expect("workspace");
     let run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, run, thread, seed.execution_worker_id, "queued").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -762,8 +763,18 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
         ] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+        // As a value of its own: the bare digits also turn up inside ids
+        // and timestamps.
         if let Some(id) = installation_id {
-            assert!(!text.contains(&id.to_string()), "{id} in {text}");
+            for shown in [
+                format!(":{id},"),
+                format!(":{id}}}"),
+                format!("\"{id}\""),
+                format!("/{id}/"),
+                format!("/{id}\""),
+            ] {
+                assert!(!text.contains(&shown), "{id} in {text}");
+            }
         }
         for id in &installation_ids {
             assert!(!text.contains(&format!(":{id}")), "{id} in {text}");
@@ -1692,6 +1703,7 @@ async fn prompt_redaction_migration_backfills_edited_messages_and_retry_chains()
     sqlx::query(r#"INSERT INTO messages (id, conversation_id, author_actor_id, content_version, content, plain_text) VALUES ($1, $2, $3, 1, '{"version":1,"nodes":[]}', 'edited replacement')"#)
         .bind(message).bind(work).bind(seed.human_actor_id).execute(&mut *transaction).await.expect("old message");
     for (id, predecessor) in [(root, None), (retry, Some(root))] {
+        // Migration 0052: before runs had records of their own.
         sqlx::query("INSERT INTO agent_runs (id, conversation_id, execution_worker_id, requesting_actor_id, execution_profile_id, repository_id, predecessor_run_id, state, prompt, authorization_snapshot) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', 'old removed secret', '{}')")
             .bind(id).bind(work).bind(seed.execution_worker_id).bind(seed.human_actor_id).bind(seed.execution_profile_id).bind(seed.repository_id).bind(predecessor)
             .execute(&mut *transaction).await.expect("old run");

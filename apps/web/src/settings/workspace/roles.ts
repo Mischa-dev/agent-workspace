@@ -53,7 +53,6 @@ export const PERMISSION_KEYS = [
   'conversations.members',
   'direct.start',
   'replies.steer',
-  'conversations.continue_agents',
   'pages.see',
   'pages.comment',
   'pages.suggest',

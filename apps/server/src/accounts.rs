@@ -13,6 +13,7 @@
 mod agents;
 pub mod claims;
 pub mod credential_ops;
+pub mod join;
 pub mod ops;
 mod people;
 pub mod refs;

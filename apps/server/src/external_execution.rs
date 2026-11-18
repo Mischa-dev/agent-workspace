@@ -6,11 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::select_run_setup,
     auth::AuthenticatedActor,
     domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
-    external_events::enqueue_external_event,
+    hosts::builtin::http::select_run_setup,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     mcp::McpPrincipal,
     message_content::MessageContent,
@@ -115,7 +114,6 @@ struct SponsorAuthorization {
 #[derive(Debug, FromRow)]
 struct SponsoredApprovalContext {
     project_id: Uuid,
-    connection_id: Uuid,
     requesting_actor_id: Uuid,
     sponsoring_actor_id: Uuid,
     conversation_id: Uuid,
@@ -426,17 +424,6 @@ async fn request_sponsored_execution_inner(
     })?;
     crate::requests::announce_raised(&mut transaction, raised.request_id).await?;
     let approval_id = raised.request_id;
-    enqueue_external_event(
-        &mut transaction,
-        connection_id,
-        principal.project_id,
-        "external_execution.requested",
-        "Sponsored Worker execution is awaiting human approval",
-        "external_execution_request",
-        request_id,
-        &request_href(principal.project_id, request_id),
-    )
-    .await?;
     sqlx::query(
         r#"
         INSERT INTO audit_events (
@@ -569,33 +556,17 @@ pub(crate) async fn approval_settled(
             "expired" => "expired",
             _ => "canceled",
         };
-        let ended = sqlx::query_as::<_, (Uuid, Uuid)>(
+        sqlx::query(
             r#"
             UPDATE external_execution_requests
             SET status = $2, version = version + 1, resolved_at = now(), updated_at = now()
             WHERE id = $1 AND status = 'pending'
-            RETURNING external_agent_connection_id, project_id
             "#,
         )
         .bind(external_request_id)
         .bind(status)
-        .fetch_optional(&mut **transaction)
+        .execute(&mut **transaction)
         .await?;
-        if let Some((connection_id, project_id)) = ended
-            && status == "denied"
-        {
-            enqueue_external_event(
-                transaction,
-                connection_id,
-                project_id,
-                "external_execution.denied",
-                "Sponsored Worker execution was denied",
-                "external_execution_request",
-                external_request_id,
-                &request_href(project_id, external_request_id),
-            )
-            .await?;
-        }
         return Ok(());
     }
     let context = sqlx::query_as::<_, SponsoredApprovalContext>(
@@ -604,7 +575,6 @@ pub(crate) async fn approval_settled(
         -- request (requests::may_answer checked them); locks the thread the
         -- run will start in.
         SELECT request.project_id,
-               request.external_agent_connection_id AS connection_id,
                request.requesting_actor_id,
                request.sponsoring_actor_id,
                request.conversation_id,
@@ -689,17 +659,6 @@ pub(crate) async fn approval_settled(
     .bind(run_id)
     .bind(context.request_version)
     .execute(&mut **transaction)
-    .await?;
-    enqueue_external_event(
-        transaction,
-        context.connection_id,
-        context.project_id,
-        "external_execution.approved",
-        "Sponsored Worker execution was approved and queued",
-        "external_execution_request",
-        external_request_id,
-        &request_href(context.project_id, external_request_id),
-    )
     .await?;
     // The built-in host's holder starts it (K5.3).
     sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")

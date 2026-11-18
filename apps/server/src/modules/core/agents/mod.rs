@@ -15,11 +15,17 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::external_agents::router);
         module.operations(crate::external_agents::ops::register_ops);
+        module.routes(crate::delivery::http::router);
+        module.operations(crate::delivery::ops::register_ops);
+    module.operations(crate::schedules::ops::register_ops);
         module.routes(crate::agent_profiles::router);
         module.routes(crate::agent_sessions::router);
         module.routes(crate::hosts::routes::router);
         module.operations(crate::hosts::ops::register_ops);
+        module.operations(crate::hosts::register::register_ops);
         module.routes(crate::agent_setup_links::router);
+        module.routes(crate::agent_plugin::router);
+        module.operations(crate::agent_plugin::register_ops);
         module.operations(crate::accounts::ops::register_ops);
         module.operations(crate::accounts::refs::register_ops);
     }

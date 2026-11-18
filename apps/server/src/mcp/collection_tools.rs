@@ -107,6 +107,23 @@ async fn read_access(state: &AppState, principal: &McpPrincipal) -> Result<Readi
     Ok(Reading::Ok { project_key })
 }
 
+/// Whether the caller may read tasks here: a collection whose records are
+/// tasks reads only with that, as the task tools do.
+async fn tasks_readable(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
+    match memory::project_access(
+        crate::db::scoped(&state.pool),
+        principal.actor_id,
+        principal.project_id,
+        Action::WorkItemView,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(AppError::NotFound(_) | AppError::Forbidden) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn refused<T>(what: &'static str) -> ToolResult<T> {
     if what == MESSAGES_SPACE_MESSAGE {
         ToolResult::invalid("projectId", MESSAGES_SPACE_MESSAGE)
@@ -449,7 +466,8 @@ pub(super) struct CollectionWriteArguments {
     pub archived: Option<bool>,
     /// true makes its records tasks: each gets a status, assignee,
     /// priority, dates, labels and a key like AWD-12, and is then changed
-    /// with the task tools (task_create with collection, task_update).
+    /// as a task (record_write, or task_create with collection and
+    /// task_update).
     /// false turns it off again while it has no records.
     pub acts_like_task: Option<bool>,
     /// The version from collection_describe: if the collection changed
@@ -876,6 +894,12 @@ pub(super) struct RecordQueryArguments {
     /// Grouped by a date: "day", "week" (from Monday) or "month" (the
     /// default).
     pub group_bucket: Option<crate::fields::DateBucket>,
+    /// What to add up beside each group's count, and over every record:
+    /// "sum", "average", "min" or "max" of measureField. Left out, a
+    /// chart view's own measure.
+    pub measure: Option<crate::views::definition::MeasureOp>,
+    /// The number field measure reads, by name or ID.
+    pub measure_field: Option<String>,
     /// The fields to return, by name. Left out, every field with a value;
     /// [] returns numbers and titles only.
     pub fields: Option<Vec<String>>,
@@ -894,6 +918,9 @@ pub(super) struct RecordQueryArguments {
 pub(super) struct GroupLine {
     pub name: String,
     pub count: i64,
+    /// With a measure: its value over the group's records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -912,6 +939,9 @@ pub(super) struct RecordQueryValue {
     pub records: Vec<RecordLine>,
     /// Records the query finds, across every page.
     pub total: i64,
+    /// With a measure: its value over every record the query finds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
     /// With groupBy: each group with records, in order, and how many.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<GroupLine>,
@@ -1003,9 +1033,15 @@ pub(super) async fn record_query(
                 Ok(collection) => collection,
                 Err(refusal) => return Ok(refusal),
             };
+        if collection.acts_like_task && !tasks_readable(state, principal).await? {
+            return Ok(ToolResult::not_found("That collection"));
+        }
         let definitions =
             collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
+        // What a view reads by: the fields, and a task's other built-ins.
+        let view_fields =
+            collections::view_fields(&mut connection, project_id, collection.id, true).await?;
         let writer = Writer {
             actor_id: principal.actor_id,
             project_key: &project_key,
@@ -1013,9 +1049,15 @@ pub(super) async fn record_query(
         // The view to start from, then what this call says instead.
         let mut config = match arguments.view.as_deref() {
             Some(reference) => {
-                let saved = views::list(&mut *connection, project_id, collection.id).await?;
+                let saved = views::visible(
+                    &mut connection,
+                    project_id,
+                    collection.id,
+                    principal.actor_id,
+                )
+                .await?;
                 match views::find(&saved, reference) {
-                    Some(view) => view.config.active(&definitions),
+                    Some(view) => view.config.active(&view_fields),
                     None => {
                         return Ok(ToolResult::NotFound {
                             message: format!(
@@ -1060,8 +1102,34 @@ pub(super) async fn record_query(
         if arguments.group_bucket.is_some() {
             config.group_bucket = arguments.group_bucket;
         }
-        if let Err(message) = views::check(&config, &definitions) {
-            return Ok(ToolResult::invalid("filters", message));
+        let measured = arguments.measure.is_some() || arguments.measure_field.is_some();
+        if measured {
+            let field = match arguments.measure_field.as_deref() {
+                None => None,
+                Some(name) => match fields::find(&definitions, name) {
+                    Some(field) if !field.archived => Some(field.id),
+                    _ => {
+                        return Ok(ToolResult::invalid(
+                            "measureField",
+                            format!("{} has no field \"{name}\".", collection.name),
+                        ));
+                    }
+                },
+            };
+            let mut chart = config.chart.unwrap_or_default();
+            chart.measure = crate::views::definition::Measure {
+                op: arguments.measure.unwrap_or(if field.is_some() {
+                    crate::views::definition::MeasureOp::Sum
+                } else {
+                    crate::views::definition::MeasureOp::Count
+                }),
+                field,
+            };
+            config.chart = Some(chart);
+        }
+        if let Err(message) = views::check(&config, &view_fields) {
+            let at = if measured { "measure" } else { "filters" };
+            return Ok(ToolResult::invalid(at, message));
         }
         let only_fields = match &arguments.fields {
             None => None,
@@ -1088,8 +1156,8 @@ pub(super) async fn record_query(
                 Some(ids)
             }
         };
-        let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
-            .searching(words.clone(), &definitions);
+        let mut spec = Spec::from_config(&config, &view_fields, principal.actor_id)
+            .searching(words.clone(), &view_fields);
         spec.archived = archived;
         let source = crate::collections::source(&collection);
         if let Some(named) = &named {
@@ -1135,6 +1203,7 @@ pub(super) async fn record_query(
         };
         let total = query::total(&mut connection, source.as_ref(), &spec).await?;
         let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
+        let value = query::measure_total(&mut connection, source.as_ref(), &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let found = records::by_ids(
             &mut *connection,
@@ -1191,11 +1260,13 @@ pub(super) async fn record_query(
                 })
                 .collect(),
             total,
+            value,
             groups: groups
                 .into_iter()
                 .map(|group| GroupLine {
                     name: group.label,
                     count: group.count,
+                    value: group.value,
                 })
                 .collect(),
             next_cursor: page.next_cursor,
@@ -1255,6 +1326,124 @@ pub(super) struct RecordWriteValue {
     pub unchanged: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_replay: bool,
+}
+
+/// Writes records of a collection whose records are tasks, each as a task
+/// change (`collections::task_writes`, as the web app's record routes do),
+/// all or nothing in the caller's transaction.
+async fn task_records_write(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    project_key: &str,
+    collection: &Collection,
+    inputs: &[RecordInput],
+) -> Result<Result<Vec<Written>, records::WriteProblem>, AppError> {
+    let project_id = principal.project_id;
+    let actor = super::tasks::command_actor(principal, project_id);
+    // Agents name built-in fields, options, people and labels as they read
+    // them; the task change takes them by ID.
+    let builtins = collections::tasks::fields(
+        &mut *transaction,
+        project_id,
+        collection.field_kind(),
+        false,
+    )
+    .await?
+    .into_iter()
+    .filter(|field| collections::tasks::is_builtin_field(field.id))
+    .collect::<Vec<_>>();
+    let mut written = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let (named, rest): (Vec<_>, Vec<_>) = input
+            .values
+            .iter()
+            .cloned()
+            .partition(|(reference, _)| fields::find(&builtins, reference).is_some());
+        let resolved = match work_item_fields::resolve_for(
+            &mut *transaction,
+            project_id,
+            Writer {
+                actor_id: principal.actor_id,
+                project_key,
+            },
+            &builtins,
+            "fields",
+            &named,
+            None,
+        )
+        .await?
+        {
+            Ok(resolved) => resolved,
+            Err(problem) => {
+                return Ok(Err(records::WriteProblem {
+                    index,
+                    kind: ProblemKind::Invalid,
+                    field: problem.field,
+                    message: problem.message,
+                    current_version: None,
+                }));
+            }
+        };
+        let input = &RecordInput {
+            values: resolved
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry.field.id.to_string(),
+                        entry.value.unwrap_or(Value::Null),
+                    )
+                })
+                .chain(rest)
+                .collect(),
+            ..input.clone()
+        };
+        let before = match input.record {
+            Some(reference) => records::find(
+                &mut **transaction,
+                project_id,
+                collection.id,
+                reference,
+                true,
+            )
+            .await?
+            .map(|record| record.version),
+            None => None,
+        };
+        let task_id = match collections::task_writes::write(
+            transaction,
+            &actor,
+            project_key,
+            collection,
+            input,
+        )
+        .await?
+        {
+            Ok(task_id) => task_id,
+            Err(mut problem) => {
+                problem.index = index;
+                return Ok(Err(problem));
+            }
+        };
+        let record = records::find(
+            &mut **transaction,
+            project_id,
+            collection.id,
+            RecordRef::Id(task_id),
+            true,
+        )
+        .await?
+        .ok_or(AppError::Internal("written task is missing"))?;
+        written.push(match before {
+            None => Written::Created(record),
+            Some(version) if version == record.version => Written::Unchanged(record),
+            Some(_) => Written::Changed {
+                record,
+                changed: Vec::new(),
+            },
+        });
+    }
+    Ok(Ok(written))
 }
 
 pub(super) async fn record_write(
@@ -1362,14 +1551,6 @@ pub(super) async fn record_write(
         else {
             return Ok(ToolResult::not_found("That collection"));
         };
-        if collection.is_tasks() {
-            return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
-        }
-        if collection.acts_like_task {
-            return Ok(ToolResult::conflict(collections::tasks::task_like_message(
-                &collection.name,
-            )));
-        }
         if collection.archived {
             return Ok(ToolResult::conflict(format!(
                 "\"{}\" is archived. Restore it with collection_write (archived: false) first.",
@@ -1383,17 +1564,29 @@ pub(super) async fn record_write(
             actor_id: principal.actor_id,
             project_key: &project_key,
         };
-        let written = match records::write(
-            &mut transaction,
-            project_id,
-            &collection,
-            writer,
-            &definitions,
-            "fields",
-            &inputs,
-        )
-        .await?
-        {
+        let written = if collection.acts_like_task {
+            // Its records are tasks: each is a task change, as on the web.
+            task_records_write(
+                &mut transaction,
+                principal,
+                &project_key,
+                &collection,
+                &inputs,
+            )
+            .await?
+        } else {
+            records::write(
+                &mut transaction,
+                project_id,
+                &collection,
+                writer,
+                &definitions,
+                "fields",
+                &inputs,
+            )
+            .await?
+        };
+        let written = match written {
             Ok(written) => written,
             Err(problem) => {
                 let at = format!("records[{}].{}", problem.index, problem.field);

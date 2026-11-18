@@ -610,12 +610,13 @@ impl Consumer for DiesOnce {
     }
 }
 
-/// A router stopped mid-batch loses no delivery and makes none twice, and
-/// routing the same events again makes no new deliveries.
+/// A router stopped mid-batch loses no rule firing and makes none twice,
+/// and routing the same events again fires nothing new.
 #[tokio::test]
 async fn the_router_loses_and_repeats_no_delivery() {
     let Some(world) = WorldBuilder::default()
         .project("HOOK")
+        .agent("rook", "member")
         .connected_app("helper")
         .build("event_log_router")
         .await
@@ -624,19 +625,19 @@ async fn the_router_loses_and_repeats_no_delivery() {
     };
     let pool = world.pool().clone();
     let project = world.project("HOOK");
-    sqlx::query(
-        "INSERT INTO webhook_subscriptions \
-             (id, organization_id, project_id, owner_actor_id, name, url, event_types) \
-         VALUES ($1, $2, $3::uuid, $4, 'Router test', 'https://receiver.invalid/hook', \
-                 '{message.created}')",
+    let helper = &world.apps["helper"];
+    // The owner's rule on messages someone else posts.
+    let rule = tool(
+        &world.app,
+        &helper.token,
+        &helper.session,
+        "automation_write",
+        json!({"projectId": "HOOK", "operation": "create", "name": "Router test",
+               "trigger": {"kind": "message_posted"},
+               "actions": [{"kind": "notify", "recipients": "owner", "message": "Heard"}]}),
     )
-    .bind(Uuid::now_v7())
-    .bind(world.organization)
-    .bind(project)
-    .bind(world.owner.actor)
-    .execute(&pool)
-    .await
-    .expect("subscription");
+    .await;
+    assert_eq!(rule["outcome"], "ok", "{rule}");
     let setup = Setup {
         app: world.app.clone(),
         browser: super::support::app::login(&world.app).await,
@@ -645,12 +646,12 @@ async fn the_router_loses_and_repeats_no_delivery() {
         cleanup: None,
     };
     let channel = create_channel(&setup, project, "hooks").await;
-    let helper = &world.apps["helper"];
+    let rook = &world.agents["rook"];
     for n in 0..3 {
         let sent = tool(
             &world.app,
-            &helper.token,
-            &helper.session,
+            &rook.token,
+            &rook.session,
             "message_send",
             json!({"conversationId": channel, "text": format!("ping {n}"), "clientRequestId": format!("hook-{n}")}),
         )
@@ -692,8 +693,7 @@ async fn the_router_loses_and_repeats_no_delivery() {
         let registry = &registry;
         let options = &options;
         async move {
-            // Only the routing jobs: deliveries would try to reach the
-            // receiver.
+            // Only the routing jobs: firings and pushes wait.
             sqlx::query(
                 "UPDATE background_jobs SET run_at = now() + interval '1 day' \
                  WHERE kind <> 'events.route' AND state = 'queued'",
@@ -711,13 +711,13 @@ async fn the_router_loses_and_repeats_no_delivery() {
     route_only(&state).await;
     let deliveries = || async {
         sqlx::query_as::<_, (i64, i64)>(
-            "SELECT count(*), count(DISTINCT event_key) FROM webhook_deliveries",
+            "SELECT count(*), count(DISTINCT dedupe_key) FROM automation_runs",
         )
         .fetch_one(&pool)
         .await
-        .expect("deliveries")
+        .expect("firings")
     };
-    assert_eq!(deliveries().await, (3, 3), "one delivery per message");
+    assert_eq!(deliveries().await, (3, 3), "one firing per message");
 
     // Routing everything again (a cursor set back) delivers nothing twice.
     sqlx::query("UPDATE event_consumers SET position = 0 WHERE name = 'router'")
@@ -726,5 +726,5 @@ async fn the_router_loses_and_repeats_no_delivery() {
         .expect("rewind");
     while runner.round(&pool).await.expect("round").handled > 0 {}
     route_only(&state).await;
-    assert_eq!(deliveries().await, (3, 3), "no delivery twice");
+    assert_eq!(deliveries().await, (3, 3), "no firing twice");
 }

@@ -9,6 +9,7 @@ import {
   displayText,
   fieldIdOf,
   isEmpty,
+  isReadOnlyType,
   normalizeField,
   normalizeValues,
   opsFor,
@@ -31,8 +32,14 @@ const risk: FieldDefinition = normalizeField({
 describe('custom fields', () => {
   it('reads definitions and values defensively', () => {
     expect(risk.options[1].archived).toBe(true)
-    expect(normalizeField({ type: 'formula' }).type).toBe('text')
-    expect(normalizeValues({ a: 'x', b: 3, c: true, d: ['o1', 2], e: null, f: { nested: 1 } })).toEqual({ a: 'x', b: 3, c: true, d: ['o1'] })
+    expect(normalizeField({ type: 'hologram' }).type).toBe('text')
+    expect(normalizeValues({ a: 'x', b: 3, c: true, d: ['o1', 2], e: null, f: { nested: 1 }, g: { error: 'Divide by zero' } })).toEqual({
+      a: 'x',
+      b: 3,
+      c: true,
+      d: ['o1'],
+      g: { error: 'Divide by zero' },
+    })
   })
 
   it('shows values as people read them', () => {
@@ -46,6 +53,26 @@ describe('custom fields', () => {
     expect(isEmpty(false)).toBe(true)
     expect(isEmpty([])).toBe(true)
     expect(isEmpty(0)).toBe(false)
+  })
+
+  it('reads a formula by what it gives, and its error for a record (T1.17)', () => {
+    const formula = (result: 'number' | 'date' | 'boolean' | 'list' | 'text') => ({
+      ...risk,
+      type: 'formula' as const,
+      options: [],
+      formula: { source: '{#title}', result },
+    })
+    expect(normalizeField({ type: 'formula', formula: { source: '{#title}', result: 'date' } }).formula).toEqual({ source: '{#title}', result: 'date' })
+    expect(displayText(formula('number'), 3)).toBe('3')
+    expect(displayText(formula('boolean'), true)).toBe('Yes')
+    expect(displayText(formula('list'), ['a', 'b'])).toBe('a, b')
+    expect(displayText(formula('text'), { error: 'Divide by zero' })).toBe('Error: Divide by zero')
+    // It filters, sorts and groups as its result.
+    expect(behavesAs(formula('number'))).toBe('number')
+    expect(opsFor(formula('boolean'))).toEqual(opsFor('checkbox'))
+    expect(canGroupRecords(formula('date'))).toBe(true)
+    expect(canGroupRecords(formula('number'))).toBe(false)
+    expect(isReadOnlyType('formula')).toBe(true)
   })
 
   it('shows small numbers as nonzero', () => {

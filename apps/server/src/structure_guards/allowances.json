@@ -6,21 +6,18 @@
     "policy.rs": 2,
     "push/actions.rs": 1
   },
-  "account_kind_strings": {
-  },
+  "account_kind_strings": {},
   "active_run_states_literal": {
     "github.rs": 3,
     "provider.rs": 2,
     "recovery.rs": 1
   },
   "agent_runs_sql": {
-    "api.rs": 10,
     "github.rs": 8,
     "mcp/code.rs": 6,
-    "provider.rs": 18,
-    "recovery.rs": 7,
-    "run_log.rs": 3,
-    "scheduler.rs": 16,
+    "provider.rs": 17,
+    "recovery.rs": 6,
+    "scheduler.rs": 15,
     "usage/history.rs": 1
   },
   "background_spawns": {
@@ -43,10 +40,10 @@
   },
   "conversation_listings": {
     "ai/summaries.rs": 1,
-    "api.rs": 5,
+    "api.rs": 1,
     "automations.rs": 1,
     "conversations.rs": 7,
-    "hosts/builtin/mod.rs": 1,
+    "hosts/builtin/http.rs": 4,
     "launch.rs": 2,
     "link_previews.rs": 1,
     "mcp/channels.rs": 2,
@@ -62,11 +59,9 @@
     "replies.rs": 2,
     "runs/views.rs": 1,
     "scheduler.rs": 1,
-    "webhooks.rs": 1,
     "workspace_templates.rs": 1
   },
-  "custom_role_allows": {
-  },
+  "custom_role_allows": {},
   "direct_tool_calls": {
     "automations.rs": 1,
     "bug_reports.rs": 2,
@@ -74,8 +69,6 @@
   },
   "hand_built_links": {
     "automations.rs": 1,
-    "external_agents.rs": 3,
-    "external_events.rs": 1,
     "external_execution.rs": 1,
     "home.rs": 1,
     "launch.rs": 3,
@@ -84,7 +77,6 @@
     "mcp/briefing.rs": 2,
     "mcp/channels.rs": 1,
     "mcp/code.rs": 1,
-    "mcp/collaboration.rs": 1,
     "mcp/collection_tools.rs": 1,
     "mcp/common.rs": 3,
     "mcp/groups.rs": 1,
@@ -105,20 +97,18 @@
     "page_docs/parity.rs": 1,
     "page_docs/testing.rs": 1,
     "projects.rs": 5,
-    "replies.rs": 1,
     "usage/ready.rs": 1,
-    "webhooks.rs": 4,
+    "webhooks.rs": 2,
     "whiteboards.rs": 1,
     "work_item_fields.rs": 1,
     "work_item_move.rs": 4,
     "work_items.rs": 4,
-    "work_items/imports.rs": 1,
-    "work_items/views.rs": 1
+    "work_items/imports.rs": 1
   },
   "message_inserts": {
-    "api.rs": 1,
     "conversations.rs": 1,
     "external_execution.rs": 1,
+    "hosts/builtin/http.rs": 1,
     "provider.rs": 1
   },
   "notification_detail_text": {
@@ -140,8 +130,7 @@
   },
   "raw_role_checks": {
   },
-  "rust_role_checks": {
-  },
+  "rust_role_checks": {},
   "task_core_updates": {
     "mcp/tasks.rs": 1,
     "work_item_commands.rs": 5,
@@ -154,13 +143,11 @@
     "auth/workos/agents.rs": 3
   },
   "vendor_names_core": {
-    "agent_setup_links.rs": 2,
     "environments.rs": 2,
     "error.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,
     "settings.rs": 1
   },
-  "workspace_role_enum": {
-  }
+  "workspace_role_enum": {}
 }

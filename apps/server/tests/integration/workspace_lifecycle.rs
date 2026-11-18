@@ -456,6 +456,22 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     );
 
     // Deleted for good.
+    // A's agent has a webhook connection, signed with a secret kept in A.
+    let session = initialize(&t.app, &a.agent_token).await.expect("agent MCP");
+    let (status, body) = call_tool(
+        &t.app,
+        &a.agent_token,
+        &session,
+        "connection_create",
+        json!({
+            "name": "Runner",
+            "webhookUrl": "https://hooks.example.test/runner",
+            "clientRequestId": "lifecycle-runner",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(structured(&body)["outcome"], "ok", "{body}");
     let b_ids = sweep_ids(&t.pool, b.organization).await;
     let b_before = digest(&t.pool, &b_ids).await;
     let a_owner = sqlx::query_scalar::<_, Uuid>(
@@ -522,6 +538,36 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     {
         std::fs::create_dir_all(directory.join("content")).expect("repository data");
     }
+    // A person in A first, then B (one A doesn't own, so it isn't retired
+    // with A): their default connection is at home in A, with a webhook. It
+    // moves to B; one only in A goes with A.
+    let traveller = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'human', 'active') RETURNING id",
+    )
+    .fetch_one(&t.pool)
+    .await
+    .expect("account in both");
+    for (workspace, joined) in [(a.organization, "1 hour"), (b.organization, "1 minute")] {
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled, created_at) \
+             VALUES ($1, $2, 'member', true, now() - $3::interval)",
+        )
+        .bind(workspace)
+        .bind(traveller)
+        .bind(joined)
+        .execute(&t.pool)
+        .await
+        .expect("membership");
+    }
+    let travelling = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/traveller' \
+         WHERE account_id = $1 AND is_default AND home_workspace_id = $2 RETURNING id",
+    )
+    .bind(traveller)
+    .bind(a.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("default connection at home in A");
     let deleted = lifecycle::delete_now(&t.state, a.organization, true)
         .await
         .expect("delete")
@@ -558,6 +604,35 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
             "{table}.{column} still names the deleted workspace"
         );
     }
+    // Connections: none left at home in A; the one reaching B moved there,
+    // its webhook stopped until saved again (its secret was A's).
+    let at_home = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_connections WHERE home_workspace_id = $1",
+    )
+    .bind(a.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("connections");
+    assert_eq!(at_home, 0);
+    let (home, state) = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT home_workspace_id, state FROM agent_connections WHERE id = $1",
+    )
+    .bind(travelling)
+    .fetch_one(&t.pool)
+    .await
+    .expect("the travelling connection stays");
+    assert_eq!((home, state.as_str()), (b.organization, "push_disabled"));
+    // Set aside, with its membership, so B compares as it was.
+    sqlx::query("DELETE FROM agent_connections WHERE account_id = $1")
+        .bind(traveller)
+        .execute(&t.pool)
+        .await
+        .expect("set the connection aside");
+    sqlx::query("DELETE FROM organization_memberships WHERE actor_id = $1")
+        .bind(traveller)
+        .execute(&t.pool)
+        .await
+        .expect("set the membership aside");
     let projects_left =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE organization_id = $1")
             .bind(a.organization)

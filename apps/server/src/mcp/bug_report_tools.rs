@@ -120,6 +120,10 @@ pub(super) struct FormWrite {
     /// Shown once an answer is in.
     #[serde(default)]
     pub thanks: Option<String>,
+    /// Answers it takes in a UTC day (1 to 10,000; 500 when left out)
+    /// before it pauses itself and tells its maker.
+    #[serde(default)]
+    pub daily_limit: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -163,6 +167,7 @@ async fn form_from_written(
         intro: written.intro.clone().unwrap_or_default(),
         fields,
         thanks: written.thanks.clone().unwrap_or_default(),
+        daily_limit: written.daily_limit,
     }))
 }
 
@@ -220,6 +225,7 @@ pub(super) async fn bug_report_link_write(
                         intro: None,
                         fields: Vec::new(),
                         thanks: None,
+                        daily_limit: None,
                     });
                     let form = match form_from_written(state, project_id, collection.id, &written)
                         .await?

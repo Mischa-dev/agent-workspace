@@ -167,13 +167,16 @@ pub struct NewEvent<'a> {
 }
 
 impl<'a> NewEvent<'a> {
-    /// The common case: a fact about one thing, heard by its space.
-    pub fn thing(ty: &'static EventType, space_id: Uuid, kind: &'a str, id: Uuid) -> Self {
+    /// The common case: a fact about one thing, heard by its space. A DM's
+    /// or group's place is the direct scope (K4.12), which is no space: its
+    /// event names that scope as its workspace and has no space.
+    pub fn thing(ty: &'static EventType, place: Uuid, kind: &'a str, id: Uuid) -> Self {
+        let direct = place == crate::spaces::DIRECT;
         Self {
             id: Uuid::now_v7(),
             ty,
-            workspace_id: None,
-            space_id: Some(space_id),
+            workspace_id: direct.then_some(place),
+            space_id: (!direct).then_some(place),
             thing: Some((id, kind)),
             access_thing: None,
             version: None,

@@ -31,7 +31,7 @@ pub(super) struct MessageReactArguments {
     pub message_id: String,
     /// One emoji, or its name (👍 thumbsup, 👀 eyes, ✅ check, 🎉 tada, and
     /// any other standard emoji), or the :name: of one of this workspace's
-    /// own.
+    /// own, or its id (as a reaction lists it) to join that one exactly.
     pub emoji: String,
     /// False to take your reaction away. Defaults to true.
     pub reacted: Option<bool>,

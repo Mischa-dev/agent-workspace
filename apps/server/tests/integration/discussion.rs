@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::support::{
     app::{Browser, send, tool},
-    callers::drain_outbox,
+    callers::{Agent, Call, Caller, drain_outbox},
     world::WorldBuilder,
 };
 
@@ -411,6 +411,34 @@ async fn things_have_discussions_as_visible_as_they_are() {
     assert_eq!(muted["outcome"], "ok", "{muted}");
     drain_outbox(&world.state).await;
     assert_eq!(thing_comments_for(pool, lena.actor).await, told_before);
+
+    // Once the sheet is archived its comments take nothing new, even sent
+    // straight into the conversation instead of through comment_create.
+    sqlx::query(
+        "UPDATE sheets SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1::uuid",
+    )
+    .bind(&sheet)
+    .bind(lena.actor)
+    .execute(pool)
+    .await
+    .expect("archive the sheet");
+    let refused = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "message_send",
+        json!({"conversationId": comments, "text": "Too late", "clientRequestId": "rook-late"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let (late,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid AND plain_text = 'Too late'",
+    )
+    .bind(&comments)
+    .fetch_one(pool)
+    .await
+    .expect("late");
+    assert_eq!(late, 0);
 }
 
 async fn thing_comments_for(pool: &sqlx::PgPool, actor: Uuid) -> i64 {
@@ -425,24 +453,49 @@ async fn thing_comments_for(pool: &sqlx::PgPool, actor: Uuid) -> i64 {
     .expect("thing comments")
 }
 
-async fn mentioned_events(pool: &sqlx::PgPool, connection: Uuid) -> Vec<(String, Uuid, String)> {
-    sqlx::query_as::<_, (String, Uuid, String)>(
-        r#"
-        SELECT resource_kind, resource_id, canonical_path
-        FROM external_agent_events
-        WHERE connection_id = $1 AND kind = 'comment.mentioned'
-        ORDER BY sequence
-        "#,
-    )
-    .bind(connection)
-    .fetch_all(pool)
-    .await
-    .expect("events")
+/// The `comment.mentioned` events an agent hears, as (comment kind,
+/// comment, thing), read the way the agent reads them.
+async fn mentioned_events(
+    app: &axum::Router,
+    pool: &sqlx::PgPool,
+    agent: &Agent,
+) -> Vec<(String, Uuid, String)> {
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    let (_, page) = agent
+        .call(
+            app,
+            Call::Tool {
+                name: "event_list",
+                arguments: json!({ "limit": 100 }),
+            },
+        )
+        .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    page["value"]["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["type"] == "comment.mentioned")
+        .map(|event| {
+            let data = &event["data"];
+            assert!(!event.to_string().contains("thoughts"), "ids only: {event}");
+            (
+                data["commentKind"].as_str().expect("kind").to_owned(),
+                data["commentId"]
+                    .as_str()
+                    .and_then(|id| id.parse().ok())
+                    .expect("comment"),
+                data["thing"]["id"].as_str().expect("thing").to_owned(),
+            )
+        })
+        .collect()
 }
 
-/// C1.1: a task or page comment that mentions a connected agent enqueues one
-/// `comment.mentioned` event for it, with a link to the comment and no
-/// words; an agent not in the project, and the author, get none. A task
+/// C1.1: a task or page comment that mentions an agent tells it with one
+/// `comment.mentioned` event, carrying the thing's and the comment's ids and
+/// no words; an agent not in the project, and the author, get none. A task
 /// comment is one path for the web and agent tools.
 #[tokio::test]
 async fn comments_that_mention_agents_tell_them() {
@@ -471,6 +524,8 @@ async fn comments_that_mention_agents_tell_them() {
     .execute(pool)
     .await
     .expect("leave WORK");
+    assert!(mentioned_events(app, pool, rook).await.is_empty());
+    assert!(mentioned_events(app, pool, kite).await.is_empty());
 
     let (status, task) = send(
         app,
@@ -501,14 +556,11 @@ async fn comments_that_mention_agents_tell_them() {
     assert_eq!(status, StatusCode::CREATED, "{posted}");
     let comment_id =
         Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
-    let events = mentioned_events(pool, rook.connection).await;
+    let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].0, "work_item_comment");
     assert_eq!(events[0].1, comment_id);
-    assert_eq!(
-        events[0].2,
-        format!("/projects/{work}/work-items/{task_id}#comment-{comment_id}")
-    );
+    assert_eq!(events[0].2, task_id);
 
     // An agent's own comment naming itself and an agent outside the project
     // tells neither.
@@ -521,8 +573,8 @@ async fn comments_that_mention_agents_tell_them() {
     )
     .await;
     assert_eq!(own["outcome"], "applied", "{own}");
-    assert_eq!(mentioned_events(pool, rook.connection).await.len(), 1);
-    assert!(mentioned_events(pool, kite.connection).await.is_empty());
+    assert_eq!(mentioned_events(app, pool, rook).await.len(), 1);
+    assert!(mentioned_events(app, pool, kite).await.is_empty());
 
     // A page comment names agents by handle.
     let (status, page) = send(
@@ -549,15 +601,12 @@ async fn comments_that_mention_agents_tell_them() {
     .await;
     assert!(status.is_success(), "{created}");
     let page_comment = created["id"].as_str().expect("comment").to_owned();
-    let events = mentioned_events(pool, rook.connection).await;
+    let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 2, "{events:?}");
     assert_eq!(events[1].0, "page_comment");
     assert_eq!(events[1].1.to_string(), page_comment);
-    assert_eq!(
-        events[1].2,
-        format!("/projects/{work}/pages/{page_id}#comment-{page_comment}")
-    );
-    assert!(mentioned_events(pool, kite.connection).await.is_empty());
+    assert_eq!(events[1].2, page_id);
+    assert!(mentioned_events(app, pool, kite).await.is_empty());
 }
 
 /// C1.19: a comment on a cell stays on that cell when rows go in above it

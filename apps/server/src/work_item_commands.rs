@@ -14,7 +14,6 @@ use uuid::Uuid;
 
 use crate::{
     error::AppError,
-    external_events::enqueue_external_work_item_event,
     outbox::enqueue_work_item_updated,
     policy::{Action, ActorKind, Decision, DenyReason, RoleGrant},
     work_item_fields::FieldValueChanges,
@@ -1021,16 +1020,10 @@ pub async fn update_locked_work_item(
     {
         add_watcher(transaction, actor.project_id, current.id, assignee).await?;
     }
-    if assignee_actor_id != current.assignee_actor_id {
-        enqueue_external_work_item_event(
-            transaction,
-            actor.project_id,
-            current.id,
-            current.assignee_actor_id,
-            "work_item.changed",
-            "A Work Item assignment changed",
-        )
-        .await?;
+    if assignee_actor_id != current.assignee_actor_id
+        && let Some(assignee) = assignee_actor_id
+    {
+        emit_assigned(transaction, actor, current.id, assignee).await?;
     }
     // The title and field values are the record's (crate::task_records);
     // the rest is the task's own.
@@ -2754,40 +2747,27 @@ pub async fn add_watcher(
     Ok(())
 }
 
-/// Tells agents watching a task that it changed, through their connection's
-/// events. The assignee hears already, and nobody hears about their own
-/// change. People hear through notifications, which read the outbox.
-pub async fn notify_watching_agents(
+/// Tells the new assignee, and only them, that the task is theirs
+/// (`task.assigned`). Watchers and the space hear the task's own update.
+async fn emit_assigned(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     work_item_id: Uuid,
+    assignee: Uuid,
 ) -> Result<(), AppError> {
-    let watchers = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT watcher.actor_id
-        FROM work_item_watchers watcher
-        JOIN actors actor ON actor.id = watcher.actor_id AND actor.kind = 'external_agent' -- // kind-check: mechanical (how they're told: agents are woken)
-        JOIN task_rows item ON item.id = watcher.work_item_id
-        WHERE watcher.work_item_id = $1 AND watcher.actor_id <> $2
-          AND item.assignee_actor_id IS DISTINCT FROM watcher.actor_id
-        ORDER BY watcher.actor_id
-        "#,
-    )
-    .bind(work_item_id)
-    .bind(actor.actor_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for watcher in watchers {
-        enqueue_external_work_item_event(
-            transaction,
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::TASK_ASSIGNED,
             actor.project_id,
+            "task",
             work_item_id,
-            Some(watcher),
-            "work_item.changed",
-            "A Work Item you watch changed",
         )
-        .await?;
-    }
+        .audience(crate::events::Audience::Account(assignee))
+        .actor(actor.actor_id)
+        .payload(serde_json::json!({ "taskId": work_item_id, "assigneeId": assignee })),
+    )
+    .await?;
     Ok(())
 }
 
@@ -2936,16 +2916,6 @@ pub async fn finalize_changes(
         );
     }
     enqueue_update(transaction, actor.project_id, work_item_id, version).await?;
-    enqueue_external_work_item_event(
-        transaction,
-        actor.project_id,
-        work_item_id,
-        None,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    notify_watching_agents(transaction, actor, work_item_id).await?;
     let audit_id = record_audit(
         transaction,
         actor,
@@ -2985,15 +2955,9 @@ async fn finalize_created(
     )
     .await?;
     enqueue_update(transaction, actor.project_id, finalization.work_item_id, 1).await?;
-    enqueue_external_work_item_event(
-        transaction,
-        actor.project_id,
-        finalization.work_item_id,
-        finalization.assignee_actor_id,
-        "work_item.assigned",
-        "A Work Item was assigned to you",
-    )
-    .await?;
+    if let Some(assignee) = finalization.assignee_actor_id {
+        emit_assigned(transaction, actor, finalization.work_item_id, assignee).await?;
+    }
     let audit_id = record_audit(
         transaction,
         actor,
@@ -3104,16 +3068,16 @@ pub(crate) async fn insert_task_comment(
         .collect::<Vec<_>>();
     mentioned_actor_ids.sort();
     mentioned_actor_ids.dedup();
-    crate::external_events::enqueue_comment_mentioned(
+    crate::delivery::mentions::comment_mentioned(
         transaction,
-        crate::external_events::MentioningComment {
-            project_id: actor.project_id,
+        crate::delivery::mentions::MentioningComment {
+            space_id: actor.project_id,
             thing_kind: "task",
             thing_id: comment.work_item_id,
             comment_kind: "work_item_comment",
             comment_id,
-            anchor: comment_id,
-            author_actor_id: actor.actor_id,
+            thread_id: comment_id,
+            author_account_id: actor.actor_id,
         },
         &mentioned_actor_ids,
     )
@@ -3147,16 +3111,6 @@ pub async fn finalize_comment(
     let sequence =
         insert_comment_timeline(transaction, actor.project_id, work_item_id, comment_id).await?;
     enqueue_update(transaction, actor.project_id, work_item_id, version).await?;
-    enqueue_external_work_item_event(
-        transaction,
-        actor.project_id,
-        work_item_id,
-        None,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    notify_watching_agents(transaction, actor, work_item_id).await?;
     let audit_id = record_audit(
         transaction,
         actor,

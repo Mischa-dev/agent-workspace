@@ -129,7 +129,10 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .fetch_one(pool)
     .await
     .expect("launch");
-    assert_eq!(launch_state, "handed_off");
+    assert_eq!(
+        launch_state, "started",
+        "a hand-off with its run has started"
+    );
     assert_eq!(launch_run, Some(run));
     let content = sqlx::query_scalar::<_, Value>("SELECT content FROM messages WHERE id = $1")
         .bind(message)
@@ -444,17 +447,17 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .await;
     assert_eq!(halt["outcome"], "ok", "{halt}");
     assert_eq!(halt["value"]["run"]["state"], "cancel_requested", "{halt}");
-    let (request_status, heard) = sqlx::query_as::<_, (String, i64)>(
-        r#"
-        SELECT (SELECT status FROM reply_requests WHERE id = $1),
-               (SELECT count(*) FROM external_agent_events
-                WHERE kind = 'reply.cancelled' AND resource_id = $1)
-        "#,
-    )
-    .bind(halted_request)
-    .fetch_one(pool)
-    .await
-    .expect("request");
+    let request_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM reply_requests WHERE id = $1")
+            .bind(halted_request)
+            .fetch_one(pool)
+            .await
+            .expect("request");
+    let heard = crate::support::addressed_events(pool, runner)
+        .await
+        .iter()
+        .filter(|(kind, thing)| kind == "reply.cancelled" && *thing == Some(halted_request))
+        .count();
     assert_eq!(request_status, "cancelled");
     assert!(heard >= 1, "the runner hears reply.cancelled");
     let late = runner_call(
@@ -570,4 +573,243 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .await;
     assert_ne!(foreign["outcome"], "ok", "{foreign}");
     assert_eq!(run_row(pool, run).await.0, "done");
+}
+
+/// A1.13: one launch path. The same task launched to the built-in host, to
+/// an agent a host runs and to a connected runner gives one run each, with
+/// the same cause and title; the agent a host runs gets a start command,
+/// and a tag of it starts a host run too; an agent that connects by itself
+/// hears `run.start`.
+#[tokio::test]
+async fn every_route_gives_one_run_with_the_same_cause_and_title() {
+    use super::{
+        a1_host_protocol::host_op,
+        support::{
+            callers::{Call, Caller},
+            test_host::TestHost,
+            world::WorldBuilder,
+        },
+    };
+    use agent_workspace_server::jobs;
+    use std::time::Duration;
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("fixer", "member")
+        .agent("runner", "member")
+        .connected_app("laptop")
+        .build("a1_one_launch_path")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let laptop = &world.apps["laptop"];
+    let fixer = world.agents["fixer"].actor;
+    let runner = world.agents["runner"].actor;
+    let call = |name: &'static str, arguments: Value| async move {
+        let (_, body) = laptop.call(app, Call::Tool { name, arguments }).await;
+        body
+    };
+
+    // Fixer is run by a host the workspace linked.
+    let mut host = TestHost::enrol(
+        app,
+        &world.owner.browser,
+        world.organization,
+        "Team host",
+        json!({"connection": "dial_out"}),
+    )
+    .await;
+    host.describe(
+        json!({"start": true, "cancel": true, "idempotentStart": true}),
+        json!([{"hostAgentRef": "fixer", "name": "Fixer"}]),
+    )
+    .await;
+    let (status, bound) = host_op(
+        app,
+        &world.owner.browser,
+        world.organization,
+        "host_agent_bind",
+        json!({"hostId": host.id, "accountId": fixer, "hostAgentRef": "fixer"}),
+    )
+    .await;
+    assert!(status.is_success(), "{bound}");
+    // Runner connects by itself, for a harness of its own.
+    let (status, registered) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/organizations/{}/harnesses", world.organization),
+            Some("register-runner"),
+            json!({"name": "Night runner", "transport": "runner", "runnerActorId": runner,
+                   "manifest": {"description": "Runs at night"}}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {registered}");
+    let runner_kind =
+        sqlx::query_scalar::<_, String>("SELECT kind FROM custom_harnesses WHERE name = $1")
+            .bind("Night runner")
+            .fetch_one(pool)
+            .await
+            .expect("harness kind");
+
+    let channel = call(
+        "channel_create",
+        json!({"projectId": "WORK", "name": "general"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let prompt = "Tidy the changelog for the release.\nKeep it short.";
+    let mut runs = Vec::new();
+    for (route, extra) in [
+        ("host", json!({"agentAccountId": fixer})),
+        ("runner", json!({"harness": runner_kind})),
+    ] {
+        let made = call(
+            "task_create",
+            json!({"projectId": "WORK", "title": format!("Changelog ({route})"),
+                   "clientRequestId": format!("task-{route}")}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{made}");
+        let task = uuid_at(&made, "/value/workItemId");
+        let mut arguments = json!({"taskIds": [made["value"]["key"]], "prompt": prompt,
+                                   "clientRequestId": format!("launch-{route}")});
+        arguments
+            .as_object_mut()
+            .expect("arguments")
+            .extend(extra.as_object().expect("extra").clone());
+        let launched = call("task_launch", arguments).await;
+        assert_eq!(launched["outcome"], "ok", "{route}: {launched}");
+        let launch = uuid_at(&launched, "/value/launches/0/id");
+        let (state, run, reason) = sqlx::query_as::<_, (String, Option<Uuid>, Option<String>)>(
+            "SELECT state, run_id, status_reason FROM launches WHERE id = $1",
+        )
+        .bind(launch)
+        .fetch_one(pool)
+        .await
+        .expect("launch");
+        assert_eq!(state, "started", "{route}: {reason:?}");
+        let run = run.unwrap_or_else(|| panic!("{route}: a started launch names its run"));
+        runs.push((route, task, launch, run));
+    }
+    // One run each, with the same cause and title shape.
+    for (route, task, launch, run) in &runs {
+        let (account, cause, work_item, run_launch, title) = sqlx::query_as::<
+            _,
+            (Uuid, String, Option<Uuid>, Option<Uuid>, String),
+        >(
+            "SELECT account_id, cause_kind, work_item_id, launch_id, title FROM runs WHERE id = $1",
+        )
+        .bind(run)
+        .fetch_one(pool)
+        .await
+        .expect("run");
+        assert_eq!(
+            (cause.as_str(), work_item, run_launch, title.as_str()),
+            (
+                "task",
+                Some(*task),
+                Some(*launch),
+                "Tidy the changelog for the release."
+            ),
+            "{route}"
+        );
+        let runs_for_launch =
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM runs WHERE launch_id = $1")
+                .bind(launch)
+                .fetch_one(pool)
+                .await
+                .expect("count");
+        assert_eq!(runs_for_launch, 1, "{route}");
+        match *route {
+            "host" => assert_eq!(account, fixer),
+            "runner" => assert_eq!(account, runner),
+            _ => {}
+        }
+    }
+    // The host is asked to start Fixer's run, with the prompt.
+    let host_run = runs[0].3;
+    assert_eq!(
+        super::a1_host_protocol::run_state(pool, host_run).await,
+        "starting"
+    );
+    let offered = host.poll().await;
+    let start = offered
+        .iter()
+        .find(|command| command["runId"] == host_run.to_string().as_str())
+        .unwrap_or_else(|| panic!("no start for the host run: {offered:?}"));
+    assert_eq!(start["kind"], "start");
+    let (status, fetched) = host.fetch(&start["commandId"]).await;
+    assert!(status.is_success(), "{fetched}");
+    assert_eq!(fetched["input"]["prompt"], prompt, "{fetched}");
+    // The runner, connecting by itself, hears run.start for its run.
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    let (_, heard) = world.agents["runner"]
+        .call(
+            app,
+            Call::Tool {
+                name: "event_list",
+                arguments: json!({}),
+            },
+        )
+        .await;
+    let start_events = heard["value"]["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["type"] == "run.start")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(start_events.len(), 1, "{heard}");
+    assert_eq!(start_events[0]["reason"], "assigned");
+    assert_eq!(
+        start_events[0]["data"]["runId"],
+        runs[1].3.to_string().as_str()
+    );
+
+    // Tagging Fixer in the channel starts a run on its host as well.
+    let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let tagged = call(
+        "message_send",
+        json!({"conversationId": channel_id, "content": {"version": 1, "nodes": [
+            {"type": "mention", "actorId": fixer},
+            {"type": "text", "text": " fix the flaky login test"}
+        ]}}),
+    )
+    .await;
+    assert_eq!(tagged["outcome"], "ok", "{tagged}");
+    jobs::run_due(
+        &world.state,
+        &jobs::default_registry(),
+        &jobs::WorkerOptions {
+            concurrency: 1,
+            poll_interval: Duration::from_millis(20),
+            lease: Duration::from_secs(30),
+            worker_id: "a1-launch-paths".to_owned(),
+        },
+    )
+    .await
+    .expect("run the tag job");
+    let (state, agent, run) = sqlx::query_as::<_, (String, Option<Uuid>, Option<Uuid>)>(
+        "SELECT state, agent_account_id, run_id FROM launches WHERE source = 'tag'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("tag launch");
+    assert_eq!((state.as_str(), agent), ("started", Some(fixer)));
+    let run = run.expect("tag run");
+    let (account, run_state) =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT account_id, state FROM runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(pool)
+            .await
+            .expect("tag run");
+    assert_eq!((account, run_state.as_str()), (fixer, "starting"));
+    world.finish().await;
 }

@@ -43,6 +43,7 @@ pub enum OutboxResourceKind {
     Page,
     Collection,
     Sheet,
+    Dashboard,
 }
 
 impl OutboxResourceKind {
@@ -60,6 +61,7 @@ impl OutboxResourceKind {
             Self::Page => "page",
             Self::Collection => "collection",
             Self::Sheet => "sheet",
+            Self::Dashboard => "dashboard",
         }
     }
 }
@@ -99,6 +101,11 @@ pub struct MessageCreatedPayload {
     pub message_id: Uuid,
     pub sequence: i64,
     pub author_actor_id: Uuid,
+    /// The id the sender's client gave the message (its `clientRequestId`),
+    /// so a client recognises its own message when it comes back (A2.12).
+    /// An id the client chose, never content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
 }
 
 /// A message was edited or removed. IDs and the revision only: never put
@@ -240,6 +247,14 @@ pub struct AccountStatusChangedPayload {
     pub workspace_id: Option<Uuid>,
 }
 
+/// Someone's profile or avatar changed (C2.17): delivered to each space
+/// they're in, whose screens read it again. Ids only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountProfileChangedPayload {
+    pub account_id: Uuid,
+}
+
 /// Someone's notifications changed (one was added or came back unread). The
 /// recipient's ID only: delivered to them alone, and browsers refetch the
 /// inbox over HTTP.
@@ -305,6 +320,15 @@ pub const MAX_COLLECTION_EVENT_RECORDS: usize = 100;
 pub struct SheetUpdatedPayload {
     pub sheet_id: Uuid,
     pub revision: i64,
+}
+
+/// A shared dashboard's name, tiles or place changed, or it was removed
+/// (T1.32). IDs and the version only: open screens fetch it again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DashboardUpdatedPayload {
+    pub dashboard_id: Uuid,
+    pub version: i64,
 }
 
 /// Every outbox event type; each has a catalogue entry naming it as a
@@ -375,6 +399,31 @@ pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's sidebar sections changed (C2.9). Their id only, delivered to
+/// them alone; their other tabs read their sidebar again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SidebarChangedPayload {
+    pub actor_id: Uuid,
+}
+
+/// Someone's saved searches changed (C2.26). Their id only, delivered to
+/// them alone; their other tabs read the list again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedSearchesChangedPayload {
+    pub actor_id: Uuid,
+}
+
+/// Who may message someone changed for them (C2.39): a block, or a message
+/// request answered. Their id only, delivered to them alone; their screens
+/// read the DM's standing again. A blocked account is never told.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DmRulesChangedPayload {
+    pub actor_id: Uuid,
+}
+
 /// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
 /// scheduled or kept. Ids and the state only; open screens refetch the
 /// session. Delivered in the workspace's own space.
@@ -407,15 +456,20 @@ pub enum OutboxEventPayload {
     NotificationsUpdated(NotificationsUpdatedPayload),
     AccountManagersChanged(AccountManagersChangedPayload),
     AccountStatusChanged(AccountStatusChangedPayload),
+    AccountProfileChanged(AccountProfileChangedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
     PageUpdated(PageUpdatedPayload),
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
     CollectionUpdated(CollectionUpdatedPayload),
     SheetUpdated(SheetUpdatedPayload),
+    DashboardUpdated(DashboardUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    SidebarChanged(SidebarChangedPayload),
+    SavedSearchesChanged(SavedSearchesChangedPayload),
+    DmRulesChanged(DmRulesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
@@ -439,15 +493,20 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => "notifications.updated",
             Self::AccountManagersChanged(_) => "account.managers.changed",
             Self::AccountStatusChanged(_) => "account.status.changed",
+            Self::AccountProfileChanged(_) => "account.profile_changed",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
             Self::PageUpdated(_) => "page.updated",
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
             Self::CollectionUpdated(_) => "collection.updated",
             Self::SheetUpdated(_) => "sheet.updated",
+            Self::DashboardUpdated(_) => "dashboard.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::SidebarChanged(_) => "sidebar.changed",
+            Self::SavedSearchesChanged(_) => "saved_searches.changed",
+            Self::DmRulesChanged(_) => "dm_rules.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
@@ -474,15 +533,20 @@ impl OutboxEventPayload {
             | Self::NotificationsUpdated(_)
             | Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
+            | Self::AccountProfileChanged(_)
             | Self::WhiteboardUpdated(_)
             | Self::PageUpdated(_)
             | Self::PageDiscussionUpdated(_)
             | Self::CollectionUpdated(_)
             | Self::SheetUpdated(_)
+            | Self::DashboardUpdated(_)
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::SidebarChanged(_)
+            | Self::SavedSearchesChanged(_)
+            | Self::DmRulesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
@@ -498,6 +562,9 @@ impl OutboxEventPayload {
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
+            Self::SidebarChanged(payload) => Some(payload.actor_id),
+            Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
+            Self::DmRulesChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -518,17 +585,20 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
-            Self::MessageDraftChanged(_) | Self::NotificationKeywordsChanged(_) => {
-                OutboxResourceKind::Account
-            }
-            Self::AccountManagersChanged(_) | Self::AccountStatusChanged(_) => {
-                OutboxResourceKind::Account
-            }
+            Self::MessageDraftChanged(_)
+            | Self::NotificationKeywordsChanged(_)
+            | Self::SidebarChanged(_) => OutboxResourceKind::Account,
+            Self::SavedSearchesChanged(_) => OutboxResourceKind::Account,
+            Self::DmRulesChanged(_) => OutboxResourceKind::Account,
+            Self::AccountManagersChanged(_)
+            | Self::AccountStatusChanged(_)
+            | Self::AccountProfileChanged(_) => OutboxResourceKind::Account,
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
             Self::PageUpdated(_) => OutboxResourceKind::Page,
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
+            Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
             Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
                 OutboxResourceKind::Project
             }
@@ -558,16 +628,21 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => payload.actor_id,
             Self::AccountManagersChanged(payload) => payload.account_id,
             Self::AccountStatusChanged(payload) => payload.account_id,
+            Self::AccountProfileChanged(payload) => payload.account_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
             Self::PageUpdated(payload) => payload.page_id,
             Self::PageDiscussionUpdated(payload) => payload.page_id,
             Self::CollectionUpdated(payload) => payload.collection_id,
             Self::SheetUpdated(payload) => payload.sheet_id,
+            Self::DashboardUpdated(payload) => payload.dashboard_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::SidebarChanged(payload) => payload.actor_id,
+            Self::SavedSearchesChanged(payload) => payload.actor_id,
+            Self::DmRulesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
@@ -638,6 +713,11 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) if payload.revision < 1 || payload.sheet_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::DashboardUpdated(payload)
+                if payload.version < 1 || payload.dashboard_id.is_nil() =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::WorkspaceLifecycleChanged(payload)
                 if payload.workspace_id.is_nil()
                     || !matches!(
@@ -693,15 +773,20 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
             Self::AccountManagersChanged(payload) => serde_json::to_value(payload),
             Self::AccountStatusChanged(payload) => serde_json::to_value(payload),
+            Self::AccountProfileChanged(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
             Self::PageUpdated(payload) => serde_json::to_value(payload),
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
             Self::SheetUpdated(payload) => serde_json::to_value(payload),
+            Self::DashboardUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::SidebarChanged(payload) => serde_json::to_value(payload),
+            Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
+            Self::DmRulesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -766,6 +851,9 @@ impl OutboxEventPayload {
             "account.status.changed" => Self::AccountStatusChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "account.profile_changed" => Self::AccountProfileChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
             "whiteboard.updated" => Self::WhiteboardUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
@@ -781,6 +869,9 @@ impl OutboxEventPayload {
             "sheet.updated" => Self::SheetUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "dashboard.updated" => Self::DashboardUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
             "custom_emoji.changed" => Self::CustomEmojiChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
@@ -788,6 +879,15 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notification_keywords.changed" => Self::NotificationKeywordsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "sidebar.changed" => Self::SidebarChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "saved_searches.changed" => Self::SavedSearchesChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "dm_rules.changed" => Self::DmRulesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(
@@ -1030,6 +1130,24 @@ pub async fn enqueue_project_modules_updated(
     .await
 }
 
+/// Enqueue `dashboard.updated` for a shared dashboard at its new version.
+pub async fn enqueue_dashboard_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    dashboard_id: Uuid,
+    version: i64,
+) -> Result<Uuid, AppError> {
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::DashboardUpdated(DashboardUpdatedPayload {
+            dashboard_id,
+            version,
+        }),
+    )
+    .await
+}
+
 /// Enqueue `sheet.updated` for a sheet at its new revision.
 pub async fn enqueue_sheet_updated(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1061,6 +1179,7 @@ pub async fn enqueue_message_created(
             message_id,
             sequence,
             author_actor_id,
+            client_message_id: None,
         }),
     )
     .await
@@ -1173,6 +1292,7 @@ mod tests {
                 message_id: id(3),
                 sequence: 7,
                 author_actor_id: id(4),
+                client_message_id: None,
             })
         );
 
@@ -1310,6 +1430,7 @@ mod tests {
             message_id: id(3),
             sequence: 0,
             author_actor_id: id(4),
+            client_message_id: None,
         });
         assert_eq!(
             invalid_message.to_json(),

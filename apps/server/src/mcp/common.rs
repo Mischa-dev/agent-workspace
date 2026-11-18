@@ -173,7 +173,8 @@ impl<T> ToolResult<T> {
 /// `actor_can_access_project` allows.
 pub(super) fn confined_project(principal: &McpPrincipal) -> Option<Uuid> {
     let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's grant)
-    (person && !principal.account_wide).then_some(principal.project_id)
+    ((person && !principal.account_wide) || principal.is_run_credential())
+        .then_some(principal.project_id)
 }
 
 /// Projects this caller can act in right now.

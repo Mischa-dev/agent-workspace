@@ -36,7 +36,7 @@ fn host_call(method: &str, uri: &str, token: Option<&str>, body: Value) -> Reque
 
 /// A host operation from the web app, in `workspace`: the value on
 /// success, the refusal otherwise.
-async fn host_op(
+pub(super) async fn host_op(
     app: &axum::Router,
     browser: &Browser,
     workspace: Uuid,
@@ -777,7 +777,7 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
         "project_memberships",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "idempotency_keys",
     ] {
@@ -802,7 +802,7 @@ use agent_workspace_server::runs::{
 use super::support::test_host::TestHost;
 
 /// A run for `agent` handed to its host, as A1.13's launch path will.
-async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) -> Uuid {
+pub(super) async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) -> Uuid {
     let mut transaction = pool.begin().await.expect("transaction");
     let opened = open_queued(
         &mut transaction,
@@ -842,7 +842,7 @@ async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) ->
     run.id
 }
 
-async fn run_state(pool: &sqlx::PgPool, run: Uuid) -> String {
+pub(super) async fn run_state(pool: &sqlx::PgPool, run: Uuid) -> String {
     sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
         .bind(run)
         .fetch_one(pool)
@@ -913,7 +913,7 @@ async fn kept_nowhere(pool: &sqlx::PgPool, secret: &str) {
         "runs",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "background_jobs",
     ] {
@@ -1040,6 +1040,32 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     .await;
     assert_eq!(started["outcome"], "ok", "{started}");
     assert_eq!(run_state(&setup.pool, run).await, "working");
+    // It reaches the run's space only, even where the agent itself is a
+    // member too.
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let (status, added) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{elsewhere}/members"),
+            None,
+            json!({"actorId": fixer, "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let listed = tool(app, &token, &session, "projects_list", json!({})).await;
+    assert!(!listed.to_string().contains(&elsewhere), "{listed}");
+    assert!(listed.to_string().contains(&work), "{listed}");
+    let opened = tool(
+        app,
+        &token,
+        &session,
+        "project_open",
+        json!({"projectId": elsewhere}),
+    )
+    .await;
+    assert_ne!(opened["outcome"], "ok", "{opened}");
     let done = last_tool(
         app,
         &token,

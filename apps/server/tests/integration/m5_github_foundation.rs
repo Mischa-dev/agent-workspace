@@ -529,6 +529,14 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .execute(&pool)
     .await
     .expect("insert publication Git worktree");
+    crate::support::builtin_run_record(
+        &pool,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "completed",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -951,20 +959,6 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     .await
     .expect("Wes watches");
     let owner_actor = owner_id(pool).await;
-    sqlx::query(
-        r#"
-        INSERT INTO webhook_subscriptions (
-            id, organization_id, project_id, owner_actor_id, name, url, event_types
-        ) VALUES ($1, $2, $3, $4, 'Moves', 'https://127.0.0.1/hook', '{task.updated}')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(setup.organization_id)
-    .bind(project)
-    .bind(owner_actor)
-    .execute(pool)
-    .await
-    .expect("webhook");
     let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 11).await;
     let (integration, version) = sqlx::query_as::<_, (Uuid, i64)>(
         "SELECT installation.integration_actor_id, pr.version FROM github_pull_requests pr JOIN github_installations installation ON installation.id = pr.github_installation_id WHERE pr.id = $1",
@@ -997,6 +991,10 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(64),
     };
+    // The agents' connections start reading from here.
+    for agent in [mara, wes] {
+        crate::support::heard(&state, agent).await;
+    }
     let pump = || async {
         let registry = agent_workspace_server::jobs::default_registry();
         let options = agent_workspace_server::jobs::WorkerOptions {
@@ -1018,10 +1016,6 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         }
     };
     pump().await;
-    sqlx::query("DELETE FROM webhook_deliveries")
-        .execute(pool)
-        .await
-        .expect("clear");
 
     apply_pull_request_automation(
         pool,
@@ -1062,20 +1056,15 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     .await
     .expect("ranks");
     assert!(ranks[1] > ranks[0], "the card is at the bottom: {ranks:?}");
-    let event_count = |agent: Uuid| async move {
-        sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT count(*) FROM external_agent_events event
-            JOIN external_agent_connections connection ON connection.id = event.connection_id
-            WHERE connection.actor_id = $1 AND event.kind = 'work_item.changed'
-              AND event.created_at > now() - interval '1 minute'
-              AND event.summary IN ('An assigned Work Item changed', 'A Work Item you watch changed')
-            "#,
-        )
-        .bind(agent)
-        .fetch_one(pool)
-        .await
-        .expect("events")
+    let event_count = |agent: Uuid| {
+        let state = state.clone();
+        async move {
+            crate::support::heard(&state, agent)
+                .await
+                .iter()
+                .filter(|event| event["type"] == "task.updated" && event["reason"] == "following")
+                .count()
+        }
     };
     assert!(
         event_count(mara).await >= 1,
@@ -1086,13 +1075,19 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         "the watching agent hears of it"
     );
     pump().await;
-    let subjects = sqlx::query_scalar::<_, Value>(
-        "SELECT subject FROM webhook_deliveries WHERE event_type = 'task.updated'",
+    // One event for the move, naming what changed (a webhook is told the
+    // same).
+    let changes = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT changes FROM events WHERE type = 'task.updated' AND thing_id = $1 \
+         AND actor_account_id = $2",
     )
+    .bind(task)
+    .bind(integration)
     .fetch_all(pool)
     .await
-    .expect("deliveries");
-    assert_eq!(subjects.len(), 1, "{subjects:?}");
-    // Routing lists what changed in name order.
-    assert_eq!(subjects[0]["changedFields"], json!(["position", "status"]));
+    .expect("events");
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    let mut changed = changes[0].clone();
+    changed.sort();
+    assert_eq!(changed, vec!["position", "status"]);
 }

@@ -18,6 +18,7 @@ import { projectSettingsHref } from '../settings/paths'
 const PinnedViews = lazy(() => import('./PinnedViews'))
 const SidebarAgents = lazy(() => import('../agents/SidebarAgents'))
 const ChannelCreator = lazy(() => import('./ChannelCreator'))
+const SidebarSections = lazy(() => import('../conversations/SidebarSections'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -132,6 +133,11 @@ export function ProjectSidebar({
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         {topRows}
       </ul>
+      {experience.shows('talk.sidebar_sections') ? (
+        <Suspense fallback={null}>
+          <SidebarSections onNavigate={onNavigate} />
+        </Suspense>
+      ) : null}
       {experience.shows('area.tasks') ? (
         <Suspense fallback={null}>
           <PinnedViews onNavigate={onNavigate} projectId={project.id} />
@@ -153,7 +159,7 @@ export function ProjectSidebar({
             const rows = [
               <SidebarLink
                 badge={!channel.muted && channel.mentions > 0 ? channel.mentions : undefined}
-                icon="hash"
+                icon={channel.private ? 'lock' : 'hash'}
                 keep={selected || channel.unread}
                 key={channel.id}
                 label={channel.name}
@@ -197,6 +203,15 @@ export function ProjectSidebar({
               nested
               onNavigate={onNavigate}
               to={`${base}/threads/${encodeURIComponent(thread.id)}`}
+            />
+          ) : null}
+          {experience.shows('channel.browse') ? (
+            <SidebarLink
+              icon="search"
+              key="browse-channels"
+              label={`Browse ${experience.label('channel', 'many').toLowerCase()}`}
+              onNavigate={onNavigate}
+              to={`${base}/conversations/channels`}
             />
           ) : null}
         </SidebarSection>

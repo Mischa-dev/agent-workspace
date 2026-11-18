@@ -279,7 +279,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .expect("run the tag job");
     let (launch_profile, launch_state, run_id) =
         sqlx::query_as::<_, (Option<Uuid>, String, Option<Uuid>)>(
-            "SELECT agent_profile_id, state, agent_run_id FROM launches WHERE source = 'tag'",
+            "SELECT agent_profile_id, state, run_id FROM launches WHERE source = 'tag'",
         )
         .fetch_one(&pool)
         .await
@@ -335,20 +335,35 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "{}",
         runs.1
     );
-    // Tokens a run used with no provider account are their own row in the
-    // usage by account, not counted as someone else's account.
+    // Tokens a run used with no provider account (one a host reports) are
+    // their own row in the usage by account, not counted as someone else's.
+    let host_run = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO agent_run_usage (
-            agent_run_id, model, organization_id, project_id, provider_account_id,
-            adapter_kind, usage_date, input_tokens, output_tokens
-        )
-        VALUES ($1, 'w12-no-account', $2, $3, NULL, 'codex', current_date, 120, 30)
+        INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state)
+        VALUES ($1, $2, $3, $4, 'A host run', 'manual', 'working')
         "#,
     )
-    .bind(run_id)
+    .bind(host_run)
     .bind(seed.organization_id)
     .bind(seed.project_id)
+    .bind(reviewer_actor)
+    .execute(&pool)
+    .await
+    .expect("a host run");
+    sqlx::query(
+        r#"
+        INSERT INTO run_usage (
+            run_id, model, attribution, workspace_id, space_id, account_id,
+            usage_date, input_tokens, output_tokens, confidence
+        )
+        VALUES ($1, 'w12-no-account', 'reported', $2, $3, $4, current_date, 120, 30, 'exact')
+        "#,
+    )
+    .bind(host_run)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(reviewer_actor)
     .execute(&pool)
     .await
     .expect("usage without an account");
@@ -648,7 +663,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .expect("harness secrets");
     assert!(handed.is_empty(), "the server's own key was handed out");
     let stored = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM agent_run_events WHERE payload::text LIKE '%sk-test-account-key%'",
+        "SELECT count(*) FROM run_activities WHERE payload::text LIKE '%sk-test-account-key%'",
     )
     .fetch_one(&pool)
     .await

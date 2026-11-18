@@ -104,11 +104,33 @@ pub async fn save(
     )
     .await?;
     let Some(draft) = draft else {
-        // A clear dated before a draft another device saved since leaves
-        // that draft alone, as an older save would.
+        // A clear leaves a dated marker (no content), so a slower device's
+        // save from before it loses, as it would to a newer draft. A clear
+        // dated before a draft another device saved since leaves that draft
+        // alone, as an older save would.
         sqlx::query(
-            "DELETE FROM message_drafts WHERE account_id = $1 AND conversation_id = $2 \
-             AND updated_at <= LEAST(COALESCE($3::timestamptz, now()), now())",
+            r#"
+            INSERT INTO message_drafts (
+                workspace_id, space_id, account_id, conversation_id, content, updated_at
+            )
+            -- visibility: the caller checked the conversation is readable.
+            SELECT project.organization_id, project.id, $1, conversation.id, NULL,
+                   LEAST(COALESCE($3::timestamptz, now()), now())
+            FROM conversations conversation
+            JOIN projects project ON project.id = conversation.project_id
+            WHERE conversation.id = $2
+            ON CONFLICT (account_id, conversation_id) DO UPDATE
+            SET content = CASE
+                    WHEN message_drafts.updated_at > EXCLUDED.updated_at
+                    THEN message_drafts.content END,
+                previous_content = CASE
+                    WHEN message_drafts.updated_at > EXCLUDED.updated_at
+                    THEN message_drafts.previous_content END,
+                previous_updated_at = CASE
+                    WHEN message_drafts.updated_at > EXCLUDED.updated_at
+                    THEN message_drafts.previous_updated_at END,
+                updated_at = GREATEST(message_drafts.updated_at, EXCLUDED.updated_at)
+            "#,
         )
         .bind(account_id)
         .bind(conversation_id)
@@ -208,6 +230,7 @@ pub async fn listed(
         FROM message_drafts draft
         JOIN conversations conversation ON conversation.id = draft.conversation_id
         WHERE draft.account_id = $1
+          AND draft.content IS NOT NULL
           AND ($2::uuid IS NULL OR draft.workspace_id = $2)
           AND ($3::uuid IS NULL OR draft.conversation_id = $3)
           AND actor_can_access_project($1, $5, draft.space_id)
@@ -237,8 +260,8 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
     registry.every(PRUNE_KIND, std::time::Duration::from_secs(60 * 60));
 }
 
-/// Forgets drafts nobody touched for 30 days, and recoverable copies older
-/// than a day. Returns how many drafts went.
+/// Forgets drafts nobody touched for 30 days, clears' markers and
+/// recoverable copies older than a day. Returns how many drafts went.
 pub async fn prune(pool: &sqlx::PgPool) -> Result<u64, AppError> {
     let pruned = crate::db::scoped_one(pool, async |connection| {
         sqlx::query(
@@ -249,9 +272,16 @@ pub async fn prune(pool: &sqlx::PgPool) -> Result<u64, AppError> {
         )
         .execute(&mut *connection)
         .await?;
-        sqlx::query("DELETE FROM message_drafts WHERE updated_at < now() - interval '30 days'")
-            .execute(&mut *connection)
-            .await
+        // A clear's marker only has to outlast a slow device's last save.
+        sqlx::query(
+            r#"
+            DELETE FROM message_drafts
+            WHERE updated_at < now() - interval '30 days'
+               OR (content IS NULL AND updated_at < now() - interval '1 day')
+            "#,
+        )
+        .execute(&mut *connection)
+        .await
     })
     .await?;
     Ok(pruned.rows_affected())

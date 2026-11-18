@@ -209,14 +209,20 @@ pub(crate) fn custom_name(input: &str) -> Option<String> {
     .then_some(word)
 }
 
-/// Whether `input` could name a reaction at all, before any lookup.
+/// Whether `input` could name a reaction at all, before any lookup: an
+/// emoji, a name, or a custom emoji's id.
 pub(crate) fn could_be_reaction(input: &str) -> bool {
-    resolve(input).is_some() || custom_name(input).is_some()
+    resolve(input).is_some()
+        || custom_name(input).is_some()
+        || Uuid::parse_str(input.trim()).is_ok()
 }
 
 /// The reaction a call named, for a message in `project_id`: a standard
-/// emoji, or a custom one of that project's workspace. Taking a reaction
-/// away finds a retired custom emoji too.
+/// emoji, or a custom one of that project's workspace, by `:name:` or by id.
+/// A custom emoji is the reaction it is by id, so a retired name reused for a
+/// new image stays a second reaction: adding by name takes the live one,
+/// adding a retired one by id joins it where it is on the message already,
+/// and taking away by name finds the one the actor has.
 #[derive(Clone, Debug)]
 pub(crate) struct Picked {
     /// As stored: the emoji, or `:name:` for a custom one.
@@ -228,6 +234,8 @@ pub(crate) struct Picked {
 async fn pick(
     transaction: &mut Transaction<'_, Postgres>,
     workspace_id: Uuid,
+    message_id: Uuid,
+    actor_id: Uuid,
     input: &str,
     adding: bool,
 ) -> Result<Option<Picked>, AppError> {
@@ -238,6 +246,30 @@ async fn pick(
             custom_emoji_id: None,
         }));
     }
+    let custom = |(id, name): (Uuid, String)| Picked {
+        emoji: format!(":{name}:"),
+        name,
+        custom_emoji_id: Some(id),
+    };
+    if let Ok(id) = Uuid::parse_str(input.trim()) {
+        let found = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT emoji.id, emoji.name
+            FROM custom_emojis emoji
+            WHERE emoji.workspace_id = $1 AND emoji.id = $2
+              AND (NOT $3 OR emoji.retired_at IS NULL OR EXISTS (
+                  SELECT 1 FROM message_reactions reaction
+                  WHERE reaction.message_id = $4 AND reaction.custom_emoji_id = emoji.id))
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(id)
+        .bind(adding)
+        .bind(message_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        return Ok(found.map(custom));
+    }
     let Some(name) = custom_name(input) else {
         return Ok(None);
     };
@@ -245,22 +277,23 @@ async fn pick(
         r#"
         SELECT emoji.id
         FROM custom_emojis emoji
+        LEFT JOIN message_reactions mine
+          ON mine.message_id = $4 AND mine.actor_id = $5 AND mine.custom_emoji_id = emoji.id
         WHERE emoji.workspace_id = $1 AND emoji.name = $2
           AND ($3 OR emoji.retired_at IS NULL)
-        ORDER BY emoji.retired_at IS NULL DESC, emoji.created_at DESC
+        ORDER BY mine.custom_emoji_id IS NOT NULL DESC,
+                 emoji.retired_at IS NULL DESC, emoji.created_at DESC
         LIMIT 1
         "#,
     )
     .bind(workspace_id)
     .bind(&name)
     .bind(!adding)
+    .bind(message_id)
+    .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    Ok(found.map(|id| Picked {
-        emoji: format!(":{name}:"),
-        name,
-        custom_emoji_id: Some(id),
-    }))
+    Ok(found.map(|id| custom((id, name))))
 }
 
 /// One emoji on a message: how many reacted with it, whether the viewer did,
@@ -398,9 +431,16 @@ pub(crate) async fn set_reaction(
     if removed {
         return Err(ReactionError::Refused(ReactionRefused::Removed));
     }
-    let picked = pick(transaction, conversation.workspace_id, reaction, reacted)
-        .await?
-        .ok_or(AppError::Validation("reaction"))?;
+    let picked = pick(
+        transaction,
+        conversation.workspace_id,
+        message_id,
+        actor.actor_id,
+        reaction,
+        reacted,
+    )
+    .await?
+    .ok_or(AppError::Validation("reaction"))?;
     let affected = if reacted {
         sqlx::query(
             r#"
@@ -408,7 +448,7 @@ pub(crate) async fn set_reaction(
                 project_id, conversation_id, message_id, actor_id, emoji, custom_emoji_id
             )
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (message_id, actor_id, emoji) DO NOTHING
+            ON CONFLICT ON CONSTRAINT message_reactions_one DO NOTHING
             "#,
         )
         .bind(conversation.project_id)
@@ -422,11 +462,16 @@ pub(crate) async fn set_reaction(
         .rows_affected()
     } else {
         sqlx::query(
-            "DELETE FROM message_reactions WHERE message_id = $1 AND actor_id = $2 AND emoji = $3",
+            r#"
+            DELETE FROM message_reactions
+            WHERE message_id = $1 AND actor_id = $2 AND emoji = $3
+              AND custom_emoji_id IS NOT DISTINCT FROM $4
+            "#,
         )
         .bind(message_id)
         .bind(actor.actor_id)
         .bind(&picked.emoji)
+        .bind(picked.custom_emoji_id)
         .execute(&mut **transaction)
         .await?
         .rows_affected()

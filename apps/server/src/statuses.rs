@@ -141,8 +141,10 @@ impl StatusInput {
     }
 }
 
+/// A paused account shows as paused whatever state it set (A2.10).
 const VIEW_COLUMNS: &str = "account_id, workspace_id IS NOT NULL AS workspace_only, emoji, \
-     text, state, clear_at, away_until, updated_at";
+     text, CASE WHEN paused_at IS NOT NULL THEN 'paused' ELSE state END AS state, clear_at, \
+     away_until, updated_at";
 
 /// Sets `account_id`'s status, for every workspace (`workspace_id` None) or
 /// for one, replacing what was there. `setter` is who set it: the account
@@ -192,14 +194,26 @@ pub async fn clear(
     workspace_id: Option<Uuid>,
 ) -> Result<bool, AppError> {
     let removed = sqlx::query(
-        "DELETE FROM account_statuses WHERE account_id = $1 AND workspace_id IS NOT DISTINCT FROM $2",
+        "DELETE FROM account_statuses WHERE account_id = $1 AND workspace_id IS NOT DISTINCT FROM $2 \
+         AND paused_at IS NULL",
     )
     .bind(account_id)
     .bind(workspace_id)
     .execute(&mut **transaction)
     .await?
     .rows_affected();
-    Ok(removed > 0)
+    // A paused account keeps its pause; only what it said goes.
+    let emptied = sqlx::query(
+        "UPDATE account_statuses SET emoji = NULL, text = NULL, state = NULL, clear_at = NULL, \
+         away_until = NULL, updated_at = now() \
+         WHERE account_id = $1 AND workspace_id IS NOT DISTINCT FROM $2 AND paused_at IS NOT NULL",
+    )
+    .bind(account_id)
+    .bind(workspace_id)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    Ok(removed + emptied > 0)
 }
 
 /// Tells the spaces of `workspace_id` that `account_id` belongs to that its
@@ -238,6 +252,32 @@ pub async fn announce(
     Ok(())
 }
 
+/// Announces a change to `account_id`'s status wherever it shows: a line
+/// about one workspace's work in that workspace, an account-wide one in
+/// every workspace the account is in (readers in each have it on screen).
+pub async fn announce_where_shown(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    workspace_only: Option<Uuid>,
+) -> Result<(), AppError> {
+    let workspaces = match workspace_only {
+        Some(workspace_id) => vec![workspace_id],
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT organization_id FROM organization_memberships \
+                 WHERE actor_id = $1 AND enabled ORDER BY organization_id LIMIT 50",
+            )
+            .bind(account_id)
+            .fetch_all(&mut **transaction)
+            .await?
+        }
+    };
+    for workspace in workspaces {
+        announce(transaction, account_id, workspace, workspace_only.is_some()).await?;
+    }
+    Ok(())
+}
+
 /// The statuses shown in `workspace_id` for `accounts`: each account's own
 /// one and its line for this workspace, for accounts that are members of it
 /// (anyone else's status is none of this workspace's business). Expired
@@ -254,7 +294,8 @@ pub async fn shown_in(
         FROM account_statuses status
         WHERE status.account_id = ANY($2)
           AND (status.workspace_id IS NULL OR status.workspace_id = $1)
-          AND (status.clear_at IS NULL OR status.clear_at > now())
+          AND (status.clear_at IS NULL OR status.clear_at > now()
+               OR status.paused_at IS NOT NULL)
           AND EXISTS (
               SELECT 1 FROM organization_memberships membership
               WHERE membership.organization_id = $1
@@ -272,7 +313,131 @@ pub async fn shown_in(
     for row in rows {
         shown.entry(row.account_id).or_default().push(row);
     }
+    // A2.10: an account that hasn't picked up a request it was asked here
+    // shows as not responding in this workspace, unless it is paused.
+    let unresponsive = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT DISTINCT request.agent_actor_id
+        FROM reply_requests request
+        JOIN projects space ON space.id = request.project_id
+        WHERE space.organization_id = $1 AND request.agent_actor_id = ANY($2)
+          AND request.status = 'pending' AND request.unresponsive_at IS NOT NULL
+        "#,
+    )
+    .bind(workspace_id)
+    .bind(accounts)
+    .fetch_all(&mut *connection)
+    .await?;
+    for account in unresponsive {
+        let views = shown.entry(account).or_default();
+        if views
+            .iter()
+            .any(|view| view.state.as_deref() == Some("paused"))
+        {
+            continue;
+        }
+        match views.iter_mut().find(|view| view.workspace_only) {
+            Some(view) => view.state = Some("unresponsive".to_owned()),
+            None => views.push(StatusView {
+                account_id: account,
+                workspace_only: true,
+                emoji: None,
+                text: None,
+                state: Some("unresponsive".to_owned()),
+                clear_at: None,
+                away_until: None,
+                updated_at: Utc::now(),
+            }),
+        }
+    }
     Ok(shown)
+}
+
+/// Pause `account_id` in one workspace, or everywhere (`workspace_id`
+/// None): it hears only about its own pause, connections and cancelled
+/// replies until resumed, and its writes do nothing (A2.10).
+pub async fn pause(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    workspace_id: Option<Uuid>,
+    by: Uuid,
+    reason: Option<&str>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO account_statuses (
+            id, account_id, workspace_id, set_by, set_by_account_id,
+            paused_by_account_id, paused_reason, paused_at
+        )
+        VALUES ($1, $2, $3, 'workspace', $4, $4, $5, now())
+        ON CONFLICT (account_id, workspace_id) DO UPDATE
+        SET paused_by_account_id = $4, paused_reason = $5,
+            paused_at = COALESCE(account_statuses.paused_at, now()), updated_at = now()
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(account_id)
+    .bind(workspace_id)
+    .bind(by)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Lift a pause. Returns whether there was one. A row that held only the
+/// pause goes.
+pub async fn resume(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    workspace_id: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let lifted = sqlx::query(
+        "UPDATE account_statuses SET paused_by_account_id = NULL, paused_reason = NULL, \
+         paused_at = NULL, updated_at = now() \
+         WHERE account_id = $1 AND workspace_id IS NOT DISTINCT FROM $2 AND paused_at IS NOT NULL",
+    )
+    .bind(account_id)
+    .bind(workspace_id)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "DELETE FROM account_statuses WHERE account_id = $1 AND workspace_id IS NOT DISTINCT FROM $2 \
+         AND paused_at IS NULL AND emoji IS NULL AND text IS NULL AND state IS NULL \
+         AND away_until IS NULL",
+    )
+    .bind(account_id)
+    .bind(workspace_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(lifted > 0)
+}
+
+/// The workspaces `account_id` is paused in: `None` in the list means
+/// everywhere.
+pub async fn paused_in(
+    connection: &mut PgConnection,
+    account_id: Uuid,
+) -> Result<Vec<Option<Uuid>>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT workspace_id FROM account_statuses WHERE account_id = $1 AND paused_at IS NOT NULL",
+    )
+    .bind(account_id)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
+/// Whether `account_id` is paused in `workspace_id`.
+pub async fn is_paused(
+    connection: &mut PgConnection,
+    account_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(paused_in(connection, account_id)
+        .await?
+        .iter()
+        .any(|paused| paused.is_none_or(|paused| paused == workspace_id)))
 }
 
 const CLEAR_DUE_KIND: &str = "status.clear_due";
@@ -296,7 +461,7 @@ pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError>
         DELETE FROM account_statuses
         WHERE id IN (
             SELECT id FROM account_statuses
-            WHERE clear_at IS NOT NULL AND clear_at <= now()
+            WHERE clear_at IS NOT NULL AND clear_at <= now() AND paused_at IS NULL
             ORDER BY clear_at
             LIMIT $1
             FOR UPDATE SKIP LOCKED
@@ -308,29 +473,16 @@ pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError>
     .fetch_all(&mut *transaction)
     .await?;
     for (account_id, workspace_id) in &cleared {
-        // A status shown everywhere was shown in each of its workspaces.
-        let workspaces = match workspace_id {
-            Some(workspace_id) => vec![*workspace_id],
-            None => {
-                sqlx::query_scalar::<_, Uuid>(
-                    "SELECT organization_id FROM organization_memberships \
-                     WHERE actor_id = $1 AND enabled ORDER BY organization_id LIMIT 50",
-                )
-                .bind(account_id)
-                .fetch_all(&mut *transaction)
-                .await?
-            }
-        };
-        for workspace in workspaces {
-            announce(
-                &mut transaction,
-                *account_id,
-                workspace,
-                workspace_id.is_some(),
-            )
-            .await?;
-        }
+        announce_where_shown(&mut transaction, *account_id, *workspace_id).await?;
     }
+    // A paused account's own words run out; the pause stays.
+    sqlx::query(
+        "UPDATE account_statuses SET emoji = NULL, text = NULL, state = NULL, clear_at = NULL, \
+         away_until = NULL, updated_at = now() \
+         WHERE clear_at IS NOT NULL AND clear_at <= now() AND paused_at IS NOT NULL",
+    )
+    .execute(&mut *transaction)
+    .await?;
     transaction.commit().await?;
     Ok(cleared.len() as u64)
 }

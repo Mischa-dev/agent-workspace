@@ -52,6 +52,7 @@ export const queryKeys = {
     ['project', projectId, 'invitations'] as const,
   externalAgents: (projectId: string) =>
     ['project', projectId, 'external-agents'] as const,
+  agentRecipes: () => ['agent-recipes'] as const,
   sponsoredExecutions: (projectId: string) =>
     ['project', projectId, 'sponsored-executions'] as const,
   githubIntegration: (projectId: string) =>
@@ -133,6 +134,14 @@ export const queryKeys = {
   /** A thread's origin message, shown above its replies. */
   originMessage: (projectId: string, parentId: string, originId: string) =>
     ['project', projectId, 'conversation', parentId, 'timeline', 'origin', originId] as const,
+  /** A space's channels to browse (C2.7). */
+  channelList: (projectId: string) => ['project', projectId, 'channel-list'] as const,
+  /** A channel's topic, membership and what you may change (C2.7). */
+  channelDetails: (projectId: string, channelId: string) =>
+    ['project', projectId, 'conversation', channelId, 'details'] as const,
+  /** A private channel's or group's members (C2.6). */
+  conversationMembers: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'members'] as const,
   conversationRestorable: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'restorable'] as const,
   conversationSidebarRoot: (projectId: string) =>

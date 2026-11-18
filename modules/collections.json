@@ -12,13 +12,22 @@
   "tools": {
     "collection_list": "query",
     "collection_describe": "describe",
+    "formula_preview": "query",
+    "button_get": "describe",
+    "button_press": "change",
     "collection_write": "change",
     "record_query": "query",
-    "record_write": "change"
+    "record_write": "change",
+    "view_list": "query",
+    "view_create": "create",
+    "view_update": "change",
+    "view_delete": "change",
+    "view_pin": "change",
+    "view_default_set": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
-  "events": { "emits": ["collection.updated", "record.created", "record.updated"], "listens": [] },
-  "notifications": [],
+  "events": { "emits": ["collection.updated", "record.created", "record.updated", "view.changed"], "listens": [] },
+  "notifications": ["form_paused"],
   "search": ["records"],
   "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
   "things": [

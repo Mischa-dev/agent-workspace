@@ -16,9 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, ConversationsContinueAgents, MembersInvite, MembersView, PagesComment,
-    PagesSuggest, RepliesSteer, RolesManage, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit,
-    TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    CollectionsEdit, MembersInvite, MembersView, PagesComment, PagesSuggest, RepliesSteer,
+    RolesManage, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete,
+    TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -59,7 +59,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("file_read", None),
     ("file_delete", None),
     ("conversation_members", None),
-    ("conversation_continue", Some(ConversationsContinueAgents)),
+    ("conversation_continue", Some(RepliesSteer)),
     ("notification_list", None),
     ("notification_update", None),
     ("later_list", None),
@@ -128,8 +128,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_render", None),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
     ("task_depend", Some(TasksEdit)),
-    ("view_list", Some(TasksView)),
-    ("view_write", Some(TasksView)),
     ("my_work", None),
     ("template_list", None),
     ("template_write", Some(TasksEdit)),
@@ -139,9 +137,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("bug_report_link_list", Some(TasksView)),
     ("bug_report_link_write", Some(TasksCreate)),
     ("project_export", Some(TasksView)),
-    ("webhook_list", None),
-    ("webhook_write", None),
-    ("webhook_deliveries", None),
     ("automation_list", None),
     ("automation_write", Some(TasksEdit)),
     ("automation_runs", None),

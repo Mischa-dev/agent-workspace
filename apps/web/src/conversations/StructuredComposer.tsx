@@ -61,6 +61,9 @@ import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../f
 import { useDraftSync } from './draftSync'
 import { useToastOffset } from './toastOffset'
 import { useWorkspaceId } from '../app/workspace'
+import { useQueryClient } from '@tanstack/react-query'
+import { opQuery } from '../api/ops'
+import type { GroupView } from '../api/generated/operations'
 import { shownStatus, useStatuses } from '../status/api'
 import { StatusText } from '../status/StatusText'
 import '../styles/conversation.css'
@@ -183,7 +186,14 @@ function isPast(at: Date) {
 
 type Suggestion =
   | { kind: 'mention'; actor: ConversationActor }
+  | { kind: 'group'; group: GroupView }
   | { kind: 'work'; item: ConversationWorkItemReference }
+
+/** C2.18: the workspace's groups whose handle or name starts with what was typed after @. */
+function matchingGroups(groups: readonly GroupView[], query: string): GroupView[] {
+  const typed = query.toLowerCase()
+  return groups.filter((group) => group.handle.startsWith(typed) || group.name.toLowerCase().startsWith(typed)).slice(0, 4)
+}
 
 /** One rounded box: type, @mention people and agents inline, reference tasks with #, Enter to send. */
 export function StructuredComposer(props: StructuredComposerProps) {
@@ -251,6 +261,8 @@ function ComposerBox({
   }, [])
   const [trigger, setTrigger] = useState<Trigger | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const queryClient = useQueryClient()
+  const workspaceId = useWorkspaceId() ?? undefined
   const [active, setActive] = useState(0)
   // C2.15: statuses next to the names offered for a mention.
   const mentionStatuses = useStatuses(
@@ -396,14 +408,20 @@ function ComposerBox({
     const timer = window.setTimeout(() => {
       const search: Promise<Suggestion[]> =
         trigger.kind === 'mention'
-          ? searchers.current
-              .searchActors(trigger.query)
-              .then((actors) =>
-                actors
-                  .filter((actor) => !peopleOnly || actorKind(actor.kind) === 'person')
-                  .slice(0, 8)
-                  .map((actor) => ({ kind: 'mention', actor })),
-              )
+          ? Promise.all([
+              searchers.current.searchActors(trigger.query),
+              // The workspace's groups, read once when someone first types @ (C2.18).
+              queryClient
+                .fetchQuery({ ...opQuery('group_list', {}, { workspaceId }), staleTime: 5 * 60_000 })
+                .then((listing) => listing.groups)
+                .catch((): GroupView[] => []),
+            ]).then(([actors, groups]) => [
+              ...actors
+                .filter((actor) => !peopleOnly || actorKind(actor.kind) === 'person')
+                .slice(0, 8)
+                .map((actor): Suggestion => ({ kind: 'mention', actor })),
+              ...matchingGroups(groups, trigger.query).map((group): Suggestion => ({ kind: 'group', group })),
+            ])
           : (searchers.current.searchWorkItems?.(trigger.query) ?? Promise.resolve([])).then((items) =>
               items.slice(0, 8).map((item) => ({ kind: 'work', item })),
             )
@@ -423,7 +441,7 @@ function ComposerBox({
         })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [peopleOnly, trigger])
+  }, [peopleOnly, queryClient, trigger, workspaceId])
 
   const updateTrigger = (value: string, caret: number) => {
     const next = activeTrigger(value, caret, Boolean(searchWorkItems))
@@ -447,7 +465,12 @@ function ComposerBox({
 
   const pick = (suggestion: Suggestion) => {
     if (!trigger) return
-    const inserted = suggestion.kind === 'mention' ? `@${suggestion.actor.handle} ` : `${suggestion.item.key} `
+    const inserted =
+      suggestion.kind === 'mention'
+        ? `@${suggestion.actor.handle} `
+        : suggestion.kind === 'group'
+          ? `@${suggestion.group.handle} `
+          : `${suggestion.item.key} `
     const caret = textareaRef.current?.selectionStart ?? text.length
     const next = text.slice(0, trigger.start) + inserted + text.slice(caret)
     setText(next)
@@ -455,7 +478,7 @@ function ComposerBox({
       setMentions((current) =>
         current.some((actor) => actor.id === suggestion.actor.id) ? current : [...current, suggestion.actor],
       )
-    } else {
+    } else if (suggestion.kind === 'work') {
       setWorkItems((current) =>
         current.some((item) => item.id === suggestion.item.id) ? current : [...current, suggestion.item],
       )
@@ -883,7 +906,7 @@ function ComposerBox({
                 aria-selected={index === active}
                 className={index === active ? 'aw-mentions__item is-active' : 'aw-mentions__item'}
                 id={`${listId}-${index}`}
-                key={suggestion.kind === 'mention' ? suggestion.actor.id : suggestion.item.id}
+                key={suggestion.kind === 'mention' ? suggestion.actor.id : suggestion.kind === 'group' ? suggestion.group.id : suggestion.item.id}
                 onMouseDown={(event) => {
                   event.preventDefault()
                   pick(suggestion)
@@ -898,6 +921,13 @@ function ComposerBox({
                     <ActorTag kind={actorKind(suggestion.actor.kind)} />
                     <span className="aw-mentions__handle">@{suggestion.actor.handle}</span>
                     <StatusText status={shownStatus(mentionStatuses.data ?? [], suggestion.actor.id)} />
+                  </>
+                ) : suggestion.kind === 'group' ? (
+                  <>
+                    <Icon name="users" />
+                    <span className="aw-mentions__name">{suggestion.group.name}</span>
+                    <span className="aw-mentions__handle">@{suggestion.group.handle}</span>
+                    <span className="aw-mentions__handle">{countLabel(suggestion.group.memberCount, 'person', 'people')}</span>
                   </>
                 ) : (
                   <>

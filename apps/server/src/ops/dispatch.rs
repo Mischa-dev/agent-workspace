@@ -313,6 +313,96 @@ fn decode_error(error: &serde_json::Error) -> OpError {
     }
 }
 
+/// Where a call acts, located, once the module gate and access let the
+/// caller run `O` there. A call that can't name its workspace gets the one
+/// the caller reaches, when there is one.
+async fn admit<O: Operation>(
+    state: &AppState,
+    caller: &Caller,
+    workspace: &mut Option<Uuid>,
+    target: &Target,
+) -> Result<Admitted, OpError> {
+    let writes = O::KIND.writes();
+    let mut connection = state
+        .pool
+        .acquire()
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    // A call that can't name its workspace needs none named when the
+    // caller reaches only one.
+    if workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
+        let reach = access_shim::reach(&mut connection, caller).await?;
+        match reach.as_slice() {
+            [only] => *workspace = Some(*only),
+            [] => {}
+            several => return Err(name_the_workspace(&mut connection, several).await),
+        }
+    }
+    let located = target::locate(&mut connection, target, caller.account_id, *workspace).await?;
+    let module = module_here::<O>(&located)?;
+    let need = crate::access::Need::maybe(O::PERMISSION)
+        .writing(writes)
+        .in_module(module);
+    let _grant = crate::access::check(
+        &mut connection,
+        caller,
+        need,
+        access_target(target, &located),
+    )
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error))?
+    .map_err(|denied| denied_error::<O>(denied, caller, &located))?;
+    // H1.24: a suspended workspace, or one being deleted, refuses every
+    // call but the ones that still work then (keeping it).
+    crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
+        .await?;
+    // A2.10: a paused account's changes do nothing (the caller answers ok,
+    // saying so).
+    let paused = writes
+        && !runs_while_paused(O::NAME)
+        && crate::statuses::is_paused(&mut connection, caller.account_id, located.workspace_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?;
+    drop(connection);
+    Ok(Admitted { located, paused })
+}
+
+/// What `admit` found: where the call lands, and whether the caller is
+/// paused there.
+struct Admitted {
+    located: target::Located,
+    paused: bool,
+}
+
+/// Whether `caller` may run `O` on `target`, by the checks a call makes,
+/// without running it: for a control shown unavailable with the reason.
+pub(super) async fn check<O: Operation>(
+    state: &AppState,
+    caller: &Caller,
+    workspace: Option<Uuid>,
+    target: &Target,
+) -> Result<(), OpError> {
+    let mut workspace = workspace;
+    admit::<O>(state, caller, &mut workspace, target)
+        .await
+        .map(|_| ())
+}
+
+/// Whether `caller` may run the operation called `name` on `target`
+/// (`check`), such as the ones a button field calls.
+pub async fn may_run(
+    state: &AppState,
+    caller: &Caller,
+    workspace: Option<Uuid>,
+    name: &str,
+    target: &Target,
+) -> Result<(), OpError> {
+    let Some(check) = registry().get(name).map(|entry| entry.check) else {
+        return Err(OpError::not_found("That operation"));
+    };
+    check(state, caller, workspace, target).await
+}
+
 async fn pipeline<O: Operation>(
     state: &AppState,
     mut request: DispatchRequest,
@@ -332,46 +422,25 @@ async fn pipeline<O: Operation>(
     let target = decoded.target();
     let writes = O::KIND.writes();
 
-    let mut connection = state
-        .pool
-        .acquire()
-        .await
-        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-    // A call that can't name its workspace needs none named when the
-    // caller reaches only one.
-    if request.workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
-        let reach = access_shim::reach(&mut connection, &request.caller).await?;
-        match reach.as_slice() {
-            [only] => request.workspace = Some(*only),
-            [] => {}
-            several => return Err(name_the_workspace(&mut connection, several).await),
+    let Admitted { located, paused } =
+        admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    // A2.10: a paused account's changes do nothing here; each answers ok,
+    // saying so, so a client that retries doesn't loop on a refusal.
+    if paused {
+        let mut body = Envelope::Ok {
+            value: serde_json::json!({ "status": "paused" }),
+            request_id: request.request_id,
+            replayed: false,
+            replay_safe: Some(true),
+            preview: request.preview,
         }
+        .to_json();
+        body["paused"] = true.into();
+        return Ok(Answer {
+            status: StatusCode::OK,
+            body,
+        });
     }
-    let located = target::locate(
-        &mut connection,
-        &target,
-        request.caller.account_id,
-        request.workspace,
-    )
-    .await?;
-    let module = module_here::<O>(&located)?;
-    let need = crate::access::Need::maybe(O::PERMISSION)
-        .writing(writes)
-        .in_module(module);
-    let _grant = crate::access::check(
-        &mut connection,
-        &request.caller,
-        need,
-        access_target(&target, &located),
-    )
-    .await
-    .map_err(|error| OpError::logged(O::NAME, &error))?
-    .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
-    // H1.24: a suspended workspace, or one being deleted, refuses every
-    // call but the ones that still work then (keeping it).
-    crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
-        .await?;
-    drop(connection);
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
     if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
@@ -389,6 +458,7 @@ async fn pipeline<O: Operation>(
         workspace_id: located.workspace_id,
         space_id: located.space_id,
         direct: located.direct,
+        requested_workspace: request.workspace,
         target: target.clone(),
         request_id: key
             .as_ref()
@@ -481,7 +551,20 @@ async fn pipeline<O: Operation>(
             audit_row(tx, &ctx, kind, id, metadata).await?;
         }
         if let Some(reservation) = reservation.as_ref() {
-            idempotency::complete(tx, reservation, answer.status, &answer.body).await?;
+            // A secret shown once is never kept for a replay (it would sit
+            // in plain text beside the request id).
+            let mut stored = answer.body.clone();
+            if let Some(value) = stored
+                .get_mut("value")
+                .and_then(|value| value.as_object_mut())
+            {
+                for field in O::SHOWN_ONCE {
+                    if value.contains_key(*field) {
+                        value.insert((*field).to_owned(), serde_json::Value::Null);
+                    }
+                }
+            }
+            idempotency::complete(tx, reservation, answer.status, &stored).await?;
         }
     }
     if let Some(tx) = call.tx.take() {
@@ -493,6 +576,21 @@ async fn pipeline<O: Operation>(
         crate::scheduler::kick(state.clone());
     }
     Ok(answer)
+}
+
+/// The changes a paused account still makes (A2.10): its status, lifting a
+/// pause, its connections and reporting on runs it already has.
+fn runs_while_paused(name: &str) -> bool {
+    matches!(
+        name,
+        "status_set"
+            | "status_delete"
+            | "agent_resume"
+            | "run_activity_report"
+            | "run_result_report"
+            | "run_usage_report"
+            | "run_update"
+    ) || name.starts_with("connection_")
 }
 
 /// A caller reaching several workspaces, calling an operation whose target

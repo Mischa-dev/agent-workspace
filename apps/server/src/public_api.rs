@@ -225,6 +225,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The statuses an operation's own refusal answers with (its `outcome`
+/// says which), rather than the shared error body.
+fn refuses(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -272,6 +278,33 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     let mut value = Value::Object(schema);
     rewrite_refs(&mut value, &names);
     value
+}
+
+/// The arguments every operation takes (the workspace, a write's
+/// `clientRequestId`, `preview`) are written once and referenced, so each
+/// new operation adds only what is its own.
+fn share_arguments(input: &mut Value, components: &mut Map<String, Value>) {
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (argument, key) in [
+        ("workspace", "WorkspaceArgument"),
+        ("clientRequestId", "ClientRequestId"),
+        ("preview", "PreviewArgument"),
+    ] {
+        let Some(schema) = properties.get(argument) else {
+            continue;
+        };
+        let shared = components
+            .entry(key.to_owned())
+            .or_insert_with(|| schema.clone());
+        if shared == schema {
+            properties.insert(
+                argument.to_owned(),
+                json!({ "$ref": format!("#/components/schemas/{key}") }),
+            );
+        }
+    }
 }
 
 /// Each tool hoists its own copy of the types it shares with others (a
@@ -322,14 +355,25 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         return;
     };
     for branch in branches {
-        let Some(outcome) = branch["properties"]["outcome"]["const"]
-            .as_str()
-            .filter(|outcome| *outcome != "ok")
-            .map(str::to_owned)
-        else {
-            continue;
+        let outcome = &branch["properties"]["outcome"];
+        let key = match outcome["const"].as_str() {
+            // A paused account's answer (A2.10) is the same for every
+            // operation: shared too.
+            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
+            Some("ok") => continue,
+            Some(outcome) => format!("Refusal{}", pascal(outcome)),
+            // The operation layer's own refusals, one branch listing them
+            // all: shared too, under the first name free or already
+            // holding the same branch.
+            None if outcome["enum"].is_array() => (1..)
+                .map(|index| match index {
+                    1 => "Refusal".to_owned(),
+                    index => format!("Refusal{index}"),
+                })
+                .find(|key| components.get(key).is_none_or(|shared| shared == branch))
+                .unwrap_or_default(),
+            None => continue,
         };
-        let key = format!("Refusal{}", pascal(&outcome));
         let shared = components
             .entry(key.clone())
             .or_insert_with(|| branch.clone());
@@ -409,57 +453,6 @@ Operations that change things take a `clientRequestId` so a retry never applies 
 changes to a task take the `expectedVersion` you last read.";
 
 /// The OpenAPI 3.1 document for every operation.
-/// Arguments many operations take word for word (`workspace`,
-/// `clientRequestId`, ...): each is written once in `components.schemas`
-/// as `Argument<Name>` and referenced from every request that takes it, so
-/// the document doesn't grow by their descriptions with each operation.
-fn share_arguments(paths: &mut Map<String, Value>, components: &mut Map<String, Value>) {
-    /// Fewer uses than this stay inline.
-    const SHARED_FROM: usize = 8;
-    fn properties(item: &mut Value) -> Option<&mut Map<String, Value>> {
-        item["post"]["requestBody"]["content"]["application/json"]["schema"]
-            .get_mut("properties")
-            .and_then(Value::as_object_mut)
-    }
-    let mut uses: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for item in paths.values_mut() {
-        for (name, schema) in properties(item).into_iter().flatten() {
-            if schema.get("$ref").is_none() {
-                let raw = serde_json::to_string(schema).unwrap_or_default();
-                *uses.entry((name.clone(), raw)).or_default() += 1;
-            }
-        }
-    }
-    // The most used wording of each name, when it's used often enough.
-    let mut shared: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    for ((name, raw), count) in uses {
-        if count >= SHARED_FROM && shared.get(&name).is_none_or(|(_, most)| count > *most) {
-            shared.insert(name, (raw, count));
-        }
-    }
-    let mut keys = BTreeMap::new();
-    for (name, (raw, _)) in &shared {
-        let key = format!("Argument{}", pascal(name));
-        if components.contains_key(&key) {
-            continue;
-        }
-        let Ok(schema) = serde_json::from_str::<Value>(raw) else {
-            continue;
-        };
-        components.insert(key.clone(), schema);
-        keys.insert(name.clone(), (raw.clone(), key));
-    }
-    for item in paths.values_mut() {
-        for (name, schema) in properties(item).into_iter().flatten() {
-            if let Some((raw, key)) = keys.get(name)
-                && serde_json::to_string(schema).is_ok_and(|own| own == *raw)
-            {
-                *schema = json!({ "$ref": format!("#/components/schemas/{key}") });
-            }
-        }
-    }
-}
-
 pub(crate) fn document() -> Value {
     let mut tools = mcp::tool_catalog();
     tools.sort_by(|left, right| left.name.cmp(&right.name));
@@ -503,8 +496,9 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
-        let input = hoist(&name, &tool.input_schema, &mut components);
-        let output = tool
+        let mut input = hoist(&name, &tool.input_schema, &mut components);
+        share_arguments(&mut input, &mut components);
+        let (result, output) = tool
             .output_schema
             .as_ref()
             .map(|schema| {
@@ -524,39 +518,45 @@ pub(crate) fn document() -> Value {
                         key
                     }
                 };
-                json!({ "$ref": format!("#/components/schemas/{key}") })
+                let reference = json!({ "$ref": format!("#/components/schemas/{key}") });
+                (key, reference)
             })
-            .unwrap_or_else(|| json!({ "type": "object" }));
+            .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
+        // The result, and a refusal (the same result with its `outcome`),
+        // are one response that 200 and the refusing statuses point at,
+        // shared by every operation with that result, so the document stays
+        // small as tools are added. The introduction says what each status
+        // means.
+        refusals.entry(result.clone()).or_insert_with(|| {
+            json!({
+                "description": "The result, or a refusal: see `outcome`.",
+                "content": { "application/json": { "schema": output } },
+            })
+        });
         let mut responses = Map::new();
         responses.insert(
             "200".to_owned(),
-            json!({
-                "description": "The result. Its `outcome` says whether it worked.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
         );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
-        refusals.insert(
-            refused.clone(),
-            json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
+        // The refusing statuses (403, 404, 409, 422, 503) share it through
+        // `default`; the statuses every operation answers the
+        // same way are named, which takes precedence over a range.
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
-            } else {
+            if !refuses(status) {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
-            };
-            responses.insert((*status).to_owned(), response);
+                responses.insert(
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
+                );
+            }
         }
+        // Every other status, the refusing ones included: one `default`
+        // rather than a 4XX and a 5XX range, which say the same.
+        responses.insert(
+            "default".to_owned(),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
+        );
         paths.insert(
             format!("/{name}"),
             json!({
@@ -575,7 +575,6 @@ pub(crate) fn document() -> Value {
             }),
         );
     }
-    share_arguments(&mut paths, &mut components);
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({
         "openapi": "3.1.0",
@@ -599,7 +598,7 @@ pub(crate) fn document() -> Value {
             "schemas": components,
             "responses": ERROR_STATUSES
                 .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .filter(|(status, _)| !refuses(status))
                 .map(|(status, description)| {
                     (
                         format!("Error{status}"),

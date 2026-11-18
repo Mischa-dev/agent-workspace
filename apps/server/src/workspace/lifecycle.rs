@@ -396,16 +396,6 @@ const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
          -- visibility: the space only, to refuse a write; the handler checks access\n \
          WHERE id = $1",
     ),
-    (
-        "/api/v1/webhooks/{",
-        "SELECT COALESCE(webhook.project_id, ( \
-             SELECT space.id FROM projects space \
-             WHERE space.organization_id = webhook.organization_id \
-             ORDER BY space.created_at LIMIT 1)) \
-         FROM webhook_subscriptions webhook \
-         -- visibility: the space only, to refuse a write; the handler checks access\n \
-         WHERE webhook.id = $1",
-    ),
 ];
 
 /// The space of a conversation (channel, thread), message, scheduled
@@ -683,8 +673,12 @@ pub async fn stop_runs(state: &AppState, workspace: Uuid) -> Result<usize, AppEr
                 Some(Lifecycle::Deleting) => "workspace_deleting",
                 _ => return Ok(0),
             };
-            let mut stopped =
-                crate::api::interrupt_workspace_runs(&mut transaction, workspace, why).await?;
+            let mut stopped = crate::hosts::builtin::http::interrupt_workspace_runs(
+                &mut transaction,
+                workspace,
+                why,
+            )
+            .await?;
             // Runs that report for themselves end through the run service.
             stopped += crate::runs::ops::end_for_closed_workspace(
                 &mut transaction,
@@ -869,6 +863,7 @@ async fn delete_in_scope(
     .bind(workspace)
     .execute(&mut *connection)
     .await?;
+    crate::delivery::connections::rehome_from(connection, workspace).await?;
     let rows = delete_rows(connection, workspace).await?;
     sqlx::query(
         "INSERT INTO deleted_workspaces (id, requested_by_actor_id, repository_ids) \
@@ -975,17 +970,21 @@ fn tenant_column(table: &str) -> Option<&'static str> {
         .map(|(_, column)| *column)
 }
 
-/// Server-wide tables the deletion walks into: the hosts the workspace owns
-/// and what hangs off them, and the credentials narrowed to it (one space's
-/// secret, or a connection's). Every other server-wide table is never
-/// touched (accounts stay, R19), so a credential that reaches every
-/// workspace its account is in stays too.
+/// Server-wide tables the deletion walks into: the hosts the workspace owns,
+/// the connections still at home there (`delivery::connections::rehome_from`
+/// first moves those that reach on elsewhere), what hangs off them, and the
+/// credentials narrowed to it (one space's secret). Every other server-wide
+/// table is never touched (accounts stay, R19), so a credential that reaches
+/// every workspace its account is in stays too.
 const OWNED_GLOBAL_TABLES: &[(&str, &str)] = &[
     ("account_credentials", "workspace_id"),
     ("hosts", "owner_workspace_id"),
     ("host_enrolments", "owner_workspace_id"),
     ("host_agents", ""),
     ("host_notices", ""),
+    ("agent_connections", "home_workspace_id"),
+    ("connection_signing_secrets", ""),
+    ("event_subscriptions", ""),
 ];
 
 fn ident(name: &str) -> String {

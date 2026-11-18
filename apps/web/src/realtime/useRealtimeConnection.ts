@@ -114,6 +114,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
             query.queryKey[0] === 'project' &&
             query.queryKey[1] === projectId,
         })
+        // Your sidebar sections (C2.9) show unread and mentions for the
+        // conversations in them, wherever they live.
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'sidebar_list',
+        })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(projectId, timer)
     }
@@ -171,6 +176,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
         // My work lists tasks across projects, so it isn't under the project key.
         void queryClient.invalidateQueries({ queryKey: queryKeys.myWork })
+        // A dashboard tile over tasks counts it (an operation's answer, read
+        // through opQuery).
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'dashboard_get',
+        })
         // A task embedded in a page as a card, and "Referenced in" lists its
         // description or comments may have changed.
         void queryClient.invalidateQueries({
@@ -358,6 +368,38 @@ export function useRealtimeConnection(): RealtimeContextValue {
             })
             return
           }
+          if (envelope.type === 'sidebar.changed') {
+            // Your sidebar sections changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'sidebar_list',
+            })
+            return
+          }
+          if (envelope.type === 'dm_rules.changed') {
+            // A block, or a message request answered (C2.39): read DM
+            // standings, blocks and the DM list again.
+            void queryClient.invalidateQueries({
+              predicate: (query) =>
+                query.queryKey[0] === 'op' && (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list'),
+            })
+            void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
+            return
+          }
+          if (envelope.type === 'saved_searches.changed') {
+            // Your saved searches changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'saved_search_list',
+            })
+            return
+          }
+          if (envelope.type === 'account.profile_changed') {
+            // Someone's profile or avatar changed: profiles and avatars read again.
+            void queryClient.invalidateQueries({
+              predicate: (query) =>
+                query.queryKey[0] === 'op' && (query.queryKey[2] === 'profile_get' || query.queryKey[2] === 'profile_avatar_list'),
+            })
+            return
+          }
           if (envelope.type === 'account.status.changed') {
             // Someone's status changed: the names that show it read it again.
             void queryClient.invalidateQueries({ queryKey: queryKeys.statuses })
@@ -369,6 +411,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             envelope.type === 'page.updated' ||
             envelope.type === 'page.discussion.updated' ||
             envelope.type === 'collection.updated' ||
+            envelope.type === 'dashboard.updated' ||
             envelope.type === 'sheet.updated'
           ) {
             // An open board or page fetches what changed itself, and lists

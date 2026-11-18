@@ -19,7 +19,7 @@ use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 
 use crate::{
     AppState,
-    cluster::{Cluster, LeaseName},
+    cluster::Cluster,
     config::AppConfig,
     error::AppError,
     github,
@@ -79,43 +79,6 @@ impl Server {
         )
         .await
         .context("register this server instance")?;
-
-        // One-off work at startup runs once however many instances start
-        // together: under `server.startup`, which nobody else can hold
-        // meanwhile. One that finds it held leaves it to that instance.
-        // Only `work` instances do it, so an `api` starts cold and fast.
-        let startup = if config.roles.work {
-            cluster
-                .try_acquire(LeaseName::StartupMaintenance)
-                .await
-                .context("take the startup lease")?
-        } else {
-            None
-        };
-        match startup {
-            Some(lease) => {
-                let moved = crate::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
-                    .await
-                    .context("encrypt plaintext agent webhook secrets");
-                if let Err(error) = cluster.release(&lease).await {
-                    tracing::warn!(
-                        error_category = error.log_category(),
-                        "startup lease not released; it runs out instead"
-                    );
-                }
-                let moved_secrets = moved?;
-                if moved_secrets > 0 {
-                    tracing::info!(
-                        moved_secrets,
-                        "moved agent webhook secrets into the secrets store"
-                    );
-                }
-            }
-            None if config.roles.work => {
-                tracing::info!("another instance is doing the startup work");
-            }
-            None => {}
-        }
 
         // Modules (and their operations) that don't fit together stop the
         // server here, before it takes a request.
@@ -261,6 +224,12 @@ impl Server {
                 crate::notifications::Notifier,
                 receiver.clone(),
             );
+            // Agent deliveries read the log too (A2.3).
+            let pusher = crate::events::run_consumer(
+                cluster.clone(),
+                crate::delivery::push::Pusher,
+                receiver.clone(),
+            );
             let heartbeat_cluster = cluster.clone();
             let heartbeat_shutdown = receiver.clone();
             async move {
@@ -273,6 +242,7 @@ impl Server {
                     listener,
                     only_if(roles.work, router),
                     only_if(roles.work, notifier),
+                    only_if(roles.work, pusher),
                     heartbeat
                 );
             }

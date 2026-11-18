@@ -240,6 +240,65 @@ mod tests {
         );
     }
 
+    /// C2.24: a slash command that runs an operation names one that exists,
+    /// in its own module, taking the text where it says and the space where
+    /// it needs one.
+    #[test]
+    fn slash_commands_run_operations_that_exist() {
+        let tools = crate::mcp::tool_catalog()
+            .into_iter()
+            .map(|tool| (tool.name.to_string(), tool.input_schema))
+            .collect::<BTreeMap<_, _>>();
+        let mut commands = 0;
+        for module in core() {
+            for entry in &module.slots.slash {
+                let manifest::SlashEntry::Command(command) = entry else {
+                    continue;
+                };
+                commands += 1;
+                let schema = tools.get(&command.operation).unwrap_or_else(|| {
+                    panic!(
+                        "/{} runs {}, which doesn't exist",
+                        command.name, command.operation
+                    )
+                });
+                assert!(
+                    module.tools.contains_key(command.operation.as_str()),
+                    "/{} runs {}, which isn't {}'s",
+                    command.name,
+                    command.operation,
+                    module.id
+                );
+                let properties = schema
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                match (command.args, command.field.as_deref()) {
+                    (manifest::SlashArgs::Text, Some(field)) => assert!(
+                        properties.contains_key(field),
+                        "/{}: {} takes no {field}",
+                        command.name,
+                        command.operation
+                    ),
+                    (manifest::SlashArgs::Text, None) => {
+                        panic!("/{} takes text but names no field for it", command.name)
+                    }
+                    (manifest::SlashArgs::None, _) => {}
+                }
+                if command.place == manifest::SlashPlace::Space {
+                    assert!(
+                        properties.contains_key("projectId"),
+                        "/{}: {} takes no projectId",
+                        command.name,
+                        command.operation
+                    );
+                }
+            }
+        }
+        assert!(commands > 0, "no slash command runs an operation");
+    }
+
     #[test]
     fn every_route_names_its_module() {
         let routes = route_paths();
@@ -398,6 +457,7 @@ mod tests {
             kind::AGENT_UNRESPONSIVE,
             kind::BUDGET_WARNING,
             kind::THING_UPDATE,
+            kind::FORM_PAUSED,
             crate::automations::NOTIFICATION_KIND,
             "automation_disabled",
             "ai_suggestions",

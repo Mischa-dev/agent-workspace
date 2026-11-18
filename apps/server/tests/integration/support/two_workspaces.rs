@@ -79,8 +79,12 @@ pub(crate) struct World {
     pub(crate) run_thread: Uuid,
     pub(crate) run: Uuid,
     pub(crate) approval: Uuid,
+    /// An action the owner ran on a host of the workspace's (A2.19),
+    /// answered.
+    pub(crate) host_action: Uuid,
     pub(crate) plan: Uuid,
     pub(crate) import: String,
+    /// The owner's webhook: a connection with an address (A2.6).
     pub(crate) webhook: Uuid,
     pub(crate) rule: Uuid,
     pub(crate) whiteboard: Uuid,
@@ -89,7 +93,11 @@ pub(crate) struct World {
     /// values name `rook`, task WORK-1 and `page`.
     pub(crate) collection: Uuid,
     pub(crate) collection_field: Uuid,
+    /// A button field on it (T1.21) that records a decision.
+    pub(crate) collection_button: Uuid,
     pub(crate) collection_view: Uuid,
+    /// A shared dashboard (T1.32) with a tile over `collection_view`.
+    pub(crate) dashboard: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -720,6 +728,10 @@ async fn build_workspace(
                 {"name": format!("Build{m}"), "type": "link", "target": "task"},
                 {"name": format!("Spec{m}"), "type": "link", "target": "page"},
                 {"name": format!("Notes{m}"), "type": "text"},
+                {"name": format!("Ship{m}"), "type": "button", "button": {"steps": [{
+                    "operation": "decision_record",
+                    "arguments": {"spaceId": "{{space.id}}", "title": "Shipped {{record.title}}"},
+                }]}},
             ],
             "views": [{
                 "name": format!("Severe ones{m}"),
@@ -770,6 +782,13 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection field");
+    let collection_button = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM field_definitions WHERE collection_id = $1 AND field_type = 'button'",
+    )
+    .bind(collection)
+    .fetch_one(pool)
+    .await
+    .expect("collection button");
     let collection_view = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collection_views WHERE collection_id = $1 ORDER BY position, id LIMIT 1",
     )
@@ -777,6 +796,17 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection view");
+    let dashboard = call(
+        "dashboard_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Numbers{m}"),
+            "tiles": [{"view": collection_view.to_string()}, {"text": format!("Note{m}")}],
+            "clientRequestId": "dashboard-1",
+        }),
+    )
+    .await;
+    let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -914,12 +944,20 @@ async fn build_workspace(
             value
         }
     };
-    post(
-        format!("/api/v1/projects/{project}/views"),
+    let tasks_collection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
+    )
+    .bind(&project)
+    .fetch_one(pool)
+    .await
+    .expect("Tasks collection");
+    let view = post(
+        format!("/api/v2/w/{organization}/ops/view_create"),
         "view-1",
-        json!({"name": format!("Launch view{m}"), "query": {"q": format!("Launch{m}")}}),
+        json!({"collection": tasks_collection, "name": format!("Launch view{m}"), "type": "table"}),
     )
     .await;
+    assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
         format!("/api/v1/projects/{project}/task-templates"),
         "template-1",
@@ -1014,6 +1052,7 @@ async fn build_workspace(
     .await
     .expect("run thread");
     let run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, run, run_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1049,37 +1088,84 @@ async fn build_workspace(
     )
     .await;
 
+    // A2.19: a host of the workspace's, and an action the owner ran on it.
+    let host_action = {
+        let owner = sqlx::query_scalar::<_, Uuid>(
+            "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+        )
+        .bind(organization)
+        .fetch_one(pool)
+        .await
+        .expect("owner");
+        let account = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("host account");
+        let host = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
+                               actions, enrolled_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, $3, '2026-11', '[{"id": "net-action"}]', $4)
+            RETURNING id
+            "#,
+        )
+        .bind(account)
+        .bind(organization)
+        .bind(format!("Isolation host{m}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host");
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO host_commands (id, workspace_id, host_id, kind, body, state, ack,
+                                       acked_at, expires_at, invoked_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, 'action', '{"action": "net-action"}', 'acked',
+                    jsonb_build_object('outcome', 'done', 'message', $3::text), now(),
+                    now() + interval '1 day', $4)
+            RETURNING id
+            "#,
+        )
+        .bind(organization)
+        .bind(host)
+        .bind(format!("Action reply{m}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host action")
+    };
+
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'note:isolation', 'agent_note', $3, $4)
-        "#,
+    let mut transaction = pool.begin().await.expect("run step transaction");
+    agent_workspace_server::runs::steps::record(
+        &mut transaction,
+        run,
+        "note:isolation",
+        "agent_note",
+        &format!("Looking around{m}"),
+        json!({ "text": format!("Looking around{m}") }),
     )
-    .bind(Uuid::now_v7())
-    .bind(run)
-    .bind(format!("Looking around{m}"))
-    .bind(json!({ "text": format!("Looking around{m}") }))
-    .execute(pool)
     .await
     .expect("run step");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_usage (
-            agent_run_id, model, organization_id, project_id, provider_account_id,
-            adapter_kind, usage_date, input_tokens, output_tokens, cached_input_tokens,
-            estimated_cost, currency
-        )
-        VALUES ($1, $2, $3, $4::uuid, $5, 'codex', current_date, 100, 50, 10, 0.25, 'USD')
-        "#,
+    transaction.commit().await.expect("commit run step");
+    agent_workspace_server::runs::usage::add_builtin(
+        pool,
+        run,
+        &agent_workspace_server::runs::usage::BuiltinTokens {
+            model: format!("model{m}"),
+            backend: "codex".to_owned(),
+            date: chrono::Utc::now().date_naive(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cached_input_tokens: 10,
+            estimated_cost: Some(0.25),
+            currency: Some("USD".to_owned()),
+            reported_cost_usd: None,
+        },
     )
-    .bind(run)
-    .bind(format!("model{m}"))
-    .bind(organization)
-    .bind(&project)
-    .bind(provider_account)
-    .execute(pool)
     .await
     .expect("run usage");
     let uri = format!("/api/v1/projects/{project}/agent-profiles");
@@ -1346,24 +1432,30 @@ async fn build_workspace(
         );
     }
 
-    // Webhooks and automations (W14): a subscription on the whole
-    // workspace and a rule that notifies its maker.
+    // Webhooks and automations (W14, A2.6): the owner's webhook (a
+    // connection with an address) on the whole workspace, and a rule that
+    // notifies its maker.
     let (status, created) = send(
         app,
         browser.request(
             "POST",
-            "/api/v1/webhooks",
-            None,
+            &format!("/api/v2/w/{organization}/ops/connection_create"),
+            Some(&Uuid::now_v7().to_string()),
             json!({
                 "name": format!("Hook{m}"),
-                "url": format!("https://hooks.example.com/{tag}"),
-                "eventTypes": ["run.finished", "message.created"],
+                "webhookUrl": format!("https://hooks.example.com/{tag}"),
+                "reachesAll": false,
+                "subscriptions": [{
+                    "kinds": ["run.finished", "message.created"],
+                    "workspaceIds": [organization],
+                }],
             }),
         ),
     )
     .await;
     assert!(status.is_success(), "{label} webhook: {status} {created}");
-    let webhook = Uuid::parse_str(&string_at(&created, "/webhook/id")).expect("webhook id");
+    let webhook =
+        Uuid::parse_str(&string_at(&created, "/value/connection/id")).expect("webhook id");
     let (status, created) = send(
         app,
         browser.request(
@@ -1637,6 +1729,15 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("custom emoji");
+    // C2.17: rook's avatar, served only to people who share a workspace.
+    sqlx::query(
+        "INSERT INTO account_profiles (account_id, avatar, avatar_type) VALUES ($1, $2, 'image/png')",
+    )
+    .bind(rook)
+    .bind(tiny_png())
+    .execute(pool)
+    .await
+    .expect("avatar");
     let module = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1709,6 +1810,7 @@ async fn build_workspace(
         run_thread,
         run,
         approval,
+        host_action,
         plan,
         import,
         webhook,
@@ -1717,7 +1819,9 @@ async fn build_workspace(
         project_whiteboard,
         collection,
         collection_field,
+        collection_button,
         collection_view,
+        dashboard,
         record,
         sheet,
         file,

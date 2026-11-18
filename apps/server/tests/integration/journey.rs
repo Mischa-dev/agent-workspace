@@ -24,7 +24,13 @@ use uuid::Uuid;
 
 use super::{
     agent_interface::{create_agent, initialize, tool},
+    agent_join::second_workspace,
     mcp_admin::{create_project, setup},
+    support::{
+        app::send,
+        callers::{Call, Caller, Person},
+        world::{Workspace, WorldBuilder},
+    },
 };
 
 #[tokio::test]
@@ -126,5 +132,282 @@ async fn the_journey() {
         "each report once, in order"
     );
 
-    // Steps 2 to 8 are turned on by the builds that make them possible.
+    // Steps 2 to 8 run in `the_journey_across_two_workspaces`, which needs
+    // the shared world (people, agents, two workspaces).
+}
+
+/// An operation from the browser, in `workspace`.
+async fn as_person(
+    world: &Workspace,
+    who: &Person,
+    workspace: Uuid,
+    name: &str,
+    input: Value,
+) -> Value {
+    let (_, body) = send(
+        &world.app,
+        who.browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await;
+    body
+}
+
+/// A tool call as an agent, in `workspace` when given.
+async fn as_agent(
+    world: &Workspace,
+    agent: &str,
+    name: &'static str,
+    mut arguments: Value,
+    workspace: Option<Uuid>,
+) -> Value {
+    if let Some(workspace) = workspace {
+        arguments["workspace"] = json!(workspace);
+    }
+    let (_, body) = world.agents[agent]
+        .call(&world.app, Call::Tool { name, arguments })
+        .await;
+    body
+}
+
+/// What the agent hears now, from every workspace, on its one stream. An
+/// account-wide read still names a workspace to call through when the
+/// caller is in several; it reads them all.
+async fn heard(world: &Workspace, agent: &str) -> Vec<Value> {
+    agent_workspace_server::events::catch_up(world.pool())
+        .await
+        .expect("sequence events");
+    let page = as_agent(
+        world,
+        agent,
+        "event_list",
+        json!({}),
+        Some(world.organization),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    page["value"]["events"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Steps 2 to 8: one agent, one account, in two workspaces.
+#[tokio::test]
+async fn the_journey_across_two_workspaces() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("scout", "member")
+        .agent("rook", "member")
+        .build("journey_two")
+        .await
+    else {
+        return;
+    };
+    let a = world.organization;
+    let owner = &world.owner;
+    let scout = world.agents["scout"].actor;
+    let rook = world.agents["rook"].actor;
+
+    // Step 2: the same account joins a second workspace; no new identity.
+    let b = second_workspace(&world).await;
+    let added = as_person(
+        &world,
+        owner,
+        b,
+        "account_workspace_add",
+        json!({"account": scout}),
+    )
+    .await;
+    assert_eq!(added["value"]["status"], "joined", "{added}");
+    // A project in B, with it as a member, to work in.
+    let (status, project) = send(
+        &world.app,
+        owner.browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("journey-b-project"),
+            json!({"organizationId": b, "key": "SIDE", "name": "Side"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{project}");
+    let b_space = project["id"].as_str().expect("project").to_owned();
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'member', 'Scout', 'scout')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(b_space.parse::<Uuid>().expect("project"))
+    .bind(scout)
+    .execute(world.pool())
+    .await
+    .expect("project membership");
+    let accounts = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM actors WHERE id = $1")
+        .bind(scout)
+        .fetch_one(world.pool())
+        .await
+        .expect("account");
+    assert_eq!(accounts, 1);
+
+    // Step 3: an event from each workspace arrives on its one stream.
+    let work = world.project("WORK").to_owned();
+    for (workspace, space, title) in [
+        (a, work.as_str(), "From A?"),
+        (b, b_space.as_str(), "From B?"),
+    ] {
+        let asked = as_person(
+            &world,
+            owner,
+            workspace,
+            "request_create",
+            json!({"spaceId": space, "title": title, "audience": {"accounts": [scout]}}),
+        )
+        .await;
+        assert_eq!(asked["outcome"], "ok", "{asked}");
+    }
+    let events = heard(&world, "scout").await;
+    let from = |workspace: Uuid| {
+        events.iter().any(|event| {
+            event["type"] == "request.raised" && event["workspace"]["id"] == workspace.to_string()
+        })
+    };
+    assert!(from(a) && from(b), "{events:?}");
+
+    // Step 4: it edits a task through an operation, and the browser reads
+    // what it wrote; both leave the same audit line.
+    let made = as_agent(
+        &world,
+        "scout",
+        "task_create",
+        json!({"projectId": "WORK", "title": "Journey task", "clientRequestId": "journey-task"}),
+        Some(a),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    // Step 6, first half: the same create twice makes one task.
+    let again = as_agent(
+        &world,
+        "scout",
+        "task_create",
+        json!({"projectId": "WORK", "title": "Journey task", "clientRequestId": "journey-task"}),
+        Some(a),
+    )
+    .await;
+    let tasks = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE title = 'Journey task' AND project_id = $1::uuid",
+    )
+    .bind(&work)
+    .fetch_one(world.pool())
+    .await
+    .expect("tasks");
+    assert_eq!(tasks, 1, "a retried create makes one task: {again}");
+
+    // Step 5: it raises a request; a person holding the permission answers
+    // one, another agent the other.
+    let mut answered_by = Vec::new();
+    for (title, answerer) in [("Ship it?", "person"), ("Merge it?", "agent")] {
+        let asked = as_agent(
+            &world,
+            "scout",
+            "request_create",
+            json!({"spaceId": work, "kind": "approval", "title": title,
+                   "options": [{"id": "yes", "label": "Yes", "style": "approve"},
+                               {"id": "no", "label": "No", "style": "deny"}],
+                   "audience": {"accounts": [if answerer == "person" { owner.actor } else { rook }]}}),
+            Some(a),
+        )
+        .await;
+        assert_eq!(asked["outcome"], "ok", "{asked}");
+        let request = asked["value"]["id"].clone();
+        let answer = json!({"requestId": request, "optionId": "yes"});
+        let answered = if answerer == "person" {
+            as_person(&world, owner, a, "request_respond", answer).await
+        } else {
+            as_agent(&world, "rook", "request_respond", answer, Some(a)).await
+        };
+        assert_eq!(answered["outcome"], "ok", "{answerer}: {answered}");
+        answered_by.push(request);
+    }
+    // Step 8, first half: a request already answered can't be answered again.
+    let late = as_person(
+        &world,
+        owner,
+        a,
+        "request_respond",
+        json!({"requestId": answered_by[0], "optionId": "no"}),
+    )
+    .await;
+    assert_ne!(late["outcome"], "ok", "{late}");
+
+    // Step 7: its membership in B is revoked mid-flight. B's stream,
+    // operations and open requests stop; A carries on.
+    let pending = as_agent(
+        &world,
+        "scout",
+        "request_create",
+        json!({"spaceId": b_space, "title": "Still there?", "audience": {"accounts": [owner.actor]}}),
+        Some(b),
+    )
+    .await;
+    assert_eq!(pending["outcome"], "ok", "{pending}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(b)
+    .bind(scout)
+    .fetch_one(world.pool())
+    .await
+    .expect("membership");
+    let (status, removed) = send(
+        &world.app,
+        owner.browser.request(
+            "PATCH",
+            &format!("/api/v1/organizations/{b}/members/{scout}"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {removed}");
+    let refused = as_agent(&world, "scout", "request_list", json!({}), Some(b)).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let still = as_agent(&world, "scout", "request_list", json!({}), Some(a)).await;
+    assert_eq!(still["outcome"], "ok", "{still}");
+    as_person(
+        &world,
+        owner,
+        b,
+        "request_create",
+        json!({"spaceId": b_space, "title": "After you left?", "audience": {"roles": ["owner"]}}),
+    )
+    .await;
+    let events = heard(&world, "scout").await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["workspace"]["id"] == b.to_string()
+                && event["type"] == "request.raised"
+                && event["data"]["title"] == "After you left?"),
+        "{events:?}"
+    );
+
+    // Step 8, second half: its request in B can't be answered once it lost
+    // access there.
+    let answered = as_person(
+        &world,
+        owner,
+        b,
+        "request_respond",
+        json!({"requestId": pending["value"]["id"], "text": "Yes"}),
+    )
+    .await;
+    assert_ne!(answered["outcome"], "ok", "{answered}");
+
+    world.finish().await;
 }

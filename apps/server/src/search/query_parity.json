@@ -1,0 +1,270 @@
+[
+  {
+    "query": "roadmap",
+    "parsed": {
+      "text": "roadmap"
+    }
+  },
+  {
+    "query": "  theming   decision  ",
+    "parsed": {
+      "text": "theming decision"
+    }
+  },
+  {
+    "query": "\"exact phrase\" -draft",
+    "parsed": {
+      "text": "\"exact phrase\" -draft"
+    }
+  },
+  {
+    "query": "from:@Lena roadmap",
+    "parsed": {
+      "text": "roadmap",
+      "from": [
+        "lena"
+      ]
+    }
+  },
+  {
+    "query": "from:me is:mine",
+    "parsed": {
+      "from": [
+        "me"
+      ]
+    }
+  },
+  {
+    "query": "from:lena from:@lena from:mara",
+    "parsed": {
+      "from": [
+        "lena",
+        "mara"
+      ]
+    }
+  },
+  {
+    "query": "in:#General in:@rook",
+    "parsed": {
+      "inChannels": [
+        "general"
+      ],
+      "inPeople": [
+        "rook"
+      ]
+    }
+  },
+  {
+    "query": "in:release-notes",
+    "parsed": {
+      "inChannels": [
+        "release-notes"
+      ]
+    }
+  },
+  {
+    "query": "during:2026-10 launch",
+    "parsed": {
+      "text": "launch",
+      "after": "2026-10-01",
+      "before": "2026-11-01"
+    }
+  },
+  {
+    "query": "during:2026",
+    "parsed": {
+      "after": "2026-01-01",
+      "before": "2027-01-01"
+    }
+  },
+  {
+    "query": "during:2026-12",
+    "parsed": {
+      "after": "2026-12-01",
+      "before": "2027-01-01"
+    }
+  },
+  {
+    "query": "on:2028-02-29",
+    "parsed": {
+      "after": "2028-02-29",
+      "before": "2028-03-01"
+    }
+  },
+  {
+    "query": "on:2026-12-31",
+    "parsed": {
+      "after": "2026-12-31",
+      "before": "2027-01-01"
+    }
+  },
+  {
+    "query": "on:2026-02-29",
+    "parsed": {
+      "errors": [
+        "on:2026-02-29"
+      ]
+    }
+  },
+  {
+    "query": "on:2026-10",
+    "parsed": {
+      "errors": [
+        "on:2026-10"
+      ]
+    }
+  },
+  {
+    "query": "before:2026-10-05",
+    "parsed": {
+      "before": "2026-10-05"
+    }
+  },
+  {
+    "query": "after:2026-10-05",
+    "parsed": {
+      "after": "2026-10-06"
+    }
+  },
+  {
+    "query": "after:2026-10 before:2027",
+    "parsed": {
+      "after": "2026-11-01",
+      "before": "2027-01-01"
+    }
+  },
+  {
+    "query": "during:2026 during:2026-10-05",
+    "parsed": {
+      "after": "2026-10-05",
+      "before": "2026-10-06"
+    }
+  },
+  {
+    "query": "has:file has:LINKS has:reaction has:pin has:task",
+    "parsed": {
+      "has": [
+        "file",
+        "link",
+        "reaction",
+        "pin",
+        "task"
+      ]
+    }
+  },
+  {
+    "query": "has:banana",
+    "parsed": {
+      "errors": [
+        "has:banana"
+      ]
+    }
+  },
+  {
+    "query": "is:thread is:dms is:unread is:saved",
+    "parsed": {
+      "is": [
+        "thread",
+        "dm",
+        "unread",
+        "saved"
+      ]
+    }
+  },
+  {
+    "query": "is:urgent",
+    "parsed": {
+      "errors": [
+        "is:urgent"
+      ]
+    }
+  },
+  {
+    "query": "kind:task kind:boards kind:Messages",
+    "parsed": {
+      "kinds": [
+        "tasks",
+        "whiteboards",
+        "messages"
+      ]
+    }
+  },
+  {
+    "query": "kind:spreadsheet",
+    "parsed": {
+      "errors": [
+        "kind:spreadsheet"
+      ]
+    }
+  },
+  {
+    "query": "https://example.com/a 10:30",
+    "parsed": {
+      "text": "https://example.com/a 10:30"
+    }
+  },
+  {
+    "query": "from: in:",
+    "parsed": {
+      "errors": [
+        "from:",
+        "in:"
+      ]
+    }
+  },
+  {
+    "query": "from:\"lena\"",
+    "parsed": {
+      "errors": [
+        "from:\"lena\""
+      ]
+    }
+  },
+  {
+    "query": "\"in:#general\" words",
+    "parsed": {
+      "text": "\"in:#general\" words"
+    }
+  },
+  {
+    "query": "FROM:@Mara IN:#Design",
+    "parsed": {
+      "from": [
+        "mara"
+      ],
+      "inChannels": [
+        "design"
+      ]
+    }
+  },
+  {
+    "query": "\"unclosed phrase here",
+    "parsed": {
+      "text": "\"unclosed phrase here"
+    }
+  },
+  {
+    "query": "during:1969",
+    "parsed": {
+      "errors": [
+        "during:1969"
+      ]
+    }
+  },
+  {
+    "query": "during:2026-13",
+    "parsed": {
+      "errors": [
+        "during:2026-13"
+      ]
+    }
+  },
+  {
+    "query": "before:2026-1-5",
+    "parsed": {
+      "errors": [
+        "before:2026-1-5"
+      ]
+    }
+  }
+]

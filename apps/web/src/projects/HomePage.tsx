@@ -1,4 +1,4 @@
-import { type MouseEvent } from 'react'
+import { lazy, Suspense, type MouseEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import homeClaims from 'virtual:modules/slots/home'
 
@@ -20,6 +20,9 @@ import type { Project } from './types'
 import '../styles/pages.css'
 
 const RECENT_PROJECTS = 6
+
+// Home as the conversation list, when only chat is on (C2.40).
+const ChatHome = lazy(() => import('./ChatHome'))
 
 function openedLabel(iso: string | null) {
   if (!iso) return 'Not opened yet'
@@ -83,6 +86,8 @@ export function HomePage() {
   )
     .filter(([, shown]) => shown)
     .map(([section]) => section)
+  // With projects and tasks off, Home is the conversation list (C2.40).
+  const chatOnly = experience.moduleOn('messages') && !experience.moduleOn('projects') && !experience.moduleOn('tasks')
   const left = sections.filter((section) => (section === 'needsYou' || section === 'working') && !quiet[section])
   const right = sections.filter((section) => (section === 'capacity' || section === 'tasks') && !quiet[section])
 
@@ -114,6 +119,11 @@ export function HomePage() {
             </div>
           ) : null}
           <div className="aw-home__column">
+            {chatOnly ? (
+              <Suspense fallback={<ListSkeleton label="Loading your conversations" rows={4} />}>
+                <ChatHome />
+              </Suspense>
+            ) : null}
             {right.includes('capacity') ? <Capacity /> : null}
             {right.includes('tasks') ? <YourTasks /> : null}
             {homeOn('recent') ? (

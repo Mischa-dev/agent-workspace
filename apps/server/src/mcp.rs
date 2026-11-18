@@ -132,6 +132,8 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
 /// What a short-lived narrow token (K1.24) authenticates as.
 pub(crate) const ACCESS_TOKEN_CLASS: &str = "access_token";
+/// A run's token, which stays in its run's space (A1.12).
+pub(crate) const RUN_TOKEN_CLASS: &str = "run_credential";
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 /// The largest JSON-RPC body a call may send; anything larger is refused
 /// with HTTP 413 before a tool runs. 6 MiB fits file_upload's 4 MiB file as
@@ -161,6 +163,17 @@ pub struct McpPrincipal {
 }
 
 impl McpPrincipal {
+    /// A host's short-lived credential for one run (A1.12): it reaches the
+    /// run's space only, whatever the agent's own connection reaches.
+    pub fn is_run_credential(&self) -> bool {
+        self.authentication_class == RUN_TOKEN_CLASS
+    }
+
+    /// A short-lived `aw_at_` token (K1.24), a run's included.
+    pub fn is_access_token(&self) -> bool {
+        self.authentication_class == ACCESS_TOKEN_CLASS || self.is_run_credential()
+    }
+
     /// The caller `access` decides for. An app acting for a person is held
     /// to their delegation limit, which the edge loads and sets
     /// (`ops::mcp::caller_of`); this is the caller without it.
@@ -822,9 +835,9 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
+        description = "Add or remove people and agents in a group or a private channel (pass it, or a thread in it). Whoever you add can read everything said there so far. Remove your own @handle to leave. In a group, people can add and remove anyone and agents can only leave; in a private channel, its managers and the space's moderators change who's in it. DMs never change; other channels are open to everyone in the project.",
         annotations(
-            title = "Change group members",
+            title = "Change members",
             read_only_hint = false,
             destructive_hint = true,
             idempotent_hint = true,
@@ -841,7 +854,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "When the agents in a group (or a thread in one) have used their turns, let them take more (needs conversations.continue_agents), like the web app's Continue button: they get 6 more messages, and the other agents are asked to answer the latest agent message. Pass a clientRequestId so a retry doesn't grant another round.",
+        description = "When the replies in a conversation have used their turns or gone as deep as the space allows, let them take another round, like the web app's Continue button: the turns come back and, in a DM or group, the other members who take reply requests are asked to answer the latest message by one. Needs the replies.steer permission there. Pass a clientRequestId so a retry doesn't grant another round.",
         annotations(
             title = "Let agents continue",
             read_only_hint = false,
@@ -877,7 +890,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
+        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread), snooze_until_activity (back unread when something new happens on it) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
         annotations(
             title = "Update notifications",
             read_only_hint = false,
@@ -1019,7 +1032,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a channel in a project. If an active channel with that name already exists, it's returned instead (created: false).",
+        description = "Create a channel in a project, or a private one (private: true) that only its members see, starting with you; add people with conversation_members. If an active channel with that name that you can see already exists, it's returned instead (created: false).",
         annotations(
             title = "Create channel",
             read_only_hint = false,
@@ -1223,7 +1236,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Ask an agent again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
+        description = "Ask an account again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
         annotations(
             title = "Retry agent",
             read_only_hint = false,
@@ -1242,7 +1255,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
+        description = "Stop an account's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
         annotations(
             title = "Stop agent",
             read_only_hint = false,
@@ -1973,42 +1986,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A project's saved views: the built-in My tasks, Ready for agents, Blocked and Recently changed, plus views people saved (yours and shared ones). Pass a view's name as `view` to task_list to list its tasks.",
-        annotations(
-            title = "List saved views",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn view_list(
-        &self,
-        Parameters(arguments): Parameters<views_data::ViewListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::ViewListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::view_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Save a view of a project's tasks (a name, the task list's query, list or board, columns), or change, pin or delete one (pass view: its name or ID). Views are yours alone unless shared: true, which needs the right to edit the project's tasks. Pinning only changes your own sidebar. List a view's tasks with task_list's view.",
-        annotations(
-            title = "Write saved view",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn view_write(
-        &self,
-        Parameters(arguments): Parameters<views_data::ViewWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::ViewWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::view_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
         annotations(title = "My work", read_only_hint = true, open_world_hint = false)
     )]
@@ -2167,59 +2144,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<views_data::ProjectExportValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(views_data::project_export(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Your outgoing webhooks: each one's URL, the events it hears, whether it's on, and its last delivery; plus every event type and how receivers check a delivery's signature. Secrets are never shown again after they're made.",
-        annotations(
-            title = "List webhooks",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_list(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make, change or remove an outgoing webhook that POSTs signed JSON to a URL when tasks, runs, pull requests or messages change. It hears what you can see, in one project or the whole workspace, and stops if you lose access. create and rotate_secret return the signing secret once; test sends a ping; redeliver sends one delivery again with the same id.",
-        annotations(
-            title = "Change webhook",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn webhook_write(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A webhook's delivery log, newest first: each delivery's id (the same on every retry), event, state, attempts, last status code and error.",
-        annotations(
-            title = "Webhook deliveries",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_deliveries(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookDeliveriesArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_deliveries(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -3236,7 +3160,7 @@ pub(crate) async fn caller_reach(
         )
     };
     // K1.24: a narrow token holds no more than its scope, whoever holds it.
-    if principal.authentication_class == ACCESS_TOKEN_CLASS {
+    if principal.is_access_token() {
         let Some(scope) =
             crate::access::tokens::scope_of(&mut connection, principal.credential_id).await?
         else {
@@ -3375,6 +3299,39 @@ fn workspace_busy_refusal(tool: &str, retry_after_seconds: u64) -> rmcp::model::
                 structured["retryCategory"] = serde_json::json!("wait");
                 structured["retryAfterSeconds"] = serde_json::json!(retry_after_seconds);
                 structured["code"] = serde_json::json!("rate_limited");
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
+/// Whether a hand-written tool is a change a paused account doesn't make
+/// (A2.10): any tool not marked read-only, but giving back work it holds
+/// and marking what it has read.
+fn writes_while_unpaused_only(tool: &str) -> bool {
+    !matches!(
+        tool,
+        "reply_release" | "reply_pass" | "mark_read" | "notification_update"
+    ) && McpServer::tools().get(tool).is_some_and(|tool| {
+        tool.annotations
+            .as_ref()
+            .and_then(|annotations| annotations.read_only_hint)
+            != Some(true)
+    })
+}
+
+/// A paused account's change, not made. Like an operation's paused answer
+/// it isn't an error to retry; in the shape `refusal` uses so it fits the
+/// tool's own results.
+fn paused_answer(tool: &str) -> rmcp::model::CallToolResponse {
+    let message = "Your account is paused here, so this change wasn't made. It can be made again once you're resumed.".to_owned();
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("do_not_retry");
+                structured["code"] = serde_json::json!("paused");
+                structured["paused"] = serde_json::json!(true);
             }
             rmcp::model::CallToolResponse::Complete(result)
         }
@@ -3554,6 +3511,7 @@ async fn run_tool(
     // in `work_item_commands::lock_membership`, messages in the send
     // pipeline, new spaces in `spaces::manage::create`, operations
     // in the dispatcher).
+    let mut acting_in = None;
     if principal.project_explicit || !principal.account_wide {
         let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
             crate::workspace::lifecycle::ensure_open_for_space(
@@ -3566,6 +3524,7 @@ async fn run_tool(
         .await
         {
             Ok(workspace) => {
+                acting_in = workspace;
                 // H1.1: the workspace's agents and apps share one budget.
                 if let Some(workspace) = workspace
                     && let Err(AppError::RateLimited {
@@ -3594,6 +3553,36 @@ async fn run_tool(
         };
         if !open {
             return Ok(suspended_refusal(&request.name));
+        }
+    }
+    // A2.10: a paused account's changes do nothing, by hand-written tool as
+    // by operation (`ops::dispatch::admit`).
+    if writes_while_unpaused_only(&request.name) {
+        let paused: Result<bool, AppError> =
+            crate::db::scoped_one(&server.state.pool, async |connection| {
+                Ok(match acting_in {
+                    Some(workspace) => {
+                        crate::statuses::is_paused(connection, principal.actor_id, workspace)
+                            .await?
+                    }
+                    // An account-wide call naming no space: paused anywhere is
+                    // paused for it.
+                    None => !crate::statuses::paused_in(connection, principal.actor_id)
+                        .await?
+                        .is_empty(),
+                })
+            })
+            .await;
+        match paused {
+            Ok(false) => {}
+            Ok(true) => return Ok(paused_answer(&request.name)),
+            Err(error) => {
+                tracing::error!(category = error.log_category(), "MCP pause lookup failed");
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
         }
     }
     let request_name = request.name.clone();
@@ -3631,7 +3620,7 @@ pub(crate) async fn acting_of(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<crate::access::acting::Acting, AppError> {
-    let (run, requested_by) = if principal.authentication_class == ACCESS_TOKEN_CLASS {
+    let (run, requested_by) = if principal.is_access_token() {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::access::tokens::acting_of(&mut connection, principal.credential_id).await?
     } else {
@@ -4468,7 +4457,11 @@ pub(crate) async fn resolve_bearer_principal(
                 .host_name
                 .unwrap_or_else(|| "access token".to_owned()),
             scopes: vec!["read".to_owned(), "write".to_owned()],
-            authentication_class: ACCESS_TOKEN_CLASS,
+            authentication_class: if holder.run_id.is_some() {
+                RUN_TOKEN_CLASS
+            } else {
+                ACCESS_TOKEN_CLASS
+            },
             account_wide: false,
             project_explicit: false,
         }));
@@ -5509,10 +5502,7 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     // afterTaskId) are left out on purpose: an anchor must never pick the
     // project a task is created in.
     ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
-    (
-        "runId",
-        "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run_visible_to(run.id, $2)",
-    ),
+    ("runId", crate::runs::store::SPACE_OF_VISIBLE_RUN),
     (
         "threadId",
         "SELECT COALESCE(project_id, direct_scope_id()) FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
@@ -5667,7 +5657,8 @@ async fn scoped_project(
         // belong to; agents reach the Projects their connection allows.
         // Older Project-scoped grants stay in their Project.
         let may_leave_home = match principal.actor_kind {
-            ActorKind::ExternalAgent => true,
+            // A host's run credential stays in its run's space.
+            ActorKind::ExternalAgent => !principal.is_run_credential(),
             ActorKind::Human => principal.account_wide,
             _ => false,
         };

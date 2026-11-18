@@ -1,12 +1,13 @@
-import { Icon } from '../ui'
-import { chosenOptions, displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import { isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
+import { fieldSpec } from './registry'
 import '../styles/work.css'
 
 /**
- * A field's value as list cells, board cards and read-only pages show it:
- * choices and statuses as the same colored chips labels use, a checkbox as a
- * check, a URL, email or phone as a link, and anything else as text. Nothing when it's empty, unless
- * `empty` says what to show.
+ * A field's value as list cells, board cards and read-only pages show it,
+ * drawn by its type's renderer in the field registry: choices and statuses
+ * as the same colored chips labels use, a checkbox as a check, a URL, email
+ * or phone as a link, and anything else as text. Nothing when it's empty,
+ * unless `empty` says what to show.
  */
 export function FieldValueView({
   empty,
@@ -19,60 +20,7 @@ export function FieldValueView({
   references?: readonly FieldReference[]
   value: FieldValue | undefined
 }) {
-  if (isEmpty(value)) return empty ? <span className="aw-prop__empty">{empty}</span> : null
-  if (field.type === 'single_choice' || field.type === 'multiple_choice' || field.type === 'status') {
-    return (
-      <ul aria-label={field.name} className="aw-labels">
-        {chosenOptions(field, value).map((option) => (
-          <li className="aw-label" key={option.id}>
-            <span aria-hidden className="aw-label__dot" style={{ backgroundColor: option.color }} />
-            <span className="aw-label__name">{option.name}</span>
-          </li>
-        ))}
-      </ul>
-    )
-  }
-  if (field.type === 'checkbox') {
-    return (
-      <span className="aw-prop__text">
-        <Icon name="check" size={14} />
-        <span className="aw-sr-only">Yes</span>
-      </span>
-    )
-  }
-  if (field.type === 'url' && typeof value === 'string') {
-    let host = value
-    try {
-      host = new URL(value).host
-    } catch {
-      // Shown as written.
-    }
-    return (
-      <a className="aw-prop__text" href={value} onClick={(event) => event.stopPropagation()} rel="noreferrer noopener" target="_blank">
-        {host}
-      </a>
-    )
-  }
-  if (field.type === 'email' && typeof value === 'string') {
-    return (
-      <a className="aw-prop__text" href={`mailto:${value}`} onClick={(event) => event.stopPropagation()}>
-        {value}
-      </a>
-    )
-  }
-  if (field.type === 'phone' && typeof value === 'string') {
-    return (
-      <a className="aw-prop__text" href={`tel:${value.replace(/[^0-9+]/g, '')}`} onClick={(event) => event.stopPropagation()}>
-        {value}
-      </a>
-    )
-  }
-  if (field.type === 'long_text') {
-    return (
-      <span className="aw-prop__text" style={{ whiteSpace: 'pre-line' }}>
-        {displayText(field, value, references)}
-      </span>
-    )
-  }
-  return <span className="aw-prop__text">{displayText(field, value, references)}</span>
+  if (value === undefined || isEmpty(value)) return empty ? <span className="aw-prop__empty">{empty}</span> : null
+  const { Renderer } = fieldSpec(field.type)
+  return <Renderer field={field} references={references} value={value} />
 }

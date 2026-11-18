@@ -235,6 +235,24 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "420",
     },
     SettingDef {
+        key: "notifications.quiet_days",
+        label: "Quiet days",
+        description: "Whole days pushes wait out, such as the weekend: one bit a day, Monday first (1 is Monday, 32 Saturday, 64 Sunday).",
+        kind: SettingType::Integer { min: 0, max: 127 },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "0",
+    },
+    SettingDef {
+        key: "notifications.urgent_breaks_quiet",
+        label: "Urgent breaks through",
+        description: "Let questions and approvals waiting on your answer reach your phone in quiet hours and on quiet days. A pause still holds them.",
+        kind: SettingType::Bool,
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "false",
+    },
+    SettingDef {
         key: "notifications.time_zone",
         label: "Time zone",
         description: "The time zone quiet hours follow, such as Europe/Berlin. Unset, UTC.",
@@ -274,6 +292,36 @@ pub const REGISTRY: &[SettingDef] = &[
         scopes: &[Scope::Workspace],
         launch_override: false,
         default: "10240",
+    },
+    SettingDef {
+        key: "replies.max_chain_depth",
+        label: "Deepest reply chain",
+        description: "How many replies in a row may ask someone else to reply before the conversation waits for a fresh message or Continue. Stops two agents from answering each other forever.",
+        kind: SettingType::Integer { min: 0, max: 50 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "5",
+    },
+    SettingDef {
+        key: "replies.turn_allowance",
+        label: "Replies before Continue",
+        description: "How many replies a conversation takes after a fresh message before someone has to say Continue.",
+        kind: SettingType::Integer { min: 0, max: 200 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "6",
+    },
+    SettingDef {
+        key: "replies.claim_window_seconds",
+        label: "Time to pick up a request",
+        description: "How long someone asked for a reply has to pick it up before it shows they haven't, and the people who manage them hear about it.",
+        kind: SettingType::Integer {
+            min: 30,
+            max: 86_400,
+        },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "120",
     },
     SettingDef {
         key: "messages.link_previews",
@@ -467,6 +515,20 @@ pub const REGISTRY: &[SettingDef] = &[
     // K1.12: the role a new agent gets when whoever adds it names none
     // (ruling R5: the same as a newly invited person unless changed). A role
     // id of this workspace; engine::agent_role checks it still is one.
+    // A2.18 (K1 3.11): agents and apps owned outside this workspace (and
+    // not by one of its members) join at once, after an admin approves, or
+    // not at all.
+    SettingDef {
+        key: "access.outside_accounts",
+        label: "Agents from outside",
+        description: "Whether agents and apps owned outside this workspace may be added: yes, after an admin approves, or no.",
+        kind: SettingType::Choice {
+            options: &["yes", "ask_admin", "no"],
+        },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "\"yes\"",
+    },
     SettingDef {
         key: "access.default_agent_role_id",
         label: "Role for new agents",
@@ -733,6 +795,39 @@ pub async fn resolve(
 }
 
 /// Most specific first.
+/// One whole-number setting as it applies in a space: the space's value,
+/// else the workspace's, else the default. For hot paths that need one
+/// team setting and no person's (such as the reply rules, A2.8).
+pub async fn space_integer(
+    connection: &mut PgConnection,
+    space_id: Uuid,
+    key: &str,
+) -> Result<i64, AppError> {
+    let definition = definition(key).ok_or(AppError::Validation("setting key"))?;
+    let stored = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT setting.value
+        FROM settings setting
+        JOIN projects space ON space.organization_id = setting.organization_id
+        WHERE space.id = $1
+          AND setting.key = $2
+          AND (setting.scope = 'workspace'
+               OR (setting.scope = 'project' AND setting.project_id = $1))
+        ORDER BY (setting.scope = 'project') DESC
+        "#,
+    )
+    .bind(space_id)
+    .bind(key)
+    .fetch_all(&mut *connection)
+    .await?;
+    Ok(stored
+        .into_iter()
+        .find(|value| definition.validate(value).is_ok())
+        .unwrap_or_else(|| definition.default_value())
+        .as_i64()
+        .unwrap_or_default())
+}
+
 fn precedence(scope: Scope) -> u8 {
     match scope {
         Scope::Project => 0,

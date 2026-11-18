@@ -48,7 +48,7 @@ pub mod target;
 pub mod web;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
-pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch};
+pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch, may_run};
 pub use envelope::Envelope;
 pub use error::{ConflictReason, DenyReason, OpError, RetryCategory};
 pub use registry::{OpEntry, OpMeta, Registry, registry};
@@ -121,6 +121,9 @@ pub trait Operation: Send + Sync + 'static {
     /// May arrive as a proposal (C1) when access says "suggest only".
     const PROPOSABLE: bool = false;
     const IDEMPOTENCY: Idempotency;
+    /// Fields of the value shown once (a new secret): kept out of the stored
+    /// answer a retry replays, which says null for them instead.
+    const SHOWN_ONCE: &'static [&'static str] = &[];
     /// May run as a job (MCP Tasks extension, K2.21).
     const LONG: bool = false;
     /// Accepts `preview: true`: runs and rolls back.

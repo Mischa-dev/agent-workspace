@@ -385,14 +385,6 @@ pub(super) async fn conversation_members(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "conversation_members"))
 }
 
-fn not_a_group(row: &ConversationAccessRow) -> &'static str {
-    if row.effective_kind() == "dm" {
-        "Only groups have turns. In a DM the agent answers every message you send."
-    } else {
-        "Only groups have turns. In a channel or thread, @mention an agent to ask it."
-    }
-}
-
 pub(super) async fn conversation_continue(
     state: &AppState,
     principal: &McpPrincipal,
@@ -419,12 +411,9 @@ pub(super) async fn conversation_continue(
         }
     };
     let result = async {
-        let Some(row) = visible_conversation(state, principal, conversation_id).await? else {
+        let Some(_) = visible_conversation(state, principal, conversation_id).await? else {
             return Ok(ToolResult::not_found("That conversation"));
         };
-        if row.effective_kind() != "group" {
-            return Ok(ToolResult::invalid("conversationId", not_a_group(&row)));
-        }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let reservation = match &key {
@@ -460,13 +449,9 @@ pub(super) async fn conversation_continue(
         .await
         {
             Ok(outcome) => outcome,
-            Err(AppError::Conflict("conversation", _)) => {
-                return Ok(ToolResult::invalid("conversationId", not_a_group(&row)));
-            }
-            Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That conversation")),
-            Err(AppError::Forbidden) => {
+            Err(AppError::NotFound(_)) => {
                 return Ok(ToolResult::denied(
-                    "Your role here doesn't let you give the agents another round (conversations.continue_agents). Ask someone in the group.",
+                    "Your role here doesn't let you give the agents another round (replies.steer). Ask someone in the group.",
                 ));
             }
             Err(error) => return Err(error),

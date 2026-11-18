@@ -10,6 +10,9 @@
 //! (`POST /api/v1/host/commands/{id}/ack`). A `start` it has seen before
 //! (the same `startKey`) is acknowledged again with the run it started,
 //! never started twice.
+//!
+//! It also enrols a host, describes it, sends its notices, and reports on
+//! a run (`RunReporter`) with the credential a command carried.
 
 use std::time::Duration;
 
@@ -212,6 +215,201 @@ pub struct PushEvent {
     pub run_id: Option<Uuid>,
 }
 
+// ------------------------------------------- enrolment, describe, notices
+
+/// Who the host is, as it enrols.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSoftware {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub software: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// `POST /api/v1/hosts/enrol`: a one-time code from the workspace (or a
+/// person, for a host of their own) links the host.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrolRequest {
+    pub code: String,
+    pub host: HostSoftware,
+    pub protocol_versions: Vec<String>,
+    /// `dial_out` (the host reads its commands; the default) or `push`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<Value>,
+}
+
+/// The credential a host sends from then on.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostCredential {
+    pub kind: String,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Enrolled {
+    pub host_id: Uuid,
+    pub protocol: String,
+    pub credential: HostCredential,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_signing_secret: Option<String>,
+}
+
+/// What an action needs before it runs: a yes, or a panel the host draws.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionNeeds {
+    Confirm,
+    Panel,
+}
+
+/// Something a person can ask the host (or one of its agents) to do; it
+/// arrives as an `action` command.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostAction {
+    pub id: String,
+    pub label: String,
+    pub needs: ActionNeeds,
+}
+
+/// Something the host offers to set up, such as a new agent.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Offer {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One agent the host runs.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribedAgent {
+    pub host_agent_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<HostAction>,
+}
+
+/// `POST /api/v1/host/describe`: what the host is and can do. Sent after
+/// enrolling, whenever it changes, and when a heartbeat's answer asks.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Description {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub software: Option<Value>,
+    #[serde(default)]
+    pub capabilities: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_interval_seconds: Option<i32>,
+    #[serde(default)]
+    pub offers: Vec<Offer>,
+    #[serde(default)]
+    pub actions: Vec<HostAction>,
+    #[serde(default)]
+    pub agents: Vec<DescribedAgent>,
+    /// The provider accounts the host runs on; it reports their plan
+    /// windows on `POST /api/v1/host/windows`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<DescribedAccount>,
+}
+
+/// A provider account a host runs on, by the host's own reference.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct DescribedAccount {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub name: String,
+}
+
+/// `POST /api/v1/host/windows`: the plan windows of described accounts.
+/// A full report: windows an account no longer lists are gone.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsReport {
+    pub accounts: Vec<AccountWindows>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountWindows {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<PlanWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<Value>,
+}
+
+/// One plan window: `key` is stable for the account (lowercase letters,
+/// digits and `._-`), `usedPercent` 0 to 100.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWindow {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub used_percent: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_minutes: Option<i64>,
+    #[serde(default)]
+    pub limit_reached: bool,
+}
+
+/// The three things a host tells the server about one of its agents.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeKind {
+    /// Its profile changed (`profile`, with at least a `name`).
+    AgentProfileChanged,
+    /// It is known by another reference now (`newHostAgentRef`, `ref`).
+    AgentRefChanged,
+    /// It is gone: its runs are interrupted.
+    AgentRetired,
+}
+
+/// `POST /api/v1/host/notices`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    pub kind: NoticeKind,
+    pub host_agent_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_host_agent_ref: Option<String>,
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Notice {
+    pub fn new(kind: NoticeKind, host_agent_ref: impl Into<String>) -> Self {
+        Self {
+            kind,
+            host_agent_ref: host_agent_ref.into(),
+            profile: None,
+            new_host_agent_ref: None,
+            reference: None,
+            reason: None,
+        }
+    }
+}
+
 // ------------------------------------------------------- push signing
 
 /// The key a `whsec_…` signing secret stands for.
@@ -360,6 +558,145 @@ impl HostClient {
             .send()
             .await?;
         Self::read(response).await
+    }
+
+    /// Link a host with a one-time code; the answer's credential is the
+    /// token for every call after.
+    pub async fn enrol(base: &str, request: &EnrolRequest) -> Result<Enrolled, ClientError> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(MAX_WAIT_SECONDS))
+            .build()?;
+        let response = http
+            .post(format!("{}/api/v1/hosts/enrol", base.trim_end_matches('/')))
+            .header(PROTOCOL_HEADER, PROTOCOL_VERSION)
+            .json(request)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// The server's origin this client calls.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    pub async fn describe(&self, description: &Description) -> Result<Value, ClientError> {
+        let response = self
+            .request(reqwest::Method::POST, "/api/v1/host/describe")
+            .json(description)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// Report the plan windows of accounts this host described.
+    pub async fn report_windows(&self, report: &WindowsReport) -> Result<Value, ClientError> {
+        let response = self
+            .request(reqwest::Method::POST, "/api/v1/host/windows")
+            .json(report)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    pub async fn notice(&self, notice: &Notice) -> Result<Value, ClientError> {
+        let response = self
+            .request(reqwest::Method::POST, "/api/v1/host/notices")
+            .json(notice)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// A reporter for one run, with the credential its start (or another
+    /// command about it) carried.
+    pub fn reporter(&self, run_id: Uuid, credential: &WorkspaceCredential) -> RunReporter {
+        RunReporter {
+            base: self.base.clone(),
+            token: credential.token.clone(),
+            run_id,
+            http: self.http.clone(),
+        }
+    }
+}
+
+/// How a host reports on a run: the run operations (`run_activity_report`,
+/// `run_usage_report`, `run_result_report`, `run_update`) on the public
+/// API, as the run's agent. Each report carries a key, so sending one again
+/// changes nothing.
+#[derive(Clone, Debug)]
+pub struct RunReporter {
+    base: String,
+    token: String,
+    run_id: Uuid,
+    http: reqwest::Client,
+}
+
+impl RunReporter {
+    pub fn run_id(&self) -> Uuid {
+        self.run_id
+    }
+
+    /// Any run operation; `input` gets the run's id.
+    pub async fn operation(
+        &self,
+        name: &str,
+        mut input: Value,
+        key: &str,
+    ) -> Result<Value, ClientError> {
+        if let Value::Object(fields) = &mut input {
+            fields.insert("runId".to_owned(), Value::String(self.run_id.to_string()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/api/v2/ops/{name}", self.base))
+            .bearer_auth(&self.token)
+            .header("idempotency-key", key)
+            .json(&input)
+            .send()
+            .await?;
+        HostClient::read(response).await
+    }
+
+    /// Activities, each `{"id", "kind", "payload"?}`: `run_started`,
+    /// `text_message`, `interrupt` (a request), and so on.
+    pub async fn activities(
+        &self,
+        activities: Vec<Value>,
+        key: &str,
+    ) -> Result<Value, ClientError> {
+        self.operation(
+            "run_activity_report",
+            serde_json::json!({ "activities": activities }),
+            key,
+        )
+        .await
+    }
+
+    /// Tokens used, under a key of the host's own.
+    pub async fn usage(
+        &self,
+        report_key: &str,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> Result<Value, ClientError> {
+        self.operation(
+            "run_usage_report",
+            serde_json::json!({ "reportKey": report_key, "model": model,
+                                "inputTokens": input_tokens, "outputTokens": output_tokens }),
+            &format!("usage-{report_key}"),
+        )
+        .await
+    }
+
+    /// The run's state (`working`, `done`, `failed`, `cancelled`, ...) and
+    /// anything else `run_update` takes.
+    pub async fn update(&self, mut fields: Value, key: &str) -> Result<Value, ClientError> {
+        if !fields.is_object() {
+            fields = serde_json::json!({});
+        }
+        self.operation("run_update", fields, key).await
     }
 }
 

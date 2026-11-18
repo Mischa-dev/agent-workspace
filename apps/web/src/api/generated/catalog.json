@@ -1,5 +1,96 @@
 [
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "account_block_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List blocked accounts"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "account_block_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Block or unblock"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "account_joinable_list",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Agents you could add here"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "project.membership.updated",
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "account_workspace_add",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Add an agent you have to this workspace"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "A host action's reply"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a host's action"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -30,6 +121,67 @@
     "preview": false,
     "proposable": false,
     "title": "Set agent managers"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_list",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Ways to get a new agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_start",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Start a host's offer"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.paused",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_pause",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pause agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_recipe_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Apps an agent can be set up in"
   },
   {
     "automation": true,
@@ -96,6 +248,39 @@
     "title": "Rebind an agent's outside reference"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.agent_registered"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_register_decide",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Approve an agent a host made"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.resumed",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_resume",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Resume agent"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -122,6 +307,112 @@
     "preview": false,
     "proposable": false,
     "title": "List usage by agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "button_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "See a button"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "record.button_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "button_press",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Press a button"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "channels",
+    "name": "channel_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Channel details"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_join",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Join channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_leave",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Leave channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "channels",
+    "name": "channel_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Browse channels"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_update",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Change channel"
   },
   {
     "automation": true,
@@ -170,6 +461,130 @@
     "title": "Resolve comment thread"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "connection_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create connection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "connection_delivery_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List webhook deliveries"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "connection_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List connections"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_redeliver",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Redeliver webhook event"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_remove",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove connection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_secret_rotate",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Rotate connection secret"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_test",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Test webhook"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update connection"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [
@@ -184,6 +599,20 @@
     "preview": false,
     "proposable": false,
     "title": "Mark read"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_member_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List members"
   },
   {
     "automation": true,
@@ -310,6 +739,82 @@
     "title": "Retire custom emoji"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_create",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a dashboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_delete",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_get",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Read a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_list",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List dashboards"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_update",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a dashboard"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -338,6 +843,106 @@
     "preview": false,
     "proposable": false,
     "title": "Record decision"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "dm_request_respond",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a message request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "messages",
+    "name": "dm_standing_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get DM standing"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "event_kind_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Event kinds"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "event_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List events"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "file_link_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link to a file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "formula_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a formula"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "group_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List groups"
   },
   {
     "automation": false,
@@ -431,6 +1036,22 @@
     "preview": false,
     "proposable": false,
     "title": "Make a host enrolment code"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.linked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_link",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link an A2A agent"
   },
   {
     "automation": false,
@@ -925,6 +1546,64 @@
     "title": "Add a person who hasn't signed in yet"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "place_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Jump to a place"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_avatar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List avatars"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get profile"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.profile_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update profile"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1141,6 +1820,82 @@
     "title": "Report usage"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved searches"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "saved_searches.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save a search"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "schedule.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set a follow-up"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List follow-ups"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "schedule.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a follow-up"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1155,6 +1910,52 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_item_move",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Move in sidebar"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List sidebar sections"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_section_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set sidebar section"
   },
   {
     "automation": true,
@@ -1577,6 +2378,103 @@
     "preview": false,
     "proposable": false,
     "title": "List followed threads"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "view_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_default_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Choose a default view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a view"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List views"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_pin",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pin a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a view"
   },
   {
     "automation": true,

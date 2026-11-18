@@ -126,6 +126,16 @@ pub static BUG_REPORTS: Bucket = exact("bug_reports", 30, MINUTE);
 /// its links (H1.1).
 pub static WORKSPACE_PUBLIC_SUBMISSIONS: Bucket =
     exact("workspace.public_submissions", 300, MINUTE);
+/// Custom emoji changes in one workspace, charged by the events each one
+/// sends: one to every space, so an emoji added in a workspace of many
+/// spaces costs that many.
+pub static CUSTOM_EMOJI_EVENTS: Bucket = exact("custom_emoji.events", 2_000, HOUR);
+/// Answers to one public form from one sender address (T1.29).
+pub static FORM_ANSWER_SENDERS: Bucket = exact(
+    "form_answers.address",
+    crate::collection_forms::ANSWERS_PER_ADDRESS_PER_HOUR,
+    HOUR,
+);
 /// Password reset requests: a few per account an hour and a few dozen per
 /// sender address; callers with no known address share one ceiling. The mail itself has its own ceiling,
 /// spent only when a reset email really goes out (to a real account).
@@ -332,6 +342,22 @@ impl RateLimiters {
             .check(
                 &WORKSPACE_PUBLIC_SUBMISSIONS,
                 LimitKey::Workspace(workspace),
+            )
+            .await
+    }
+
+    /// A custom emoji change in `workspace` that will send `events` events
+    /// (one to each of its spaces), charged before it's made.
+    pub async fn check_custom_emoji_events(
+        &self,
+        workspace: Uuid,
+        events: u32,
+    ) -> Result<(), AppError> {
+        self.limits
+            .check_cost(
+                &CUSTOM_EMOJI_EVENTS,
+                LimitKey::Workspace(workspace),
+                events.max(1),
             )
             .await
     }
@@ -586,6 +612,25 @@ impl RateLimiters {
             .check(&BUG_REPORTS, LimitKey::Secret(token_digest))
             .await
     }
+
+    /// An answer to one public form from one sender address. A caller
+    /// whose address isn't known is bounded by the form's own limits.
+    pub async fn check_form_answer_sender(
+        &self,
+        link_id: Uuid,
+        address: Option<&str>,
+    ) -> Result<(), AppError> {
+        let Some(address) = address else {
+            return Ok(());
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(link_id.as_bytes());
+        hasher.update(address.as_bytes());
+        let key: [u8; 32] = hasher.finalize().into();
+        self.limits
+            .check(&FORM_ANSWER_SENDERS, LimitKey::Secret(&key))
+            .await
+    }
 }
 
 impl Default for RateLimiters {
@@ -684,6 +729,8 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&WEBHOOK_ATTEMPTS, LimitScope::Server),
     (&BUG_REPORTS, LimitScope::Link),
     (&WORKSPACE_PUBLIC_SUBMISSIONS, LimitScope::Workspace),
+    (&CUSTOM_EMOJI_EVENTS, LimitScope::Workspace),
+    (&FORM_ANSWER_SENDERS, LimitScope::Address),
     (&PASSWORD_RESETS, LimitScope::Login),
     (&PASSWORD_RESET_SENDERS, LimitScope::Address),
     (&PASSWORD_RESETS_GLOBAL, LimitScope::ServerUnattributed),

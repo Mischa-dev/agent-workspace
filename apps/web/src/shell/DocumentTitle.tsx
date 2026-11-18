@@ -1,12 +1,11 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useDirectOverview } from '../direct/api'
 import { useProjects } from '../projects/hooks'
 import { loadShellLazy } from './loadShellLazy'
-import { pageTitleFor, unreadCount, usePageTitleOverride } from './documentTitleModel'
-import { useInboxUnread } from './homeSpace'
+import { pageTitleFor, usePageTitleOverride } from './documentTitleModel'
+import { useNeedsYouBadge } from './homeSpace'
 
 const BASE_ICON = '/icons/icon.svg'
 
@@ -81,16 +80,14 @@ function useRememberPlace(path: string, title: string, namedByPage: boolean) {
 }
 
 /**
- * Keeps the tab title on the page you're on, with an unread count in front,
- * and the favicon and app badge in step with it.
+ * Keeps the tab title on the page you're on, with what needs you in front
+ * (the server's count, C2.4), and the favicon and app badge in step with it.
  */
 export function DocumentTitle() {
   const location = useLocation()
   const projects = useProjects()
-  const direct = useDirectOverview()
   const override = usePageTitleOverride()
-  const inboxUnread = useInboxUnread() ?? 0
-  const count = useMemo(() => unreadCount(inboxUnread, direct.data?.conversations ?? []), [direct.data?.conversations, inboxUnread])
+  const count = useNeedsYouBadge() ?? 0
   const title = pageTitleFor(location.pathname, location.search, projects.data?.projects ?? [], override)
 
   useEffect(() => {

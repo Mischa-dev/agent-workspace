@@ -11,9 +11,7 @@
 //! the catalog page edits), and a harness that reports its own cost keeps
 //! that beside the estimate, for models the catalog has no price for.
 
-use chrono::Utc;
 use serde_json::{Map, Value, json};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
@@ -449,16 +447,6 @@ pub fn price(usage: &TokenUsage, prices: &ModelPrices) -> f64 {
         )
 }
 
-#[derive(sqlx::FromRow)]
-struct RunScope {
-    organization_id: Uuid,
-    project_id: Uuid,
-    provider_account_id: Uuid,
-    adapter_kind: String,
-    model: Option<String>,
-    created_at: chrono::DateTime<Utc>,
-}
-
 /// Adds usage to the run's row for its model and prices it. Usage is a
 /// side note to the run: a failure here is logged, never the run's.
 pub async fn record_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) {
@@ -468,21 +456,7 @@ pub async fn record_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) {
 }
 
 async fn store_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) -> Result<(), AppError> {
-    let scope = sqlx::query_as::<_, RunScope>(
-        r#"
-        SELECT run.project_id, project.organization_id,
-               profile.provider_account_id, account.adapter_kind,
-               run.config ->> 'model' AS model, run.created_at
-        FROM agent_runs run
-        JOIN projects project ON project.id = run.project_id
-        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        JOIN provider_accounts account ON account.id = profile.provider_account_id
-        WHERE run.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(crate::db::scoped(&state.pool))
-    .await?;
+    let scope = crate::runs::usage::builtin_scope(crate::db::scoped(&state.pool), run_id).await?;
     let model = usage
         .model
         .clone()
@@ -490,56 +464,32 @@ async fn store_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) -> Resu
         .or(scope.model.clone())
         .unwrap_or_else(|| "default".to_owned());
     let prices = match state.supervisors.manifest(&scope.adapter_kind) {
-        Some(manifest) => catalog::run_catalog(&state.pool, scope.organization_id, &manifest)
+        Some(manifest) => catalog::run_catalog(&state.pool, scope.workspace_id, &manifest)
             .await?
             .into_iter()
             .find(|entry| entry.id == model)
             .and_then(|entry| entry.prices),
         None => None,
     };
-    let cost = prices.as_ref().map(|prices| price(&usage, prices));
     let clamp = |tokens: u64| i64::try_from(tokens).unwrap_or(i64::MAX);
-    let reported = usage
-        .reported_cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0);
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_usage (
-            agent_run_id, model, organization_id, project_id, provider_account_id,
-            adapter_kind, usage_date, input_tokens, output_tokens, cached_input_tokens,
-            estimated_cost, currency, reported_cost_usd
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (agent_run_id, model) DO UPDATE SET
-            input_tokens = agent_run_usage.input_tokens + EXCLUDED.input_tokens,
-            output_tokens = agent_run_usage.output_tokens + EXCLUDED.output_tokens,
-            cached_input_tokens = agent_run_usage.cached_input_tokens + EXCLUDED.cached_input_tokens,
-            estimated_cost = CASE
-                WHEN EXCLUDED.estimated_cost IS NULL THEN agent_run_usage.estimated_cost
-                ELSE COALESCE(agent_run_usage.estimated_cost, 0) + EXCLUDED.estimated_cost END,
-            currency = COALESCE(EXCLUDED.currency, agent_run_usage.currency),
-            reported_cost_usd = CASE
-                WHEN EXCLUDED.reported_cost_usd IS NULL THEN agent_run_usage.reported_cost_usd
-                ELSE COALESCE(agent_run_usage.reported_cost_usd, 0) + EXCLUDED.reported_cost_usd END,
-            updated_at = now()
-        "#,
+    crate::runs::usage::add_builtin(
+        crate::db::scoped(&state.pool),
+        run_id,
+        &crate::runs::usage::BuiltinTokens {
+            model,
+            backend: scope.adapter_kind.clone(),
+            date: scope.created_at.date_naive(),
+            input_tokens: clamp(usage.input_tokens),
+            output_tokens: clamp(usage.output_tokens),
+            cached_input_tokens: clamp(usage.cached_input_tokens),
+            estimated_cost: prices.as_ref().map(|prices| price(&usage, prices)),
+            currency: prices.as_ref().map(|prices| prices.currency.clone()),
+            reported_cost_usd: usage
+                .reported_cost_usd
+                .filter(|cost| cost.is_finite() && *cost >= 0.0),
+        },
     )
-    .bind(run_id)
-    .bind(&model)
-    .bind(scope.organization_id)
-    .bind(scope.project_id)
-    .bind(scope.provider_account_id)
-    .bind(&scope.adapter_kind)
-    .bind(scope.created_at.date_naive())
-    .bind(clamp(usage.input_tokens))
-    .bind(clamp(usage.output_tokens))
-    .bind(clamp(usage.cached_input_tokens))
-    .bind(cost)
-    .bind(prices.as_ref().map(|prices| prices.currency.clone()))
-    .bind(reported)
-    .execute(crate::db::scoped(&state.pool))
-    .await?;
-    Ok(())
+    .await
 }
 
 /// A run's (or a set of runs') tokens and cost, for views.
@@ -555,26 +505,19 @@ pub struct UsageTotals {
     pub currency: Option<String>,
 }
 
-/// One run's totals across its models.
-pub async fn run_totals(pool: &PgPool, run_id: Uuid) -> Result<UsageTotals, AppError> {
-    Ok(sqlx::query_as::<_, UsageTotals>(&format!(
-        "SELECT {TOTALS} FROM agent_run_usage WHERE agent_run_id = $1"
-    ))
-    .bind(run_id)
-    .fetch_one(crate::db::scoped(pool))
-    .await?)
-}
-
 /// Sums usage rows; cost prefers each row's catalog estimate over the
 /// harness's own figure, and reports USD when currencies are mixed or none.
 pub const TOTALS: &str = r#"
     COALESCE(sum(input_tokens), 0)::bigint AS input_tokens,
     COALESCE(sum(output_tokens), 0)::bigint AS output_tokens,
     COALESCE(sum(cached_input_tokens), 0)::bigint AS cached_input_tokens,
-    sum(COALESCE(estimated_cost, reported_cost_usd)) AS cost,
-    CASE WHEN count(*) FILTER (WHERE COALESCE(estimated_cost, reported_cost_usd) IS NOT NULL) = 0
+    sum(COALESCE(estimated_cost, reported_cost)) AS cost,
+    CASE WHEN count(*) FILTER (WHERE COALESCE(estimated_cost, reported_cost) IS NOT NULL) = 0
          THEN NULL
-         WHEN count(DISTINCT COALESCE(currency, 'USD')) = 1 THEN min(COALESCE(currency, 'USD'))
+         WHEN count(DISTINCT COALESCE(CASE WHEN estimated_cost IS NOT NULL THEN currency
+                                           ELSE reported_currency END, 'USD')) = 1
+         THEN min(COALESCE(CASE WHEN estimated_cost IS NOT NULL THEN currency
+                                ELSE reported_currency END, 'USD'))
          ELSE 'USD' END AS currency
 "#;
 

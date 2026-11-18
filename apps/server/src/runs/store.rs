@@ -21,6 +21,11 @@ pub const RUN_COLUMNS: &str = r#"
     run.cancel_requested_by_account_id, run.finished_at, run.updated_at
 "#;
 
+/// The space of a run the account (`$2`) may see, by the run's id (`$1`):
+/// one row of `space_id`, for finding which project a tool call acts in.
+pub const SPACE_OF_VISIBLE_RUN: &str =
+    "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run_visible_to(run.id, $2)";
+
 /// One `runs` row.
 #[derive(Clone, Debug, FromRow)]
 pub struct RunRow {

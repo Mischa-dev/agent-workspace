@@ -449,10 +449,22 @@ pub async fn open(
     .bind(
         if request.get("sensitive").and_then(Value::as_bool) == Some(true) {
             SENSITIVE
-        } else if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
-            "runs.approve"
         } else {
-            "requests.answer"
+            // A join (A2.18) is answered by whoever its roles name; an agent a
+            // host made (A2.19) needs `agents.create`; a run's approval needs
+            // `runs.approve`.
+            match origin.subject {
+                Some((subject, _)) if subject == crate::hosts::register::REGISTER_SUBJECT => {
+                    "agents.create"
+                }
+                Some((subject, _))
+                    if kind == "approval" && subject != crate::accounts::join::JOIN_SUBJECT =>
+                {
+                    "runs.approve"
+                }
+                _ if kind == "approval" && origin.run_id.is_some() => "runs.approve",
+                _ => "requests.answer",
+            }
         },
     )
     .bind(&accounts)
@@ -665,10 +677,6 @@ pub async fn cancel_raised_via_host(
 
 /// The most characters of a typed answer.
 pub const MAX_ANSWER_CHARS: usize = 4_000;
-/// The event each of the raiser's connections gets when a request settles.
-pub const ANSWERED_EVENT: &str = "request.answered";
-/// What an agent asked something hears on its connections.
-pub const RAISED_EVENT: &str = "request.raised";
 
 /// The option a `deny` expiry picks: the first styled deny.
 fn deny_option(options: &[Value]) -> Option<&Value> {
@@ -927,6 +935,21 @@ async fn holds_addressed_role(
 /// The permission a sensitive request asks of whoever answers it (K1.14b).
 const SENSITIVE: &str = "requests.answer_sensitive";
 
+/// The space a request lives in, unlocked and unchecked: only for holding
+/// its workspace open before the request's row is locked.
+pub async fn space_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    request_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT space_id FROM requests WHERE id = $1")
+            .bind(request_id)
+            .fetch_optional(executor)
+            .await?
+            .flatten(),
+    )
+}
+
 /// Who may answer an open request they can see: an account it names (for
 /// a sensitive one, only while it holds its permission); else a holder of
 /// one of the roles it names who has its permission; else, when it names
@@ -940,6 +963,8 @@ pub async fn may_answer(
     if row.status != "open" || row.raised_by_account_id == caller.account_id {
         return Ok(false);
     }
+    // Being asked by name still needs what answering it needs now: a
+    // sponsor who has lost `runs.approve` no longer approves their run.
     if row.addressed_account_ids.contains(&caller.account_id) {
         return Ok(
             row.answer_permission != SENSITIVE || holds(transaction, caller, row, true).await?
@@ -1059,6 +1084,11 @@ pub async fn answer(
     if !may_answer(transaction, caller, row).await? {
         return Err(AnswerError::NotYours);
     }
+    if raiser_left(transaction, row).await? {
+        return Err(AnswerError::Settled(
+            "The one who asked no longer has access here, so it can't be answered.".to_owned(),
+        ));
+    }
     let answer = clean_answer(row, option_id, typed)?;
     let settled = settle(
         transaction,
@@ -1071,6 +1101,29 @@ pub async fn answer(
     .await?
     .ok_or_else(|| AnswerError::Settled("This request was settled meanwhile.".to_owned()))?;
     Ok(settled)
+}
+
+/// Whether the account that raised the request has since lost the
+/// workspace (A1.8): its membership there was turned off. A host, which
+/// raises requests without being a member, never has.
+async fn raiser_left(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &RequestRow,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM organization_memberships membership
+            LEFT JOIN actors account ON account.id = membership.actor_id
+            WHERE membership.organization_id = $1 AND membership.actor_id = $2
+              AND (NOT membership.enabled OR account.status IS DISTINCT FROM 'active')
+        )
+        "#,
+    )
+    .bind(row.workspace_id)
+    .bind(row.raised_by_account_id)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Withdraw an open request its raiser no longer needs.
@@ -1204,6 +1257,14 @@ async fn follow(
         let by = by.unwrap_or(row.raised_by_account_id);
         crate::accounts::refs::decide(transaction, agent, same, by).await?;
     }
+    // An agent from outside joins when an admin approves (A2.18).
+    if row.subject_kind.as_deref() == Some(crate::accounts::join::JOIN_SUBJECT) {
+        crate::accounts::join::settled(transaction, row).await?;
+    }
+    // An agent a host made is added when its approver says so (A2.19).
+    if row.subject_kind.as_deref() == Some(crate::hosts::register::REGISTER_SUBJECT) {
+        crate::hosts::register::settled(transaction, row, by).await?;
+    }
     // A run on the built-in host goes on in process (A1.14).
     if let Some(run_id) = row.run_id
         && crate::runs::ops::is_builtin(transaction, run_id).await?
@@ -1302,50 +1363,6 @@ async fn tell_raiser(
     if crate::notifications::deliver(transaction, &notification).await? {
         crate::notifications::announce(transaction, space_id, row.raised_by_account_id).await?;
     }
-    tell_connections(
-        transaction,
-        row.raised_by_account_id,
-        space_id,
-        ANSWERED_EVENT,
-        "Your request was answered; read it with request_get",
-        row.id,
-    )
-    .await
-}
-
-/// An event on each of an account's agent connections that reach the space.
-async fn tell_connections(
-    transaction: &mut Transaction<'_, Postgres>,
-    account_id: Uuid,
-    space_id: Uuid,
-    kind: &str,
-    summary: &str,
-    request_id: Uuid,
-) -> Result<(), AppError> {
-    let connections = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM external_agent_connections
-        WHERE actor_id = $1 AND status = 'active' AND agent_connection_can_access(id, $2)
-        ORDER BY id
-        "#,
-    )
-    .bind(account_id)
-    .bind(space_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for connection_id in connections {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection_id,
-            space_id,
-            kind,
-            summary,
-            "request",
-            request_id,
-            &crate::addresses::Target::Inbox.legacy_path(),
-        )
-        .await?;
-    }
     Ok(())
 }
 
@@ -1424,15 +1441,6 @@ pub async fn announce_raised(
         };
         if crate::notifications::deliver(transaction, &notification).await? {
             crate::notifications::announce(transaction, space_id, account_id).await?;
-            tell_connections(
-                transaction,
-                account_id,
-                space_id,
-                RAISED_EVENT,
-                "A request waits on you; read it with request_get",
-                row.id,
-            )
-            .await?;
             told += 1;
         }
     }

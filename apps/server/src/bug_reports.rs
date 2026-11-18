@@ -280,12 +280,6 @@ pub(crate) async fn checked_form_in(
             "The collection is archived. Restore it to take answers.".to_owned(),
         ));
     }
-    if collection.acts_like_task {
-        return Ok(Err(format!(
-            "{}'s records are tasks, so a form can't add to it yet. A bug report link without a collection makes tasks.",
-            collection.name
-        )));
-    }
     let definitions =
         crate::collections::field_definitions(&mut *connection, project_id, collection_id, false)
             .await?;
@@ -450,6 +444,13 @@ pub(crate) async fn create(
             if !can_add_records(&state.pool, caller, project_id).await {
                 return Err(AppError::Forbidden);
             }
+            // A form whose answers are tasks needs the right to make tasks.
+            let makes_tasks = crate::collections::get(&state.pool, project_id, collection_id)
+                .await?
+                .is_some_and(|collection| collection.acts_like_task);
+            if makes_tasks && !can_create {
+                return Err(AppError::Forbidden);
+            }
             let form = form.clone().unwrap_or_default();
             Some((
                 collection_id,
@@ -594,6 +595,8 @@ pub(crate) async fn update(
         SET name = coalesce($2, name),
             state = coalesce($3, state),
             disabled_reason = CASE WHEN $3::text IS NULL THEN disabled_reason ELSE NULL END,
+            answers_on_day = CASE WHEN $3::text = 'active' AND state <> 'active'
+                                  THEN 0 ELSE answers_on_day END,
             owner_actor_id = $4,
             form = coalesce($5, form),
             version = version + 1, updated_at = now()
@@ -889,6 +892,8 @@ struct ReportLink {
     bug_type: Option<String>,
     collection_id: Option<Uuid>,
     form: Option<Value>,
+    /// Signs the pages a form renders (T1.29); never leaves the server.
+    render_key: Vec<u8>,
     /// M1.6: false when a built module holding it is switched off.
     module_on: bool,
 }
@@ -896,10 +901,26 @@ struct ReportLink {
 /// Why the maker can't add tasks (or a form's records) through it any
 /// more, if they can't.
 async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String>, AppError> {
-    let action = if link.collection_id.is_some() {
-        PolicyAction::CollectionRecordEdit
-    } else {
-        PolicyAction::WorkItemCreate
+    // A form whose collection's records are tasks makes tasks (T1.11).
+    let makes_tasks = match link.collection_id {
+        None => true,
+        Some(collection_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT acts_like_task FROM collections WHERE project_id = $1 AND id = $2",
+        )
+        .bind(link.project_id)
+        .bind(collection_id)
+        .fetch_optional(crate::db::scoped(pool))
+        .await?
+        .unwrap_or(false),
+    };
+    // A form writes records; one whose records are tasks makes tasks too.
+    let actions = match (link.collection_id.is_some(), makes_tasks) {
+        (false, _) => &[PolicyAction::WorkItemCreate][..],
+        (true, false) => &[PolicyAction::CollectionRecordEdit][..],
+        (true, true) => &[
+            PolicyAction::CollectionRecordEdit,
+            PolicyAction::WorkItemCreate,
+        ][..],
     };
     let reachable = sqlx::query_scalar::<_, bool>(
         "SELECT coalesce(actor_can_access_project($1, NULL, $2), false)",
@@ -908,14 +929,17 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
     .bind(link.project_id)
     .fetch_one(crate::db::scoped(pool))
     .await?;
-    let allowed = reachable
-        && matches!(
-            crate::memory::project_access(pool, link.owner_actor_id, link.project_id, action,)
-                .await,
-            Ok(false)
-        );
+    let mut allowed = reachable;
+    for action in actions {
+        allowed = allowed
+            && matches!(
+                crate::memory::project_access(pool, link.owner_actor_id, link.project_id, *action,)
+                    .await,
+                Ok(false)
+            );
+    }
     Ok((!allowed).then(|| {
-        if link.collection_id.is_some() {
+        if link.collection_id.is_some() && !makes_tasks {
             "Turned off because the person who made it can no longer add records in this \
              project. Turn it on again to take answers as you."
                 .to_owned()
@@ -948,7 +972,7 @@ async fn receive(
                 WHERE item_type.project_id = link.project_id AND item_type.enabled
                   AND lower(item_type.name) = 'bug'
                 LIMIT 1) AS bug_type,
-               link.collection_id, link.form,
+               link.collection_id, link.form, link.render_key,
                module_part_on('form', link.id) AS module_on
         FROM bug_report_links link
         WHERE link.token_digest = $1
@@ -982,7 +1006,7 @@ async fn receive(
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
     if let Some(collection_id) = link.collection_id {
-        return receive_answer(state, &link, collection_id, content_type, body).await;
+        return receive_answer(state, &link, collection_id, headers, content_type, body).await;
     }
     let report = parse_report(content_type, body)?;
     let (title, description) = task_text(&report, &link.name)?;
@@ -1102,9 +1126,17 @@ async fn receive_answer(
     state: &AppState,
     link: &ReportLink,
     collection_id: Uuid,
+    headers: &HeaderMap,
     content_type: Option<&str>,
     body: &[u8],
 ) -> Result<Response, AppError> {
+    state
+        .rate_limits
+        .check_form_answer_sender(
+            link.id,
+            crate::rate_limit::client_address(&state.config, headers),
+        )
+        .await?;
     let closed = || {
         Ok(refused(
             StatusCode::FORBIDDEN,
@@ -1130,6 +1162,33 @@ async fn receive_answer(
         Ok(answer) => answer,
         Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
     };
+    // A script that fills in the field people never see is thanked and
+    // nothing is kept, so it learns nothing.
+    if collection_forms::caught_by_honeypot(&answer) {
+        return Ok(answered(StatusCode::CREATED, None, false, &form.thanks));
+    }
+    match collection_forms::check_render_token(
+        &link.render_key,
+        link.id,
+        answer
+            .get(collection_forms::RENDER_TOKEN_KEY)
+            .and_then(Value::as_str),
+        chrono::Utc::now().timestamp_millis(),
+    ) {
+        Ok(()) => {}
+        Err(collection_forms::RenderRefusal::TooSoon) => {
+            return Ok(refused(
+                StatusCode::TOO_MANY_REQUESTS,
+                "That was quick. Wait a moment, then send your answers again.",
+            ));
+        }
+        Err(collection_forms::RenderRefusal::Reload) => {
+            return Ok(refused(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Load the form again, then send your answers.",
+            ));
+        }
+    }
     let definitions = crate::collections::field_definitions(
         &mut *crate::db::scoped_tx(&state.pool).await?,
         link.project_id,
@@ -1145,6 +1204,13 @@ async fn receive_answer(
     if turned_off_for_maker(&state.pool, link).await? {
         return closed();
     }
+    // One of today's answers is held for this one before the record is
+    // written, so the form never takes more than its daily limit.
+    let limit = i32::try_from(form.daily_limit()).unwrap_or(i32::MAX);
+    let Some(taken_today) = hold_todays_answer(&state.pool, link.id, limit).await? else {
+        pause_for_the_day(state, link, collection_id, limit).await?;
+        return closed();
+    };
     let arguments = json!({
         "projectId": link.project_id,
         "collection": collection_id.to_string(),
@@ -1163,8 +1229,16 @@ async fn receive_answer(
         mcp::DirectCallError::UnknownTool | mcp::DirectCallError::InvalidArguments(_) => {
             AppError::Internal("form record_write call")
         }
-    })?;
+    });
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            give_back_todays_answer(&state.pool, link.id).await?;
+            return Err(error);
+        }
+    };
     if result.get("outcome").and_then(Value::as_str) != Some("ok") {
+        give_back_todays_answer(&state.pool, link.id).await?;
         let outcome = result
             .get("outcome")
             .and_then(Value::as_str)
@@ -1185,28 +1259,144 @@ async fn receive_answer(
         .pointer("/value/idempotentReplay")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if !duplicate {
+    if duplicate {
+        give_back_todays_answer(&state.pool, link.id).await?;
+    } else {
         sqlx::query(
             "UPDATE bug_report_links SET report_count = report_count + 1, last_report_at = now() WHERE id = $1",
         )
         .bind(link.id)
         .execute(crate::db::scoped(&state.pool))
         .await?;
+        if taken_today >= limit {
+            pause_for_the_day(state, link, collection_id, limit).await?;
+        }
     }
-    Ok((
+    Ok(answered(
         if duplicate {
             StatusCode::OK
         } else {
             StatusCode::CREATED
         },
+        result.pointer("/value/records/0/number"),
+        duplicate,
+        &form.thanks,
+    ))
+}
+
+fn answered(status: StatusCode, record: Option<&Value>, duplicate: bool, thanks: &str) -> Response {
+    (
+        status,
         Json(json!({
             "ok": true,
-            "record": result.pointer("/value/records/0/number"),
+            "record": record,
             "duplicate": duplicate,
-            "thanks": form.thanks,
+            "thanks": thanks,
         })),
     )
-        .into_response())
+        .into_response()
+}
+
+/// Holds one of today's answers (UTC) for a form, or `None` when it has
+/// taken `limit` already or isn't taking answers.
+async fn hold_todays_answer(
+    pool: &PgPool,
+    link_id: Uuid,
+    limit: i32,
+) -> Result<Option<i32>, AppError> {
+    // Every SET expression reads the row as it was, so the CASE sees the
+    // day the count belongs to.
+    Ok(sqlx::query_scalar::<_, i32>(
+        r#"
+        UPDATE bug_report_links
+        SET answers_on_day = CASE WHEN answers_day = (now() AT TIME ZONE 'UTC')::date
+                                  THEN answers_on_day + 1 ELSE 1 END,
+            answers_day = (now() AT TIME ZONE 'UTC')::date
+        WHERE id = $1 AND state = 'active'
+          AND (answers_day IS DISTINCT FROM (now() AT TIME ZONE 'UTC')::date
+               OR answers_on_day < $2)
+        RETURNING answers_on_day
+        "#,
+    )
+    .bind(link_id)
+    .bind(limit)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?)
+}
+
+/// Gives back a held answer that made no record (refused, or a repeat).
+async fn give_back_todays_answer(pool: &PgPool, link_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE bug_report_links SET answers_on_day = answers_on_day - 1
+        WHERE id = $1 AND answers_on_day > 0
+          AND answers_day = (now() AT TIME ZONE 'UTC')::date
+        "#,
+    )
+    .bind(link_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(())
+}
+
+/// A form that has taken its answers for the day pauses itself, and its
+/// maker is told once. Turning it on again starts the count over.
+async fn pause_for_the_day(
+    state: &AppState,
+    link: &ReportLink,
+    collection_id: Uuid,
+    limit: i32,
+) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let paused = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE bug_report_links
+        SET state = 'paused', disabled_reason = $2, version = version + 1, updated_at = now()
+        WHERE id = $1 AND state = 'active'
+        RETURNING owner_actor_id
+        "#,
+    )
+    .bind(link.id)
+    .bind(format!(
+        "Paused after taking {limit} answers today, its daily limit. Turn it on again to take more."
+    ))
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(maker) = paused else {
+        return Ok(());
+    };
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    let notification = crate::notifications::NewNotification {
+        project_id: link.project_id,
+        recipient_actor_id: maker,
+        kind: crate::notifications::kind::FORM_PAUSED,
+        subject_kind: "bug_report_link",
+        subject_id: link.id,
+        actor_id: None,
+        conversation_id: None,
+        message_id: None,
+        work_item_id: None,
+        comment_id: None,
+        agent_run_id: None,
+        pull_request_id: None,
+        detail: json!({
+            "title": "A form you made paused itself",
+            "dailyLimit": limit,
+            "href": crate::addresses::Target::space(
+                link.project_id,
+                crate::addresses::Place::Collection(collection_id),
+            )
+            .legacy_path(),
+            "linkId": link.id,
+        }),
+        group_key: format!("form-paused:{}", link.id),
+        dedupe_key: format!("form-paused:{}:{today}", link.id),
+    };
+    if crate::notifications::deliver(&mut transaction, &notification).await? {
+        crate::notifications::announce(&mut transaction, link.project_id, maker).await?;
+    }
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// `GET /api/v1/forms/{token}`: the form's page reads what to ask. Nothing
@@ -1214,14 +1404,35 @@ async fn receive_answer(
 async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> {
     let token_digest = digest(token);
     state.rate_limits.check_bug_report(&token_digest).await?;
-    let row = sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, Option<Value>, bool)>(
-        "SELECT project_id, name, state, collection_id, form, module_part_on('form', id) \
-         FROM bug_report_links WHERE token_digest = $1",
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            String,
+            String,
+            Option<Uuid>,
+            Option<Value>,
+            Vec<u8>,
+            bool,
+        ),
+    >(
+        "SELECT id, project_id, name, state, collection_id, form, render_key, \
+         module_part_on('form', id) FROM bug_report_links WHERE token_digest = $1",
     )
     .bind(&token_digest)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
-    let Some((project_id, name, link_state, Some(collection_id), Some(form), module_on)) = row
+    let Some((
+        link_id,
+        project_id,
+        name,
+        link_state,
+        Some(collection_id),
+        Some(form),
+        render_key,
+        module_on,
+    )) = row
     else {
         return Ok(refused(StatusCode::NOT_FOUND, "There's no form here."));
     };
@@ -1255,6 +1466,7 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
         &collection,
         &form,
         &definitions,
+        collection_forms::render_token(&render_key, link_id, chrono::Utc::now().timestamp_millis()),
     ))
     .into_response();
     response

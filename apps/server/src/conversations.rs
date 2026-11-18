@@ -1,5 +1,7 @@
 // K2.7: the message operations.
+pub mod channel_ops;
 pub mod ops;
+pub mod sidebar_ops;
 
 use std::{
     cmp::Reverse,
@@ -24,7 +26,6 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::allocate_conversation_sequence,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    external_events::enqueue_external_event,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash},
     message_content::{MessageContent, MessageContentError},
     outbox::{
@@ -124,6 +125,8 @@ const ACCESS_COLUMNS: &str = r#"
             COALESCE(project.archived_at IS NOT NULL, false) AS project_archived,
             COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
             parent.kind AS parent_kind,
+            COALESCE(parent.kind, conversation.kind) = 'channel'
+                AND COALESCE(parent.visibility, conversation.visibility) = 'members' AS private,
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
@@ -169,6 +172,10 @@ pub(crate) struct ConversationAccessRow {
     pub(crate) project_archived: bool,
     parent_archived: bool,
     pub(crate) parent_kind: Option<String>,
+    /// A private channel, or a thread in one (C2.6). Read where the lock
+    /// reads it; false elsewhere.
+    #[sqlx(default)]
+    pub(crate) private: bool,
     pub(crate) thread_status: String,
     pub(crate) thread_outcome: Option<String>,
     pub(crate) next_entry_sequence: i64,
@@ -242,10 +249,15 @@ impl ConversationAccessRow {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateChannelRequest {
     name: String,
-    /// A private channel (K4.11): only its members see it, and whoever makes
-    /// it starts as its only member.
+    /// A private channel: its members only, starting with whoever makes it
+    /// (C2.6). Left out of the request's hash when false, so retries of
+    /// older requests still replay.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     private: bool,
+    /// A public channel: whether everyone in the space joins it, and
+    /// everyone who arrives later (C2.7). Left out, they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_join: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -333,6 +345,9 @@ pub struct ConversationView {
     /// Threads only: the kind of conversation the thread lives under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_kind: Option<String>,
+    /// A private channel (or a thread in one): its members only (C2.6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 impl From<&ConversationAccessRow> for ConversationView {
@@ -358,6 +373,7 @@ impl From<&ConversationAccessRow> for ConversationView {
             } else {
                 None
             },
+            private: row.private,
         }
     }
 }
@@ -742,6 +758,7 @@ struct ChannelRow {
     highest_sequence: i64,
     highest_seen_sequence: i64,
     read_version: i64,
+    private: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -781,6 +798,7 @@ struct SidebarChannelRow {
     id: Uuid,
     name: String,
     archived_at: Option<String>,
+    private: bool,
     version: i64,
     highest_sequence: i64,
     highest_seen_sequence: i64,
@@ -826,6 +844,8 @@ struct SidebarChannelView {
     id: Uuid,
     name: String,
     archived_at: Option<String>,
+    /// Only its members see it (C2.6).
+    private: bool,
     version: i64,
     highest_sequence: i64,
     highest_seen_sequence: i64,
@@ -900,7 +920,8 @@ async fn list_channels(
             conversation.version,
             conversation.next_entry_sequence - 1 AS highest_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence,
-            COALESCE(read_state.version, 0) AS read_version
+            COALESCE(read_state.version, 0) AS read_version,
+            conversation.visibility = 'members' AS private
         FROM conversations conversation
         LEFT JOIN conversation_read_states read_state
           ON read_state.project_id = conversation.project_id
@@ -950,6 +971,7 @@ async fn list_channels(
                     thread_status: None,
                     thread_outcome: None,
                     parent_kind: None,
+                    private: row.private,
                 },
                 highest_sequence,
                 unread,
@@ -985,6 +1007,7 @@ async fn create_channel(
     let command = CreateChannelRequest {
         name,
         private: request.private,
+        auto_join: request.auto_join,
     };
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
@@ -1022,7 +1045,10 @@ async fn create_channel(
         project_id,
         principal.actor_id,
         &command.name,
-        command.private,
+        NewChannel {
+            private: command.private,
+            auto_join: command.auto_join.unwrap_or(true),
+        },
     )
     .await?;
     insert_audit_event(
@@ -1048,6 +1074,7 @@ async fn create_channel(
             thread_status: None,
             thread_outcome: None,
             parent_kind: None,
+            private: command.private,
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -1059,36 +1086,99 @@ async fn create_channel(
     created_conversation_response(StatusCode::CREATED, &body)
 }
 
+/// Someone arriving in a space joins its auto-join channels (C2.7).
+pub(crate) async fn join_auto_channels(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        -- visibility: public channels of a space the member was just added to.
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        SELECT channel.project_id, channel.id, $2, $2
+        FROM conversations channel
+        WHERE channel.project_id = $1
+          AND channel.kind = 'channel'
+          AND channel.visibility = 'project'
+          AND channel.auto_join
+          AND channel.archived_at IS NULL
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// How a new channel is made.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NewChannel {
+    /// Its members only (C2.6).
+    pub(crate) private: bool,
+    /// A public channel that everyone in the space joins, now and on
+    /// arriving later (C2.7). Ignored for a private one.
+    pub(crate) auto_join: bool,
+}
+
+impl NewChannel {
+    /// A public channel everyone is in, as templates make them.
+    pub(crate) const EVERYONE: Self = Self {
+        private: false,
+        auto_join: true,
+    };
+}
+
 /// Create a channel in a Project, read up to date for its creator. The caller
-/// has already checked `Action::ChannelCreate`. Shared with MCP. A private
-/// channel is seen by its members only, and its creator is the first.
+/// has already checked `Action::ChannelCreate`. Shared with MCP. Its creator
+/// is its first member and manager. A private one (C2.6) is for its members
+/// only; everyone in the space joins an auto-join one (C2.7).
 pub(crate) async fn insert_channel(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     creator_actor_id: Uuid,
     name: &str,
-    private: bool,
+    channel: NewChannel,
 ) -> Result<Uuid, AppError> {
     let conversation_id = Uuid::now_v7();
+    let auto_join = channel.auto_join && !channel.private;
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, auto_join)
         VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3,
-                CASE WHEN $4 THEN 'members' ELSE 'project' END)
+                CASE WHEN $4 THEN 'members' ELSE 'project' END, $5)
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
     .bind(name)
-    .bind(private)
+    .bind(channel.private)
+    .bind(auto_join)
     .execute(&mut **transaction)
     .await;
     map_conversation_insert(inserted)?;
-    if private {
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members
+            (project_id, conversation_id, actor_id, added_by_actor_id, manager)
+        VALUES ($1, $2, $3, $3, true)
+        "#,
+    )
+    .bind(project_id)
+    .bind(conversation_id)
+    .bind(creator_actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    if auto_join {
         sqlx::query(
             r#"
             INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
-            VALUES ($1, $2, $3, $3)
+            SELECT $1, $2, membership.actor_id, $3
+            FROM project_memberships membership
+            WHERE membership.project_id = $1 AND membership.enabled
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(project_id)
@@ -1208,6 +1298,7 @@ async fn create_thread(
             thread_status: Some("Open".to_owned()),
             thread_outcome: None,
             parent_kind: Some(channel.kind.clone()),
+            private: channel.private,
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -1379,6 +1470,14 @@ pub(crate) const THREAD_STATUS_SUGGESTIONS: [&str; 6] = [
     "Dropped",
     "Blocked",
 ];
+/// Statuses that close a thread: it leaves Open lists and briefings. A
+/// discussion's "Resolved" counts with the board's own.
+pub(crate) const SETTLED_THREAD_STATUSES: [&str; 4] = ["decided", "done", "dropped", "resolved"];
+
+pub(crate) fn is_settled_thread_status(status: &str) -> bool {
+    SETTLED_THREAD_STATUSES.contains(&status.to_ascii_lowercase().as_str())
+}
+
 const MAX_THREAD_STATUS_CHARACTERS: usize = 40;
 const MAX_THREAD_OUTCOME_CHARACTERS: usize = 1000;
 
@@ -1740,6 +1839,9 @@ pub(crate) struct AppendExtras {
     /// The message in the same conversation it replies to (AWD-70). Checked
     /// here, inside the send, against the conversation the sender may post in.
     pub(crate) reply_to_message_id: Option<Uuid>,
+    /// The client chose the idempotency key (`clientRequestId`): it goes
+    /// out on `message.created` as `clientMessageId` (A2.12).
+    pub(crate) client_keyed: bool,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1811,6 +1913,13 @@ pub(crate) async fn append_message_command_with(
         require_conversation_kind(&conversation, expected_kind)?;
     }
     require_active_conversation(&conversation)?;
+    // An archived thing's comments take no new messages, from any edge.
+    crate::discussion::ensure_subject_takes_messages(
+        &mut transaction,
+        conversation.id,
+        actor.actor_id,
+    )
+    .await?;
     // H1.24: a suspended or deleting workspace takes no new messages, from
     // any edge.
     crate::workspace::lifecycle::ensure_open_for_space(
@@ -1847,6 +1956,16 @@ pub(crate) async fn append_message_command_with(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    // C2.39: blocks, a shared workspace, and message requests (after the
+    // replay, so a retried first message isn't refused as waiting).
+    // A thread under a DM follows the DM's rules.
+    crate::direct_rules::check_send(
+        &mut transaction,
+        conversation.membership_conversation_id(),
+        conversation.effective_kind(),
+        actor.actor_id,
+    )
+    .await?;
 
     let ResolvedContent {
         content_json,
@@ -1984,6 +2103,9 @@ pub(crate) async fn append_message_command_with(
             message_id,
             sequence,
             author_actor_id: actor.actor_id,
+            client_message_id: extras
+                .client_keyed
+                .then(|| idempotency_key.as_str().to_owned()),
         }),
     )
     .await?;
@@ -2110,7 +2232,6 @@ pub(crate) async fn append_message_command_with(
             conversation_kind: conversation.effective_kind(),
             message_id,
             author_actor_id: actor.actor_id,
-            author_kind: &actor.actor_kind,
             mentioned_actor_ids: &mentioned_actor_ids,
         },
     )
@@ -2417,13 +2538,27 @@ pub(crate) async fn lock_message_conversation(
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
     if !row.allows(actor.actor_id, action)? {
+        // A DM whose two no longer share a workspace (or who blocked one
+        // another) is still read, but says why it takes nothing new.
+        if row.project_id.is_none()
+            && let Some(refused) = crate::direct_rules::why_closed(
+                transaction,
+                row.membership_conversation_id(),
+                row.effective_kind(),
+                actor.actor_id,
+            )
+            .await?
+        {
+            return Err(refused);
+        }
         return Err(AppError::NotFound("conversation"));
     }
     Ok(row)
 }
 
-/// Tell mentioned agents' connections they were mentioned. Only agents who
-/// can see the conversation are told.
+/// Tells each mentioned account it was mentioned (`message.mentioned`, heard
+/// by that account alone). Only accounts that can see the conversation now
+/// are told, and delivery checks again when it reads the event.
 pub(crate) async fn enqueue_external_message_events(
     transaction: &mut Transaction<'_, Postgres>,
     conversation: &ConversationAccessRow,
@@ -2434,70 +2569,38 @@ pub(crate) async fn enqueue_external_message_events(
     if mentioned_actor_ids.is_empty() {
         return Ok(());
     }
-    // Historical migration tests intentionally exercise this command path on
-    // pre-M9 schemas. The durable Message is still valid there; external-agent
-    // delivery begins only once the M9 connection table has been installed.
-    let external_connections_available = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('external_agent_connections') IS NOT NULL",
-    )
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !external_connections_available {
-        return Ok(());
-    }
-    let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
+    let mentioned = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT connection.id, connection.actor_id
-        FROM external_agent_connections connection
-        JOIN actors actor ON actor.id = connection.actor_id
-        WHERE (CASE WHEN $1::uuid IS NULL
-                    THEN agent_connection_can_reach_direct(connection.id)
-                    ELSE agent_connection_can_access(connection.id, $1) END)
-          AND connection.actor_id = ANY($2)
-          AND connection.actor_id <> $3
-          AND connection.status = 'active'
+        SELECT actor.id
+        FROM actors actor
+        WHERE actor.id = ANY($1)
+          AND actor.id <> $2
           AND actor.status = 'active'
-          AND conversation_visible_to($4, connection.actor_id)
-        ORDER BY connection.id
-        FOR SHARE OF connection, actor
+          AND conversation_visible_to($3, actor.id)
+        ORDER BY actor.id
         "#,
     )
-    .bind(conversation.project_id)
     .bind(mentioned_actor_ids)
     .bind(author_actor_id)
     .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
-    // A comment opens on its thing (C1.3); anything else at its address,
-    // stored with the event in today's shape, which the web and resolve read.
-    let subject_href = if conversation.kind == "comments"
-        || conversation.parent_kind.as_deref() == Some("comments")
-    {
-        crate::discussion::href_of_conversation(transaction, conversation.id).await?
-    } else {
-        None
-    };
-    let path = subject_href.unwrap_or_else(|| {
-        Target::conversation(
-            conversation.place(),
-            &conversation.kind,
-            conversation.id,
-            conversation.parent_channel_id,
-            conversation.project_id.is_none(),
-            true,
-        )
-        .legacy_path()
-    });
-    for (connection_id, _) in connections {
-        enqueue_external_event(
+    for account in mentioned {
+        crate::events::emit(
             transaction,
-            connection_id,
-            conversation.place(),
-            "message.mentioned",
-            "You were mentioned in a Message",
-            "message",
-            message_id,
-            &path,
+            crate::events::NewEvent::thing(
+                &crate::events::catalog::MESSAGE_MENTIONED,
+                conversation.place(),
+                "message",
+                message_id,
+            )
+            .access_thing(conversation.id)
+            .audience(crate::events::Audience::Account(account))
+            .actor(author_actor_id)
+            .payload(serde_json::json!({
+                "conversationId": conversation.id,
+                "messageId": message_id,
+            })),
         )
         .await?;
     }
@@ -3467,6 +3570,7 @@ async fn project_conversation_sidebar(
             channel.id,
             channel.name,
             channel.archived_at::text AS archived_at,
+            channel.visibility = 'members' AS private,
             channel.version,
             channel.next_entry_sequence - 1 AS highest_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence
@@ -3479,6 +3583,11 @@ async fn project_conversation_sidebar(
           AND channel.kind = 'channel'
           AND ($3 OR channel.archived_at IS NULL)
           AND conversation_visible_to(channel.id, $2)
+          -- Only the channels you're in (C2.7), and the one you're looking
+          -- at; channel_list finds the rest.
+          AND (channel.id = $5
+               OR EXISTS (SELECT 1 FROM conversation_members member
+                          WHERE member.conversation_id = channel.id AND member.actor_id = $2))
         ORDER BY channel.archived_at NULLS FIRST, lower(channel.name), channel.id
         LIMIT $4
         "#,
@@ -3487,6 +3596,7 @@ async fn project_conversation_sidebar(
     .bind(principal.actor_id)
     .bind(include_archived)
     .bind(MAX_CHANNELS_PER_PROJECT)
+    .bind(query.selected_channel_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let threads = sqlx::query_as::<_, SidebarThreadRow>(&format!(
@@ -3589,6 +3699,7 @@ async fn project_conversation_sidebar(
                 id: channel.id,
                 name: channel.name,
                 archived_at: channel.archived_at,
+                private: channel.private,
                 version: channel.version,
                 highest_sequence: channel.highest_sequence,
                 highest_seen_sequence: channel.highest_seen_sequence,
@@ -3833,6 +3944,16 @@ pub(crate) async fn fetch_conversation_access(
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<Option<ConversationAccessRow>, AppError> {
+    read_conversation_access(crate::db::scoped(pool), actor_id, conversation_id).await
+}
+
+/// [`fetch_conversation_access`] on a given connection, such as an
+/// operation's transaction; it reads without locking.
+pub(crate) async fn read_conversation_access<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<Option<ConversationAccessRow>, AppError> {
     Ok(sqlx::query_as::<_, ConversationAccessRow>(&format!(
         r#"
         SELECT {ACCESS_COLUMNS}
@@ -3841,7 +3962,7 @@ pub(crate) async fn fetch_conversation_access(
     ))
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(crate::db::scoped(pool))
+    .fetch_optional(executor)
     .await?)
 }
 

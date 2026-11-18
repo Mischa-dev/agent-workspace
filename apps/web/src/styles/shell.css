@@ -1348,3 +1348,32 @@ button.aw-sidebar__title[aria-expanded="true"] {
 .aw-sidebar__skeleton {
   padding: 0 var(--space-2);
 }
+
+/* A row in your own sidebar sections (C2.9) being dragged, and a line where it would land. */
+.aw-sidebar__placed {
+  position: relative;
+}
+
+.aw-sidebar__placed.is-dragging {
+  opacity: 0.4;
+}
+
+.aw-sidebar__placed.is-drop-before::after,
+.aw-sidebar__placed.is-drop-after::after {
+  position: absolute;
+  right: var(--space-2);
+  left: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--rail-indicator);
+  content: '';
+  pointer-events: none;
+}
+
+.aw-sidebar__placed.is-drop-before::after {
+  top: -1px;
+}
+
+.aw-sidebar__placed.is-drop-after::after {
+  bottom: -1px;
+}

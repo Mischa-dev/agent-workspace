@@ -40,3 +40,9 @@ and why (R50). Newest last.
   direct-scope acceptance is tested with strict mode on. A new tenant table calls
   `tenancy_protect` in its own migration. Why: the build brief (observe never refuses),
   confirmed by the lead.
+- **2026-11-16.** T1.21 (button field): a button runs one to three registered operations in
+  order, not one, so "Mark shipped" can set a status and post a message. Each step is
+  checked against the presser's access before any runs; a press stops at the first step
+  refused and says which. The Mark-shipped acceptance waits for K2.7 and K2.13 (message
+  and task operations, build 2O); until then buttons run the operations the registry has.
+  T1.11 moved from build 4T's task into AWD-190 (early field work), after T1.29.

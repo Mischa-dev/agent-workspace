@@ -183,5 +183,7 @@ export function conversationTitle(
   const suffix = conversation.label ? ` (${conversation.label})` : ''
   if (conversation.kind === 'group') return conversation.name + suffix
   const other = conversation.members.find((member) => member.id !== viewerId)
+  // A DM with only yourself in it is your note to self (C2.32).
+  if (!other && conversation.members.length > 0) return 'Note to self'
   return (other?.displayName ?? conversation.name) + suffix
 }

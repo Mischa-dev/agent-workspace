@@ -99,14 +99,13 @@ pub enum Action {
     HostManage,
     /// Add or remove others in a group (leaving needs nothing).
     ConversationMembersChange,
-    /// Stop or retry an agent's reply.
+    /// Continue, stop or retry the replies accounts were asked for in a
+    /// conversation (A2.8), whatever kind of account asks.
     ReplySteer,
-    /// Give a group's agents another round of turns.
-    AgentsContinue,
 }
 
 impl Action {
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 49] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -156,7 +155,6 @@ impl Action {
         Self::HostManage,
         Self::ConversationMembersChange,
         Self::ReplySteer,
-        Self::AgentsContinue,
     ];
 
     /// The permission a role needs for this action.
@@ -188,7 +186,6 @@ impl Action {
             Self::MessageModerate => Permission::ChannelsModerate,
             Self::ConversationMembersChange => Permission::ConversationsMembers,
             Self::ReplySteer => Permission::RepliesSteer,
-            Self::AgentsContinue => Permission::ConversationsContinueAgents,
             Self::WorkItemView => Permission::TasksView,
             Self::WorkItemCreate => Permission::TasksCreate,
             Self::WorkItemArchive => Permission::TasksDelete,
@@ -656,7 +653,6 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::MessageModerate
             | Action::ConversationMembersChange
             | Action::ReplySteer
-            | Action::AgentsContinue
             | Action::ThreadCreate
             | Action::ConversationArchive
             | Action::ReadStateUpdate
@@ -864,7 +860,6 @@ mod tests {
                             // K1.14b: steering agents in chat is a role's.
                             | Action::ConversationMembersChange
                             | Action::ReplySteer
-                            | Action::AgentsContinue
                     ),
                     MembershipRole::Viewer => {
                         matches!(
@@ -1221,10 +1216,7 @@ mod tests {
             .collect::<Vec<_>>();
         indexes.sort_unstable();
         assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
-        assert_eq!(
-            Permission::ConversationsContinueAgents as usize,
-            PERMISSIONS.len() - 1
-        );
+        assert_eq!(Permission::SettingsAudit as usize, PERMISSIONS.len() - 1);
         for info in PERMISSIONS {
             assert_eq!(Permission::from_key(info.key), Some(info.permission));
             assert_eq!(info.permission.info().key, info.key);

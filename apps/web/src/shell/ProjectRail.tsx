@@ -17,7 +17,7 @@ import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { shownStatus, useStatuses } from '../status/api'
 import { statusLine } from '../status/statusWords'
 import { openCommandMenu, useCommandState } from './commandStore'
-import { inHomeSpace, useInboxUnread } from './homeSpace'
+import { inHomeSpace, useNeedsYouBadge } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 import { isMobileWidth } from './mobileNavigation'
 import { usePausedUntil } from './pauseStatus'
@@ -185,7 +185,7 @@ export function ProjectRail({
   const projects = openProjects.filter(
     (project) => !project.modulesOff?.includes('projects') && (!several || !workspace || project.organizationId === workspace.id),
   )
-  const inboxUnread = useInboxUnread() ?? 0
+  const needsYou = useNeedsYouBadge() ?? 0
   // AWD-75: no Messages tile with Messages off, and no New project tile
   // with Projects off at Home, where a new project goes.
   const experience = useHomeExperience()
@@ -271,7 +271,7 @@ export function ProjectRail({
         ) : null}
         <UtilityTile
           active={inHomeSpace(location.pathname)}
-          badge={inboxUnread}
+          badge={needsYou}
           icon="home"
           label="Home"
           onClick={onSpaceSelected}

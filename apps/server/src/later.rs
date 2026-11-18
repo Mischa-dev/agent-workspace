@@ -1036,39 +1036,26 @@ async fn tell_agent(
     transaction: &mut Transaction<'_, Postgres>,
     row: &DueRow,
 ) -> Result<(), AppError> {
-    let connections = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT connection.id FROM external_agent_connections connection
-        WHERE connection.actor_id = $1 AND connection.status = 'active'
-          AND agent_connection_can_access(connection.id, $2)
-        ORDER BY connection.id
-        "#,
-    )
-    .bind(row.actor_id)
-    .bind(row.project_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    let summary: String = if row.note.is_empty() {
-        "A reminder you set is due".to_owned()
-    } else {
-        format!(
-            "Reminder: {}",
-            row.note.chars().take(200).collect::<String>()
-        )
-    };
-    for connection_id in connections {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection_id,
+    // The note stays in its record; the event carries the item's id.
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::SCHEDULE_DUE,
             row.project_id,
-            "reminder.due",
-            &summary,
             "saved_item",
             row.id,
-            &addresses::Target::Later.legacy_path(),
         )
-        .await?;
-    }
+        .audience(crate::events::Audience::Account(row.actor_id))
+        .actor(row.actor_id)
+        .payload(serde_json::json!({
+            "source": "later",
+            "laterId": row.id,
+            "conversationId": row.conversation_id,
+            "messageId": row.message_id,
+            "taskId": row.work_item_id,
+        })),
+    )
+    .await?;
     Ok(())
 }
 

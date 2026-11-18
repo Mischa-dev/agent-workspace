@@ -798,6 +798,7 @@ pub(crate) async fn own_account(
         SELECT id AS account_id, adapter_kind, home_path, max_concurrent_runs
         FROM provider_accounts
         WHERE organization_id = $1 AND owner_actor_id = $2 AND adapter_kind = $3
+          AND home_path IS NOT NULL
           AND status = 'available' AND account_state = 'authenticated'
         ORDER BY updated_at DESC, id
         LIMIT 1

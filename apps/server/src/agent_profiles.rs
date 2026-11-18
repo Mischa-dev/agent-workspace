@@ -700,6 +700,7 @@ pub(crate) async fn create_in(
     .bind(&handle)
     .execute(&mut **transaction)
     .await?;
+    crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     let worker_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1070,6 +1071,11 @@ async fn delete_profile_rows(
         .bind(actor_id)
         .execute(&mut **transaction)
         .await?;
+    // The default connection its workspace membership gave it (A2).
+    sqlx::query("DELETE FROM agent_connections WHERE account_id = $1")
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
     sqlx::query("DELETE FROM organization_memberships WHERE actor_id = $1")
         .bind(actor_id)
         .execute(&mut **transaction)
@@ -1105,6 +1111,8 @@ pub(crate) async fn profile_worker(
 #[derive(Clone, Debug, FromRow)]
 pub(crate) struct ProfileSettings {
     pub id: Uuid,
+    /// The profile's agent account.
+    pub actor_id: Uuid,
     pub harness: Option<String>,
     pub environment_id: Option<Uuid>,
     pub run_defaults: Value,
@@ -1171,7 +1179,7 @@ pub(crate) async fn profile_settings(
 ) -> Result<Option<ProfileSettings>, AppError> {
     Ok(sqlx::query_as::<_, ProfileSettings>(
         r#"
-        SELECT id, harness, environment_id, run_defaults, instructions, allowed_tools
+        SELECT id, actor_id, harness, environment_id, run_defaults, instructions, allowed_tools
         FROM agent_profiles WHERE id = $1 AND enabled
         "#,
     )
@@ -1187,7 +1195,7 @@ pub(crate) async fn profile_for_actor(
 ) -> Result<Option<ProfileSettings>, AppError> {
     Ok(sqlx::query_as::<_, ProfileSettings>(
         r#"
-        SELECT id, harness, environment_id, run_defaults, instructions, allowed_tools
+        SELECT id, actor_id, harness, environment_id, run_defaults, instructions, allowed_tools
         FROM agent_profiles WHERE actor_id = $1 AND enabled
         "#,
     )

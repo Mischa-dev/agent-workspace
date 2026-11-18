@@ -23,7 +23,9 @@ pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<StatusSet>()
         .add::<StatusDelete>()
-        .add::<StatusList>();
+        .add::<StatusList>()
+        .add::<AgentPause>()
+        .add::<AgentResume>();
 }
 
 /// Whose status a call changes: the caller's own, or an account they manage.
@@ -138,7 +140,7 @@ impl Operation for StatusSet {
         let here = call.ctx.workspace_id;
         let tx = call.tx().await?;
         let view = super::set(tx, account, setter, workspace, &status).await?;
-        super::announce(tx, account, here, input.workspace_only).await?;
+        super::announce_where_shown(tx, account, input.workspace_only.then_some(here)).await?;
         call.audit_target(
             "account",
             account,
@@ -200,7 +202,7 @@ impl Operation for StatusDelete {
         let tx = call.tx().await?;
         let cleared = super::clear(tx, account, workspace).await?;
         if cleared {
-            super::announce(tx, account, here, input.workspace_only).await?;
+            super::announce_where_shown(tx, account, input.workspace_only.then_some(here)).await?;
         }
         call.audit_target(
             "account",
@@ -270,5 +272,186 @@ impl Operation for StatusList {
         let mut statuses = shown.into_values().flatten().collect::<Vec<_>>();
         statuses.sort_by_key(|status| (status.account_id, status.workspace_only));
         Ok(StatusListOutput { statuses })
+    }
+}
+
+/// Pause or resume an account (A2.10).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPauseInput {
+    /// The agent (or any account you manage): its id or a link to it.
+    pub account: IdRef,
+    /// true: in every workspace it is in. Left out, only in this one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub everywhere: bool,
+    /// Why, in a line people see (up to 200 characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Targeted for AgentPauseInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PauseView {
+    #[schemars(with = "String")]
+    pub account: Uuid,
+    /// "paused" or "resumed".
+    pub status: &'static str,
+    /// False when it already was.
+    pub changed: bool,
+}
+
+/// What a pause or resume tells: the account itself (addressed, so it
+/// hears it even while paused) and the screens showing its status.
+async fn told(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    ty: &'static crate::events::catalog::EventType,
+    account: Uuid,
+    by: Uuid,
+    here: Uuid,
+    everywhere: bool,
+) -> Result<(), OpError> {
+    crate::events::emit(
+        tx,
+        crate::events::NewEvent {
+            id: Uuid::now_v7(),
+            ty,
+            workspace_id: Some(here),
+            space_id: None,
+            thing: Some((account, "account")),
+            access_thing: None,
+            version: None,
+            changes: &[],
+            audience: crate::events::Audience::Account(account),
+            payload: json!({ "accountId": account, "everywhere": everywhere }),
+            actor: Some(by),
+            legacy_type: None,
+        },
+    )
+    .await?;
+    super::announce(tx, account, here, !everywhere).await?;
+    Ok(())
+}
+
+pub struct AgentPause;
+
+impl Operation for AgentPause {
+    const NAME: &'static str = "agent_pause";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "workspace";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Pause agent";
+    const DESCRIPTION: &'static str = "Pause an agent you manage, here or everywhere: until \
+        resumed it is asked nothing new, hears only about its own pause, its connections and \
+        stopped replies, and its changes do nothing (each answers ok with status \"paused\"). \
+        What it would have heard waits and arrives in order when it is resumed.";
+    const EMITS: &'static [&'static str] = &["agent.paused", "account.status.changed"];
+
+    type Input = AgentPauseInput;
+    type Output = PauseView;
+
+    async fn run(call: &mut OpCall<'_>, input: AgentPauseInput) -> Result<PauseView, OpError> {
+        let reason = match input.reason.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(reason)
+                if reason.chars().count() <= 200 && !reason.chars().any(char::is_control) =>
+            {
+                Some(reason.to_owned())
+            }
+            Some(_) => {
+                return Err(OpError::invalid(
+                    "reason",
+                    "Say why in one line of up to 200 characters.",
+                ));
+            }
+        };
+        if input.account.id() == call.account_id() {
+            return Err(OpError::invalid(
+                "account",
+                "You can't pause yourself; someone who manages you can.",
+            ));
+        }
+        let account = account_for(call, Some(input.account)).await?;
+        let by = call.account_id();
+        let here = call.ctx.workspace_id;
+        let workspace = (!input.everywhere).then_some(here);
+        let tx = call.tx().await?;
+        let before = super::paused_in(tx, account).await?;
+        let changed = !before.contains(&workspace);
+        super::pause(tx, account, workspace, by, reason.as_deref()).await?;
+        if changed {
+            told(
+                tx,
+                &crate::events::catalog::AGENT_PAUSED,
+                account,
+                by,
+                here,
+                input.everywhere,
+            )
+            .await?;
+        }
+        call.audit_target(
+            "account",
+            account,
+            json!({ "everywhere": input.everywhere }),
+        );
+        Ok(PauseView {
+            account,
+            status: "paused",
+            changed,
+        })
+    }
+}
+
+pub struct AgentResume;
+
+impl Operation for AgentResume {
+    const NAME: &'static str = "agent_resume";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "workspace";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Resume agent";
+    const DESCRIPTION: &'static str = "Lift an agent's pause, here or (everywhere) the one \
+        set for every workspace. What it missed arrives in order.";
+    const EMITS: &'static [&'static str] = &["agent.resumed", "account.status.changed"];
+
+    type Input = AgentPauseInput;
+    type Output = PauseView;
+
+    async fn run(call: &mut OpCall<'_>, input: AgentPauseInput) -> Result<PauseView, OpError> {
+        let account = account_for(call, Some(input.account)).await?;
+        let by = call.account_id();
+        let here = call.ctx.workspace_id;
+        let workspace = (!input.everywhere).then_some(here);
+        let tx = call.tx().await?;
+        let changed = super::resume(tx, account, workspace).await?;
+        if changed {
+            told(
+                tx,
+                &crate::events::catalog::AGENT_RESUMED,
+                account,
+                by,
+                here,
+                input.everywhere,
+            )
+            .await?;
+        }
+        call.audit_target(
+            "account",
+            account,
+            json!({ "everywhere": input.everywhere }),
+        );
+        Ok(PauseView {
+            account,
+            status: "resumed",
+            changed,
+        })
     }
 }

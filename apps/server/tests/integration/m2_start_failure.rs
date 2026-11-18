@@ -243,12 +243,12 @@ done
         SELECT
             count(*),
             max(entry.sequence)
-        FROM agent_run_events event
+        FROM run_activities event
         JOIN conversation_entries entry
-          ON entry.agent_run_event_id = event.id
-         AND entry.conversation_id = event.conversation_id
-        WHERE event.agent_run_id = $1
-          AND event.kind = 'run_failed'
+          ON entry.run_activity_id = event.id
+         AND entry.conversation_id = (SELECT conversation_id FROM runs WHERE id = event.run_id)
+        WHERE event.run_id = $1
+          AND event.payload->>'step' = 'run_failed'
         "#,
     )
     .bind(run_id)

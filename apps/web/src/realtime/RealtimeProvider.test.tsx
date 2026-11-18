@@ -87,7 +87,7 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(5))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(6))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })

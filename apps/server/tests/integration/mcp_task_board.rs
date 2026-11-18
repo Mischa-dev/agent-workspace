@@ -460,8 +460,16 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         "cursor",
         "different search",
     );
-    let legacy = list(json!({"projectIds": ["ALPHA", "BETA"], "limit": 1, "cursor": "1"})).await;
-    assert_eq!(keys(&legacy["tasks"]), [paged[1].clone()], "{legacy}");
+    // A cursor is made by its search: a bare number isn't one.
+    assert_refused(
+        &call(
+            "task_list",
+            json!({"projectIds": ["ALPHA", "BETA"], "limit": 1, "cursor": "1"}),
+        )
+        .await,
+        "cursor",
+        "different search",
+    );
 
     // Plain-words refusals.
     assert_refused(
@@ -713,8 +721,9 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
         "different search",
     );
 
-    // A saved view lists for an agent exactly what it lists on the page,
-    // "me" being the caller; a field passed as well replaces the view's.
+    // A saved view (a view of the Tasks collection) lists its tasks for an
+    // agent, "me" being the caller; a field passed as well replaces the
+    // view's filter on that field.
     let (_, workflow) = send(
         app,
         setup.browser.request(
@@ -735,49 +744,41 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
             .unwrap_or_else(|| panic!("status {name}: {workflow}"))
             .to_owned()
     };
-    for (index, (name, query)) in [
+    let tasks = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1 AND builtin = 'tasks'",
+    )
+    .bind(Uuid::parse_str(&project).expect("project"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("Tasks collection");
+    // The built-in fields: status, assignee, priority, labels.
+    let field = |n: u8| format!("0192f5c0-0000-7000-8000-0000000000{n:02x}");
+    for (name, filters) in [
         (
             "In flight, not mine",
-            json!({"statusId": format!("{},{}", status_id("Ready"), status_id("In Progress")), "notAssigneeActorId": "me"}),
+            json!([
+                {"field": field(1), "op": "is", "values": [status_id("Ready"), status_id("In Progress")]},
+                {"field": field(2), "op": "isNot", "values": ["me"]},
+            ]),
         ),
-        ("No labels", json!({"labelIds": "none"})),
-        ("Urgent or unsorted", json!({"priority": "urgent,no_priority", "includeDone": "false"})),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let (status, view) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/views"),
-                Some(&format!("view-{index}")),
-                json!({"name": name, "query": query}),
-            ),
+        ("No labels", json!([{"field": field(6), "op": "empty"}])),
+        (
+            "Urgent or unsorted",
+            json!([
+                {"or": [
+                    {"field": field(3), "op": "is", "values": ["0192f5c0-0000-7000-8000-0000000000a1"]},
+                    {"field": field(3), "op": "empty"},
+                ]},
+                {"field": field(1), "op": "categoryIsNot", "values": ["completed", "canceled"]},
+            ]),
+        ),
+    ] {
+        let view = call(
+            "view_create",
+            json!({"collection": tasks, "name": name, "type": "table", "config": {"filters": filters}}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{view}");
-        let resolved = view["resolvedQuery"]
-            .as_object()
-            .expect("resolved query")
-            .iter()
-            .map(|(key, value)| format!("{key}={}", value.as_str().expect("value")))
-            .collect::<Vec<_>>()
-            .join("&");
-        let (status, page) = send(
-            app,
-            setup.browser.request(
-                "GET",
-                &format!("/api/v1/projects/{project}/work-items?{resolved}"),
-                None,
-                Value::Null,
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{page}");
-        let mut on_the_page = keys(&page["items"]);
-        on_the_page.sort();
-        assert_eq!(list(json!({"view": name})).await, on_the_page, "{name}");
+        assert_eq!(view["outcome"], "ok", "{name}: {view}");
     }
     assert_eq!(
         list(json!({"view": "In flight, not mine"})).await,
@@ -1389,7 +1390,10 @@ async fn task_link_repositories_pull_requests_and_threads() {
     assert_eq!(thread_audits, 1);
     let unthreaded = link(json!({"conversationId": threads[0].1, "remove": true})).await;
     assert_eq!(unthreaded["value"]["version"], before + 2, "{unthreaded}");
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&threads[1].0)
         .execute(&setup.pool)
         .await

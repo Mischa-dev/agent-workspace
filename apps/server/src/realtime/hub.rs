@@ -276,6 +276,9 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "account.managers.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -300,15 +303,20 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "notifications.updated"
                 | "account.managers.changed"
                 | "account.status.changed"
+                | "account.profile_changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
                 | "sheet.updated"
+                | "dashboard.updated"
                 | "project.modules.updated"
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
         let project_scoped_event = matches!(
@@ -318,15 +326,20 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "notifications.updated"
                 | "account.managers.changed"
                 | "account.status.changed"
+                | "account.profile_changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
                 | "sheet.updated"
+                | "dashboard.updated"
                 | "project.modules.updated"
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {

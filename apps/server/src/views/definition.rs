@@ -19,8 +19,10 @@ use crate::{
     fields::{self, DateBucket, FieldDefinition, FieldType, LinkTarget},
 };
 
-/// Views one collection keeps.
+/// Shared views one collection keeps.
 pub const MAX_VIEWS: i64 = 30;
+/// Views of their own one person keeps in one collection.
+pub const MAX_PERSONAL_VIEWS: i64 = 100;
 /// Sort keys one view or query takes.
 pub const MAX_SORTS: usize = 3;
 pub const MIN_COLUMN_WIDTH: u16 = 48;
@@ -29,15 +31,106 @@ pub const MAX_COLUMN_WIDTH: u16 = 1_200;
 /// A view's kind: the one list in `crate::views` (T1.2).
 pub use crate::views::ViewKind as ViewType;
 
-/// The kinds a collection's view can be today: a table, a board (a column
-/// for each value of the field it groups by), a gallery (a card for each
-/// record) or a calendar (a month, each record on its date).
-pub const COLLECTION_VIEW_TYPES: [ViewType; 4] = [
+/// The kinds a collection's view can be (T1.14): a table, a board (a column
+/// for each value of the field it groups by), a list (one line for each
+/// record), a gallery (a card for each record), a calendar (a month, each
+/// record on its date) or a timeline (each record a bar from its date to its
+/// end date).
+pub const COLLECTION_VIEW_TYPES: [ViewType; 7] = [
     ViewType::Table,
     ViewType::Board,
+    ViewType::List,
     ViewType::Gallery,
     ViewType::Calendar,
+    ViewType::Timeline,
+    ViewType::Chart,
 ];
+
+/// What a chart counts for each group (T1.31): how many records, or the
+/// sum, average, least or most of a number field.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum MeasureOp {
+    #[default]
+    Count,
+    Sum,
+    Average,
+    Min,
+    Max,
+}
+
+impl MeasureOp {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "count" => Some(Self::Count),
+            "sum" | "total" => Some(Self::Sum),
+            "average" | "avg" | "mean" => Some(Self::Average),
+            "min" | "least" => Some(Self::Min),
+            "max" | "most" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Its name, as written.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Average => "average",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+
+    /// The SQL aggregate it is, over a number.
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Average => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+}
+
+/// A chart's measure: an operation, and the number field it reads (none
+/// for a count).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Measure {
+    #[serde(default)]
+    pub op: MeasureOp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<Uuid>,
+}
+
+/// How a chart draws its groups.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ChartStyle {
+    #[default]
+    Bar,
+    Line,
+    Donut,
+    /// One number: the measure over every record.
+    Number,
+}
+
+/// A chart view's settings beside the view's filters and grouping (its
+/// groups are the chart's bars, points or slices).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChartConfig {
+    #[serde(default)]
+    pub style: ChartStyle,
+    #[serde(default)]
+    pub measure: Measure,
+}
 
 /// A view kind a collection's view can be, by name.
 pub fn parse_view_type(value: &str) -> Option<ViewType> {
@@ -45,8 +138,8 @@ pub fn parse_view_type(value: &str) -> Option<ViewType> {
 }
 
 /// What a view or a query asks for when the type isn't one there is.
-pub const VIEW_TYPE_MESSAGE: &str =
-    "A view is a \"table\", \"board\", \"gallery\" or \"calendar\".";
+pub const VIEW_TYPE_MESSAGE: &str = "A view is a \"table\", \"board\", \"list\", \"gallery\", \"calendar\", \"timeline\" \
+     or \"chart\".";
 
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
@@ -143,9 +236,19 @@ pub struct ViewConfig {
     /// The title column's width, in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
-    /// The date field a calendar puts records on.
+    /// The date field a calendar puts records on; where a timeline's bars
+    /// start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_field: Option<Uuid>,
+    /// Where a timeline's bars end; none, and each record is one day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<Uuid>,
+    /// A chart's style and measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<ChartConfig>,
+    /// Words every record the view shows contains: a search kept with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
 }
 
 impl ViewConfig {
@@ -179,6 +282,16 @@ impl ViewConfig {
                 .collect(),
             title_width: self.title_width,
             date_field: self.date_field.filter(active),
+            end_field: self.end_field.filter(active),
+            // A measure on a field that's gone counts until it's back.
+            chart: self.chart.map(|chart| match chart.measure.field {
+                Some(field) if !active(&field) => ChartConfig {
+                    measure: Measure::default(),
+                    ..chart
+                },
+                _ => chart,
+            }),
+            search: self.search.clone(),
         }
     }
 
@@ -211,6 +324,37 @@ impl ViewConfig {
                         .ok_or("A calendar needs a date field. Add one first.")?,
                 );
             }
+            ViewType::Timeline if self.date_field.is_none() => {
+                let mut dates = definitions
+                    .iter()
+                    .filter(|field| !field.archived && field.field_type == FieldType::Date)
+                    .collect::<Vec<_>>();
+                dates.sort_by_key(|field| field.position);
+                let start = dates
+                    .first()
+                    .ok_or("A timeline needs a date field. Add one first.")?;
+                self.date_field = Some(start.id);
+                if self.end_field.is_none() {
+                    self.end_field = dates.get(1).map(|field| field.id);
+                }
+            }
+            // A chart's bars are its groups: the first field that can group,
+            // or, with none, one number over every record.
+            ViewType::Chart => {
+                if self.group_by.is_none() {
+                    self.group_by = first(&|field| field.field_type.can_group());
+                }
+                if self.chart.is_none() {
+                    self.chart = Some(ChartConfig {
+                        style: if self.group_by.is_some() {
+                            ChartStyle::Bar
+                        } else {
+                            ChartStyle::Number
+                        },
+                        measure: Measure::default(),
+                    });
+                }
+            }
             _ => {}
         }
         Ok(self)
@@ -232,6 +376,15 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
     };
     if let Some(problem) = config.filters.size_problem() {
         return Err(problem);
+    }
+    if let Some(search) = &config.search
+        && super::query::search_words(search).is_none()
+    {
+        return Err(format!(
+            "A view searches for at most {} words in {} characters.",
+            super::query::MAX_SEARCH_WORDS,
+            super::query::MAX_SEARCH_CHARACTERS
+        ));
     }
     for clause in config.filters.clauses() {
         let Some(field) = active(clause.field) else {
@@ -255,7 +408,7 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         }
         // "me" stands for the reader; any member's ID checks the same way.
         let mut checked = clause.clone();
-        if field.field_type.behaves_as() == FieldType::Person {
+        if field.behaves_as() == FieldType::Person {
             for value in &mut checked.values {
                 if value == ME {
                     *value = Uuid::nil().to_string();
@@ -322,6 +475,55 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             }
         }
     }
+    if let Some(end) = config.end_field {
+        match active(end) {
+            Some(field) if field.field_type != FieldType::Date => {
+                return Err(format!(
+                    "\"{}\" isn't a date field. A timeline's bars end on a date field.",
+                    field.name
+                ));
+            }
+            Some(_) if config.date_field == Some(end) => {
+                return Err(
+                    "A timeline's bars start and end on two different date fields.".to_owned(),
+                );
+            }
+            Some(_) if config.date_field.is_none() => {
+                return Err("A timeline's end date goes with a start date field.".to_owned());
+            }
+            Some(_) => {}
+            None => {
+                return Err("The end date names a field this collection doesn't have.".to_owned());
+            }
+        }
+    }
+    if let Some(chart) = &config.chart {
+        match (chart.measure.op, chart.measure.field) {
+            (MeasureOp::Count, None) => {}
+            (MeasureOp::Count, Some(_)) => {
+                return Err("A count counts records; it reads no field.".to_owned());
+            }
+            (_, None) => {
+                return Err(
+                    "A sum, average, least or most reads a number field: name one.".to_owned(),
+                );
+            }
+            (_, Some(id)) => match active(id) {
+                Some(field) if field.behaves_as() == FieldType::Number => {}
+                Some(field) => {
+                    return Err(format!(
+                        "\"{}\" isn't a number field. A chart adds up number fields.",
+                        field.name
+                    ));
+                }
+                None => {
+                    return Err(
+                        "The measure names a field this collection doesn't have.".to_owned()
+                    );
+                }
+            },
+        }
+    }
     let mut columns = HashSet::new();
     for column in &config.columns {
         if !definitions.iter().any(|field| field.id == column.field) {
@@ -369,7 +571,7 @@ pub async fn check_references(
         if ids.is_empty() {
             continue;
         }
-        let found = match (field.field_type.behaves_as(), field.config.target) {
+        let found = match (field.behaves_as(), field.config.target) {
             (FieldType::Person, _) => {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
@@ -415,7 +617,7 @@ pub async fn check_references(
             return Ok(Err(format!(
                 "A filter on \"{}\" names {} that isn't in this project.",
                 field.name,
-                if field.field_type.behaves_as() == FieldType::Person {
+                if field.behaves_as() == FieldType::Person {
                     "someone"
                 } else {
                     "something"
@@ -436,9 +638,46 @@ pub struct View {
     pub name: String,
     pub view_type: ViewType,
     pub config: ViewConfig,
-    /// 0-based order among the collection's views.
+    /// 0-based order among the collection's shared views, or among its
+    /// owner's own.
     pub position: i32,
     pub version: i64,
+    /// None for a view shared with everyone who can see the collection.
+    pub owner_actor_id: Option<Uuid>,
+    /// One of the views every Tasks collection starts with.
+    pub builtin: Option<String>,
+}
+
+impl View {
+    pub fn scope(&self) -> Scope {
+        match self.owner_actor_id {
+            Some(owner) => Scope::Personal(owner),
+            None => Scope::Shared,
+        }
+    }
+}
+
+/// Whose views: the collection's shared ones, or one account's own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scope {
+    Shared,
+    Personal(Uuid),
+}
+
+impl Scope {
+    fn owner(self) -> Option<Uuid> {
+        match self {
+            Self::Shared => None,
+            Self::Personal(owner) => Some(owner),
+        }
+    }
+
+    fn limit(self) -> i64 {
+        match self {
+            Self::Shared => MAX_VIEWS,
+            Self::Personal(_) => MAX_PERSONAL_VIEWS,
+        }
+    }
 }
 
 #[derive(FromRow)]
@@ -450,6 +689,8 @@ struct ViewRow {
     config: Value,
     position: i32,
     version: i64,
+    owner_actor_id: Option<Uuid>,
+    builtin: Option<String>,
 }
 
 impl TryFrom<ViewRow> for View {
@@ -466,6 +707,8 @@ impl TryFrom<ViewRow> for View {
                 .map_err(|_| AppError::Internal("stored view config"))?,
             position: row.position,
             version: row.version,
+            owner_actor_id: row.owner_actor_id,
+            builtin: row.builtin,
         })
     }
 }
@@ -481,9 +724,11 @@ pub struct ViewSummary {
     pub view_type: &'static str,
     #[serde(flatten)]
     pub config: ViewConfig,
-    /// 1 is first.
+    /// 1 is first, among the shared views or among the reader's own.
     pub position: i32,
     pub version: i64,
+    /// Everyone's; false for one of the reader's own.
+    pub shared: bool,
 }
 
 impl ViewSummary {
@@ -496,29 +741,66 @@ impl ViewSummary {
             config: view.config.active(definitions),
             position: view.position + 1,
             version: view.version,
+            shared: view.owner_actor_id.is_none(),
         }
     }
 }
 
-const VIEW_COLUMNS: &str = "id, collection_id, name, view_type, config, position, version";
+const VIEW_COLUMNS: &str =
+    "id, collection_id, name, view_type, config, position, version, owner_actor_id, builtin";
 
-/// A collection's views in order.
+/// A collection's shared views in order.
 pub async fn list(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
     collection_id: Uuid,
 ) -> Result<Vec<View>, AppError> {
+    in_scope(executor, project_id, collection_id, Scope::Shared).await
+}
+
+/// The views in one scope, in order.
+pub async fn in_scope(
+    executor: impl sqlx::PgExecutor<'_>,
+    project_id: Uuid,
+    collection_id: Uuid,
+    scope: Scope,
+) -> Result<Vec<View>, AppError> {
     sqlx::query_as::<_, ViewRow>(&format!(
         "SELECT {VIEW_COLUMNS} FROM collection_views \
-         WHERE project_id = $1 AND collection_id = $2 ORDER BY position, id LIMIT {MAX_VIEWS}"
+         WHERE project_id = $1 AND collection_id = $2 \
+           AND owner_actor_id IS NOT DISTINCT FROM $3 \
+         ORDER BY position, id LIMIT {limit}",
+        limit = scope.limit()
     ))
     .bind(project_id)
     .bind(collection_id)
+    .bind(scope.owner())
     .fetch_all(executor)
     .await?
     .into_iter()
     .map(View::try_from)
     .collect()
+}
+
+/// The views `reader` sees in a collection: the shared ones in order, then
+/// their own.
+pub async fn visible(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<Vec<View>, AppError> {
+    let mut views = list(&mut *connection, project_id, collection_id).await?;
+    views.extend(
+        in_scope(
+            &mut *connection,
+            project_id,
+            collection_id,
+            Scope::Personal(reader),
+        )
+        .await?,
+    );
+    Ok(views)
 }
 
 /// Finds one of `views` by ID or name, ignoring case.
@@ -580,6 +862,8 @@ pub struct NewView {
     pub config: ViewConfig,
     /// 1-based place among the views; the end when None.
     pub position: Option<i32>,
+    /// Shared, or one account's own.
+    pub scope: Scope,
 }
 
 #[derive(Clone, Debug)]
@@ -587,12 +871,12 @@ pub enum CreateViewOutcome {
     Created(View),
     /// A view of the collection already has the name, ignoring case.
     NameTaken(View),
-    /// `MAX_VIEWS` already.
+    /// `MAX_VIEWS` (or `MAX_PERSONAL_VIEWS`) already.
     Full,
 }
 
-/// Adds a view. The caller holds the project lock and the collection's
-/// row, and has checked the actor may build collections.
+/// Adds a view. The caller holds the collection's row, and has checked the
+/// actor may build collections when the view is shared.
 pub async fn create(
     connection: &mut PgConnection,
     project_id: Uuid,
@@ -603,14 +887,14 @@ pub async fn create(
     if crate::collections::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
         return Err(AppError::Validation("name"));
     }
-    let existing = list(&mut *connection, project_id, collection_id).await?;
+    let existing = in_scope(&mut *connection, project_id, collection_id, new.scope).await?;
     if let Some(taken) = existing
         .iter()
         .find(|view| view.name.to_lowercase() == new.name.to_lowercase())
     {
         return Ok(CreateViewOutcome::NameTaken(taken.clone()));
     }
-    if existing.len() as i64 >= MAX_VIEWS {
+    if existing.len() as i64 >= new.scope.limit() {
         return Ok(CreateViewOutcome::Full);
     }
     let id = Uuid::now_v7();
@@ -619,11 +903,12 @@ pub async fn create(
     sqlx::query(
         r#"
         INSERT INTO collection_views (
-            id, project_id, collection_id, name, view_type, config, position, created_by_actor_id
+            id, project_id, collection_id, name, view_type, config, position,
+            created_by_actor_id, owner_actor_id
         )
         VALUES ($1, $2, $3, $4, $5, $6,
                 (SELECT COALESCE(max(position) + 1, 0) FROM collection_views
-                 WHERE collection_id = $3), $7)
+                 WHERE collection_id = $3 AND owner_actor_id IS NOT DISTINCT FROM $8), $7, $8)
         "#,
     )
     .bind(id)
@@ -633,10 +918,19 @@ pub async fn create(
     .bind(new.view_type.as_str())
     .bind(config)
     .bind(actor_id)
+    .bind(new.scope.owner())
     .execute(&mut *connection)
     .await?;
     if let Some(position) = new.position {
-        move_to(connection, project_id, collection_id, id, position).await?;
+        move_to(
+            connection,
+            project_id,
+            collection_id,
+            new.scope,
+            id,
+            position,
+        )
+        .await?;
     }
     let view = one(connection, project_id, collection_id, id)
         .await?
@@ -644,7 +938,8 @@ pub async fn create(
     Ok(CreateViewOutcome::Created(view))
 }
 
-async fn one(
+/// One view by ID, in whichever scope.
+pub async fn one(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
@@ -672,6 +967,8 @@ pub struct ViewChange {
     pub position: Option<i32>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
+    /// A personal view becomes shared, at the end of the shared views.
+    pub share: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -685,21 +982,26 @@ pub enum ChangeViewOutcome {
     NotFound,
     VersionConflict(View),
     NameTaken(String),
+    /// Sharing it would pass `MAX_VIEWS`.
+    Full,
 }
 
-/// Renames a view, changes what it shows, or moves it. The caller holds
-/// the project lock and the collection's row.
+/// Renames a view, changes what it shows, moves it among the views in its
+/// scope, or shares a personal view. The caller holds the collection's row
+/// and has checked who may change a view in `scope`.
 pub async fn change(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
     change: ViewChange,
 ) -> Result<ChangeViewOutcome, AppError> {
-    let views = list(&mut *connection, project_id, collection_id).await?;
+    let views = in_scope(&mut *connection, project_id, collection_id, scope).await?;
     let Some(current) = views.iter().find(|view| view.id == view_id).cloned() else {
         return Ok(ChangeViewOutcome::NotFound);
     };
+    let share = change.share && scope != Scope::Shared;
     let name = change.name.clone().unwrap_or_else(|| current.name.clone());
     if crate::collections::normalize_name(&name).as_deref() != Some(name.as_str()) {
         return Err(AppError::Validation("name"));
@@ -725,6 +1027,9 @@ pub async fn change(
     if moves {
         changed.push("position");
     }
+    if share {
+        changed.push("shared");
+    }
     if changed.is_empty() {
         return Ok(ChangeViewOutcome::Unchanged(current));
     }
@@ -741,12 +1046,29 @@ pub async fn change(
     {
         return Ok(ChangeViewOutcome::NameTaken(other.name.clone()));
     }
+    if share {
+        let shared = list(&mut *connection, project_id, collection_id).await?;
+        if let Some(other) = shared
+            .iter()
+            .find(|view| view.name.to_lowercase() == name.to_lowercase())
+        {
+            return Ok(ChangeViewOutcome::NameTaken(other.name.clone()));
+        }
+        if shared.len() as i64 >= MAX_VIEWS {
+            return Ok(ChangeViewOutcome::Full);
+        }
+    }
     let config_value =
         serde_json::to_value(&config).map_err(|_| AppError::Internal("encode view config"))?;
     sqlx::query(
         r#"
         UPDATE collection_views
-        SET name = $4, config = $5, version = version + 1, updated_at = now()
+        SET name = $4, config = $5, version = version + 1, updated_at = now(),
+            owner_actor_id = CASE WHEN $6 THEN NULL ELSE owner_actor_id END,
+            position = CASE WHEN $6 THEN
+                (SELECT COALESCE(max(shared.position) + 1, 0) FROM collection_views shared
+                 WHERE shared.collection_id = $2 AND shared.owner_actor_id IS NULL)
+                ELSE position END
         WHERE project_id = $1 AND collection_id = $2 AND id = $3
         "#,
     )
@@ -755,10 +1077,20 @@ pub async fn change(
     .bind(view_id)
     .bind(&name)
     .bind(config_value)
+    .bind(share)
     .execute(&mut *connection)
     .await?;
+    let scope = if share { Scope::Shared } else { scope };
     if moves && let Some(position) = change.position {
-        move_to(connection, project_id, collection_id, view_id, position).await?;
+        move_to(
+            connection,
+            project_id,
+            collection_id,
+            scope,
+            view_id,
+            position,
+        )
+        .await?;
     }
     let view = one(connection, project_id, collection_id, view_id)
         .await?
@@ -773,23 +1105,25 @@ pub async fn change(
 pub enum RemoveViewOutcome {
     Removed(View),
     NotFound,
-    /// A collection keeps at least one view.
+    /// A collection keeps at least one shared view.
     LastView,
 }
 
 /// Removes a view. What it showed stays: views hold no records. The caller
-/// holds the project lock and the collection's row.
+/// holds the collection's row and has checked who may remove a view in
+/// `scope`.
 pub async fn remove(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
 ) -> Result<RemoveViewOutcome, AppError> {
-    let views = list(&mut *connection, project_id, collection_id).await?;
+    let views = in_scope(&mut *connection, project_id, collection_id, scope).await?;
     let Some(view) = views.iter().find(|view| view.id == view_id).cloned() else {
         return Ok(RemoveViewOutcome::NotFound);
     };
-    if views.len() <= 1 {
+    if scope == Scope::Shared && views.len() <= 1 {
         return Ok(RemoveViewOutcome::LastView);
     }
     sqlx::query(
@@ -803,21 +1137,24 @@ pub async fn remove(
     Ok(RemoveViewOutcome::Removed(view))
 }
 
-/// Puts a view at a 1-based place among the collection's views and
+/// Puts a view at a 1-based place among the views in its scope and
 /// renumbers the rest.
 async fn move_to(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
     position: i32,
 ) -> Result<(), AppError> {
     let mut order = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collection_views WHERE project_id = $1 AND collection_id = $2 \
+           AND owner_actor_id IS NOT DISTINCT FROM $3 \
          ORDER BY position, id",
     )
     .bind(project_id)
     .bind(collection_id)
+    .bind(scope.owner())
     .fetch_all(&mut *connection)
     .await?;
     order.retain(|id| *id != view_id);
@@ -841,6 +1178,207 @@ async fn move_to(
     .bind(&positions)
     .execute(&mut *connection)
     .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pins and defaults (T1.6)
+
+/// Which views `reader` keeps in their sidebar: the ones they pinned or
+/// unpinned themselves, and which built-in views start pinned for them.
+#[derive(Clone, Debug, Default)]
+pub struct Pins {
+    /// By view: pinned or not, and the place among their pinned views.
+    pub own: std::collections::HashMap<Uuid, (bool, i32)>,
+    /// Their role's defaults (built-in view keys); without any, My tasks
+    /// and Ready for agents start pinned.
+    pub role_defaults: Option<Vec<String>>,
+}
+
+impl Pins {
+    /// Whether the view is in their sidebar, and where.
+    pub fn of(&self, view: &View) -> (bool, Option<i32>) {
+        if let Some((pinned, position)) = self.own.get(&view.id) {
+            return (*pinned, pinned.then_some(*position));
+        }
+        let Some(builtin) = view.builtin.as_deref() else {
+            return (false, None);
+        };
+        let pinned = match &self.role_defaults {
+            Some(keys) => keys.iter().any(|key| key == builtin),
+            None => matches!(builtin, "my_tasks" | "ready_for_agents"),
+        };
+        (pinned, None)
+    }
+}
+
+/// The views every Tasks collection starts with (`collection_views.builtin`).
+pub const BUILTIN_VIEW_KEYS: [&str; 4] = [
+    "my_tasks",
+    "ready_for_agents",
+    "blocked",
+    "recently_changed",
+];
+
+/// `reader`'s pins in a collection.
+pub async fn pins(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<Pins, AppError> {
+    let rows = sqlx::query_as::<_, (Uuid, bool, i32)>(
+        "SELECT pin.view_id, pin.pinned, pin.position FROM collection_view_pins pin \
+         JOIN collection_views view ON view.project_id = pin.space_id AND view.id = pin.view_id \
+         WHERE pin.space_id = $1 AND view.collection_id = $2 AND pin.actor_id = $3",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(reader)
+    .fetch_all(&mut *connection)
+    .await?;
+    let role_defaults =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT role_default_pinned_views($1, $2)")
+            .bind(project_id)
+            .bind(reader)
+            .fetch_one(&mut *connection)
+            .await?;
+    Ok(Pins {
+        own: rows
+            .into_iter()
+            .map(|(view, pinned, position)| (view, (pinned, position)))
+            .collect(),
+        role_defaults,
+    })
+}
+
+/// Pins or unpins a view for one account. A pinned view goes to the end
+/// of their pinned views unless `position` (0-based) says where.
+pub async fn set_pin(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    view_id: Uuid,
+    actor_id: Uuid,
+    pinned: bool,
+    position: Option<i32>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO collection_view_pins (workspace_id, space_id, view_id, actor_id, pinned, position)
+        SELECT project.organization_id, $1, $2, $3, $4,
+               COALESCE($5, (SELECT COALESCE(max(other.position) + 1, 0)
+                             FROM collection_view_pins other
+                             WHERE other.space_id = $1 AND other.actor_id = $3 AND other.pinned))
+        FROM projects project WHERE project.id = $1
+        ON CONFLICT (view_id, actor_id) DO UPDATE
+        SET pinned = EXCLUDED.pinned, position = EXCLUDED.position, updated_at = now()
+        "#,
+    )
+    .bind(project_id)
+    .bind(view_id)
+    .bind(actor_id)
+    .bind(pinned)
+    .bind(position.map(|position| position.max(0)))
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+/// Whose default a view is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DefaultFor {
+    /// One account's own; it wins over their role's.
+    Account(Uuid),
+    /// Everyone holding a role in the space.
+    Role(Uuid),
+}
+
+/// The view a collection opens on for `reader`: their own default, else
+/// their role's in the space, else the first shared view. None only when
+/// the collection has no shared view.
+pub async fn default_view(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let chosen = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT preference.view_id FROM collection_view_defaults preference
+        JOIN collection_views view
+          ON view.project_id = preference.space_id AND view.id = preference.view_id
+        WHERE preference.space_id = $1 AND preference.collection_id = $2
+          AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $3)
+          AND (preference.actor_id = $3
+               OR preference.role_id IN (
+                   SELECT held.id FROM project_memberships membership
+                   JOIN projects project ON project.id = membership.project_id
+                   JOIN workspace_roles held ON held.organization_id = project.organization_id
+                    AND (held.id = membership.role_id
+                         OR (membership.role_id IS NULL AND held.key = membership.role))
+                   WHERE membership.project_id = $1 AND membership.actor_id = $3))
+        ORDER BY (preference.actor_id IS NULL), preference.updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(reader)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if chosen.is_some() {
+        return Ok(chosen);
+    }
+    Ok(list(&mut *connection, project_id, collection_id)
+        .await?
+        .first()
+        .map(|view| view.id))
+}
+
+/// Sets (or, with no view, clears) a default. The caller has checked the
+/// view is one the default's holder can see.
+pub async fn set_default(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    holder: DefaultFor,
+    view_id: Option<Uuid>,
+    set_by: Uuid,
+) -> Result<(), AppError> {
+    let (role_id, actor_id) = match holder {
+        DefaultFor::Account(actor) => (None, Some(actor)),
+        DefaultFor::Role(role) => (Some(role), None),
+    };
+    sqlx::query(
+        "DELETE FROM collection_view_defaults \
+         WHERE space_id = $1 AND collection_id = $2 \
+           AND role_id IS NOT DISTINCT FROM $3 AND actor_id IS NOT DISTINCT FROM $4",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(role_id)
+    .bind(actor_id)
+    .execute(&mut *connection)
+    .await?;
+    if let Some(view_id) = view_id {
+        sqlx::query(
+            r#"
+            INSERT INTO collection_view_defaults
+                (id, workspace_id, space_id, collection_id, role_id, actor_id, view_id, set_by_actor_id)
+            SELECT $1, project.organization_id, $2, $3, $4, $5, $6, $7
+            FROM projects project WHERE project.id = $2
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(collection_id)
+        .bind(role_id)
+        .bind(actor_id)
+        .bind(view_id)
+        .bind(set_by)
+        .execute(&mut *connection)
+        .await?;
+    }
     Ok(())
 }
 
@@ -891,8 +1429,20 @@ mod tests {
             }],
             title_width: None,
             date_field: None,
+            end_field: None,
+            chart: None,
+            search: Some("login crash".to_owned()),
         };
         assert_eq!(check(&mine, &fields), Ok(()));
+        // A kept search is read like a typed one: every word, a few at most.
+        let spec = crate::views::query::Spec::from_config(&mine, &fields, Uuid::now_v7())
+            .searching(vec!["Crash".to_owned(), "parser".to_owned()], &fields);
+        assert_eq!(spec.words, ["login", "crash", "parser"]);
+        let wordy = ViewConfig {
+            search: Some("one two three four five six seven eight nine".to_owned()),
+            ..ViewConfig::default()
+        };
+        assert!(check(&wordy, &fields).is_err());
         let elsewhere = ViewConfig {
             filters: vec![FieldClause {
                 field: Uuid::now_v7(),
@@ -948,6 +1498,43 @@ mod tests {
     }
 
     #[test]
+    fn timelines_run_from_one_date_field_to_another() {
+        let start = field("Start", FieldType::Date, false);
+        let mut end = field("End", FieldType::Date, false);
+        end.position = start.position + 1;
+        let notes = field("Notes", FieldType::Text, false);
+        let fields = vec![start.clone(), end.clone(), notes.clone()];
+        let timeline = ViewConfig::default()
+            .for_type(ViewType::Timeline, &fields)
+            .expect("a timeline");
+        assert_eq!(timeline.date_field, Some(start.id));
+        assert_eq!(timeline.end_field, Some(end.id));
+        assert!(check(&timeline, &fields).is_ok());
+        let same = ViewConfig {
+            date_field: Some(start.id),
+            end_field: Some(start.id),
+            ..ViewConfig::default()
+        };
+        assert!(check(&same, &fields).is_err());
+        let not_a_date = ViewConfig {
+            date_field: Some(start.id),
+            end_field: Some(notes.id),
+            ..ViewConfig::default()
+        };
+        assert!(check(&not_a_date, &fields).is_err());
+        let one_date = ViewConfig::default()
+            .for_type(ViewType::Timeline, std::slice::from_ref(&start))
+            .expect("one date is enough");
+        assert_eq!(one_date.end_field, None);
+        assert!(
+            ViewConfig::default()
+                .for_type(ViewType::Timeline, std::slice::from_ref(&notes))
+                .is_err()
+        );
+        assert!(parse_view_type("list").is_some() && parse_view_type("timeline").is_some());
+    }
+
+    #[test]
     fn boards_and_calendars_start_on_a_field_that_fits() {
         let notes = field("Notes", FieldType::Text, false);
         let old_date = field("Was due", FieldType::Date, true);
@@ -998,6 +1585,7 @@ mod tests {
         };
         assert_eq!(stored.active(&fields).date_field, None);
         assert_eq!(parse_view_type(" Calendar "), Some(ViewType::Calendar));
-        assert_eq!(parse_view_type("list"), None);
+        assert_eq!(parse_view_type("chart"), Some(ViewType::Chart));
+        assert_eq!(parse_view_type("kanban"), None);
     }
 }

@@ -55,7 +55,7 @@ use crate::{
         Action, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
         Permission, PermissionSet, RoleGrant, current_agent_limit,
     },
-    work_items::views::BUILTIN_VIEWS,
+    views::definition::BUILTIN_VIEW_KEYS,
 };
 
 const MAX_CUSTOM_ROLES: i64 = 50;
@@ -879,7 +879,7 @@ async fn checked_defaults(
     if let Some(views) = defaults.pinned_views.as_mut() {
         if views
             .iter()
-            .any(|view| !BUILTIN_VIEWS.iter().any(|builtin| builtin.key == view))
+            .any(|view| !BUILTIN_VIEW_KEYS.contains(&view.as_str()))
         {
             return Err(AppError::Validation("role pinned view"));
         }
@@ -1847,14 +1847,15 @@ pub(crate) async fn set_agent_limit(
     Ok(keys)
 }
 
-/// On arriving in a project, join the private channels their role names,
-/// when the person adding them is in that channel.
+/// On arriving in a project, join its auto-join channels, and the private
+/// channels their role names when the person adding them is in that channel.
 pub(crate) async fn apply_arrival_defaults(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_id: Uuid,
     added_by: Uuid,
 ) -> Result<(), AppError> {
+    crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     sqlx::query(&format!(
         r#"
         INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
@@ -2401,7 +2402,7 @@ mod tests {
             }
             if let Some(views) = &point.defaults.pinned_views {
                 for view in views {
-                    assert!(BUILTIN_VIEWS.iter().any(|builtin| builtin.key == view));
+                    assert!(BUILTIN_VIEW_KEYS.contains(&view.as_str()));
                 }
             }
             for part in &point.defaults.home_hidden {

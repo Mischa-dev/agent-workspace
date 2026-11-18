@@ -525,6 +525,7 @@ impl Operation for ModuleCreate {
                     intro: inline.intro.clone(),
                     fields: questions,
                     thanks: inline.thanks.clone(),
+                    daily_limit: None,
                 };
                 let form =
                     match crate::bug_reports::checked_form_in(tx, space, collection_id, &form)

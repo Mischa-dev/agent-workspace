@@ -92,6 +92,10 @@ pub struct OpContext {
     pub space_id: Option<Uuid>,
     /// The DM or group the call is about, when it is in no space.
     pub direct: Option<Uuid>,
+    /// The workspace the request named, if it named one: for a call about a
+    /// DM or group, which is in none, where the caller's own things (such
+    /// as sidebar sections) are.
+    pub requested_workspace: Option<Uuid>,
     pub target: Target,
     /// Set for every write.
     pub request_id: Option<String>,

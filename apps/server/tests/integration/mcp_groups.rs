@@ -687,18 +687,17 @@ async fn continue_follows_the_role_and_asks_each_agent_once() {
     .await
     .expect("Mara's message");
 
-    // Giving the agents another round needs conversations.continue_agents,
-    // which a viewer's role doesn't hold.
-    set_role(&setup.pool, &space, mara, "viewer").await;
-    let denied = mara_mcp
+    // Whoever's role holds replies.steer may continue, an agent too (A2.8):
+    // depth and turns end loops, not the kind of account.
+    let by_mara = mara_mcp
         .call(
             &setup,
             "conversation_continue",
             json!({"conversationId": group}),
         )
         .await;
-    assert_eq!(denied["outcome"], "permission_denied", "{denied}");
-    set_role(&setup.pool, &space, mara, "member").await;
+    assert_eq!(by_mara["outcome"], "ok", "{by_mara}");
+    assert_eq!(handles(&by_mara["value"]["asked"]), ["rook"]);
 
     let continued = codex
         .call(
@@ -781,7 +780,7 @@ async fn continue_follows_the_role_and_asks_each_agent_once() {
         0
     );
 
-    // DMs and channels have no turns.
+    // DMs and channels have turns too.
     let dm = codex
         .call(&setup, "conversation_start", json!({"people": ["@mara"]}))
         .await;
@@ -796,7 +795,7 @@ async fn continue_follows_the_role_and_asks_each_agent_once() {
                 json!({"conversationId": conversation}),
             )
             .await;
-        assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+        assert_eq!(refused["outcome"], "ok", "{refused}");
     }
 }
 

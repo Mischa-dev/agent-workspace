@@ -152,16 +152,17 @@ async fn every_table_belongs_to_a_workspace_or_says_why() {
             .iter()
             .any(|problem| problem.starts_with("new_things"))
     );
-    // (agent_connections is on the must-be-global list but not made yet.)
-    let mut with_outside_refs = tables.clone();
-    with_outside_refs.insert(
-        "agent_connections".to_owned(),
-        BTreeSet::from(["id".to_owned(), "workspace_id".to_owned()]),
+    // A workspace's table that loses its workspace column is refused too.
+    // (Every must-be-global table is made and listed global now.)
+    let mut without_column = tables.clone();
+    without_column.insert(
+        "thing_grants".to_owned(),
+        BTreeSet::from(["id".to_owned(), "space_id".to_owned()]),
     );
     assert!(
-        problems(&with_outside_refs)
+        problems(&without_column)
             .iter()
-            .any(|problem| problem.starts_with("agent_connections"))
+            .any(|problem| problem.starts_with("thing_grants"))
     );
 
     // No membership or role row names the direct scope (R20), once a

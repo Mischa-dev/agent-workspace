@@ -802,7 +802,10 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
             .fetch_one(&setup.pool)
             .await
             .expect("thread name");
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&channel_id)
         .execute(&setup.pool)
         .await

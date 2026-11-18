@@ -554,6 +554,101 @@ async fn people_read_archive_snooze_and_restore_their_own() {
 }
 
 #[tokio::test]
+async fn snoozed_until_activity_comes_back_with_the_next_occurrence() {
+    let Some(setup) = setup("notify_wake").await else {
+        return;
+    };
+    let project = create_project(&setup, "WAKE", "Wake").await;
+    let general = create_channel(&setup, &project, "general").await;
+    let random = create_channel(&setup, &project, "random").await;
+    let (mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
+    say(
+        &setup,
+        &setup.browser,
+        &general,
+        "w1",
+        mention(mara, "One "),
+    )
+    .await;
+    say(&setup, &setup.browser, &random, "w2", mention(mara, "Two ")).await;
+    drain(&setup).await;
+    let page = inbox(&setup, &mara_browser, "").await;
+    let row = |page: &Value, words: &str| {
+        items(page)
+            .iter()
+            .find(|item| item["preview"].as_str().unwrap_or("").contains(words))
+            .cloned()
+    };
+    let one = row(&page, "One").expect("one")["id"].clone();
+    let two = row(&page, "Two").expect("two")["id"].clone();
+
+    // One until something new; Two until tomorrow.
+    let (status, result) = update(
+        &setup,
+        &mara_browser,
+        json!({"action": "snooze_until_activity", "ids": [one]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let tomorrow = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+    let (status, result) = update(
+        &setup,
+        &mara_browser,
+        json!({"action": "snooze", "ids": [two], "snoozeUntil": tomorrow}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["unreadCount"], 0);
+    let snoozed = inbox(&setup, &mara_browser, "?view=snoozed").await;
+    let waiting = row(&snoozed, "One").expect("one is snoozed");
+    assert_eq!(waiting["untilActivity"], true, "{snoozed}");
+    assert!(waiting["snoozedUntil"].is_null(), "{snoozed}");
+    // A time isn't allowed with it.
+    let (status, _) = update(
+        &setup,
+        &mara_browser,
+        json!({"action": "snooze_until_activity", "ids": [one], "snoozeUntil": tomorrow}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Something new on each: One comes back unread at once, Two waits.
+    say(
+        &setup,
+        &setup.browser,
+        &general,
+        "w3",
+        mention(mara, "Three "),
+    )
+    .await;
+    say(
+        &setup,
+        &setup.browser,
+        &random,
+        "w4",
+        mention(mara, "Four "),
+    )
+    .await;
+    drain(&setup).await;
+    let page = inbox(&setup, &mara_browser, "").await;
+    assert_eq!(items(&page).len(), 1, "{page}");
+    assert_eq!(items(&page)[0]["id"], one, "{page}");
+    assert_eq!(items(&page)[0]["read"], false, "{page}");
+    assert_eq!(items(&page)[0]["untilActivity"], false, "{page}");
+    assert_eq!(page["unreadCount"], 1);
+    let snoozed = inbox(&setup, &mara_browser, "?view=snoozed").await;
+    assert_eq!(items(&snoozed).len(), 1, "{snoozed}");
+    assert_eq!(items(&snoozed)[0]["id"], two, "{snoozed}");
+
+    // A mention can be answered in place: it names its conversation.
+    assert_eq!(
+        items(&page)[0]["replyConversationId"],
+        general.as_str(),
+        "{page}"
+    );
+}
+
+#[tokio::test]
 async fn apps_connected_by_a_person_see_their_notifications() {
     let Some(setup) = setup("notify_mcp").await else {
         return;

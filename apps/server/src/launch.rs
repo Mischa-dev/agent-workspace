@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::{RunActor, StartRunRequest},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    hosts::builtin::http::{RunActor, StartRunRequest},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     jobs::{self, JobRegistry, NewJob},
     memory,
@@ -721,6 +721,8 @@ struct LaunchRow {
     provider_account_id: Option<Uuid>,
     status_reason: Option<String>,
     agent_profile_id: Option<Uuid>,
+    /// The agent the launch goes to, when it names one (A1.13).
+    agent_account_id: Option<Uuid>,
     source: String,
     made_through_app: bool,
 }
@@ -740,7 +742,7 @@ const LAUNCH_ROW: &str = r#"
     id, project_id, work_item_id, conversation_id,
     requested_by_actor_id, via_oauth_grant_id, environment_id,
     overrides, prompt, provider_account_id, status_reason, agent_profile_id,
-    source, made_through_app
+    agent_account_id, source, made_through_app
 "#;
 
 #[derive(Clone, Debug, Serialize)]
@@ -772,8 +774,7 @@ pub(crate) struct LaunchView {
     pub state: String,
     /// Why it waits, or why it was cancelled or failed.
     pub status_reason: Option<String>,
-    pub agent_run_id: Option<Uuid>,
-    /// The run it opened: the built-in run, or a connected runner's (A1.4).
+    /// The run it opened, whichever host or agent does it (A1.13).
     pub run_id: Option<Uuid>,
     pub run_state: Option<String>,
     pub position: i64,
@@ -799,7 +800,6 @@ struct LaunchViewRow {
     start_at: Option<DateTime<Utc>>,
     state: String,
     status_reason: Option<String>,
-    agent_run_id: Option<Uuid>,
     run_id: Option<Uuid>,
     run_state: Option<String>,
     position: i64,
@@ -816,7 +816,7 @@ const LAUNCH_VIEW_SELECT: &str = r#"
            launch.source, launch.environment_id, environment.name AS environment_name,
            COALESCE(launch.overrides ->> 'harness', environment.harness) AS harness,
            launch.start_when, launch.start_at, launch.state, launch.status_reason,
-           launch.agent_run_id, launch.run_id,
+           launch.run_id,
            {RUN_STATE} AS run_state, launch.position,
            launch.created_at, launch.started_at
     FROM launches launch
@@ -830,12 +830,11 @@ const LAUNCH_VIEW_SELECT: &str = r#"
       ON environment.project_id = launch.project_id AND environment.id = launch.environment_id
 "#;
 
-/// [`LAUNCH_VIEW_SELECT`] with its run's state: the built-in row's, or (a
-/// runner's run, A1.4) the state of the run that reports for itself.
+/// [`LAUNCH_VIEW_SELECT`] with its run's state.
 fn launch_view_select() -> String {
     LAUNCH_VIEW_SELECT.replace(
         "{RUN_STATE}",
-        &crate::runs::sql::launch_run_state("launch.agent_run_id", "launch.run_id"),
+        &crate::runs::sql::launch_run_state("launch.run_id"),
     )
 }
 
@@ -868,8 +867,7 @@ fn launch_view(
         start_at: row.start_at,
         state: row.state,
         status_reason: row.status_reason,
-        agent_run_id: row.agent_run_id,
-        run_id: row.run_id.or(row.agent_run_id),
+        run_id: row.run_id,
         run_state: row.run_state,
         position: row.position,
         created_at: row.created_at,
@@ -1367,6 +1365,11 @@ pub(crate) struct LaunchRequest {
     /// model settings and instructions; left out, the project's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_profile_id: Option<Uuid>,
+    /// The agent account that does the work, a member of the project: run
+    /// by its host when one runs it, else handed the task in its thread.
+    /// An agent profile's account launches as that profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_account_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1469,6 +1472,29 @@ pub(crate) async fn launch_tasks(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
+    if let Some(agent) = request.agent_account_id {
+        // An agent the caller can hand work to here: a member of the
+        // project. A profile's account is that profile.
+        let member = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM project_memberships membership \
+             JOIN actors account ON account.id = membership.actor_id AND account.status = 'active' \
+             WHERE membership.project_id = $1 AND membership.actor_id = $2 AND membership.enabled)",
+        )
+        .bind(project_id)
+        .bind(agent)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
+        if !member || agent == caller.actor_id {
+            return Err(AppError::NotFound("agent"));
+        }
+        if let Some(profile) = crate::agent_profiles::profile_for_actor(&state.pool, agent).await? {
+            if request.agent_profile_id.is_some_and(|id| id != profile.id) {
+                return Err(AppError::Validation("agentAccountId"));
+            }
+            request.agent_profile_id = Some(profile.id);
+            request.agent_account_id = None;
+        }
+    }
     let profile = match request.agent_profile_id {
         Some(profile_id) => Some(
             crate::agent_profiles::profile_settings(&state.pool, profile_id)
@@ -1608,12 +1634,12 @@ pub(crate) async fn launch_tasks(
                 id, organization_id, project_id, work_item_id, requested_by_actor_id,
                 via_oauth_grant_id, source, environment_id, overrides, prompt,
                 start_when, start_at, provider_account_id, status_reason, position,
-                agent_profile_id, made_through_app
+                agent_profile_id, made_through_app, agent_account_id
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                 (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
-                $15, $16
+                $15, $16, $17
             )
             "#,
         )
@@ -1652,6 +1678,7 @@ pub(crate) async fn launch_tasks(
                     )
                     .is_some()),
         )
+        .bind(request.agent_account_id)
         .execute(&mut *transaction)
         .await?;
         audit(
@@ -2012,10 +2039,46 @@ async fn start_launch(
         Some(profile) => profile.prompt(manifest.as_deref(), &prompt),
         None => prompt,
     };
-    if let Some(runner) = harness
-        .as_deref()
-        .and_then(|harness| state.supervisors.runner_for(harness))
+    // A1.13: one path. The agent that does the work is the one the launch
+    // names, else the profile's; its host runs it when it has one. Else a
+    // connected runner for the harness, or the named agent connecting by
+    // itself, is handed the task; else the built-in host runs it.
+    let agent = launch
+        .agent_account_id
+        .or_else(|| profile.as_ref().map(|profile| profile.actor_id));
+    if let Some(agent) = agent
+        && crate::hosts::dispatch::binding_of(crate::db::scoped(&state.pool), agent)
+            .await?
+            .is_some()
     {
+        let settings = [
+            ("harness", harness.clone()),
+            ("model", overrides.model.clone()),
+            ("reasoning", overrides.reasoning.clone()),
+            ("speed", overrides.speed.clone()),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_owned(), Value::String(value))))
+        .collect::<Map<_, _>>();
+        return start_on_host(
+            state,
+            caller,
+            launch,
+            agent,
+            thread_id,
+            &prompt,
+            (!settings.is_empty()).then_some(Value::Object(settings)),
+        )
+        .await;
+    }
+    // The agent the launch names does the work; a harness's runner only
+    // when none is named.
+    let runner = launch.agent_account_id.or_else(|| {
+        harness
+            .as_deref()
+            .and_then(|harness| state.supervisors.runner_for(harness))
+    });
+    if let Some(runner) = runner {
         return hand_off(
             state, caller, launch, thread_id, runner, &prompt, &overrides,
         )
@@ -2036,7 +2099,7 @@ async fn start_launch(
         options,
         ..Default::default()
     };
-    let started = crate::api::start_run_in(
+    let started = crate::hosts::builtin::http::start_run_in(
         state,
         &LaunchStarter {
             caller,
@@ -2060,10 +2123,26 @@ async fn start_launch(
         Err(error) => return Err(error),
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::runs::builtin::launched(&mut transaction, run_id, launch.id, launch.work_item_id)
+        .await?;
+    mark_started(&mut transaction, caller, launch, run_id, thread_id, None).await?;
+    transaction.commit().await?;
+    Ok(run_id)
+}
+
+/// The launch started run `run_id` in its thread.
+async fn mark_started(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &LaunchCaller,
+    launch: &LaunchRow,
+    run_id: Uuid,
+    thread_id: Uuid,
+    host_id: Option<Uuid>,
+) -> Result<(), AppError> {
     sqlx::query(
         r#"
         UPDATE launches
-        SET state = 'started', agent_run_id = $2, conversation_id = $3,
+        SET state = 'started', run_id = $2, conversation_id = $3,
             status_reason = NULL, started_at = now(), updated_at = now()
         WHERE id = $1 AND state = 'queued'
         "#,
@@ -2071,19 +2150,125 @@ async fn start_launch(
     .bind(launch.id)
     .bind(run_id)
     .bind(thread_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     audit(
-        &mut *transaction,
+        &mut **transaction,
         caller,
         launch.project_id,
         "launch.started",
         launch.id,
-        json!({ "agentRunId": run_id, "conversationId": thread_id }),
+        json!({ "runId": run_id, "conversationId": thread_id, "hostId": host_id }),
+    )
+    .await
+}
+
+/// A launch to an agent a host runs (A1.13): the agent's run opens queued
+/// with the launch's task as its cause, and its host is asked to start it,
+/// together. The host reports from there.
+async fn start_on_host(
+    state: &AppState,
+    caller: &LaunchCaller,
+    launch: &LaunchRow,
+    agent: Uuid,
+    thread_id: Uuid,
+    prompt: &str,
+    settings: Option<Value>,
+) -> Result<Uuid, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let opened = crate::runs::ops::open_queued(
+        &mut transaction,
+        agent,
+        launch_run(launch, thread_id, None, prompt, settings.clone()),
+    )
+    .await
+    .map_err(launch_refused)?;
+    let run = if opened.created {
+        match crate::hosts::dispatch::start_run(
+            &mut transaction,
+            opened.run.id,
+            crate::hosts::dispatch::StartInput {
+                prompt: Some(prompt.to_owned()),
+                settings,
+            },
+        )
+        .await
+        {
+            Ok((run, _)) => run,
+            Err(crate::hosts::dispatch::StartError::NoHost) => {
+                return Err(AppError::Invalid("that agent's host is no longer linked"));
+            }
+            Err(crate::hosts::dispatch::StartError::Run(error)) => {
+                return Err(launch_refused(error));
+            }
+            Err(crate::hosts::dispatch::StartError::App(error)) => return Err(error),
+        }
+    } else {
+        opened.run
+    };
+    mark_started(
+        &mut transaction,
+        caller,
+        launch,
+        run.id,
+        thread_id,
+        run.host_id,
     )
     .await?;
     transaction.commit().await?;
-    Ok(run_id)
+    Ok(run.id)
+}
+
+/// The run a launch opens for an agent that reports for itself or through
+/// its host: the same cause and title on every route.
+fn launch_run(
+    launch: &LaunchRow,
+    thread_id: Uuid,
+    message_id: Option<Uuid>,
+    prompt: &str,
+    settings: Option<Value>,
+) -> crate::runs::ops::RunOpen {
+    crate::runs::ops::RunOpen {
+        space_id: launch.project_id,
+        client_run_id: Some(format!("launch:{}", launch.id)),
+        title: crate::runs::builtin::title_from_prompt(prompt),
+        cause: crate::runs::ops::Cause {
+            kind: if launch.work_item_id.is_some() {
+                "task"
+            } else if message_id.is_some() {
+                "message"
+            } else {
+                "thread"
+            }
+            .to_owned(),
+            conversation_id: message_id.is_none().then_some(thread_id),
+            work_item_id: launch.work_item_id,
+            message_id,
+            reference: None,
+        },
+        parent_run_id: None,
+        report_interval_seconds: None,
+        settings,
+        initial: crate::runs::state::RunState::Queued,
+        requested_by: Some(launch.requested_by_actor_id),
+        via_app_id: None,
+        launch_id: Some(launch.id),
+    }
+}
+
+/// A run the launch couldn't open, as the launch's own refusal.
+fn launch_refused(error: crate::runs::ops::RunOpError) -> AppError {
+    match error {
+        crate::runs::ops::RunOpError::App(error) => error,
+        crate::runs::ops::RunOpError::NotFound => AppError::NotFound("agent"),
+        crate::runs::ops::RunOpError::Refused { .. } => {
+            AppError::Invalid("that agent can't take this work here")
+        }
+        crate::runs::ops::RunOpError::Conflict(_)
+        | crate::runs::ops::RunOpError::VersionConflict { .. } => {
+            AppError::Conflict("run", "the agent has too many runs open")
+        }
+    }
 }
 
 /// A launch to a connected runner (X2): the task goes to the runner agent
@@ -2110,13 +2295,7 @@ async fn hand_off(
     if !settings.is_empty() {
         text.push_str(&format!("\n\nSettings: {}", settings.join(" ")));
     }
-    let actor_kind = match caller.actor_kind {
-        ActorKind::Human => "human",
-        ActorKind::ExternalAgent => "external_agent",
-        ActorKind::ExecutionWorker => "execution_worker",
-        ActorKind::Integration => "integration",
-        ActorKind::System => "system",
-    };
+    let actor_kind = crate::accounts::actor_kind_key(caller.actor_kind);
     let outcome = crate::conversations::append_message_command(
         state,
         crate::conversations::MessageCommandActor {
@@ -2141,10 +2320,20 @@ async fn hand_off(
     .await?;
     let message_id = outcome.body.message.id;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // A1.4, A1.13: the agent gets a run for the work, waiting for it to
+    // claim the message, and a `run.start` event. The launch has started
+    // that run; a hand-off whose run couldn't be opened stands without one,
+    // as `handed_off`.
+    let run = hand_off_run(&mut transaction, launch, runner, message_id, prompt).await;
+    if let Some(run) = &run {
+        crate::runs::ops::ask_to_start(&mut transaction, run).await?;
+    }
+    let run_id = run.map(|run| run.id);
     sqlx::query(
         r#"
         UPDATE launches
-        SET state = 'handed_off', handoff_message_id = $2, conversation_id = $3,
+        SET state = CASE WHEN $4::uuid IS NULL THEN 'handed_off' ELSE 'started' END,
+            handoff_message_id = $2, conversation_id = $3, run_id = $4,
             status_reason = NULL, started_at = now(), updated_at = now()
         WHERE id = $1 AND state = 'queued'
         "#,
@@ -2152,18 +2341,9 @@ async fn hand_off(
     .bind(launch.id)
     .bind(message_id)
     .bind(thread_id)
+    .bind(run_id)
     .execute(&mut *transaction)
     .await?;
-    // A1.4: the runner gets a run for the work, waiting for it to claim the
-    // message. Best effort: the hand-off stands without one.
-    let run_id = hand_off_run(&mut transaction, launch, runner, message_id, prompt).await;
-    if let Some(run_id) = run_id {
-        sqlx::query("UPDATE launches SET run_id = $2 WHERE id = $1")
-            .bind(launch.id)
-            .bind(run_id)
-            .execute(&mut *transaction)
-            .await?;
-    }
     audit(
         &mut *transaction,
         caller,
@@ -2185,7 +2365,7 @@ async fn hand_off_run(
     runner: Uuid,
     message_id: Uuid,
     prompt: &str,
-) -> Option<Uuid> {
+) -> Option<crate::runs::store::RunRow> {
     let mut savepoint = sqlx::Connection::begin(&mut **transaction).await.ok()?;
     let opened = crate::runs::launch_paths::open_for_hand_off(
         &mut savepoint,
@@ -2196,16 +2376,12 @@ async fn hand_off_run(
             message_id,
             work_item_id: launch.work_item_id,
             requested_by: launch.requested_by_actor_id,
-            title: prompt
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or_default()
-                .to_owned(),
+            title: crate::runs::builtin::title_from_prompt(prompt),
         },
     )
     .await;
     match opened {
-        Ok(Some(run)) => savepoint.commit().await.ok().map(|()| run.id),
+        Ok(Some(run)) => savepoint.commit().await.ok().map(|()| run),
         Ok(None) => {
             let _ = savepoint.rollback().await;
             None
@@ -2260,7 +2436,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
     // can't leave it held.
     let mut guard = crate::db::scoped_tx(&state.pool).await?;
     let locked = sqlx::query_scalar::<_, bool>(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended('launch.drain', 0))",
+        "SELECT pg_try_advisory_xact_lock(hashtextextended('launch.drain:' || current_schema(), 0))",
     )
     .fetch_one(&mut *guard)
     .await?;
@@ -2686,10 +2862,10 @@ pub(crate) struct TagPayload {
     pub made_through_app: bool,
 }
 
-/// A person tagged an agent backed by a harness: launch a run with the
-/// project's defaults, in the thread the message is in, or a new thread
-/// under it when it was posted in a channel. Called in the message's own
-/// transaction; the work happens in a job.
+/// A person tagged an agent backed by a harness, or any agent a host runs
+/// (A1.13): launch a run with the project's defaults, in the thread the
+/// message is in, or a new thread under it when it was posted in a channel.
+/// Called in the message's own transaction; the work happens in a job.
 pub(crate) async fn queue_tag_launches(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -2702,13 +2878,19 @@ pub(crate) async fn queue_tag_launches(
         SELECT actor.id
         FROM project_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-        JOIN execution_workers worker
+        LEFT JOIN execution_workers worker
           ON worker.project_id = membership.project_id AND worker.actor_id = actor.id
          AND worker.enabled
         WHERE membership.project_id = $1 AND membership.enabled
-          AND actor.kind = 'execution_worker' AND actor.status = 'active' -- // kind-check: mechanical (the execution worker's own account)
+          AND actor.status = 'active'
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
+          AND ((actor.kind = 'execution_worker' AND worker.id IS NOT NULL) -- // kind-check: mechanical (a profile agent runs on its worker)
+               OR EXISTS (
+                   SELECT 1 FROM host_agents binding
+                   JOIN hosts host ON host.id = binding.host_id
+                   WHERE binding.account_id = actor.id AND binding.status = 'active'
+                     AND host.status <> 'revoked' AND NOT host.builtin))
         ORDER BY actor.id
         LIMIT 1
         "#,
@@ -2869,7 +3051,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         INSERT INTO launches (
             id, organization_id, project_id, conversation_id, source_message_id,
             requested_by_actor_id, source, environment_id, prompt, start_when, position,
-            work_item_id, agent_profile_id, made_through_app
+            work_item_id, agent_profile_id, made_through_app, agent_account_id
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, 'tag', $7, $8, 'now',
@@ -2877,7 +3059,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
             (SELECT link.work_item_id FROM work_item_conversation_links link
              WHERE link.project_id = $3 AND link.conversation_id = $4
              ORDER BY link.created_at LIMIT 1),
-            $9, $10
+            $9, $10, $11
         )
         ON CONFLICT (source_message_id) WHERE source = 'tag' DO NOTHING
         "#,
@@ -2906,6 +3088,8 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     })
     .bind(profile.as_ref().map(|profile| profile.id))
     .bind(payload.made_through_app)
+    // An agent with no profile is one a host runs: the launch goes to it.
+    .bind(profile.is_none().then_some(payload.worker_actor_id))
     .execute(&mut *transaction)
     .await?
     .rows_affected();

@@ -223,7 +223,10 @@ pub(super) async fn agent_list(
                        CASE WHEN connection.status = 'active' AND actor.status = 'active'
                             THEN 'active' ELSE 'disabled' END AS status,
                        connection.runtime_kind, connection.scopes,
-                       connection.webhook_url IS NOT NULL AS wakeups,
+                       EXISTS (SELECT 1 FROM agent_connections delivery
+                               WHERE delivery.account_id = actor.id
+                                 AND delivery.webhook_url IS NOT NULL
+                                 AND delivery.state = 'active') AS wakeups,
                        connection.last_used_at, connection.last_error_category
                 FROM actors actor
                 JOIN external_agent_connections connection

@@ -34,6 +34,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MessageHistory>()
         .add::<MessageReact>()
         .add::<ConversationMarkRead>()
+        .add::<ConversationMemberList>()
         .add::<MessageSchedule>()
         .add::<ScheduledMessageUpdate>();
 }
@@ -673,5 +674,137 @@ impl Operation for ScheduledMessageUpdate {
         .await?;
         call.audit_target("scheduled_message", id, json!({}));
         Ok(updated)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_member_list
+
+pub struct ConversationMemberList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMemberListInput {
+    /// A private channel or a group, or a thread in one: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationMemberListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMember {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub display_name: String,
+    pub handle: String,
+    /// The account's kind, for showing it.
+    pub kind: String,
+    /// Changes who's in a private channel.
+    pub manager: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMembers {
+    /// The channel or group whose members these are, even for a thread.
+    #[schemars(with = "String")]
+    pub conversation_id: uuid::Uuid,
+    pub members: Vec<ConversationMember>,
+    /// Whether you can add and remove others (conversation_members).
+    pub can_manage: bool,
+}
+
+impl Operation for ConversationMemberList {
+    const NAME: &'static str = "conversation_member_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "messages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List members";
+    const DESCRIPTION: &'static str = "Who is in a private channel or a group (or the one a \
+        thread is in), which of them manage a private channel, and whether you can add and \
+        remove others with conversation_members. An open channel has no member list: everyone \
+        in its space reads it.";
+
+    type Input = ConversationMemberListInput;
+    type Output = ConversationMembers;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationMemberListInput,
+    ) -> Result<ConversationMembers, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let tx = call.tx().await?;
+        let row = crate::conversations::read_conversation_access(
+            &mut **tx,
+            caller,
+            input.conversation_id.id(),
+        )
+        .await?
+        .ok_or_else(|| OpError::not_found("That conversation"))?;
+        crate::conversations::authorize_conversation_row_for(
+            caller,
+            &row,
+            crate::policy::Action::ProjectView,
+            true,
+        )?;
+        let holder = match (row.kind.as_str(), row.parent_kind.as_deref()) {
+            ("thread", Some(_)) => row.parent_channel_id.unwrap_or(row.id),
+            _ => row.id,
+        };
+        let has_members = row.private || matches!(row.effective_kind(), "dm" | "group");
+        if !has_members {
+            return Err(OpError::invalid(
+                "conversationId",
+                "This channel is open to everyone in its space, so it has no member list.",
+            ));
+        }
+        let members = sqlx::query_as::<_, (uuid::Uuid, String, String, String, bool)>(
+            r#"
+            SELECT actor.id, membership.display_name, membership.handle, actor.kind,
+                   member.manager
+            FROM conversation_members member
+            JOIN actors actor ON actor.id = member.actor_id
+            CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id) membership
+            WHERE member.conversation_id = $1
+              AND conversation_visible_to($1, $2)
+            ORDER BY member.manager DESC, lower(membership.display_name), actor.id
+            "#,
+        )
+        .bind(holder)
+        .bind(caller)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        let is_manager = members
+            .iter()
+            .any(|(id, _, _, _, manager)| *id == caller && *manager);
+        let can_manage = if row.private {
+            is_manager || row.allows(caller, crate::policy::Action::MessageModerate)?
+        } else {
+            row.effective_kind() == "group"
+                && row.allows(caller, crate::policy::Action::ConversationMembersChange)?
+        };
+        Ok(ConversationMembers {
+            conversation_id: holder,
+            members: members
+                .into_iter()
+                .map(
+                    |(id, display_name, handle, kind, manager)| ConversationMember {
+                        id,
+                        display_name,
+                        handle,
+                        kind,
+                        manager,
+                    },
+                )
+                .collect(),
+            can_manage,
+        })
     }
 }

@@ -16,6 +16,7 @@ use crate::{
 
 pub fn register_ops(registry: &mut Registry) {
     registry.add::<AgentManagersSet>();
+    super::join::register_ops(registry);
 }
 
 /// Name or un-name the managers of an agent or app account.

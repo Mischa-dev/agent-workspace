@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     cluster::{Cluster, Lease, LeaseName},
-    domain::{RunState, allocate_conversation_sequence},
+    domain::RunState,
     error::AppError,
     git_runtime::{
         self, RegisteredRepository, expected_repository_mirror_path, managed_worktree_path,
@@ -910,7 +910,7 @@ async fn fail_admission(
     .execute(&mut *transaction)
     .await?;
     clear_claim_in_transaction(&mut transaction, run.run_id, run.claim_id).await?;
-    let event_id = insert_event(
+    let event_id = crate::runs::steps::record_new(
         &mut transaction,
         run.run_id,
         "run_failed",
@@ -918,7 +918,7 @@ async fn fail_admission(
         json!({}),
     )
     .await?;
-    insert_entry(&mut transaction, run.conversation_id, event_id).await?;
+    crate::runs::steps::show_in_thread(&mut transaction, run.conversation_id, event_id).await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         run.project_id,
@@ -954,54 +954,6 @@ async fn clear_claim_in_transaction(
     )
     .bind(run_id)
     .bind(claim_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
-async fn insert_event(
-    transaction: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    kind: &str,
-    summary: &str,
-    payload: serde_json::Value,
-) -> Result<Uuid, AppError> {
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(format!("{kind}:{event_id}"))
-    .bind(kind)
-    .bind(summary)
-    .bind(payload)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(event_id)
-}
-
-async fn insert_entry(
-    transaction: &mut Transaction<'_, Postgres>,
-    conversation_id: Uuid,
-    event_id: Uuid,
-) -> Result<(), AppError> {
-    let sequence = allocate_conversation_sequence(transaction, conversation_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, agent_run_event_id
-        )
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(conversation_id)
-    .bind(sequence)
-    .bind(event_id)
     .execute(&mut **transaction)
     .await?;
     Ok(())
