@@ -137,7 +137,9 @@ const sizes = [
 ] as const
 const schemes = ['light', 'dark'] as const
 
-const file = (screen: Screen, size: string, scheme: string) => `${screen.name}-${size}-${scheme}.png`
+// W1.40: UI_TOUR_DIRECTION previews one of the visual directions (theme/directions.ts).
+const direction = process.env.UI_TOUR_DIRECTION ?? ''
+const file = (screen: Screen, size: string, scheme: string) => `${direction ? `${direction}-` : ''}${screen.name}-${size}-${scheme}.png`
 
 test.use({ storageState: storageStatePath })
 
@@ -148,12 +150,13 @@ for (const scheme of schemes) {
     test.use({ colorScheme: scheme })
 
     test.beforeEach(async ({ page }) => {
-      await page.addInitScript(() => {
+      await page.addInitScript((previewed) => {
         window.localStorage.setItem(
           'agent-workspace:appearance:v2',
           JSON.stringify({ theme: 'system', overrides: {}, density: 'comfortable', textSize: 'default' }),
         )
-      })
+        if (previewed) window.sessionStorage.setItem('agent-workspace:direction-preview', previewed)
+      }, direction)
     })
 
     for (const screen of chosen) {
@@ -185,10 +188,10 @@ ${schemes.map((scheme) => `<a href="${file(screen, 'phone', scheme)}"><img class
     )
     .join('\n')
   writeFileSync(
-    path.join(tourDir, 'index.html'),
+    path.join(tourDir, direction ? `${direction}.html` : 'index.html'),
     `<!doctype html><meta charset="utf-8"><title>UI tour</title>
 <style>body{font:14px system-ui;margin:24px;background:#888}h2{font-size:16px;margin:24px 0 8px}small{opacity:.6;font-weight:400}
 .row{display:flex;gap:12px;align-items:flex-start}img{border:1px solid #0003;display:block}.desktop{width:560px}.phone{width:180px}</style>
-<h1>UI tour</h1>${rows}`,
+<h1>UI tour${direction ? `: ${direction}` : ''}</h1>${rows}`,
   )
 })

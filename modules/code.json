@@ -11,15 +11,17 @@
   "permissions": ["code.view", "code.publish", "code.manage"],
   "tools": {
     "repository_list": "query",
-    "repository_write": "change",
-    "github_integration_write": "change",
+    "repository_create": "create",
+    "repository_prepare": "change",
+    "repository_archive": "change",
+    "github_installation_link": "change",
+    "github_automation_update": "change",
     "repository_get": "describe",
     "pull_request_list": "query",
-    "pull_request_create": "change",
+    "pull_request_create": "create",
     "pull_request_merge": "change",
     "pull_request_refresh": "change",
-    "pull_request_get": "describe",
-    "task_link_pull_request": "change"
+    "pull_request_get": "describe"
   },
   "routes": [
     "/api/v1/integrations/github/*",

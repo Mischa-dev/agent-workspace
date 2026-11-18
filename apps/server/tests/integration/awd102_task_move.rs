@@ -1436,12 +1436,12 @@ async fn a_receipt_is_returned_only_with_access_now() {
     // - the target: the request gate (which scopes task_move by the task's
     //   own project, the source) lets it through, and the move's access
     //   check finds no enabled membership there: not_found.
-    // - the source: the request gate itself refuses the call, an HTTP 403,
-    //   before any tool code runs (mcp.rs scoped_project).
+    // - the source: the operation's own access check finds the task out
+    //   of reach: not_found, the same as a task that isn't there.
     // Neither answer, read raw, carries anything from the receipt.
     for (lost, status, outcome) in [
         (w.dst.clone(), StatusCode::OK, Some("not_found")),
-        (w.src.clone(), StatusCode::FORBIDDEN, None),
+        (w.src.clone(), StatusCode::OK, Some("not_found")),
     ] {
         set_enabled(lost.clone(), false).await;
         let (answered, body) =

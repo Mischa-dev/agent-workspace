@@ -1,6 +1,6 @@
 import { createContext, useContext, useId, useLayoutEffect, type ReactNode } from 'react'
 
-import type { ShellPresence } from './AppShell'
+import type { ShellPresence } from './ShellFrame'
 
 // W1.11: the persistent shell. `ShellLayout` draws the rail, the sidebar and
 // the panel once around every shell page; each page says what it needs
@@ -12,9 +12,13 @@ export type ShellRegistrar = (id: string, presence: ShellPresence | null) => voi
 
 export const ShellPresenceContext = createContext<ShellRegistrar | null>(null)
 
-/** Merges each registrant's presence, latest registrant last. */
+/** Merges each registrant's presence, latest registrant last; what one leaves unsaid (undefined) keeps the earlier say. */
 export function mergePresence(entries: Iterable<ShellPresence>): ShellPresence {
-  return Object.assign({}, ...entries) as ShellPresence
+  const merged: Record<string, unknown> = {}
+  for (const entry of entries) {
+    for (const [key, value] of Object.entries(entry)) if (value !== undefined) merged[key] = value
+  }
+  return merged as ShellPresence
 }
 
 /** Whether two presences draw the same shell. */
@@ -45,8 +49,8 @@ export function useShellPresence(presence: ShellPresence): boolean {
 
 /**
  * Everything a page tells the shell (W1.12): its space, how its main area is
- * laid out, its panel. A page off `AppShell` calls this once, before any
- * early return, and renders only its own content.
+ * laid out, its panel. A page calls this once, before any early return, and
+ * renders only its own content.
  */
 export function useShellPage(presence: ShellPresence) {
   return useShellPresence(presence)
@@ -60,4 +64,10 @@ export function useShellPanel(panel: ReactNode, key?: string, onDismiss?: () => 
 /** The space this page belongs to: a project, Messages or Home. */
 export function useShellSpace(space: Pick<ShellPresence, 'project' | 'direct' | 'home' | 'selectedChannelId' | 'thread'>) {
   return useShellPresence(space)
+}
+
+/** The details panel for a page that knows it only past its early returns: draws nothing itself. */
+export function ShellPanel({ panel, panelKey, onDismiss }: { panel: ReactNode; panelKey?: string; onDismiss?: () => void }) {
+  useShellPanel(panel, panelKey, onDismiss)
+  return null
 }

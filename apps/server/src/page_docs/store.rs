@@ -552,7 +552,10 @@ pub async fn lock_page(
     Ok(sqlx::query_as::<_, LockedPage>(
         r#"
         SELECT project_id, title, body, version, archived_at IS NOT NULL AS archived
-        FROM project_pages WHERE id = $1 FOR UPDATE
+        FROM project_pages
+        -- A page whose module is off or archived can't be changed (M1.6).
+        WHERE id = $1 AND module_part_on('page', id) AND module_part_on('skill', id)
+        FOR UPDATE
         "#,
     )
     .bind(page_id)

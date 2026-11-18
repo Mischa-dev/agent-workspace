@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { useTheme } from '../theme/themeContext'
 import {
   Banner,
@@ -43,7 +42,7 @@ import './whiteboards.css'
 type View = 'boards' | 'trash'
 
 export function WhiteboardsPage() {
-  const session = useAuthenticatedSession()
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
   const [view, setView] = useState<View>('boards')
   const [query, setQuery] = useState('')
   const search = useDeferredValue(query)
@@ -72,7 +71,7 @@ export function WhiteboardsPage() {
   })
   const trashed = view === 'trash' && !search.trim() && (boards.data?.whiteboards.length ?? 0) > 0
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page">
         <PageHeader
           actions={
@@ -174,7 +173,7 @@ export function WhiteboardsPage() {
       >
         Every whiteboard in the trash is deleted for good, with its drawing, images and history. This can’t be undone.
       </ConfirmDialog>
-    </AppShell>
+    </>
   )
 }
 

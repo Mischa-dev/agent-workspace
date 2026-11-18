@@ -109,3 +109,8 @@ export function useApplyPick() {
     onSettled: (_result, _error, input) => void invalidate(input.projectId),
   })
 }
+
+/** A claim or release that was refused says why in words, such as who holds it and until when. */
+export function claimErrorMessage(error: unknown, doing: string): string {
+  return isApiError(error) && error.message ? error.message : `${doing} didn’t work. Try again.`
+}

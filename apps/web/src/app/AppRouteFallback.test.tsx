@@ -2,7 +2,7 @@ import { lazy, type ComponentType } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen } from '@testing-library/react'
 import axe from 'axe-core'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
@@ -11,6 +11,7 @@ import {
   type AuthenticatedSession,
 } from '../auth/session'
 import type { Project } from '../projects/types'
+import { ShellLayout } from '../shell/ShellLayout'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { AuthenticatedRouteBoundary } from './App'
 
@@ -68,25 +69,32 @@ describe('authenticated route loading', () => {
       capabilities: { createChannel: false },
     })
 
+    // The persistent shell draws the project's sidebar from the route while the page loads.
+    const router = createMemoryRouter(
+      [
+        {
+          element: <ShellLayout />,
+          children: [
+            {
+              path: '/projects/:projectId/work-items',
+              handle: { space: 'project', layout: 'shell' },
+              element: (
+                <AuthenticatedRouteBoundary>
+                  <SuspendedRoute />
+                </AuthenticatedRouteBoundary>
+              ),
+            },
+          ],
+        },
+      ],
+      { initialEntries: [`/projects/${projectId}/work-items`] },
+    )
     const { container } = render(
       <ThemeProvider>
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter
-            initialEntries={[`/projects/${projectId}/work-items`]}
-          >
-            <AuthenticatedSessionProvider session={session}>
-              <Routes>
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <SuspendedRoute />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/work-items"
-                />
-              </Routes>
-            </AuthenticatedSessionProvider>
-          </MemoryRouter>
+          <AuthenticatedSessionProvider session={session}>
+            <RouterProvider router={router} />
+          </AuthenticatedSessionProvider>
         </QueryClientProvider>
       </ThemeProvider>,
     )

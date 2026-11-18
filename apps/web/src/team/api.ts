@@ -26,6 +26,8 @@ export type Member = {
     | 'disabled'
     | 'not_configured'
   capabilities: { changeRole: boolean; disable: boolean; enable: boolean }
+  /** The roles you could give them (a built-in role's key or a custom role's ID), from the server. */
+  assignableRoles?: string[]
 }
 
 export type Invitation = {

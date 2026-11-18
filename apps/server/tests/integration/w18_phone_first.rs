@@ -316,3 +316,121 @@ async fn answered(pool: &PgPool, request: Uuid) -> (String, Option<Uuid>, Option
     .await
     .expect("request")
 }
+
+#[tokio::test]
+async fn a_request_is_answered_from_its_notification_once_as_the_person() {
+    use super::{
+        agent_interface::{create_agent, initialize, tool},
+        mcp_admin::{create_project, setup},
+        mcp_tasks::{add_member, space},
+    };
+    let Some(setup) = setup("w18_request_push").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let project = create_project(&setup, "PSH", "Push").await;
+    let (mara, _mara_browser) = add_person(&setup, &[&project], "mara").await;
+    let space = space(&setup).await;
+    let (scout, scout_token) = create_agent(app, &setup.browser, &space, "Scout", "scout").await;
+    add_member(&setup, &project, scout, "member").await;
+    let session = initialize(app, &scout_token).await.expect("Scout MCP");
+    let ask = |title: &str, extra: Value| {
+        let mut arguments = json!({
+            "spaceId": project,
+            "title": title,
+            "audience": {"accounts": ["@mara"]},
+        });
+        arguments
+            .as_object_mut()
+            .expect("arguments")
+            .extend(extra.as_object().expect("extra").clone());
+        let token = scout_token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, "request_create", arguments).await }
+    };
+    let setup = &setup;
+    let notification_for = |request: String| async move {
+        drain(setup).await;
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM notifications WHERE recipient_actor_id = $1 AND subject_id = $2::uuid",
+        )
+        .bind(mara)
+        .bind(request)
+        .fetch_one(pool)
+        .await
+        .expect("request notification")
+    };
+
+    // Yes and no: Approve and Deny, answered as Mara through request_respond.
+    let asked = ask(
+        "Ship the colour change?",
+        json!({"options": [
+            {"id": "ship", "label": "Ship it", "style": "approve"},
+            {"id": "hold", "label": "Hold", "style": "deny"},
+        ]}),
+    )
+    .await;
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    let request = asked["value"]["id"].as_str().expect("request").to_owned();
+    let notification = notification_for(request.clone()).await;
+    let (minted, payload) = mint(pool, setup.organization_id, mara, notification).await;
+    let offered = payload["actions"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .map(|action| action["action"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(&offered[..2], ["approve", "deny"], "{payload}");
+    let (status, body) = act(setup, json!({"token": minted.token, "action": "approve"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "approved", "{body}");
+    let (state, answer, by) = sqlx::query_as::<_, (String, Option<Value>, Option<Uuid>)>(
+        "SELECT status, answer, answered_by_account_id FROM requests WHERE id = $1::uuid",
+    )
+    .bind(&request)
+    .fetch_one(pool)
+    .await
+    .expect("request");
+    assert_eq!(state, "answered");
+    assert_eq!(by, Some(mara));
+    assert_eq!(
+        answer
+            .as_ref()
+            .and_then(|answer| answer["optionId"].as_str()),
+        Some("ship"),
+        "{answer:?}"
+    );
+    // A retry is fine; Deny after Approve is refused and changes nothing.
+    let (status, body) = act(setup, json!({"token": minted.token, "action": "approve"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = act(setup, json!({"token": minted.token, "action": "deny"})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // A typed answer: Reply, and the text is the answer.
+    let asked = ask("What should the banner say?", json!({"allowText": true})).await;
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    let request = asked["value"]["id"].as_str().expect("request").to_owned();
+    let notification = notification_for(request.clone()).await;
+    let (minted, payload) = mint(pool, setup.organization_id, mara, notification).await;
+    assert_eq!(payload["actions"][0]["action"], "reply", "{payload}");
+    let (status, body) = act(setup, json!({"token": minted.token, "action": "approve"})).await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    let (status, body) = act(
+        setup,
+        json!({"token": minted.token, "action": "reply", "text": "Back soon"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let answer =
+        sqlx::query_scalar::<_, Option<Value>>("SELECT answer FROM requests WHERE id = $1::uuid")
+            .bind(&request)
+            .fetch_one(pool)
+            .await
+            .expect("request");
+    assert_eq!(
+        answer.as_ref().and_then(|answer| answer["text"].as_str()),
+        Some("Back soon"),
+        "{answer:?}"
+    );
+}

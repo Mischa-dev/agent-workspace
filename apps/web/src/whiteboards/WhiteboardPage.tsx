@@ -8,9 +8,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { callOp, newRequestId, opPrefix } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { useShellPage } from '../shell/shellStore'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
-import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { useTheme } from '../theme/themeContext'
 import {
@@ -66,10 +66,9 @@ function useNow() {
 export function WhiteboardPage() {
   const { whiteboardId = '' } = useParams()
   const session = useAuthenticatedSession()
+  useShellPage({ mainClassName: 'aw-main--whiteboard' })
   return (
-    <AppShell mainClassName="aw-main--whiteboard" user={session.user}>
-      <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
-    </AppShell>
+    <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
   )
 }
 

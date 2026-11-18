@@ -2,10 +2,9 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, countLabel, describeError, formatRelative, showToast } from '../ui'
 import { sheetKeys, updateSheet, useSheets, type SheetSummary } from './api'
 import { SheetDetailsDialog } from './SheetDialogs'
@@ -15,7 +14,6 @@ type Shown = 'open' | 'archived'
 
 /** A project's sheets, each with its tabs and how many cells hold something. */
 export function SheetsListPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const sheets = useSheets(projectId)
@@ -23,19 +21,16 @@ export function SheetsListPage() {
   const navigate = useNavigate()
   const [shown, setShown] = useState<Shown>('open')
   const [creating, setCreating] = useState(false)
+  useShellPage({ project: project.data })
 
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading sheets" />
-      </AppShell>
+      <ProjectPageLoading label="Loading sheets" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -64,7 +59,7 @@ export function SheetsListPage() {
   ) : null
 
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-sheets">
         <PageHeader
           actions={
@@ -126,6 +121,6 @@ export function SheetsListPage() {
         ) : null}
       </div>
       {creating ? <SheetDetailsDialog onClose={() => setCreating(false)} onSaved={(body) => void navigate(href(body.sheet.id))} projectId={projectId} sheet={null} /> : null}
-    </AppShell>
+    </>
   )
 }

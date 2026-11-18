@@ -866,6 +866,7 @@ async fn graph(
         &GraphFilter {
             milestone_id: query.milestone_id,
             include_finished: query.include_finished.unwrap_or(false),
+            ..GraphFilter::default()
         },
     )
     .await?;

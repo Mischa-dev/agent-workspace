@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 
 import { legacyPathOf } from '../app/href'
+import { useWorkspaceHref } from '../app/workspace'
+import { useHomeExperience } from '../experience/layout'
+import { captureEntries } from '../modules/registry'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
 import { formatBytes } from '../files/api'
 import { QuickMessageForm, QuickNoteForm, QuickTaskForm } from './QuickAddForms'
@@ -20,6 +23,7 @@ import { FileGlyph, ImageGlyph } from '../files/icons'
  */
 export function QuickAddPage() {
   const session = useAuthenticatedSession()
+  useShellPage({ mainClassName: 'aw-main--page' })
   const location = useLocation()
   const [params] = useSearchParams()
   const sharing = legacyPathOf(location.pathname) === '/share'
@@ -68,35 +72,54 @@ export function QuickAddPage() {
   }
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--reading aw-quick">
-        <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : mode === 'note' ? 'Note to self' : mode === 'message' ? 'New message' : 'New task'} />
-        {shared ? <SharedPreview shared={shared} /> : null}
-        {files?.length ? (
-          <ul aria-label="Shared files" className="aw-quick__files">
-            {files.map((file, index) => (
-              <li key={`${file.name}-${index}`}>
-                <Icon name={file.type.startsWith('image/') ? ImageGlyph : FileGlyph} size={14} />
-                <span className="aw-quick__file-name">{file.name}</span>
-                <span className="aw-quick__file-size">{formatBytes(file.size)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <SegmentedControl
-          label={sharing ? 'Share as' : 'Add'}
-          onChange={setMode}
-          options={[
-            { value: 'task', label: 'New task', icon: 'work' },
-            { value: 'message', label: sharing ? 'Send to…' : 'Message…', icon: 'message' },
-            { value: 'note', label: 'Note to self', icon: 'pencil' },
-            ...(sharing ? [{ value: 'later' as const, label: 'Save to Later', icon: 'bookmark' as const }] : []),
-          ]}
-          value={mode}
-        />
-        {body}
-      </div>
-    </AppShell>
+    <div className="aw-page aw-page--reading aw-quick">
+      <PageHeader icon={sharing ? 'link' : 'plus'} title={sharing ? 'Share' : mode === 'note' ? 'Note to self' : mode === 'message' ? 'New message' : 'New task'} />
+      {shared ? <SharedPreview shared={shared} /> : null}
+      {files?.length ? (
+        <ul aria-label="Shared files" className="aw-quick__files">
+          {files.map((file, index) => (
+            <li key={`${file.name}-${index}`}>
+              <Icon name={file.type.startsWith('image/') ? ImageGlyph : FileGlyph} size={14} />
+              <span className="aw-quick__file-name">{file.name}</span>
+              <span className="aw-quick__file-size">{formatBytes(file.size)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <SegmentedControl
+        label={sharing ? 'Share as' : 'Add'}
+        onChange={setMode}
+        options={[
+          { value: 'task', label: 'New task', icon: 'work' },
+          { value: 'message', label: sharing ? 'Send to…' : 'Message…', icon: 'message' },
+          { value: 'note', label: 'Note to self', icon: 'pencil' },
+          ...(sharing ? [{ value: 'later' as const, label: 'Save to Later', icon: 'bookmark' as const }] : []),
+        ]}
+        value={mode}
+      />
+      {body}
+      {sharing ? null : <OtherCaptures />}
+    </div>
+  )
+}
+
+/**
+ * The other things the modules on here let you start quickly (W1.32), each
+ * a link to the page that starts it. The task form above is the first.
+ */
+function OtherCaptures() {
+  const experience = useHomeExperience()
+  const href = useWorkspaceHref()
+  const others = captureEntries(experience).filter((entry) => entry.id !== 'task' && !entry.inProject)
+  if (others.length === 0) return null
+  return (
+    <nav aria-label="Add something else" className="aw-quick__others">
+      {others.map((entry) => (
+        <ButtonLink icon={entry.icon} key={`${entry.module}:${entry.id}`} size="sm" to={href(entry.path)} variant="ghost">
+          {entry.label}
+        </ButtonLink>
+      ))}
+    </nav>
   )
 }
 

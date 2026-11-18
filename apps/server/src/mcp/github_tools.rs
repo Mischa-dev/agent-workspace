@@ -19,7 +19,7 @@ const PEOPLE_ONLY: &str =
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct GitHubIntegrationWriteArguments {
+pub(crate) struct GitHubIntegrationWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Link the project to this GitHub App installation (its number on
@@ -44,7 +44,7 @@ pub(super) struct GitHubIntegrationWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitHubIntegrationWriteValue {
+pub(crate) struct GitHubIntegrationWriteValue {
     /// "synced" or "automation".
     pub done: String,
     /// After a sync: the installation and the repositories it reaches.
@@ -57,7 +57,7 @@ pub(super) struct GitHubIntegrationWriteValue {
     pub automation: Option<Value>,
 }
 
-pub(super) async fn github_integration_write(
+pub(crate) async fn github_integration_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: GitHubIntegrationWriteArguments,

@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.operations(crate::packages::ops::register_ops);
+        module.operations(crate::packages::directory_ops::register_ops);
         module.operations(crate::statuses::ops::register_ops);
         module.operations(crate::profiles::ops::register_ops);
         module.operations(crate::groups::ops::register_ops);
@@ -28,6 +29,8 @@ impl CoreModule for Module {
         module.operations(crate::spaces::invite_links::register_ops);
         module.routes(crate::spaces::invite_links::router);
         module.operations(crate::workspace::ops::register_ops);
+        module.operations(crate::workspace::reads::register_ops);
+        module.operations(crate::ops::long::register_ops);
         module.operations(crate::files::link::register_ops);
         module.routes(crate::files::link::router);
     }

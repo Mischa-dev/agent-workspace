@@ -80,12 +80,15 @@ def main() -> None:
     if len(set(allowlist)) != len(allowlist):
         fail("Hermes tool allowlist contains duplicates")
     # A tool is served when it is a hand-written tool in mcp.rs, an
-    # operation (its NAME in an ops module), or an old name the operation
-    # alias table keeps answering.
+    # operation (its NAME in an ops module, or a read_op! name in a file
+    # under an ops folder), or an old name the operation alias table keeps
+    # answering.
     mcp_source = MCP_SOURCE.read_text(encoding="utf-8")
+    operation_files = sorted(
+        set(SERVER_SOURCE.rglob("ops.rs")) | set(SERVER_SOURCE.rglob("ops/*.rs"))
+    )
     operations_source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(SERVER_SOURCE.rglob("ops.rs"))
+        path.read_text(encoding="utf-8") for path in operation_files
     )
     aliases_source = ALIASES_SOURCE.read_text(encoding="utf-8")
     for tool_name in allowlist:
@@ -93,6 +96,7 @@ def main() -> None:
         if not (
             re.search(rf"async fn {name}\s*\(", mcp_source)
             or re.search(rf'const NAME: &\'static str = "{name}";', operations_source)
+            or re.search(rf'_op!\(\w+ \{{\s*name: "{name}",', operations_source)
             or re.search(rf'"{name}"\s*=>|name:\s*"{name}"', aliases_source)
         ):
             fail(f"Hermes allowlisted tool is missing from MCP: {tool_name}")

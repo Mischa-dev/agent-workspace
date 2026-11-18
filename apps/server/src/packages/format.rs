@@ -426,6 +426,22 @@ pub fn from_template(
         needs_admin.push(format!("role:{key}"));
         part(ContentKind::Role, key, body);
     }
+    // A default role the template doesn't bring (a built-in one, such as
+    // Member): a role part naming it only, which makes it the default.
+    if let Some(default) = definition.default_role.as_deref()
+        && !definition
+            .roles
+            .iter()
+            .any(|role| role.name.trim().eq_ignore_ascii_case(default.trim()))
+    {
+        let key = keys.take(ContentKind::Role, default);
+        needs_admin.push(format!("role:{key}"));
+        part(
+            ContentKind::Role,
+            key,
+            serde_json::json!({ "name": default.trim(), "default": true }),
+        );
+    }
     if let Some(project) = &definition.project {
         part(
             ContentKind::Space,
@@ -452,7 +468,6 @@ pub fn from_template(
             );
         }
     }
-    let modules = definition.modules.clone().unwrap_or_default();
     Package {
         format: FORMAT.to_owned(),
         id: key_of(id),
@@ -461,15 +476,96 @@ pub fn from_template(
         description: description.to_owned(),
         publisher: None,
         target: PackageTarget::Workspace,
-        requires: Requires {
-            contract: None,
-            modules,
-        },
+        requires: Requires::default(),
         contents,
         needs_admin,
         digest: None,
     }
     .sealed()
+}
+
+/// Whether a role part only names a role to make the default (`{"name",
+/// "default": true}`), rather than adding or changing one.
+pub fn is_default_reference(body: &Value) -> bool {
+    body.as_object().is_some_and(|map| {
+        map.get("default") == Some(&Value::Bool(true))
+            && map.get("name").is_some_and(Value::is_string)
+            && map.keys().all(|key| key == "name" || key == "default")
+    })
+}
+
+/// A workspace package read back as a template, for the template list and
+/// routes (M1.11): `None` when it holds a part a template can't (a form,
+/// an automation, a page, a skill, an agent, a built module).
+pub fn to_template(package: &Package) -> Option<TemplateDefinition> {
+    use crate::workspace_templates::{TemplateProject, TemplateRole};
+
+    if package.target != PackageTarget::Workspace {
+        return None;
+    }
+    let mut definition = TemplateDefinition::default();
+    let mut project: Option<TemplateProject> = None;
+    for part in &package.contents {
+        let body = part.body.clone()?;
+        match part.kind {
+            ContentKind::Switches => {
+                let off = body["off"].as_array().cloned().unwrap_or_default();
+                definition.modules = Some(
+                    crate::modules::manifest::core()
+                        .iter()
+                        .filter(|module| module.switchable)
+                        .filter(|module| !off.iter().any(|id| *id == module.id.as_str()))
+                        .map(|module| module.id.clone())
+                        .collect(),
+                );
+            }
+            ContentKind::Layout => {
+                definition.layout = Some(body["preset"].as_str()?.to_owned());
+                definition.layout_changes =
+                    serde_json::from_value(body["changes"].clone()).unwrap_or_default();
+                definition.layout_words =
+                    serde_json::from_value(body["words"].clone()).unwrap_or_default();
+            }
+            ContentKind::Role => {
+                let mut body = body;
+                let default = body
+                    .as_object_mut()
+                    .and_then(|map| map.remove("default"))
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                let role = serde_json::from_value::<TemplateRole>(body.clone()).ok()?;
+                if default {
+                    definition.default_role = Some(role.name.clone());
+                }
+                if !(default && body.as_object().is_some_and(|map| map.len() == 1)) {
+                    definition.roles.push(role);
+                }
+            }
+            ContentKind::Space => {
+                let starter = project.get_or_insert_with(TemplateProject::default);
+                starter.name = body["name"].as_str()?.to_owned();
+                starter.key = body["key"].as_str()?.to_owned();
+            }
+            ContentKind::Channels => {
+                let starter = project.get_or_insert_with(TemplateProject::default);
+                for channel in body["channels"].as_array()? {
+                    starter.channels.push(channel["name"].as_str()?.to_owned());
+                }
+            }
+            ContentKind::Collection => {
+                let starter = project.get_or_insert_with(TemplateProject::default);
+                starter.collections.push(serde_json::from_value(body).ok()?);
+            }
+            _ => return None,
+        }
+    }
+    if let Some(project) = &project
+        && project.name.is_empty()
+    {
+        return None;
+    }
+    definition.project = project;
+    Some(definition)
 }
 
 /// The JSON Schema of the inline form, as `modules/packages/package.schema.json`
