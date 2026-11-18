@@ -211,9 +211,8 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
                 }
                 _ => {}
             }
-            if section.show == "unread" {
-                mine.retain(|item| item.unread);
-            }
+            // Every item comes back, read or not: "only unread" is how a
+            // section shows, and where a conversation sits stays known.
             SidebarSection {
                 id: section.id,
                 name: section.name,
@@ -275,7 +274,8 @@ impl Operation for SidebarList {
     const TITLE: &'static str = "List sidebar sections";
     const DESCRIPTION: &'static str = "Your own sidebar sections in this workspace (Starred, and \
         any you named) with the channels, DMs and groups you placed in each, whether each is \
-        unread, in each section's order. Arrange them with sidebar_section_set and \
+        unread, in each section's order. A section whose show is unread still lists \
+        every item; display only the unread ones. Arrange them with sidebar_section_set and \
         sidebar_item_move.";
 
     type Input = SidebarListInput;

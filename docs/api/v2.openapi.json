@@ -50497,7 +50497,7 @@
     },
     "/api/v2/w/{workspace}/ops/sidebar_list": {
       "post": {
-        "description": "Your own sidebar sections in this workspace (Starred, and any you named) with the channels, DMs and groups you placed in each, whether each is unread, in each section's order. Arrange them with sidebar_section_set and sidebar_item_move.",
+        "description": "Your own sidebar sections in this workspace (Starred, and any you named) with the channels, DMs and groups you placed in each, whether each is unread, in each section's order. A section whose show is unread still lists every item; display only the unread ones. Arrange them with sidebar_section_set and sidebar_item_move.",
         "operationId": "sidebar_list",
         "parameters": [
           {
