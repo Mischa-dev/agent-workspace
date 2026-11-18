@@ -847,6 +847,64 @@ pub(super) async fn resolve_conversation_members(
     Ok(Ok(resolved))
 }
 
+/// The name each tool gives the space it acts in, when it takes one:
+/// `projectId` for most hand-written tools, `spaceId` for the newer ones.
+fn space_key(tool: &str) -> Option<&'static str> {
+    static KEYS: std::sync::OnceLock<std::collections::HashMap<String, &'static str>> =
+        std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        super::McpServer::tools()
+            .list_all()
+            .into_iter()
+            .chain(crate::ops::mcp::tools())
+            .filter_map(|tool| {
+                let properties = tool.input_schema.get("properties")?.as_object()?;
+                let key = match (
+                    properties.contains_key("projectId"),
+                    properties.contains_key("spaceId"),
+                ) {
+                    (true, false) => "projectId",
+                    (false, true) => "spaceId",
+                    _ => return None,
+                };
+                Some((tool.name.to_string(), key))
+            })
+            .collect()
+    })
+    .get(tool)
+    .copied()
+}
+
+/// K4.21: every tool that takes a space takes it as `spaceId` or as
+/// `projectId`, whichever it names, so the arguments are given the name
+/// the tool reads. Both, naming different spaces, is refused.
+pub(super) fn space_arg(
+    tool: &str,
+    arguments: &mut Option<rmcp::model::JsonObject>,
+) -> Result<(), &'static str> {
+    let (Some(key), Some(arguments)) = (space_key(tool), arguments.as_mut()) else {
+        return Ok(());
+    };
+    let other = if key == "spaceId" {
+        "projectId"
+    } else {
+        "spaceId"
+    };
+    let Some(given) = arguments.remove(other) else {
+        return Ok(());
+    };
+    match arguments.get(key) {
+        Some(named) if *named != given => {
+            Err("spaceId and projectId name different spaces. Give one of them.")
+        }
+        Some(_) => Ok(()),
+        None => {
+            arguments.insert(key.to_owned(), given);
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

@@ -3394,6 +3394,15 @@ async fn run_tool(
     request: rmcp::model::CallToolRequestParams,
     context: RequestContext<RoleServer>,
 ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+    // K4.21: a space may be named `spaceId` or `projectId`.
+    let mut request = request;
+    if let Err(message) = common::space_arg(&request.name, &mut request.arguments) {
+        return Ok(rmcp::model::CallToolResponse::Complete(
+            rmcp::model::CallToolResult::structured(
+                crate::ops::OpError::invalid("spaceId", message).to_json(),
+            ),
+        ));
+    }
     // K2: an operation runs through the dispatcher, which checks access,
     // modules and request ids itself.
     if crate::ops::mcp::is_operation(&request.name) {
