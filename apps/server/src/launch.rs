@@ -2077,10 +2077,13 @@ async fn start_launch(
         )
         .await;
     }
-    let runner = harness
-        .as_deref()
-        .and_then(|harness| state.supervisors.runner_for(harness))
-        .or(launch.agent_account_id);
+    // The agent the launch names does the work; a harness's runner only
+    // when none is named.
+    let runner = launch.agent_account_id.or_else(|| {
+        harness
+            .as_deref()
+            .and_then(|harness| state.supervisors.runner_for(harness))
+    });
     if let Some(runner) = runner {
         return hand_off(
             state, caller, launch, thread_id, runner, &prompt, &overrides,

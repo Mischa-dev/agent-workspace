@@ -190,6 +190,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
             host_agent_ref: host_agent_ref.to_owned(),
             ..Receipt::default()
         });
+        receipt.command_id = Some(command.command_id.to_string());
         if let Some(finished) = &receipt.finished {
             // Offered again after it ended: answer as the first time.
             return Some(match (finished.as_str(), receipt.task_id()) {
@@ -314,14 +315,18 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                     .controller
                     .call(json!({"operation": "task-cancel", "id": task_id}))
                     .await;
-                let _ = active
+                let reported = active
                     .sink
                     .update(
                         json!({"state": "failed", "failureReason": "The Agent OS task took too long and was stopped."}),
                         &format!("{task_id}-deadline"),
                     )
                     .await;
-                self.finish(&run_id, "failed");
+                // Kept until the report lands; the next look sends it again
+                // under the same key.
+                if reported.is_ok() {
+                    self.finish(&run_id, "failed");
+                }
                 continue;
             }
             let inspected = self
@@ -336,7 +341,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
             if !TERMINAL.contains(&status) {
                 continue;
             }
-            let ended = if status == "completed" {
+            let (fields, key, how) = if status == "completed" {
                 let text = output_text(&task["observation"], self.config.max_reply_characters);
                 match participation(&text) {
                     Ok(Decision::Reply(body)) => {
@@ -350,44 +355,32 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                         if said.is_err() {
                             continue;
                         }
-                        let _ = active
-                            .sink
-                            .update(json!({"state": "done"}), &format!("{task_id}-done"))
-                            .await;
-                        "done"
+                        (json!({"state": "done"}), format!("{task_id}-done"), "done")
                     }
-                    Ok(Decision::Pass) => {
-                        let _ = active
-                            .sink
-                            .update(
-                                json!({"state": "done", "outcomeSummary": "Nothing to add."}),
-                                &format!("{task_id}-passed"),
-                            )
-                            .await;
-                        "passed"
-                    }
-                    Err(why) => {
-                        let _ = active
-                            .sink
-                            .update(
-                                json!({"state": "failed", "failureReason": why}),
-                                &format!("{task_id}-failed"),
-                            )
-                            .await;
-                        "failed"
-                    }
+                    Ok(Decision::Pass) => (
+                        json!({"state": "done", "outcomeSummary": "Nothing to add."}),
+                        format!("{task_id}-passed"),
+                        "passed",
+                    ),
+                    Err(why) => (
+                        json!({"state": "failed", "failureReason": why}),
+                        format!("{task_id}-failed"),
+                        "failed",
+                    ),
                 }
             } else {
-                let _ = active
-                    .sink
-                    .update(
-                        json!({"state": "failed", "failureReason": format!("The Agent OS task ended as {status}.")}),
-                        &format!("{task_id}-failed"),
-                    )
-                    .await;
-                "failed"
+                (
+                    json!({"state": "failed", "failureReason": format!("The Agent OS task ended as {status}.")}),
+                    format!("{task_id}-failed"),
+                    "failed",
+                )
             };
-            self.finish(&run_id, ended);
+            // Kept until the run's last report lands: a lost one is sent
+            // again next look, under the same key, so it counts once.
+            if active.sink.update(fields, &key).await.is_err() {
+                continue;
+            }
+            self.finish(&run_id, how);
         }
     }
 
@@ -396,6 +389,42 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
             active.receipt.finished = Some(how.to_owned());
             let _ = self.receipts.save(&active.receipt);
         }
+    }
+
+    /// Starts it took before a restart and hasn't finished: each is
+    /// looked at and reported again once `resume` gives it a sink.
+    pub fn to_resume(&self) -> Vec<Receipt> {
+        self.receipts
+            .unfinished()
+            .into_iter()
+            .filter(|receipt| receipt.accepted() && !self.active.contains_key(&receipt.run_id))
+            .collect()
+    }
+
+    /// Takes up a start from before a restart, reporting through `sink`.
+    pub fn resume(&mut self, receipt: Receipt, sink: S) {
+        self.active.insert(
+            receipt.run_id.clone(),
+            Active {
+                receipt,
+                sink,
+                since: Instant::now(),
+            },
+        );
+    }
+
+    /// Lets go of a start from before a restart that can no longer be
+    /// reported (its command closed): its task is stopped, since its answer
+    /// would reach nobody.
+    pub async fn abandon(&mut self, mut receipt: Receipt) {
+        if let Some(task) = receipt.task_id() {
+            let _ = self
+                .controller
+                .call(json!({"operation": "task-cancel", "id": task}))
+                .await;
+        }
+        receipt.finished = Some("abandoned".to_owned());
+        let _ = self.receipts.save(&receipt);
     }
 
     pub fn running(&self) -> usize {
@@ -537,6 +566,41 @@ fn token_path(config: &Config) -> std::path::PathBuf {
     config.state_dir.join("host-credential")
 }
 
+/// Takes up the tasks it was running before a restart, before the first
+/// heartbeat says which runs it has: each start is fetched again for a
+/// fresh credential to report with.
+async fn resume<C: Controller>(
+    client: &HostClient,
+    connector: &mut Connector<C, RunReporter>,
+) -> Result<(), ClientError> {
+    for receipt in connector.to_resume() {
+        let Some(command_id) = receipt
+            .command_id
+            .as_deref()
+            .and_then(|id| id.parse::<uuid::Uuid>().ok())
+        else {
+            connector.abandon(receipt).await;
+            continue;
+        };
+        let command = match client.command(command_id).await {
+            Ok(command) => command,
+            Err(ClientError::Refused(404 | 410, _)) => {
+                connector.abandon(receipt).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        match (command.run_id, command.workspace_credential.as_ref()) {
+            (Some(run_id), Some(credential)) => {
+                connector.resume(receipt, client.reporter(run_id, credential));
+            }
+            // The run ended meanwhile: nothing to report to.
+            _ => connector.abandon(receipt).await,
+        }
+    }
+    Ok(())
+}
+
 /// Runs until `stop` resolves: describes itself, then reads commands,
 /// looks at running tasks and sends a heartbeat in turn.
 pub async fn serve<C: Controller>(
@@ -545,6 +609,7 @@ pub async fn serve<C: Controller>(
     stop: impl Future<Output = ()>,
 ) -> Result<(), ClientError> {
     client.describe(&connector.description()).await?;
+    resume(&client, &mut connector).await?;
     let mut after = 0;
     let mut last_beat = Instant::now() - Duration::from_secs(3600);
     let wait = connector

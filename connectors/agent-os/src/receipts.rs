@@ -17,6 +17,10 @@ pub struct Receipt {
     pub start_key: String,
     pub run_id: String,
     pub host_agent_ref: String,
+    /// The start command, fetched again after a restart for a fresh
+    /// credential to report with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
     /// The `task-submit` call, kept whole so a retry sends the very same
     /// one (same idempotency key, same source revision).
     #[serde(default, skip_serializing_if = "Option::is_none")]

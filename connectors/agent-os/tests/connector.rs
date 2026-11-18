@@ -77,6 +77,8 @@ impl Controller for FakeController {
 #[derive(Clone, Default)]
 struct FakeSink {
     reports: Arc<Mutex<Vec<(String, Value)>>>,
+    /// Updates still to fail, as when the workspace can't be reached.
+    failing_updates: Arc<Mutex<usize>>,
 }
 
 impl FakeSink {
@@ -95,6 +97,13 @@ impl RunSink for FakeSink {
     }
 
     async fn update(&self, fields: Value, _key: &str) -> Result<(), String> {
+        {
+            let mut failing = self.failing_updates.lock().expect("failing");
+            if *failing > 0 {
+                *failing -= 1;
+                return Err("unreachable".to_owned());
+            }
+        }
         self.reports
             .lock()
             .expect("reports")
@@ -324,6 +333,55 @@ async fn an_ended_task_becomes_the_agents_answer_a_pass_or_a_failure() {
         }
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+#[tokio::test]
+async fn a_restart_takes_up_its_tasks_and_a_lost_last_report_is_sent_again() {
+    let fake = FakeController::default();
+    let sink = FakeSink::default();
+    let dir = state_dir();
+    let mut connector: Connector<_, FakeSink> =
+        Connector::new(config(dir.clone()), fake.clone()).expect("connector");
+    let first = start(RUN, "helper");
+    connector
+        .command(&first, || Some(sink.clone()))
+        .await
+        .expect("ack");
+    drop(connector);
+
+    // After a restart it knows the task and the start to fetch again.
+    let mut restarted: Connector<_, FakeSink> =
+        Connector::new(config(dir.clone()), fake.clone()).expect("connector");
+    assert_eq!(restarted.running(), 0);
+    let waiting = restarted.to_resume();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        waiting[0].command_id.as_deref(),
+        Some(first.command_id.to_string().as_str())
+    );
+    let resumed = FakeSink::default();
+    restarted.resume(waiting[0].clone(), resumed.clone());
+    assert!(restarted.to_resume().is_empty());
+    assert_eq!(
+        restarted.heartbeat().runs.len(),
+        1,
+        "the heartbeat names it"
+    );
+
+    // Its last report is lost once: it stays until the report lands.
+    *resumed.failing_updates.lock().expect("failing") = 1;
+    fake.finish("completed", json!("{\"decision\":\"pass\"}"));
+    restarted.tick().await;
+    assert_eq!(restarted.running(), 1, "kept until the report lands");
+    assert!(resumed.reports().is_empty());
+    restarted.tick().await;
+    assert_eq!(restarted.running(), 0);
+    assert_eq!(
+        resumed.reports().last().expect("reported").1["state"],
+        "done"
+    );
+    assert!(restarted.to_resume().is_empty(), "finished for good");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

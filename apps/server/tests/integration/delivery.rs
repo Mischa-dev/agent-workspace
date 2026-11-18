@@ -1333,6 +1333,24 @@ async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
             .await
             .expect("count");
     assert_eq!(posted, 0, "nothing was posted");
+    // A hand-written write tool too.
+    let (_, uploaded) = rook
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "file_upload",
+                arguments: json!({"conversationId": general, "name": "note.txt", "text": "Note"}),
+            },
+        )
+        .await;
+    assert_eq!(uploaded["paused"], true, "{uploaded}");
+    let files =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM files WHERE uploaded_by_actor_id = $1")
+            .bind(rook.actor)
+            .fetch_one(world.pool())
+            .await
+            .expect("count");
+    assert_eq!(files, 0, "nothing was uploaded");
 
     // Asked while paused: it hears its pause, and nothing else yet.
     post(
