@@ -7,6 +7,7 @@ import { whenChoices } from '../later/when'
 import { actorKind, type ActorKind } from '../ui/identityModel'
 import type { MenuEntry } from '../ui/overlays'
 import { formatDateTime, formatTime } from '../ui/time'
+import { spaceHref } from '../app/href'
 
 export const inboxKeys = {
   root: queryKeys.inbox,
@@ -84,7 +85,7 @@ function text(value: unknown): string | null {
 export function safeHref(href: string, projectId: string): string {
   if (href.startsWith('/') && !href.startsWith('//')) return href
   if (/^https:\/\/[^/\s]+\//.test(href)) return href
-  return `/projects/${encodeURIComponent(projectId)}`
+  return spaceHref(projectId)
 }
 
 function inAppPath(href: string | null) {

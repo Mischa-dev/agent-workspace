@@ -64,6 +64,7 @@ import { runAgent } from './runAgent'
 import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
 import '../styles/conversation.css'
+import { spaceHref } from '../app/href'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -180,14 +181,13 @@ export function ThreadPage() {
   )
 
   const runActions = useThreadRunActions({ entries, includeArchived, projectId, threadId, timeline: verifiedTimeline })
-  const { busyAction } = runActions
   const archiveThread = useArchiveConversation({
     conversationId: threadId,
     kind: 'thread',
     label: `“${verifiedTimeline?.conversation.name ?? 'thread'}”`,
     leaveTo: verifiedTimeline?.conversation.parentChannelId
-      ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(verifiedTimeline.conversation.parentChannelId)}`
-      : `/projects/${encodeURIComponent(projectId)}`,
+      ? spaceHref(projectId, `/channels/${encodeURIComponent(verifiedTimeline.conversation.parentChannelId)}`)
+      : spaceHref(projectId),
     projectId,
   })
   const restoreThread = useRestoreConversation({
@@ -286,8 +286,8 @@ export function ThreadPage() {
         replace
         to={
           parent
-            ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parent)}`
-            : `/projects/${encodeURIComponent(projectId)}`
+            ? spaceHref(projectId, `/channels/${encodeURIComponent(parent)}`)
+            : spaceHref(projectId)
         }
       />
     )
@@ -297,7 +297,7 @@ export function ThreadPage() {
     return (
       <Navigate
         replace
-        to={`/projects/${encodeURIComponent(projectId)}`}
+        to={spaceHref(projectId)}
       />
     )
   }
@@ -324,8 +324,8 @@ export function ThreadPage() {
   // Streamed text comes from the run that's working now.
   const writer = runAgent(activeRun)
   const channelRoute = parentId
-    ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parentId)}`
-    : `/projects/${encodeURIComponent(projectId)}`
+    ? spaceHref(projectId, `/channels/${encodeURIComponent(parentId)}`)
+    : spaceHref(projectId)
 
   // An active run without a stop button has no actions, so its card has no footer.
   const cardActions =
@@ -493,9 +493,8 @@ export function ThreadPage() {
           <div className="aw-timeline__card">
             <ApprovalCard
               approval={pendingApproval}
-              busyAction={busyAction}
               canRespond={pendingApproval.mayAnswer}
-              onRespond={runActions.respond}
+              onAnswered={runActions.answered}
               run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.runId) ?? activeRun}
             />
           </div>
@@ -512,7 +511,7 @@ export function ThreadPage() {
             kind: 'message',
             conversationId: threadId,
             conversationKind: 'thread',
-            href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`,
+            href: spaceHref(projectId, `/threads/${encodeURIComponent(threadId)}`),
           }}
           onEditLast={() => messageActions.editLast(entries)}
           onReplyChange={reply.set}

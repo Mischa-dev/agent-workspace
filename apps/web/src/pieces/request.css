@@ -1,0 +1,57 @@
+/* The request card (W1.24): a question, approval or proposal waiting on an answer. */
+
+.aw-request {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-request[data-status='open']:not(.aw-request--inline) {
+  border-color: var(--warning);
+}
+
+.aw-request__question {
+  margin: 0;
+  font: var(--t-ui-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-request--inline .aw-request__question {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--content-border);
+}
+
+.aw-request__detail {
+  margin: 0;
+  color: var(--content-fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-request__form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-request__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-request__send {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.aw-request__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-request__asker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}

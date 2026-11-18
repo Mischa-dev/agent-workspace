@@ -1,3 +1,4 @@
+import { here, legacyPathOf, spaceHref } from '../app/href'
 import { Suspense, lazy, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -74,7 +75,7 @@ export function ProjectOverviewPage() {
     )
   }
 
-  const base = `/projects/${encodeURIComponent(project.data.id)}`
+  const base = spaceHref(project.data.id)
   return (
     <>
       <div className="aw-page">
@@ -196,9 +197,9 @@ function NeedsYouHere({ base, project }: { base: string; project: Project }) {
     )
   }
   const notifications = unread.data?.notifications ?? []
-  const listed = new Set(notifications.map((item) => pathOf(item.href)))
+  const listed = new Set(notifications.map((item) => legacyPathOf(pathOf(item.href))))
   const waiting = liveThreads((sidebar.data?.channels ?? []).filter((channel) => !channel.archivedAt)).filter(
-    (thread) => WAITING.includes(thread.attention) && !listed.has(`${base}/threads/${encodeURIComponent(thread.id)}`),
+    (thread) => WAITING.includes(thread.attention) && !listed.has(legacyPathOf(`${base}/threads/${encodeURIComponent(thread.id)}`)),
   )
   // The list is the whole count when it fits on one page; past that, the project's count says how many.
   const unreadTotal = unread.data?.nextCursor ? Math.max(project.attentionCount, notifications.length) : notifications.length
@@ -210,7 +211,7 @@ function NeedsYouHere({ base, project }: { base: string; project: Project }) {
     if (!item.read) update.mutate({ action: 'read', ids: [item.id] })
   }
   return (
-    <Section actions={<MoreLink to="/inbox">Inbox</MoreLink>} id="overview-needs-you" title="Needs you">
+    <Section actions={<MoreLink to={here('/inbox')}>Inbox</MoreLink>} id="overview-needs-you" title="Needs you">
       {unread.isError || sidebar.isError ? (
         <Banner
           onRetry={() => {
@@ -324,7 +325,7 @@ function Channels({ base, project }: { base: string; project: Project }) {
                 leading={<Icon className="aw-row__glyph" name="hash" />}
                 meta={channelMeta(channel)}
                 title={
-                  <Link className="aw-row__link" to={`${base}/channels/${encodeURIComponent(channel.id)}`}>
+                  <Link className="aw-row__link" to={`${base}/chat/${encodeURIComponent(channel.id)}`}>
                     {channel.name}
                   </Link>
                 }
@@ -371,7 +372,7 @@ function RecentTasks({ base, canCreate, experience, projectId }: { base: string;
   const many = experience.word('task', 'many')
   return (
     <div className="aw-overview__column">
-      <Section actions={<MoreLink to={`${base}/work-items`}>{`All ${many}`}</MoreLink>} title={`Recent ${many}`}>
+      <Section actions={<MoreLink to={`${base}/tasks`}>{`All ${many}`}</MoreLink>} title={`Recent ${many}`}>
         {work.isPending && <ListSkeleton label={`Loading ${many}`} rows={3} />}
         {work.isError && (
           <Banner onRetry={() => void work.refetch()} tone="danger">
@@ -382,7 +383,7 @@ function RecentTasks({ base, canCreate, experience, projectId }: { base: string;
           <EmptyState
             action={
               canCreate ? (
-                <ButtonLink icon="plus" to={`${base}/work-items?create=task`} variant="primary">
+                <ButtonLink icon="plus" to={`${base}/tasks?create=task`} variant="primary">
                   New {experience.word('task')}
                 </ButtonLink>
               ) : null
@@ -407,7 +408,7 @@ function RecentTasks({ base, canCreate, experience, projectId }: { base: string;
                 leading={<StatusIcon category={item.status.semanticCategory} label={item.status.name} />}
                 meta={experience.shows('tech.task_keys') ? `${item.key} · ${item.status.name}` : item.status.name}
                 title={
-                  <Link className="aw-row__link" to={`${base}/work-items/${encodeURIComponent(item.id)}`}>
+                  <Link className="aw-row__link" to={`${base}/tasks/${encodeURIComponent(item.id)}`}>
                     {item.title}
                   </Link>
                 }

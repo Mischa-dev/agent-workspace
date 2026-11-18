@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
@@ -13,7 +14,7 @@ import { useSettingsRegistry } from './api'
 import { isArchiving } from './archiving'
 import { accountSettingsHref, projectSettingsHref, workspaceSettingsHref } from './paths'
 import { GitHubReturnBanner } from './GitHubReturnBanner'
-import { parseSettingsPath } from './route'
+import { parseSettingsPath, workspaceSettingsSplat } from './route'
 import { GROUP_LABELS, SETTINGS_PAGES, findPage, pageModule, pagesIn, type PageModuleState, type SettingsPage } from './registry'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 import { defaultWorkspace, useViewedWorkspace } from './workspaceChoice'
@@ -66,17 +67,22 @@ function organizationFor(session: AuthenticatedSession, project: Project | null)
   return project ? (session.organizations.find((organization) => organization.id === project.organizationId) ?? null) : null
 }
 
-/** /settings/*: one area for your account, the workspace and each project. */
+/**
+ * One area for your account (`/settings/account/...`), the workspace
+ * (`/w/:ws/settings/...`) and each space in it (`/w/:ws/settings/spaces/:id/...`).
+ */
 export default function SettingsArea() {
   const session = useAuthenticatedSession()
-  const { '*': splat = '' } = useParams()
+  const { ws, '*': splat = '' } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const route = parseSettingsPath(splat, location.search)
+  const route = parseSettingsPath(ws ? workspaceSettingsSplat(splat) : splat, location.search)
   const projectList = useProjects()
   const projects = useMemo(() => projectList.data?.projects ?? [], [projectList.data])
   const workspace = defaultWorkspace(session)
-  const [viewedWorkspace, viewWorkspace] = useViewedWorkspace(session)
+  const [pickedWorkspace, viewWorkspace] = useViewedWorkspace(session)
+  // In a workspace's address, its settings are the ones shown.
+  const viewedWorkspace = (ws ? session.organizations.find((organization) => organization.slug === ws) : null) ?? pickedWorkspace
   const [navOpen, setNavOpen] = useState(false)
   useShellPage({ mainClassName: 'aw-main--page' })
 
@@ -136,7 +142,7 @@ export default function SettingsArea() {
     content = (
       <EmptyState
         action={
-          <ButtonLink icon="plus" to="/projects/new" variant="primary">
+          <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
             New project
           </ButtonLink>
         }
@@ -208,7 +214,8 @@ export default function SettingsArea() {
           }
           onPickWorkspace={(organizationId) => {
             viewWorkspace(organizationId)
-            if (group !== 'workspace') navigate(workspaceSettingsHref('general'))
+            const picked = session.organizations.find((organization) => organization.id === organizationId)
+            if (picked) navigate(workspaceSettingsHref(group === 'workspace' ? route.section : 'general', picked.slug))
           }}
           pickerProject={pickerProject}
           projects={projects}

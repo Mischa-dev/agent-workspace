@@ -660,7 +660,10 @@ export function InboxPage() {
               {selected ? (
                 <NotificationDetail
                   item={selected}
-                  onAnswerRequest={(reply) => answerAsked(selected, reply)}
+                  onAnswered={() => {
+                    showToast({ tone: 'success', title: selected.actor ? `Sent to ${selected.actor.name}` : 'Answer sent' })
+                    invalidateInbox(queryClient)
+                  }}
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}
                   onOpen={() => open(selected)}

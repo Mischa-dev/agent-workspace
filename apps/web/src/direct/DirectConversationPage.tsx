@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -273,7 +274,7 @@ export function DirectConversationPage() {
       },
   })
   if (isApiError(timeline.error) && timeline.error.status === 404) {
-    return <Navigate replace to="/messages" />
+    return <Navigate replace to={here('/messages')} />
   }
 
   const otherKind = other ? actorKind(other.kind) : 'person'
@@ -458,7 +459,7 @@ export function DirectConversationPage() {
             kind: 'message',
             conversationId,
             conversationKind: isGroup ? 'group' : 'dm',
-            href: `/messages/${encodeURIComponent(conversationId)}`,
+            href: here(`/messages/${encodeURIComponent(conversationId)}`),
           }}
           onEditLast={() => messageActions.editLast(entries)}
           onReplyChange={reply.set}
@@ -486,7 +487,7 @@ export function DirectConversationPage() {
       <LeaveGroupDialog
         conversationId={conversationId}
         onClose={() => setLeaving(null)}
-        onLeft={() => navigate('/messages')}
+        onLeft={() => navigate(here('/messages'))}
         open={leaving === conversationId}
         title={title}
         viewerId={viewerId}

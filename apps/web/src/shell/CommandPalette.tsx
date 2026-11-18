@@ -533,7 +533,7 @@ export function CommandPalette() {
 
 /** The task list or board on screen, whose own keys the sheet lists too. */
 function taskViewAt(pathname: string, search: string): 'list' | 'board' | null {
-  if (!/^\/projects\/[^/]+\/work-items\/?$/.test(pathname)) return null
+  if (!/^\/projects\/[^/]+\/work-items\/?$/.test(legacyPathOf(pathname))) return null
   return new URLSearchParams(search).get('view') === 'board' ? 'board' : 'list'
 }
 

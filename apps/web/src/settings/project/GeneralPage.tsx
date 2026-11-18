@@ -1,3 +1,4 @@
+import { here } from '../../app/href'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -43,7 +44,7 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
     markArchiving(current.id, true)
     try {
       await archive.mutateAsync({ projectId: current.id, expectedVersion: current.version })
-      navigate('/home', {
+      navigate(here('/home'), {
         replace: true,
         state: { notice: `${current.name} was archived. Everything in it was kept.` },
       })

@@ -48,6 +48,7 @@ import type { ConversationTimelineEntry, SidebarThread } from './types'
 import { useFirstUnread } from './useFirstUnread'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
 import { useMessageSender } from './useMessageSender'
+import { spaceHref } from '../app/href'
 
 const PageInChannel = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageInChannel })))
 
@@ -216,7 +217,7 @@ export function ChannelPage() {
           refreshSidebar(),
         ])
         showToast({ tone: 'success', title: join ? `Joined #${name}` : `Left #${name}` })
-        if (!join && isPrivate) navigate(`/projects/${encodeURIComponent(projectId)}`)
+        if (!join && isPrivate) navigate(spaceHref(projectId))
       })
       .catch((reason: unknown) => toastError(join ? `You didn’t join #${name}` : `You didn’t leave #${name}`, reason))
       .finally(() => setJoining(false))
@@ -227,7 +228,7 @@ export function ChannelPage() {
   // A layout without threads keeps the threads already here reachable but doesn't offer new ones.
   const threadsShown = useProjectExperience(projectId).shows('talk.threads')
   const canStartThread = canPost && threadsShown
-  const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
+  const threadRoute = (threadId: string) => spaceHref(projectId, `/threads/${encodeURIComponent(threadId)}`)
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
 
@@ -285,7 +286,7 @@ export function ChannelPage() {
     conversationId: channelId,
     kind: 'channel',
     label: `#${name}`,
-    leaveTo: `/projects/${encodeURIComponent(projectId)}`,
+    leaveTo: spaceHref(projectId),
     projectId,
   })
   const restoreChannel = useRestoreConversation({ conversationId: channelId, kind: 'channel', label: `#${name}`, projectId })
@@ -320,7 +321,7 @@ export function ChannelPage() {
                 name={name}
                 onClose={() => setDetailsTab(null)}
                 onEditTopic={() => setTopicOpen(true)}
-                onLeft={() => navigate(`/projects/${encodeURIComponent(projectId)}`)}
+                onLeft={() => navigate(spaceHref(projectId))}
                 onTab={setDetailsTab}
                 projectId={projectId}
                 tab={detailsTab}
@@ -331,7 +332,7 @@ export function ChannelPage() {
               <ChannelMembers
                 channelId={channelId}
                 onClose={() => setMembersOpen(false)}
-                onLeft={() => navigate(`/projects/${encodeURIComponent(projectId)}`)}
+                onLeft={() => navigate(spaceHref(projectId))}
                 projectId={projectId}
                 viewerId={viewer.actorId}
               />
@@ -354,10 +355,10 @@ export function ChannelPage() {
       : {},
   )
   if (isApiError(timeline.error) && timeline.error.status === 404) {
-    return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}`} />
+    return <Navigate replace to={spaceHref(projectId)} />
   }
   if (timeline.isSuccess && !validBoundary) {
-    return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}`} />
+    return <Navigate replace to={spaceHref(projectId)} />
   }
   if (project.isPending) {
     return (
@@ -419,7 +420,7 @@ export function ChannelPage() {
           {
             label: 'Archived conversations',
             icon: 'archive' as const,
-            onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/conversations/archived`),
+            onSelect: () => navigate(spaceHref(projectId, `/conversations/archived`)),
           },
           ...(canRestore ? [{ label: 'Restore channel', icon: 'undo' as const, onSelect: restore }] : []),
           ...(canArchive && !archived && page
@@ -569,7 +570,7 @@ export function ChannelPage() {
             kind: 'message',
             conversationId: channelId,
             conversationKind: 'channel',
-            href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channelId)}`,
+            href: spaceHref(projectId, `/channels/${encodeURIComponent(channelId)}`),
           }}
           onEditLast={() => messageActions.editLast(entries)}
           onReplyChange={reply.set}

@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import { createChannel } from '../conversations/sidebarApi'
 import { Button, Checkbox, Dialog, TextField } from '../ui'
+import { spaceHref } from '../app/href'
 
 /** The New channel dialog, loaded when someone opens it. */
 export default function ChannelCreator({
@@ -39,7 +40,7 @@ export default function ChannelCreator({
         setEveryone(true)
         onClose()
         void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-        onCreated(`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`)
+        onCreated(spaceHref(projectId, `/channels/${encodeURIComponent(channel.id)}`))
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The channel wasn’t created. Try again.'))
       .finally(() => setBusy(false))

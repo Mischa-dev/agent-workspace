@@ -1,3 +1,4 @@
+import { here } from '../../app/href'
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -128,7 +129,7 @@ function SetupSection({ organizationId }: { organizationId: string }) {
             Show setup
           </Button>
         ) : (
-          <ButtonLink to="/welcome">Continue setup</ButtonLink>
+          <ButtonLink to={here('/welcome')}>Continue setup</ButtonLink>
         )}
       </div>
     </Section>
@@ -319,7 +320,7 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
       setOpen(false)
       await queryClient.invalidateQueries({ queryKey: queryKeys.session })
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-      navigate('/home', { replace: true, state: { notice: `You left ${workspace.name}.` } })
+      navigate(here('/home'), { replace: true, state: { notice: `You left ${workspace.name}.` } })
     },
   })
   const leaveError = leave.isError

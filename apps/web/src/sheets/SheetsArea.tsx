@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { SheetPage } from './SheetPage'
 import { SheetsListPage } from './SheetsListPage'
 import './sheets.css'
+import { spaceHref } from '../app/href'
 
 /**
  * A project's Sheets area (AWD-54), one lazy chunk: the list of its sheets,
@@ -20,5 +21,5 @@ export default function SheetsArea() {
 
 function BackToList() {
   const { projectId = '' } = useParams()
-  return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/sheets`} />
+  return <Navigate replace to={spaceHref(projectId, `/sheets`)} />
 }

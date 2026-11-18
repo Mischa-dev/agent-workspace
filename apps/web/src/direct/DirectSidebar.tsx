@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -24,7 +25,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
           label="New message"
           onClick={() => {
             onNavigate()
-            navigate('/messages')
+            navigate(here('/messages'))
           }}
           side="bottom"
         />
@@ -56,7 +57,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
               label={conversationTitle(conversation, viewerId)}
               meta={conversation.kind === 'group' ? String(conversation.members.length) : undefined}
               onNavigate={onNavigate}
-              to={`/messages/${encodeURIComponent(conversation.id)}`}
+              to={here(`/messages/${encodeURIComponent(conversation.id)}`)}
               unread={conversation.unread && !conversation.muted}
             />
           )
@@ -77,7 +78,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
       ) : null}
       {overview.data?.capabilities.manageAgents ? (
         <ul className="aw-section__list aw-sidebar__bottom">
-          <SidebarLink icon="bot" label="Agents" onNavigate={onNavigate} to="/messages/agents" />
+          <SidebarLink icon="bot" label="Agents" onNavigate={onNavigate} to={here('/messages/agents')} />
         </ul>
       ) : null}
     </SidebarFrame>

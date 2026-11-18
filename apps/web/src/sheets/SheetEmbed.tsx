@@ -6,6 +6,7 @@ import { useSheet } from './api'
 import { cellKey, cellMap, columnName, display, parseRange, rangeName, type Range } from './sheetModel'
 import '../collections/collectionEmbed.css'
 import './sheetEmbed.css'
+import { spaceHref } from '../app/href'
 
 /** The most rows and columns an embed shows. */
 const ROWS = 20
@@ -51,7 +52,7 @@ export default function SheetEmbed({ label, projectId, range, sheetId, tabId }: 
   const rows = Array.from({ length: shown.bottom - shown.top + 1 - (header ? 1 : 0) }, (_, index) => shown.top + (header ? 1 : 0) + index)
   const moreRows = area.bottom - shown.bottom
   const moreColumns = area.right - shown.right
-  const open = `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheetId)}${tab ? `?tab=${encodeURIComponent(tab.id)}` : ''}`
+  const open = spaceHref(projectId, `/sheets/${encodeURIComponent(sheetId)}${tab ? `?tab=${encodeURIComponent(tab.id)}` : ''}`)
   const empty = body.cells.length === 0 || rows.every((row) => columns.every((column) => !cells.has(cellKey(row, column))))
 
   return (

@@ -1,5 +1,5 @@
 import { Suspense, type ReactNode } from 'react'
-import { Navigate, Outlet, useLocation, useParams, useRouteError } from 'react-router-dom'
+import { Outlet, useLocation, useRouteError } from 'react-router-dom'
 
 import { BrandMark } from '../auth/AuthLayout'
 import { ModuleGate } from '../modules/ModuleGate'
@@ -86,9 +86,3 @@ function AuthenticatedRouteFallback() {
   )
 }
 
-/** Project settings moved to /settings/projects/:projectId/:section; the settings area reads the old `?tab=`. */
-export function LegacyProjectSettingsRedirect() {
-  const { projectId = '' } = useParams()
-  const location = useLocation()
-  return <Navigate replace to={`/settings/projects/${encodeURIComponent(projectId)}${location.search}`} />
-}

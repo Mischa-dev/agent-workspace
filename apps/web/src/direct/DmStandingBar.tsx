@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -24,7 +25,7 @@ export function DmStandingBar({ conversationId, name, standing }: { conversation
         .then(() => {
           if (accept) return
           showToast({ tone: 'success', title: 'Request declined', description: `${name} isn’t told.` })
-          navigate('/messages')
+          navigate(here('/messages'))
         })
         .catch((reason: unknown) => toastError('The request wasn’t answered', reason))
         .finally(() => setBusy(null))

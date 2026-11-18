@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -152,7 +153,7 @@ export function MessagesPage() {
     await sendConversationMessage({ conversationId, kind: isGroup ? 'group' : 'dm', ...submission })
     // `started` stays set until the page goes: a second message sent before then joins the same conversation.
     await queryClient.invalidateQueries({ queryKey: directQueryKey })
-    navigate(`/messages/${encodeURIComponent(conversationId)}`)
+    navigate(here(`/messages/${encodeURIComponent(conversationId)}`))
   }
 
   // Agents from different projects can share a handle; each needs its own @token here (mentions carry the actor's ID).
@@ -252,7 +253,7 @@ export function MessagesPage() {
           <EmptyState
             action={
               overview.data.capabilities.manageAgents ? (
-                <ButtonLink icon="bot" to="/messages/agents" variant="primary">
+                <ButtonLink icon="bot" to={here('/messages/agents')} variant="primary">
                   Add an agent
                 </ButtonLink>
               ) : undefined
@@ -270,7 +271,7 @@ export function MessagesPage() {
             <ConversationIntro
               actions={
                 existing ? (
-                  <ButtonLink to={`/messages/${encodeURIComponent(existing.id)}`} variant="ghost">
+                  <ButtonLink to={here(`/messages/${encodeURIComponent(existing.id)}`)} variant="ghost">
                     Open the conversation
                   </ButtonLink>
                 ) : undefined

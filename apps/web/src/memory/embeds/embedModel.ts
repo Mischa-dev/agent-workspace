@@ -1,3 +1,5 @@
+import { spaceHref } from '../../app/href'
+
 /**
  * What an embed in a page shows, from its path (AWD-90). A collection's view
  * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
@@ -49,7 +51,7 @@ export function embedTarget(href: string): EmbedTarget {
 
 /** The path an embed of a collection's view keeps, and the label it starts with. */
 export function collectionEmbed(projectId: string, collection: { id: string; name: string }, view: { id: string; name: string } | null, views: number) {
-  const path = `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection.id)}`
+  const path = spaceHref(projectId, `/collections/${encodeURIComponent(collection.id)}`)
   return {
     href: view ? `${path}?view=${encodeURIComponent(view.id)}` : path,
     label: view && views > 1 ? `${collection.name} · ${view.name}` : collection.name,
@@ -58,7 +60,7 @@ export function collectionEmbed(projectId: string, collection: { id: string; nam
 
 /** The path an embed of a sheet's tab (and range, if one) keeps, and its label. */
 export function sheetEmbed(projectId: string, sheet: { id: string; name: string }, tab: { id: string; name: string } | null, tabs: number, range: string | null) {
-  const path = `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheet.id)}`
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
   const query = new URLSearchParams()
   if (tab) query.set('tab', tab.id)
   if (range) query.set('range', range)

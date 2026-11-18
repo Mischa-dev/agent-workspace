@@ -41,6 +41,7 @@ import { RecordPanel } from './RecordPanel'
 import { CollectionTableView } from './CollectionTableView'
 import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
+import { spaceHref } from '../app/href'
 
 // Forms are managed now and then, so their dialog loads when it opens.
 // The board, list, gallery, calendar, timeline and chart pieces load when a view first uses them.
@@ -148,7 +149,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
         {gone ? (
           <ErrorState
             action={
-              <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/collections`} variant="primary">
+              <ButtonLink to={spaceHref(projectId, `/collections`)} variant="primary">
                 See the collections
               </ButtonLink>
             }
@@ -170,7 +171,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   const tasks = collection.data.collection.builtin === 'tasks'
   const taskLike = tasks || collection.data.collection.actsLikeTask === true
   // A link to such a record (an embed, an old link) opens its task.
-  if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
+  if (taskLike && recordId) return <Navigate replace to={spaceHref(projectId, `/work-items/${encodeURIComponent(recordId)}`)} />
   const body = { ...collection.data, canBuild: collection.data.canChangeFields }
   // Shared views first, then the person's own.
   const views = [...body.views].sort((left, right) => Number(right.shared) - Number(left.shared) || left.position - right.position)
@@ -197,7 +198,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
   const recordHref = (id: string) => {
-    if (taskLike) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+    if (taskLike) return spaceHref(projectId, `/work-items/${encodeURIComponent(id)}`)
     const next = new URLSearchParams(params)
     next.set('record', id)
     return `?${next.toString()}`

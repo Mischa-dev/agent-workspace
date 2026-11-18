@@ -1,3 +1,4 @@
+import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
@@ -463,7 +464,7 @@ export async function searchWorkItemReferences(
     const key = string(item.key)
     const title = string(item.title)
     const href = string(item.href)
-    if (!id || !key || !title || !href.startsWith('/projects/')) return []
+    if (!id || !key || !title || !isSpaceAddress(href)) return []
     return [{
       id,
       key,
@@ -860,7 +861,7 @@ export async function getWorkItemTimeline(
               referencedWorkItems: (Array.isArray(comment.referencedWorkItems) ? comment.referencedWorkItems : []).flatMap((value) => {
                 const item = record(value)
                 const href = string(item.href)
-                if (!string(item.id) || !href.startsWith('/projects/')) return []
+                if (!string(item.id) || !isSpaceAddress(href)) return []
                 return [{ id: string(item.id), key: string(item.key), title: string(item.title), statusCategory: string(item.statusCategory), archivedAt: nullableString(item.archivedAt), href }]
               }),
               createdAt: string(comment.createdAt),

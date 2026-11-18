@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { legacyPathOf, workspaceHref } from '../app/href'
+import { legacyPathOf, spaceHref, spaceIdOf, workspaceHref } from '../app/href'
 import { toastError } from '../app/toastError'
 import { useWorkspace, useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession, type OrganizationSummary, type SessionUser } from '../auth/session'
@@ -228,7 +228,7 @@ export function ProjectRail({
     onSpaceSelected()
     if (project.id === currentProjectId) {
       // The project's own tile leads to its overview; on a phone the drawer already shows its sidebar.
-      const overview = `/projects/${encodeURIComponent(project.id)}`
+      const overview = spaceHref(project.id)
       if (!isMobileWidth() && location.pathname !== overview) navigate(overview)
       return
     }
@@ -258,8 +258,8 @@ export function ProjectRail({
   const myStatus = shownStatus(statuses.data ?? [], user.actorId)
   const [statusOpen, setStatusOpen] = useState(false)
   // Settings open on the project you were in.
-  const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
-  const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
+  const fromProjectId = spaceIdOf(location.pathname)
+  const settingsState = fromProjectId ? { fromProjectId } : undefined
 
   return (
     <>
