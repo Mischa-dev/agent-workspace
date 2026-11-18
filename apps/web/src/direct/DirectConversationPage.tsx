@@ -12,6 +12,8 @@ import { useConversationTimeline } from '../conversations/useConversationTimelin
 import { useMessageActions } from '../conversations/MessageActions'
 import { useReplyTarget } from '../conversations/replyTarget'
 import { useConversationTools } from '../later/useConversationTools'
+import { useSidebarPlacement } from '../conversations/useSidebarPlacement'
+import { useHomeExperience } from '../experience/layout'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
@@ -207,6 +209,9 @@ export function DirectConversationPage() {
     projectId,
   })
 
+  // Starring it, or keeping it in a section you named (C2.9).
+  const placement = useSidebarPlacement(conversationId, useHomeExperience().shows('talk.sidebar_sections'))
+
   const letContinue = () => {
     setContinuing(true)
     void continueConversation(conversationId)
@@ -298,6 +303,7 @@ export function DirectConversationPage() {
       }
       icon="users"
       menu={[
+        ...placement.menu,
         ...tools.levelMenu,
         ...(summary ? [{ separator: true as const }, { label: 'Leave group…', icon: 'log-out' as const, danger: true, onSelect: () => setLeaving(conversationId) }] : []),
       ]}
@@ -309,7 +315,7 @@ export function DirectConversationPage() {
     <ConversationHeader
       actions={threadsButton}
       lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
-      menu={tools.levelMenu}
+      menu={[...placement.menu, ...tools.levelMenu]}
       subtitle={
         other ? (
           <>
@@ -354,6 +360,7 @@ export function DirectConversationPage() {
   return (
     <>
       {header}
+      {placement.dialog}
       {tools.banner}
       {valid && projectId ? <PinnedBar canEdit={canPost} conversationId={conversationId} direct projectId={projectId} /> : null}
       <ConversationTimeline

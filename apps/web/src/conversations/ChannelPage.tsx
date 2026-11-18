@@ -27,6 +27,7 @@ import { ReplyStatusList } from './ReplyStatus'
 import { groupReplyRequests } from './replyStatusModel'
 import { PinnedBar } from '../memory/ConversationMemory'
 import { useConversationTools } from '../later/useConversationTools'
+import { useSidebarPlacement } from './useSidebarPlacement'
 import { useMessageActions } from './MessageActions'
 import { useReplyTarget } from './replyTarget'
 import { StructuredComposer } from './StructuredComposer'
@@ -176,6 +177,8 @@ export function ChannelPage() {
     enabled: Boolean(validBoundary && channelId),
   })
   const browseShown = useProjectExperience(projectId).shows('channel.browse')
+  // Starring it, or keeping it in a section you named (C2.9).
+  const placement = useSidebarPlacement(validBoundary ? channelId : '', useProjectExperience(projectId).shows('talk.sidebar_sections'))
   const [topicOpen, setTopicOpen] = useState(false)
   const [joining, setJoining] = useState(false)
   const joinChannel = (join: boolean) => {
@@ -359,6 +362,7 @@ export function ChannelPage() {
           ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
           ...(details.data?.canEdit ? [{ label: topic ? 'Change topic' : 'Set a topic', icon: 'pencil' as const, onSelect: () => setTopicOpen(true) }] : []),
           ...(browseShown && details.data?.joined ? [{ label: 'Leave channel', icon: 'arrow-left' as const, onSelect: () => joinChannel(false) }] : []),
+          ...placement.menu,
           ...tools.levelMenu,
           { separator: true as const },
           {
@@ -379,6 +383,7 @@ export function ChannelPage() {
         tag={tools.levelMark}
         title={name}
       />
+      {placement.dialog}
       {topicOpen && details.data ? (
         <ChannelTopicDialog
           autoJoin={details.data.autoJoin}

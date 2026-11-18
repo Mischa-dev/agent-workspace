@@ -86,7 +86,7 @@
   "web": { "folder": "direct" },
   "slots": {
     "pages": ["/messages", "/messages/:conversationId", "/dm/:conversationId"],
-    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies", "thing.comments"],
+    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies", "thing.comments", "talk.sidebar_sections"],
     "sidebar": ["rail.messages"],
     "home": [],
     "settings": [],
