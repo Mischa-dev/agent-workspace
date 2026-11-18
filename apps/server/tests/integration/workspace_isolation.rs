@@ -2081,6 +2081,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "launch_list",
     "message_history",
     "conversation_member_list",
+    "conversation_task_list",
+    "conversation_file_list",
+    "conversation_tab_list",
     "channel_list",
     "channel_get",
     "message_draft_list",
@@ -2101,6 +2104,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "profile_avatar_list",
     "group_list",
     "saved_search_list",
+    "inbox_view_list",
     "place_search",
     "dm_standing_get",
     "account_block_list",
@@ -2646,6 +2650,30 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "conversation_tab_list",
+            vec![json!({"conversationId": a.channel})],
+            vec![json!({"conversationId": b.channel})],
+            vec![],
+        ),
+        case(
+            "conversation_file_list",
+            vec![json!({"conversationId": a.dm})],
+            vec![
+                json!({"conversationId": b.dm}),
+                json!({"conversationId": b.channel}),
+            ],
+            vec![],
+        ),
+        case(
+            "conversation_task_list",
+            vec![json!({"conversationId": a.channel})],
+            vec![
+                json!({"conversationId": b.channel}),
+                json!({"conversationId": b.dm}),
+            ],
+            vec![],
+        ),
+        case(
             "agent_list",
             vec![
                 json!({}),
@@ -2745,6 +2773,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // C2.26: saved searches, and places to jump to, stay in their workspace.
         case(
             "saved_search_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.11: saved inbox views stay in their workspace.
+        case(
+            "inbox_view_list",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],

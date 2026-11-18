@@ -631,6 +631,38 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     .await
     .expect("links");
     assert_eq!(links, 1);
+    // Nothing is said in the channel unless asked (C2.20); asked, a system
+    // entry names who made what, with ids only.
+    let made = |view: &Value| {
+        view["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .filter(|entry| entry["kind"] == "system")
+            .map(|entry| entry["system"].clone())
+            .collect::<Vec<_>>()
+    };
+    let (_, quiet) = get(setup, &setup.browser, &timeline_uri).await;
+    assert!(made(&quiet).is_empty(), "{quiet}");
+    let (status, said) = call(
+        setup,
+        &pat_browser,
+        "POST",
+        &tasks,
+        Some("task-say-so"),
+        json!({"title": "Order cake", "sourceMessageId": open, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{said}");
+    let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
+    let entries = made(&told);
+    assert_eq!(entries.len(), 1, "{told}");
+    assert_eq!(entries[0]["type"], "made_into");
+    assert_eq!(entries[0]["thingKind"], "task");
+    assert_eq!(entries[0]["thingId"], said["id"]);
+    assert_eq!(entries[0]["messageId"], json!(open));
+    assert!(entries[0]["actorName"].is_string(), "{told}");
+    assert!(!told.to_string().contains("Order cake"), "{told}");
     let (status, _) = call(
         setup,
         &pat_browser,
@@ -641,6 +673,69 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     )
     .await;
     assert!(status.is_client_error());
+    // Agents and apps do the same through task_create.
+    let op = |key: &'static str, input: Value| {
+        call(
+            setup,
+            &pat_browser,
+            "POST",
+            "/api/v2/ops/task_create",
+            Some(key),
+            input,
+        )
+    };
+    let (status, created) = op(
+        "op-say-so",
+        json!({"projectId": project, "title": "Fetch plates", "fromMessageId": open, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
+    assert_eq!(made(&told).len(), 2, "{told}");
+    // A decision recorded from it says so the same way.
+    let (status, decision) = call(
+        setup,
+        &pat_browser,
+        "POST",
+        "/api/v2/ops/decision_record",
+        Some("decision-say-so"),
+        json!({"title": "Lunch is at noon", "sourceMessageId": open, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decision}");
+    let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
+    let said = made(&told);
+    assert_eq!(said.len(), 3, "{told}");
+    assert_eq!(said[2]["thingKind"], "decision");
+    assert!(!told.to_string().contains("Lunch is at noon"), "{told}");
+    // The message itself carries what it was made into, ids and kinds only.
+    let chips = told["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(open))
+        .map(|entry| entry["message"]["madeInto"].clone())
+        .expect("the message");
+    let chips = chips.as_array().expect("made into");
+    assert_eq!(chips.len(), 4, "{told}");
+    assert_eq!(
+        chips.iter().filter(|chip| chip["kind"] == "task").count(),
+        3
+    );
+    assert_eq!(chips[3]["kind"], "decision");
+    assert_eq!(chips[3]["id"], decision["value"]["id"], "{decision}");
+    assert!(
+        chips
+            .iter()
+            .any(|chip| chip["id"] == created["value"]["workItemId"]),
+        "{created}"
+    );
+    let (status, refused) = op(
+        "op-secret",
+        json!({"projectId": project, "title": "Peek", "fromMessageId": secret}),
+    )
+    .await;
+    assert!(status.is_client_error(), "{refused}");
 }
 
 #[tokio::test]

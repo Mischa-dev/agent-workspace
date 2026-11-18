@@ -187,11 +187,27 @@ async fn requests_blocks_and_a_shared_workspace_decide_who_reaches_whom() {
     let (status, body) = op(
         app,
         lena,
+        "sidebar_item_move",
+        json!({"conversationId": lena_nina, "starred": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["value"]["sections"][0]["items"][0]["hidden"], false);
+    let (status, body) = op(
+        app,
+        lena,
         "account_block_set",
         json!({"account": nina.actor, "blocked": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // Starred, it keeps its place, marked hidden so it isn't shown.
+    let (status, sidebar) = op(app, lena, "sidebar_list", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{sidebar}");
+    assert_eq!(
+        sidebar["value"]["sections"][0]["items"][0]["hidden"], true,
+        "{sidebar}"
+    );
     assert_eq!(
         body["value"]["blocked"][0]["accountId"],
         json!(nina.actor),

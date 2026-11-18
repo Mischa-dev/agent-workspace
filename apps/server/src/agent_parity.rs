@@ -191,6 +191,11 @@ mod tests {
             "/api/v1/client-errors",
             Plumbing("browser error reports"),
         ),
+        (
+            Post,
+            "/api/v1/client-timings",
+            Plumbing("browser speed timings"),
+        ),
         (Post, "/api/v1/auth/workos/start", Plumbing("sign-in")),
         (
             Patch,

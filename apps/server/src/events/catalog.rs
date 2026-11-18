@@ -226,6 +226,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     None,
     "Someone's saved searches changed",
 );
+pub static INBOX_VIEWS_CHANGED: EventType = signal(
+    "inbox_views.changed",
+    "inbox",
+    None,
+    "Someone's saved inbox views changed",
+);
 pub static DM_RULES_CHANGED: EventType = signal(
     "dm_rules.changed",
     "messages",
@@ -671,6 +677,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &INBOX_VIEWS_CHANGED,
         &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,

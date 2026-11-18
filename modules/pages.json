@@ -12,6 +12,8 @@
   "tools": {
     "page_list": "query",
     "page_get": "describe",
+    "conversation_tab_list": "query",
+    "conversation_tab_set": "change",
     "page_blocks": "describe",
     "page_write": "change",
     "page_template_list": "query",
@@ -83,7 +85,7 @@
   "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "channel.tabs"],
     "sidebar": [],
     "home": [],
     "settings": [],

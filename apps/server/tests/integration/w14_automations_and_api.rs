@@ -147,8 +147,15 @@ fn signature_ok(secret: &str, headers: &HeaderMap, body: &str) -> bool {
         == expected
 }
 
+// The walk is one long async body: held on the heap, its state doesn't sit
+// on the test thread's stack under the jobs it pumps (it overflowed the
+// two megabytes there on a loaded runner).
 #[tokio::test]
 async fn api_webhooks_and_automations_act_for_their_maker_only() {
+    Box::pin(webhooks_and_automations_walk()).await;
+}
+
+async fn webhooks_and_automations_walk() {
     let Some((database_url, administrative_pool)) = integration_pool().await else {
         return;
     };
