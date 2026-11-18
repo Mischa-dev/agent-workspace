@@ -66,12 +66,13 @@ pub(crate) fn edit_error(error: EditError) -> OpError {
 /// The images an edit carries, stored on the board as the web stores a
 /// dropped image, with the operations pointing at them.
 pub(crate) async fn store_images(
+    state: &crate::AppState,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
     operations: &[Operation],
 ) -> Result<Vec<Operation>, OpError> {
-    whiteboard_tools::store_images(transaction, caller, whiteboard_id, operations)
+    whiteboard_tools::store_images(state, transaction, caller, whiteboard_id, operations)
         .await
         .map_err(edit_error)
 }

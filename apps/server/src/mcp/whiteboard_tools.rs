@@ -456,7 +456,7 @@ pub(super) async fn whiteboard_render(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let files = store::files_for(&state.pool, id, &elements).await?;
+        let files = store::files_for(state, id, &elements).await?;
         Ok::<_, AppError>((view.scene_seq, elements, files))
     }
     .await;
@@ -695,7 +695,8 @@ pub(super) async fn whiteboard_create(
         }
         let edit = match arguments.operations.as_deref() {
             Some(operations) if !operations.is_empty() => {
-                let operations = store_images(&mut transaction, &caller, id, operations).await?;
+                let operations =
+                    store_images(state, &mut transaction, &caller, id, operations).await?;
                 Some(edit::apply(&mut transaction, &caller, id, &operations, None, false).await?)
             }
             _ => None,
@@ -724,6 +725,7 @@ pub(super) async fn whiteboard_create(
 /// dropped on the board, and points those operations at them by file id.
 /// An image named by fileId must already be on this board.
 pub(super) async fn store_images(
+    state: &AppState,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     caller: &whiteboards::Caller,
     whiteboard_id: Uuid,
@@ -770,6 +772,7 @@ pub(super) async fn store_images(
                 }
             };
             store::put_file(
+                state,
                 transaction,
                 caller,
                 whiteboard_id,

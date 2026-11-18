@@ -522,7 +522,7 @@ async fn board_picture(
     if elements.is_empty() {
         return Ok(None);
     }
-    let files = crate::whiteboards::store::files_for(&state.pool, board_id, &elements).await?;
+    let files = crate::whiteboards::store::files_for(state, board_id, &elements).await?;
     let rendered = crate::whiteboards::render::svg(
         &elements,
         &files,

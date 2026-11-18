@@ -498,17 +498,7 @@ async fn copy_into(
     .bind(caller.actor_id)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
-        SELECT $2, file_id, mime_type, data, $3 FROM whiteboard_files WHERE whiteboard_id = $1
-        "#,
-    )
-    .bind(whiteboard_id)
-    .bind(id)
-    .bind(caller.actor_id)
-    .execute(&mut **transaction)
-    .await?;
+    store::copy_files(transaction, whiteboard_id, id, caller.actor_id).await?;
     sqlx::query(
         r#"
         UPDATE whiteboards copy
@@ -688,6 +678,7 @@ pub async fn purge(
         whiteboard_id,
     )
     .await?;
+    store::remove_files(transaction, whiteboard_id, caller.actor_id).await?;
     sqlx::query("DELETE FROM whiteboards WHERE id = $1")
         .bind(whiteboard_id)
         .execute(&mut **transaction)

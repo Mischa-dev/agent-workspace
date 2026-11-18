@@ -18,7 +18,9 @@ use super::{
     scene::{self, Object},
 };
 use crate::{
+    AppState,
     error::AppError,
+    files,
     outbox::{OutboxEventPayload, WhiteboardUpdatedPayload, enqueue_typed},
 };
 
@@ -562,7 +564,15 @@ pub async fn scene(
     .fetch_all(&mut *transaction)
     .await?;
     let files = sqlx::query_as::<_, FileSummary>(
-        "SELECT file_id AS id, mime_type FROM whiteboard_files WHERE whiteboard_id = $1 ORDER BY created_at, file_id",
+        r#"
+        SELECT id, mime_type FROM (
+            SELECT external_key AS id, content_type AS mime_type, created_at FROM files
+            WHERE thing_kind = 'whiteboard' AND thing_id = $1 AND removed_at IS NULL
+            UNION ALL
+            SELECT file_id, mime_type, created_at FROM whiteboard_files WHERE whiteboard_id = $1
+        ) image
+        ORDER BY created_at, id
+        "#,
     )
     .bind(whiteboard_id)
     .fetch_all(&mut *transaction)
@@ -684,14 +694,21 @@ pub fn decode_image(
     Ok((id, mime_type, data))
 }
 
-/// Which of these files the board has.
+/// Which of these files the board has: in `files` (C1.29), or still in the
+/// old table until the move job reaches them.
 pub async fn stored_files(
     transaction: &mut Transaction<'_, Postgres>,
     whiteboard_id: Uuid,
     file_ids: &[String],
 ) -> Result<Vec<String>, AppError> {
     Ok(sqlx::query_scalar::<_, String>(
-        "SELECT file_id FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = ANY($2)",
+        r#"
+        SELECT external_key FROM files
+        WHERE thing_kind = 'whiteboard' AND thing_id = $1 AND external_key = ANY($2)
+          AND removed_at IS NULL
+        UNION
+        SELECT file_id FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = ANY($2)
+        "#,
     )
     .bind(whiteboard_id)
     .bind(file_ids)
@@ -706,9 +723,11 @@ pub fn allowed_mime(mime_type: &str) -> bool {
     )
 }
 
-/// Stores an image for a board the caller may edit. Excalidraw names files
-/// by content, so a second upload of the same id changes nothing.
+/// Stores an image for a board the caller may edit, as a file of the board
+/// in the file store (C1.29). Excalidraw names files by content, so a
+/// second upload of the same id changes nothing.
 pub async fn put_file(
+    state: &AppState,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
@@ -722,11 +741,18 @@ pub async fn put_file(
     if !allowed_mime(mime_type) {
         return Err(AppError::Validation("mimeType"));
     }
-    let used =
-        sqlx::query_scalar::<_, i64>("SELECT file_bytes FROM whiteboards WHERE id = $1 FOR UPDATE")
-            .bind(whiteboard_id)
-            .fetch_one(&mut **transaction)
-            .await?;
+    let (used, project_id) = sqlx::query_as::<_, (i64, Uuid)>(
+        "SELECT file_bytes, project_id FROM whiteboards WHERE id = $1 FOR UPDATE",
+    )
+    .bind(whiteboard_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !stored_files(transaction, whiteboard_id, &[file_id.to_owned()])
+        .await?
+        .is_empty()
+    {
+        return Ok(false);
+    }
     let size = i64::try_from(data.len()).map_err(|_| AppError::PayloadTooLarge)?;
     if used + size > MAX_BOARD_FILE_BYTES {
         return Err(AppError::Conflict(
@@ -734,30 +760,40 @@ pub async fn put_file(
             "This board's images use all the space a board has. Remove some images first.",
         ));
     }
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT DO NOTHING
-        "#,
+    let name = format!("{file_id}.{}", extension(mime_type));
+    files::store_content(
+        state,
+        transaction,
+        caller.actor_id,
+        files::ContentFile {
+            project_id,
+            thing: files::ThingKind::Whiteboard,
+            thing_id: whiteboard_id,
+            purpose: files::Purpose::Inline,
+            external_key: file_id,
+            name: &name,
+            content_type: mime_type,
+            bytes: data,
+        },
     )
-    .bind(whiteboard_id)
-    .bind(file_id)
-    .bind(mime_type)
-    .bind(data)
-    .bind(caller.actor_id)
-    .execute(&mut **transaction)
-    .await?
-    .rows_affected()
-        == 1;
-    if inserted {
-        sqlx::query("UPDATE whiteboards SET file_bytes = file_bytes + $2 WHERE id = $1")
-            .bind(whiteboard_id)
-            .bind(size)
-            .execute(&mut **transaction)
-            .await?;
+    .await?;
+    sqlx::query("UPDATE whiteboards SET file_bytes = file_bytes + $2 WHERE id = $1")
+        .bind(whiteboard_id)
+        .bind(size)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(true)
+}
+
+fn extension(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
     }
-    Ok(inserted)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -770,55 +806,314 @@ pub struct FileView {
     pub created: i64,
 }
 
-pub async fn get_file(
+/// One stored image of a board: its id, type, when it was added, and where
+/// its bytes are.
+struct StoredImage {
+    id: String,
+    mime_type: String,
+    created: chrono::DateTime<chrono::Utc>,
+    bytes: ImageBytes,
+}
+
+enum ImageBytes {
+    /// In the file store under this key.
+    Stored(String),
+    /// Still in the old table, until the move job reaches it.
+    Inline(Vec<u8>),
+}
+
+/// The board's images with these ids, from `files` first, then from the
+/// old table for any the move job hasn't reached.
+async fn images(
     pool: &PgPool,
+    whiteboard_id: Uuid,
+    file_ids: &[String],
+) -> Result<Vec<StoredImage>, AppError> {
+    let mut found = sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>, String)>(
+        r#"
+        SELECT external_key, content_type, created_at, storage_key FROM files
+        WHERE thing_kind = 'whiteboard' AND thing_id = $1 AND external_key = ANY($2)
+          AND removed_at IS NULL
+        "#,
+    )
+    .bind(whiteboard_id)
+    .bind(file_ids)
+    .fetch_all(crate::db::scoped(pool))
+    .await?
+    .into_iter()
+    .map(|(id, mime_type, created, key)| StoredImage {
+        id,
+        mime_type,
+        created,
+        bytes: ImageBytes::Stored(key),
+    })
+    .collect::<Vec<_>>();
+    let missing = file_ids
+        .iter()
+        .filter(|id| !found.iter().any(|image| &image.id == *id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        found.extend(
+            sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>, Vec<u8>)>(
+                r#"
+                SELECT file_id, mime_type, created_at, data FROM whiteboard_files
+                WHERE whiteboard_id = $1 AND file_id = ANY($2)
+                "#,
+            )
+            .bind(whiteboard_id)
+            .bind(&missing)
+            .fetch_all(crate::db::scoped(pool))
+            .await?
+            .into_iter()
+            .map(|(id, mime_type, created, data)| StoredImage {
+                id,
+                mime_type,
+                created,
+                bytes: ImageBytes::Inline(data),
+            }),
+        );
+    }
+    Ok(found)
+}
+
+async fn image_bytes(
+    state: &AppState,
+    image: StoredImage,
+) -> Result<(StoredImage, Vec<u8>), AppError> {
+    let bytes = match &image.bytes {
+        ImageBytes::Inline(data) => data.clone(),
+        ImageBytes::Stored(key) => {
+            files::FileStore::from_config(&state.config)
+                .read_all(key, MAX_FILE_BYTES as u64)
+                .await?
+        }
+    };
+    Ok((image, bytes))
+}
+
+pub async fn get_file(
+    state: &AppState,
     whiteboard_id: Uuid,
     file_id: &str,
 ) -> Result<FileView, AppError> {
-    let (mime_type, data, created) = sqlx::query_as::<_, (String, Vec<u8>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT mime_type, data, created_at FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = $2",
-    )
-    .bind(whiteboard_id)
-    .bind(file_id)
-    .fetch_optional(crate::db::scoped(pool))
-    .await?
-    .ok_or(AppError::NotFound("whiteboard file"))?;
+    let image = images(&state.pool, whiteboard_id, &[file_id.to_owned()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(AppError::NotFound("whiteboard file"))?;
+    let (image, data) = image_bytes(state, image).await?;
     Ok(FileView {
-        id: file_id.to_owned(),
+        id: image.id,
         data_url: format!(
-            "data:{mime_type};base64,{}",
+            "data:{};base64,{}",
+            image.mime_type,
             base64::engine::general_purpose::STANDARD.encode(&data)
         ),
-        mime_type,
-        created: created.timestamp_millis(),
+        mime_type: image.mime_type,
+        created: image.created.timestamp_millis(),
     })
 }
 
 /// The images the given elements show, for rendering.
 pub async fn files_for(
-    pool: &PgPool,
+    state: &AppState,
     whiteboard_id: Uuid,
     elements: &[Object],
 ) -> Result<HashMap<String, super::render::File>, AppError> {
-    let wanted = elements
+    let mut wanted = elements
         .iter()
         .filter(|element| !scene::is_deleted(element))
         .filter_map(|element| scene::text_field(element, "fileId"))
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    wanted.sort();
+    wanted.dedup();
     if wanted.is_empty() {
         return Ok(HashMap::new());
     }
-    Ok(sqlx::query_as::<_, (String, String, Vec<u8>)>(
-        "SELECT file_id, mime_type, data FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = ANY($2)",
+    let mut found = HashMap::new();
+    for image in images(&state.pool, whiteboard_id, &wanted).await? {
+        // An image whose bytes can't be read is left out of the drawing
+        // rather than failing it.
+        if let Ok((image, data)) = image_bytes(state, image).await {
+            found.insert(
+                image.id,
+                super::render::File {
+                    mime_type: image.mime_type,
+                    data,
+                },
+            );
+        }
+    }
+    Ok(found)
+}
+
+/// Copies a board's images to its duplicate: new rows of the copy over
+/// the same stored bytes, so nothing is copied (C1.29). Images still in the
+/// old table are copied there, and move with the rest.
+pub async fn copy_files(
+    transaction: &mut Transaction<'_, Postgres>,
+    from: Uuid,
+    to: Uuid,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO files (
+            id, organization_id, project_id, uploaded_by_actor_id, name, content_type,
+            byte_size, sha256, storage_key, image_width, image_height, attached_at,
+            thing_kind, thing_id, purpose, external_key
+        )
+        SELECT gen_random_uuid(), copy.organization_id, copy.project_id, $3, file.name,
+               file.content_type, file.byte_size, file.sha256, file.storage_key,
+               file.image_width, file.image_height, now(), 'whiteboard', copy.id,
+               file.purpose, file.external_key
+        FROM files file
+        JOIN whiteboards copy ON copy.id = $2
+        WHERE file.thing_kind = 'whiteboard' AND file.thing_id = $1
+          AND file.removed_at IS NULL AND file.thumbnail_key IS NULL
+          AND file.organization_id = copy.organization_id
+        "#,
+    )
+    .bind(from)
+    .bind(to)
+    .bind(actor)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
+        SELECT $2, file_id, mime_type, data, $3 FROM whiteboard_files WHERE whiteboard_id = $1
+        "#,
+    )
+    .bind(from)
+    .bind(to)
+    .bind(actor)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Marks a purged board's images removed, so the file cleanup takes their
+/// bytes (unless another board still shows them).
+pub async fn remove_files(
+    transaction: &mut Transaction<'_, Postgres>,
+    whiteboard_id: Uuid,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE files SET removed_at = now(), removed_by_actor_id = $2
+        WHERE thing_kind = 'whiteboard' AND thing_id = $1 AND removed_at IS NULL
+        "#,
     )
     .bind(whiteboard_id)
-    .bind(&wanted)
-    .fetch_all(crate::db::scoped(pool))
-    .await?
-    .into_iter()
-    .map(|(id, mime_type, data)| (id, super::render::File { mime_type, data }))
-    .collect())
+    .bind(actor)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Moving images out of the old table (C1.29)
+
+pub const MOVE_IMAGES_KIND: &str = "whiteboards.move_images";
+/// Images moved per transaction.
+const MOVE_BATCH: i64 = 20;
+/// A run stops after this long and queues the next.
+const MOVE_RUN: std::time::Duration = std::time::Duration::from_secs(240);
+
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    registry.register_with_timeout(
+        MOVE_IMAGES_KIND,
+        std::time::Duration::from_secs(300),
+        |context: crate::jobs::JobContext| async move {
+            let more = move_images(&context.state, MOVE_RUN)
+                .await
+                .map_err(|error| crate::jobs::JobError::retry(error.log_category()))?;
+            if more {
+                crate::jobs::enqueue(
+                    crate::db::scoped(&context.state.pool),
+                    crate::jobs::NewJob::new(MOVE_IMAGES_KIND)
+                        .unique(format!("{MOVE_IMAGES_KIND}:{}", Uuid::now_v7()))
+                        .max_attempts(50),
+                )
+                .await
+                .map_err(|error| crate::jobs::JobError::retry(error.log_category()))?;
+            }
+            Ok(())
+        },
+    );
+}
+
+/// Moves board images from `whiteboard_files` into the file store, a batch
+/// per transaction, for up to `budget`. True when some are left.
+pub async fn move_images(state: &AppState, budget: std::time::Duration) -> Result<bool, AppError> {
+    let started = std::time::Instant::now();
+    loop {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                String,
+                String,
+                Vec<u8>,
+                Uuid,
+                chrono::DateTime<chrono::Utc>,
+            ),
+        >(
+            r#"
+            SELECT old.whiteboard_id, board.project_id, old.file_id, old.mime_type, old.data,
+                   old.created_by_actor_id, old.created_at
+            FROM whiteboard_files old
+            JOIN whiteboards board ON board.id = old.whiteboard_id
+            ORDER BY old.whiteboard_id, old.file_id
+            LIMIT $1
+            FOR UPDATE OF old SKIP LOCKED
+            "#,
+        )
+        .bind(MOVE_BATCH)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if rows.is_empty() {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        for (board, project_id, file_id, mime_type, data, actor, created) in rows {
+            let name = format!("{file_id}.{}", extension(&mime_type));
+            files::move_content(
+                state,
+                &mut transaction,
+                actor,
+                files::ContentFile {
+                    project_id,
+                    thing: files::ThingKind::Whiteboard,
+                    thing_id: board,
+                    purpose: files::Purpose::Inline,
+                    external_key: &file_id,
+                    name: &name,
+                    content_type: &mime_type,
+                    bytes: &data,
+                },
+                created,
+            )
+            .await?;
+            // The old row goes once its file is in `files`, in the same
+            // transaction: the move, not a removal (rule 16).
+            sqlx::query("DELETE FROM whiteboard_files WHERE whiteboard_id = $1 AND file_id = $2")
+                .bind(board)
+                .bind(&file_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        if started.elapsed() >= budget {
+            return Ok(true);
+        }
+    }
 }
 
 /// The live elements, for reading and rendering outside a write.

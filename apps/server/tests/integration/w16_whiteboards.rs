@@ -1097,7 +1097,7 @@ async fn agents_put_images_on_boards_they_can_edit() {
     .await;
     assert_eq!(again["outcome"], "ok", "{again}");
     let stored = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM whiteboard_files WHERE whiteboard_id = $1::text::uuid",
+        "SELECT count(*) FROM files WHERE thing_kind = 'whiteboard' AND thing_id = $1::text::uuid",
     )
     .bind(&board)
     .fetch_one(&setup.pool)
@@ -1575,4 +1575,150 @@ async fn board_changes_are_listed_and_undone() {
         json!(0.0),
         "{now}"
     );
+}
+
+/// C1.29: a board's images are files of the board in the file store. A
+/// duplicate adds rows over the same bytes, an image still in the old table
+/// is read from there until the move job takes it, and deleting a board
+/// for good leaves the bytes its copy still shows.
+#[tokio::test]
+async fn board_images_live_in_the_file_store() {
+    let Some(setup) = setup("w16_images").await else {
+        return;
+    };
+    let state = crate::support::app::state_on(&setup.pool);
+    let work = create_project(&setup, "IMG", "Images").await;
+    let owner = &setup.browser;
+    let board = create_board(
+        &setup,
+        owner,
+        json!({"title": "Moodboard", "projectId": work}),
+    )
+    .await;
+    let (status, stored) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/files"),
+        json!({"id": "photo1", "mimeType": "image/png", "dataURL": TINY_PNG}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let (kind, purpose, key) = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT thing_kind, purpose, storage_key FROM files WHERE thing_id::text = $1 AND external_key = 'photo1'",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the image is a file of the board");
+    assert_eq!((kind.as_str(), purpose.as_str()), ("whiteboard", "inline"));
+    let file_url = |board: &str, file: &str| format!("/api/v1/whiteboards/{board}/files/{file}");
+    let (status, file) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "photo1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(file["dataURL"], TINY_PNG);
+
+    // A copy shows the image over the same stored bytes.
+    let (status, copy) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/duplicate"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copy}");
+    let copy = copy["whiteboard"]["id"].as_str().expect("copy").to_owned();
+    let copied_key = sqlx::query_scalar::<_, String>(
+        "SELECT storage_key FROM files WHERE thing_id::text = $1 AND external_key = 'photo1'",
+    )
+    .bind(&copy)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the copy's image");
+    assert_eq!(copied_key, key, "no bytes copied");
+
+    // An image from before the move is read from the old table, then moved.
+    const GIF: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    let gif = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, GIF).expect("gif");
+    sqlx::query(
+        r#"
+        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
+        SELECT id, 'legacy1', 'image/gif', $2, created_by_actor_id FROM whiteboards WHERE id::text = $1
+        "#,
+    )
+    .bind(&board)
+    .bind(&gif)
+    .execute(&setup.pool)
+    .await
+    .expect("an old image");
+    let gif_url = format!("data:image/gif;base64,{GIF}");
+    let (_, before) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "legacy1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(before["dataURL"], gif_url.as_str(), "{before}");
+    let listed = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        listed["files"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+    let more = agent_workspace_server::whiteboards::store::move_images(
+        &state,
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    .expect("move");
+    assert!(!more);
+    let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboard_files")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("left");
+    assert_eq!(left, 0);
+    let (_, after) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "legacy1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(after["dataURL"], gif_url.as_str(), "{after}");
+    let listed = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        listed["files"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+
+    // Deleting the original for good keeps the bytes its copy shows.
+    let path = format!("/api/v1/whiteboards/{board}");
+    let (status, _) = request(&setup, owner, "PATCH", &path, json!({"deleted": true})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    agent_workspace_server::files::cleanup(&state)
+        .await
+        .expect("cleanup");
+    let (status, kept) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&copy, "photo1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["dataURL"], TINY_PNG);
 }

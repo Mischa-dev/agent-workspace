@@ -329,13 +329,18 @@ impl Destination {
 }
 
 /// The things other than conversations and tasks that keep files of their
-/// own. Board images move here with C1.29.
+/// own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThingKind {
     Page,
+    /// A board's images (C1.29), each under the id the board's elements
+    /// name it by.
+    Whiteboard,
 }
 
 impl ThingKind {
+    /// The kinds the upload route takes. A board's images come in through
+    /// the board, named by their content (`whiteboards::store::put_file`).
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "page" => Some(Self::Page),
@@ -346,6 +351,7 @@ impl ThingKind {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Page => "page",
+            Self::Whiteboard => "whiteboard",
         }
     }
 }
@@ -379,6 +385,7 @@ pub(crate) async fn thing_destination(
     thing_id: Uuid,
 ) -> Result<Destination, AppError> {
     match thing {
+        ThingKind::Whiteboard => Err(AppError::NotFound("thing")),
         ThingKind::Page => {
             let project_id = crate::memory::page_project(pool, thing_id).await?;
             crate::memory::project_access(
@@ -643,6 +650,160 @@ pub(crate) async fn store_prepared(
     }
 }
 
+/// A thing's file kept under a key named by its content: board images
+/// (C1.29). The same bytes in a workspace are stored once however many
+/// boards show them (a duplicated board adds rows, not bytes), and bytes a
+/// write left behind when it didn't commit are found again by the next
+/// write of the same image rather than stored a second time.
+pub(crate) struct ContentFile<'a> {
+    pub(crate) project_id: Uuid,
+    pub(crate) thing: ThingKind,
+    pub(crate) thing_id: Uuid,
+    pub(crate) purpose: Purpose,
+    /// The thing's own name for it, unique among its live files.
+    pub(crate) external_key: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) content_type: &'a str,
+    pub(crate) bytes: &'a [u8],
+}
+
+/// The store key for content `sha256` in a workspace.
+fn content_key(organization_id: Uuid, sha256: &str) -> String {
+    format!("{}/c-{sha256}", organization_id.simple())
+}
+
+/// Stores a [`ContentFile`] for `uploader` in `transaction`, after the
+/// workspace's room check. Nothing to take away if the transaction then
+/// fails: the bytes are named by content, so a later write reuses them.
+pub(crate) async fn store_content(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    file: ContentFile<'_>,
+) -> Result<FileRow, AppError> {
+    let organization_id = organization_of(&mut **transaction, file.project_id).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{organization_id}"))
+        .execute(&mut **transaction)
+        .await?;
+    let sha256 = hex::encode(Sha256::digest(file.bytes));
+    let key = content_key(organization_id, &sha256);
+    if !content_stored(transaction, &key).await? {
+        require_room(
+            state,
+            transaction,
+            organization_id,
+            u64::try_from(file.bytes.len()).unwrap_or(u64::MAX),
+        )
+        .await?;
+        FileStore::from_config(&state.config)
+            .put(&key, file.bytes)
+            .await?;
+    }
+    insert_content_row(
+        transaction,
+        organization_id,
+        uploader,
+        &file,
+        &sha256,
+        &key,
+        None,
+    )
+    .await?
+    .ok_or(AppError::Conflict(
+        "file",
+        "That file was added a moment ago.",
+    ))
+}
+
+/// Whether a live row already holds bytes under `key`.
+async fn content_stored(connection: &mut PgConnection, key: &str) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM files WHERE storage_key = $1 AND blob_deleted_at IS NULL)",
+    )
+    .bind(key)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+/// Inserts a content file's row, attached at once (or at `attached_at`,
+/// for a row moved from elsewhere). None when the thing already has a live
+/// file under that external key.
+async fn insert_content_row(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    uploader: Uuid,
+    file: &ContentFile<'_>,
+    sha256: &str,
+    key: &str,
+    attached_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Option<FileRow>, AppError> {
+    Ok(sqlx::query_as::<_, FileRow>(&format!(
+        r#"
+        INSERT INTO files AS file (
+            id, organization_id, project_id, uploaded_by_actor_id, name, content_type,
+            byte_size, sha256, storage_key, attached_at, created_at, thing_kind, thing_id,
+            purpose, external_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, now()), COALESCE($10, now()),
+                $11, $12, $13, $14)
+        ON CONFLICT (thing_kind, thing_id, external_key)
+            WHERE external_key IS NOT NULL AND removed_at IS NULL
+            DO NOTHING
+        RETURNING {FILE_COLUMNS}
+        "#
+    ))
+    .bind(Uuid::now_v7())
+    .bind(organization_id)
+    .bind(file.project_id)
+    .bind(uploader)
+    .bind(clean_name(file.name))
+    .bind(file.content_type)
+    .bind(i64::try_from(file.bytes.len()).unwrap_or(i64::MAX))
+    .bind(sha256)
+    .bind(key)
+    .bind(attached_at)
+    .bind(file.thing.name())
+    .bind(file.thing_id)
+    .bind(file.purpose.name())
+    .bind(file.external_key)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+/// Moves one stored file into the file store as a content file, outside any
+/// transaction for the bytes, then inserts its row in `transaction`. Used
+/// by the job that moves board images out of their old table: no room
+/// check, since the bytes were already the workspace's. False when the
+/// thing already had it.
+pub(crate) async fn move_content(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    file: ContentFile<'_>,
+    attached_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, AppError> {
+    let organization_id = organization_of(&mut **transaction, file.project_id).await?;
+    let sha256 = hex::encode(Sha256::digest(file.bytes));
+    let key = content_key(organization_id, &sha256);
+    if !content_stored(transaction, &key).await? {
+        FileStore::from_config(&state.config)
+            .put(&key, file.bytes)
+            .await?;
+    }
+    Ok(insert_content_row(
+        transaction,
+        organization_id,
+        uploader,
+        &file,
+        &sha256,
+        &key,
+        Some(attached_at),
+    )
+    .await?
+    .is_some())
+}
+
 /// Takes away the bytes [`store_prepared`] stored, when the transaction
 /// that held its row didn't commit.
 pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
@@ -681,7 +842,9 @@ pub(crate) async fn require_room(
     let (workspace_bytes, all_bytes) = sqlx::query_as::<_, (i64, i64)>(
         r#"
         WITH stored AS (
-            SELECT organization_id, byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
+            -- Bytes several rows share (content files) count once.
+            SELECT DISTINCT ON (storage_key)
+                   organization_id, byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
             FROM files WHERE blob_deleted_at IS NULL
             UNION ALL
             SELECT organization_id, image_bytes
@@ -1051,10 +1214,25 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     let store = FileStore::from_config(&state.config);
     let mut deleted = 0;
     for (id, key, thumbnail_key) in removed {
+        // Bytes named by content can be another file's too (a duplicated
+        // board's images): they stay while any other row still holds them.
+        let shared = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM files
+                WHERE storage_key = $1 AND id <> $2 AND blob_deleted_at IS NULL
+            )
+            "#,
+        )
+        .bind(&key)
+        .bind(id)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
         // One file the store can't delete mustn't stop every later one: it
         // stays in the batch and is tried again next time.
         let mut failed = false;
-        for key in std::iter::once(key).chain(thumbnail_key) {
+        let keys = if shared { None } else { Some(key) };
+        for key in keys.into_iter().chain(thumbnail_key) {
             if let Err(error) = store.delete(&key).await {
                 tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
                 failed = true;

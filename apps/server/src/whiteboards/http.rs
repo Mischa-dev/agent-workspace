@@ -525,6 +525,7 @@ async fn put_file_http(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     access(&mut transaction, &caller, id, true).await?;
     let stored = store::put_file(
+        &state,
         &mut transaction,
         &caller,
         id,
@@ -552,7 +553,7 @@ async fn get_file_http(
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
-    Ok(Json(store::get_file(&state.pool, id, &file_id).await?))
+    Ok(Json(store::get_file(&state, id, &file_id).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -577,7 +578,7 @@ async fn preview_http(
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
     let elements = store::live_elements(&state.pool, id).await?;
-    let files = store::files_for(&state.pool, id, &elements).await?;
+    let files = store::files_for(&state, id, &elements).await?;
     let rendered = render::svg(
         &elements,
         &files,

@@ -108,6 +108,7 @@ impl Operation for WhiteboardUpdateElements {
         let id = input.whiteboard_id.id();
         let caller = whiteboard_commands::caller_of(call.ctx);
         let access_caller = call.ctx.caller.clone();
+        let state = call.state;
         let tx = call.tx().await?;
         let (board, mode) = board_for_writing(tx, &caller, &access_caller, id).await?;
         if mode == WriteMode::Propose {
@@ -137,7 +138,7 @@ impl Operation for WhiteboardUpdateElements {
             });
         }
         let operations =
-            whiteboard_commands::store_images(tx, &caller, id, &input.operations).await?;
+            whiteboard_commands::store_images(state, tx, &caller, id, &input.operations).await?;
         let outcome = edit::apply(
             tx,
             &caller,
