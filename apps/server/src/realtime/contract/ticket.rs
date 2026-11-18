@@ -146,6 +146,10 @@ pub struct Ticket {
     pub from: i64,
     /// Unix seconds.
     pub expires: i64,
+    /// When it was cut, in unix milliseconds: a connection whose ticket went
+    /// stale takes only one cut after that.
+    #[serde(default)]
+    pub issued_ms: i64,
 }
 
 mod position {
@@ -300,6 +304,7 @@ mod tests {
             ]),
             from: 9_007_199_254_740_993,
             expires: 1_000,
+            issued_ms: 0,
         };
         let token = signer.sign(&ticket);
         let opened = verify(&token, &keys, 999).expect("opens");

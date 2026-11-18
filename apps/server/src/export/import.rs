@@ -1916,12 +1916,33 @@ fn plain(name: &str) -> Result<&str, ImportError> {
     }
 }
 
+/// Whether the import `transfer` is still to finish.
+async fn unfinished(state: &AppState, transfer: Uuid) -> Result<bool, AppError> {
+    let unfinished = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM workspace_transfers \
+             WHERE id = $1 AND direction = 'import' AND state IN ('queued', 'running'))",
+        )
+        .bind(transfer)
+        .fetch_one(&mut *connection)
+        .await
+    })
+    .await?;
+    Ok(unfinished)
+}
+
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(IMPORT_KIND, |context| async move {
         let payload = context.job.payload_as::<ImportPayload>()?;
-        run_import(&context.state, payload.transfer, RunLimits::default())
+        let ran = run_import(&context.state, payload.transfer, RunLimits::default())
             .await
             .map_err(JobError::from)?;
+        // Not claimed: finished, or another worker's lease still holds it.
+        // A lease left by a worker that stopped runs out, so try again then
+        // rather than leave the workspace importing.
+        if !ran && unfinished(&context.state, payload.transfer).await? {
+            return Err(JobError::retry("import_leased"));
+        }
         Ok(())
     });
 }

@@ -355,6 +355,7 @@ async fn conformance(name: &str, target: Target) {
         audiences: [Audience::Workspace(workspace)].into(),
         from: 0,
         expires: chrono::Utc::now().timestamp() - 1,
+        issued_ms: 0,
     });
     for refused in [tampered.as_str(), expired.as_str(), "nonsense"] {
         let mut socket = open(&world, refused).await;
@@ -710,6 +711,25 @@ async fn document_rooms(name: &str, target: Target) {
             .await
             .is_none(),
         "a stale ticket hears no content"
+    );
+    // Sending back the ticket it already had doesn't lift that: it still
+    // verifies, but it was cut before access changed.
+    sockets[0]
+        .send(Message::Text(
+            json!({"type": "ticket", "ticket": mara_ticket["ticket"]})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("old ticket");
+    publish(api.state(), change(2)).await;
+    assert!(
+        until(&mut sockets[0], Duration::from_secs(1), |frame| {
+            is_update(frame) || frame["type"] == "ticket.accepted"
+        })
+        .await
+        .is_none(),
+        "the old ticket is not taken back"
     );
     let fresh = watch(&mara_browser).await;
     assert_eq!(fresh["documents"], json!([]), "the room is dropped");
