@@ -430,81 +430,24 @@ pub(super) async fn reply_claim(
         Ok(value) => value,
         Err(failure) => return ReplyToolResult::from_failure(failure),
     };
-    // A tag in a project channel is answered in a thread started from the
-    // message, so the work and its follow-ups stay in one place. DMs and
-    // groups answer inline.
-    let place = sqlx::query_as::<_, (Uuid, Uuid, String, Option<Uuid>, String)>(
-        r#"
-        SELECT request.conversation_id, request.message_id, conversation.kind,
-               request.thread_id, request.status
-        FROM reply_requests request
-        JOIN conversations conversation ON conversation.id = request.conversation_id
-        WHERE request.id = $1 AND request.project_id = $2 AND request.agent_actor_id = $3
-        "#,
+    let creator = crate::conversations::threads::ThreadCreator::mcp(principal);
+    let (conversation_id, thread_id) = match claim_in(
+        &mut transaction,
+        &creator,
+        request_id,
+        principal.project_id,
+        principal.actor_id,
     )
-    .bind(request_id)
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await;
-    match place {
-        Ok(Some((channel_id, message_id, kind, None, status)))
-            if kind == "channel" && status == "pending" =>
-        {
-            if let Err(error) = open_answer_thread(
-                &mut transaction,
-                principal,
-                request_id,
-                channel_id,
-                message_id,
-            )
-            .await
-            {
-                tracing::error!(category = error.log_category(), "reply_claim thread failed");
-                return ReplyToolResult::unavailable();
-            }
-        }
-        Ok(_) => {}
-        Err(_) => return ReplyToolResult::from_failure(ReadFailure::Database("reply_claim_place")),
-    }
-    // Claiming a pending request starts a new generation; claiming one you
-    // already hold renews the lease.
-    let claimed = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
-        r#"
-        UPDATE reply_requests request
-        SET status = 'claimed',
-            generation = CASE WHEN request.status = 'pending'
-                              THEN request.generation + 1
-                              ELSE request.generation END,
-            progress_text = CASE WHEN request.status = 'pending'
-                                 THEN NULL ELSE request.progress_text END,
-            progress_at = CASE WHEN request.status = 'pending'
-                               THEN NULL ELSE request.progress_at END,
-            lease_expires_at = now() + make_interval(mins => $4),
-            updated_at = now()
-        FROM conversations conversation
-        WHERE request.id = $1
-          AND request.project_id = $2
-          AND request.agent_actor_id = $3
-          AND request.status IN ('pending', 'claimed')
-          AND conversation.id = request.conversation_id
-          AND conversation.archived_at IS NULL
-          AND conversation_visible_to(conversation.id, $3)
-        RETURNING request.conversation_id, request.thread_id
-        "#,
-    )
-    .bind(request_id)
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .bind(LEASE_MINUTES)
-    .fetch_optional(&mut *transaction)
-    .await;
-    let (conversation_id, thread_id) = match claimed {
+    .await
+    {
         Ok(Some(row)) => row,
         Ok(None) => {
             return unusable(&mut *transaction, request_id, principal).await;
         }
-        Err(_) => return ReplyToolResult::from_failure(ReadFailure::Database("reply_claim")),
+        Err(error) => {
+            tracing::error!(category = error.log_category(), "reply_claim failed");
+            return ReplyToolResult::unavailable();
+        }
     };
     let request =
         sqlx::query_as::<_, InboxItem>(&format!("{INBOX_ITEM_SELECT} WHERE request.id = $1"))
@@ -696,6 +639,7 @@ pub(super) async fn reply_send(
                 connection_id,
             }),
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         None,
@@ -1049,13 +993,79 @@ async fn unusable<T>(
     ReplyToolResult::Conflict { message }
 }
 
+/// Claim a reply request for `agent_id` in `project_id`: a tag in a
+/// project channel is answered in a thread started from the message, so the
+/// work and its follow-ups stay in one place (DMs and groups answer
+/// inline). Claiming a pending request starts a new generation; claiming
+/// one already held renews the lease. `None` when it can't be claimed.
+/// `reply_claim` and a run's host speaking in its thread (`runs::say`)
+/// both claim here.
+pub(crate) async fn claim_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    creator: &crate::conversations::threads::ThreadCreator,
+    request_id: Uuid,
+    project_id: Uuid,
+    agent_id: Uuid,
+) -> Result<Option<(Uuid, Option<Uuid>)>, AppError> {
+    let place = sqlx::query_as::<_, (Uuid, Uuid, String, Option<Uuid>, String)>(
+        r#"
+        SELECT request.conversation_id, request.message_id, conversation.kind,
+               request.thread_id, request.status
+        FROM reply_requests request
+        JOIN conversations conversation ON conversation.id = request.conversation_id
+        WHERE request.id = $1 AND request.project_id = $2 AND request.agent_actor_id = $3
+        "#,
+    )
+    .bind(request_id)
+    .bind(project_id)
+    .bind(agent_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some((channel_id, message_id, kind, None, status)) = place
+        && kind == "channel"
+        && status == "pending"
+    {
+        open_answer_thread(transaction, creator, request_id, channel_id, message_id).await?;
+    }
+    Ok(sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        r#"
+        UPDATE reply_requests request
+        SET status = 'claimed',
+            generation = CASE WHEN request.status = 'pending'
+                              THEN request.generation + 1
+                              ELSE request.generation END,
+            progress_text = CASE WHEN request.status = 'pending'
+                                 THEN NULL ELSE request.progress_text END,
+            progress_at = CASE WHEN request.status = 'pending'
+                               THEN NULL ELSE request.progress_at END,
+            lease_expires_at = now() + make_interval(mins => $4),
+            updated_at = now()
+        FROM conversations conversation
+        WHERE request.id = $1
+          AND request.project_id = $2
+          AND request.agent_actor_id = $3
+          AND request.status IN ('pending', 'claimed')
+          AND conversation.id = request.conversation_id
+          AND conversation.archived_at IS NULL
+          AND conversation_visible_to(conversation.id, $3)
+        RETURNING request.conversation_id, request.thread_id
+        "#,
+    )
+    .bind(request_id)
+    .bind(project_id)
+    .bind(agent_id)
+    .bind(LEASE_MINUTES)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 /// Start (or find) the thread a channel tag is answered in, and point the
 /// request at it. The agent starts it, as it could with thread_start. When it
 /// can't (a viewer, or the message was removed meanwhile) the answer stays in
 /// the channel.
 async fn open_answer_thread(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    principal: &McpPrincipal,
+    creator: &crate::conversations::threads::ThreadCreator,
     request_id: Uuid,
     channel_id: Uuid,
     message_id: Uuid,
@@ -1068,7 +1078,7 @@ async fn open_answer_thread(
         // confine it.
         &crate::conversations::threads::ThreadCreator {
             project_id: None,
-            ..crate::conversations::threads::ThreadCreator::mcp(principal)
+            ..creator.clone()
         },
         channel_id,
         crate::conversations::threads::ThreadSpec::new(

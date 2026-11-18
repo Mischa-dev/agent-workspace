@@ -2225,6 +2225,10 @@ pub(super) struct TaskCreateArguments {
     /// Make it in a collection that acts like a task, such as "Bugs", by
     /// name or ID (project_open lists them). Left out, it's a plain task.
     pub collection: Option<String>,
+    /// Made from this message; the task links back to it.
+    pub from_message_id: Option<String>,
+    /// With fromMessageId, say so in its conversation.
+    pub say_so: Option<bool>,
 }
 
 pub(super) async fn task_create(
@@ -2253,6 +2257,8 @@ pub(super) async fn task_create(
         estimate: arguments.estimate,
         fields: arguments.fields.clone().filter(|fields| !fields.is_empty()),
         collection: arguments.collection.clone(),
+        from_message_id: arguments.from_message_id.clone(),
+        say_so: arguments.say_so,
     };
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would

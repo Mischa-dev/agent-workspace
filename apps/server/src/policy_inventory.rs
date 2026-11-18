@@ -268,6 +268,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     boundary_route!("metrics", Post, "/api/v1/client-errors", ClientTelemetry),
+    boundary_route!("metrics", Post, "/api/v1/client-timings", ClientTelemetry),
     boundary_route!(
         "auth/workos",
         Post,

@@ -6,9 +6,11 @@ import { toastError } from '../app/mutations'
 import { memoryKeys, pin, unpin } from '../memory/api'
 import { usePins } from '../memory/hooks'
 import { useProjects } from '../projects/hooks'
+import { useProjectExperience } from '../experience/layout'
 import { showToast, type MenuEntry } from '../ui'
 import { LazyDecisionDialog } from './LazyDecisionDialog'
 import { LazyMakePageDialog } from '../memory/LazyMakePageDialog'
+import { LazyRecordFromMessageDialog } from './LazyRecordFromMessageDialog'
 import type { ConversationMessage } from './types'
 
 /**
@@ -33,6 +35,8 @@ export function useMessageMemory({
   const pins = usePins(enabled ? projectId : '', conversationId)
   const [deciding, setDeciding] = useState<ConversationMessage | null>(null)
   const [making, setMaking] = useState<ConversationMessage | null>(null)
+  const [recording, setRecording] = useState<ConversationMessage | null>(null)
+  const records = useProjectExperience(projectId).shows('area.collections')
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.
   const projects = useProjects()
   const decisionProjects = direct ? (projects.data?.projects ?? []).filter((project) => !project.archivedAt && project.role !== 'viewer') : []
@@ -70,6 +74,8 @@ export function useMessageMemory({
             { label: 'Save as decision…', icon: 'checklist' as const, onSelect: () => setDeciding(message) },
             { label: 'Make a page…', icon: FilePlus, onSelect: () => setMaking(message) },
           ]),
+      // C2.21: a record in one of this space's collections, linked back here.
+      ...(direct || !records ? [] : [{ label: 'Make a record…', icon: 'table' as const, onSelect: () => setRecording(message) }]),
     ]
   }
 
@@ -91,6 +97,9 @@ export function useMessageMemory({
           projects={direct ? decisionProjects : null}
           source={{ kind: 'messages', messageIds: [making.id] }}
         />
+      ) : null}
+      {recording ? (
+        <LazyRecordFromMessageDialog message={recording} onClose={() => setRecording(null)} projectId={projectId} />
       ) : null}
     </>
   )

@@ -7,6 +7,7 @@ import { toastError } from '../app/mutations'
 import { Icon, IconButton, plainPreview, showToast } from '../ui'
 import { memoryKeys, pin, unpin, type Pin } from './api'
 import { usePins } from './hooks'
+import { pinHref } from './pinHref'
 import '../styles/conversation.css'
 
 /** Pin or unpin, then say so, with Undo; a failure says why. */
@@ -49,12 +50,7 @@ export function PinnedBar({
   const [open, setOpen] = useState(false)
   const items = pins.data?.pins ?? []
   if (items.length === 0) return null
-  const href = (item: Pin) =>
-    item.kind === 'page'
-      ? `/projects/${encodeURIComponent(projectId)}/pages/${encodeURIComponent(item.id)}`
-      : item.kind === 'decision'
-        ? `/projects/${encodeURIComponent(projectId)}/decisions#${encodeURIComponent(item.id)}`
-        : `#message-${item.id}`
+  const href = (item: Pin) => pinHref(projectId, item)
   return (
     <div className="aw-pins">
       <button aria-expanded={open} className="aw-pins__toggle" onClick={() => setOpen(!open)} type="button">

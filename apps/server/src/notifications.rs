@@ -30,6 +30,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, post},
 };
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -54,6 +55,8 @@ const MAX_CHANGE_EVENTS: usize = 50;
 
 // ---------------------------------------------------------------------------
 // Kinds
+
+pub mod views;
 
 pub mod kind {
     pub const MENTION: &str = "mention";
@@ -155,7 +158,7 @@ fn needs_you_sql(needs: &str) -> String {
 }
 
 /// Groups of kinds people filter the inbox by.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
     #[default]
@@ -191,7 +194,7 @@ impl Category {
 }
 
 /// Which part of the inbox to show.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum View {
     /// Everything not archived and not snoozed.
@@ -2530,6 +2533,8 @@ struct ListQuery {
     view: Option<View>,
     category: Option<Category>,
     project_id: Option<Uuid>,
+    /// Only these spaces, comma-separated (a saved inbox view's, C2.11).
+    spaces: Option<String>,
     cursor: Option<String>,
     limit: Option<i64>,
 }
@@ -2539,7 +2544,12 @@ async fn list_http(
     principal: AuthenticatedActor,
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<NotificationPage>, AppError> {
-    let page = list(
+    let spaces = query
+        .spaces
+        .as_deref()
+        .map(views::parse_spaces)
+        .transpose()?;
+    let mut page = list(
         &state.pool,
         Addresses::of(&state),
         principal.actor_id,
@@ -2547,12 +2557,16 @@ async fn list_http(
             view: query.view.unwrap_or_default(),
             category: query.category.unwrap_or_default(),
             project_id: query.project_id,
-            within: None,
+            within: spaces.clone(),
             cursor: query.cursor,
             limit: query.limit.unwrap_or(DEFAULT_PAGE_SIZE),
         },
     )
     .await?;
+    if spaces.is_some() {
+        // The badge counts the whole inbox, not the view's spaces.
+        page.unread_count = unread_count(&state.pool, principal.actor_id, None).await?;
+    }
     Ok(Json(page))
 }
 

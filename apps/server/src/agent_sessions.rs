@@ -257,53 +257,6 @@ pub(crate) async fn bind(
     .await?)
 }
 
-/// A harness run's turn started: its thread now has the run's session (the
-/// execution worker's), pointing at the turn.
-pub(crate) async fn record_run_turn(
-    state: &AppState,
-    run_id: Uuid,
-    turn_id: &str,
-    url: Option<&str>,
-) -> Result<(), AppError> {
-    let Some(crate::runs::store::BuiltinTurnPlace {
-        project_id,
-        conversation_id,
-        worker_actor_id,
-        harness,
-    }) = crate::runs::store::builtin_turn_place(&state.pool, run_id).await?
-    else {
-        return Ok(());
-    };
-    // Only turns people can open somewhere get a session row; a local turn
-    // is already the run card.
-    let Some(url) = url else {
-        return Ok(());
-    };
-    let reference = turn_id.chars().take(200).collect::<String>();
-    if valid_reference(&reference, Some(url)).is_err() {
-        return Ok(());
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    bind(
-        &mut transaction,
-        Binding {
-            project_id,
-            conversation_id,
-            agent_actor_id: worker_actor_id,
-            source: "harness_run",
-            harness: &harness,
-            external_ref: &reference,
-            url: Some(url),
-            state: "active",
-            agent_run_id: Some(run_id),
-            reply_request_id: None,
-        },
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
 /// A run ended: its session goes idle (it can be resumed by the next run).
 pub(crate) async fn idle_run_session(
     executor: impl PgExecutor<'_>,

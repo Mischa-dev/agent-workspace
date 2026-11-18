@@ -24,7 +24,6 @@ src/mcp/whiteboard_tools.rs: 9
 src/modules/gate.rs: 2
 src/onboarding.rs: 1
 src/page_docs/docx.rs: 1
-src/provider/codex_cloud.rs: 1
 src/replies.rs: 2
 src/search.rs: 3
 src/usage/batch.rs: 1

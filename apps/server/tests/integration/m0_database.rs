@@ -227,7 +227,9 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     .execute(&pool)
     .await
     .expect("insert consolidated Worker Message");
-    let duplicate_worker_message = sqlx::query(
+    // A run's agent may say several things in its thread (A1.16), each
+    // linked to the run.
+    sqlx::query(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
@@ -235,8 +237,8 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         )
         VALUES (
             $1, $2, $3, $4, 1,
-            '{"version":1,"nodes":[{"type":"text","text":"duplicate"}]}'::jsonb,
-            'duplicate', $5
+            '{"version":1,"nodes":[{"type":"text","text":"and another"}]}'::jsonb,
+            'and another', $5
         )
         "#,
     )
@@ -246,11 +248,8 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     .bind(first.worker_actor_id)
     .bind(terminal_run_id)
     .execute(&pool)
-    .await;
-    assert!(
-        duplicate_worker_message.is_err(),
-        "provider replay cannot create a second Worker Message for one Agent Run"
-    );
+    .await
+    .expect("a second message from the run");
 }
 
 async fn insert_active_run(

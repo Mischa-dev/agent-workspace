@@ -279,38 +279,6 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "pages",
-    "name": "change_list",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "List recent changes"
-  },
-  {
-    "automation": true,
-    "destructive": true,
-    "emits": [
-      "page.updated",
-      "sheet.updated",
-      "whiteboard.updated"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "pages",
-    "name": "change_undo",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Undo a change"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
     "kind": "describe",
     "long": false,
     "module": "channels",
@@ -555,6 +523,20 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_file_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a conversation's files"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [
       "conversation.read"
     ],
@@ -581,6 +563,50 @@
     "preview": false,
     "proposable": false,
     "title": "List members"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "conversation_tab_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a channel's tabs"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "conversation_tab_set",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a channel's page tab"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "conversation_task_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List a conversation's tasks"
   },
   {
     "automation": true,
@@ -869,8 +895,7 @@
     "destructive": false,
     "emits": [
       "page.version_restored",
-      "whiteboard.version_restored",
-      "sheet.version_restored"
+      "whiteboard.version_restored"
     ],
     "idempotent": true,
     "kind": "change",
@@ -989,6 +1014,36 @@
     "preview": false,
     "proposable": false,
     "title": "Unlink a host"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "inbox",
+    "name": "inbox_view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved inbox views"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "inbox_views.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "inbox",
+    "name": "inbox_view_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save an inbox view"
   },
   {
     "automation": true,
@@ -1423,54 +1478,6 @@
     "title": "Remove a package"
   },
   {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "file.attached"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "pages",
-    "name": "page_file_upload",
-    "permission": "pages.edit",
-    "preview": false,
-    "proposable": false,
-    "title": "Keep a file on a page"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "page.updated"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "pages",
-    "name": "page_make",
-    "permission": "pages.edit",
-    "preview": false,
-    "proposable": false,
-    "title": "Make a page from messages or blocks"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "page.updated"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "pages",
-    "name": "page_move",
-    "permission": "pages.edit",
-    "preview": false,
-    "proposable": false,
-    "title": "Move a page to another space"
-  },
-  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1562,33 +1569,17 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "page.discussion.updated",
-      "sheet.proposals_changed",
-      "whiteboard.proposals_changed"
+      "record.created"
     ],
     "idempotent": true,
-    "kind": "change",
+    "kind": "create",
     "long": false,
-    "module": "workspace",
-    "name": "proposal_decide",
-    "permission": null,
+    "module": "collections",
+    "name": "record_create",
+    "permission": "collections.edit",
     "preview": false,
     "proposable": false,
-    "title": "Decide a proposal"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "workspace",
-    "name": "proposal_list",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "List proposals"
+    "title": "Create a record"
   },
   {
     "automation": true,
@@ -1897,128 +1888,6 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "describe",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_chart_get",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Read a sheet chart"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "sheet.charts_changed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_chart_set",
-    "permission": "sheets.edit",
-    "preview": false,
-    "proposable": false,
-    "title": "Chart a sheet range"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "sheet.ranges_changed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_range_set",
-    "permission": "sheets.edit",
-    "preview": false,
-    "proposable": false,
-    "title": "Name a sheet range"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_search",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Find in a sheet"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "sheet.views_changed"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_view_create",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Save a sheet view"
-  },
-  {
-    "automation": true,
-    "destructive": true,
-    "emits": [
-      "sheet.views_changed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_view_delete",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Remove a sheet view"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_view_list",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "List a sheet's views"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "sheet.views_changed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "sheets",
-    "name": "sheet_view_update",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Change a sheet view"
   },
   {
     "automation": false,
@@ -2355,22 +2224,6 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "message.created"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "whiteboards",
-    "name": "whiteboard_ask",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Ask about part of a board"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
       "whiteboard.created"
     ],
     "idempotent": true,
@@ -2416,22 +2269,6 @@
     "title": "Link whiteboard"
   },
   {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "whiteboard.proposals_changed"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "whiteboards",
-    "name": "whiteboard_propose",
-    "permission": "whiteboards.suggest",
-    "preview": false,
-    "proposable": false,
-    "title": "Propose a whiteboard change"
-  },
-  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2444,22 +2281,6 @@
     "preview": false,
     "proposable": false,
     "title": "List whiteboard templates"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "task.created"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "tasks",
-    "name": "whiteboard_to_tasks",
-    "permission": "tasks.create",
-    "preview": false,
-    "proposable": false,
-    "title": "Make tasks from a board's notes"
   },
   {
     "automation": true,
@@ -2481,15 +2302,14 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "whiteboard.updated",
-      "whiteboard.proposals_changed"
+      "whiteboard.updated"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
     "module": "whiteboards",
     "name": "whiteboard_update_elements",
-    "permission": "whiteboards.suggest",
+    "permission": "whiteboards.edit",
     "preview": false,
     "proposable": false,
     "title": "Draw on whiteboard"

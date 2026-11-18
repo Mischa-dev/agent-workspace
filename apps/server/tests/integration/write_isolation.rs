@@ -411,6 +411,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          workspace, and takes no ID",
     ),
     (
+        "POST /api/v1/client-timings",
+        "browser speed timings: counted per known name in process metrics, never \
+         stored with a workspace, and takes no ID",
+    ),
+    (
         "POST /api/v1/integrations/github/webhook",
         "GitHub's own signed delivery, checked against the app's webhook secret, not a \
          session; covered in the GitHub tests",
@@ -509,6 +514,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "collection_write",
     "proposal_decide",
     "record_write",
+    "record_create",
+    "conversation_tab_set",
     "button_press",
     "sheet_write",
     "sheet_view_create",
@@ -595,6 +602,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
+    "inbox_view_set",
     "profile_update",
     "account_block_set",
     "dm_request_respond",
@@ -2542,6 +2550,10 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .execute(pool)
     .await
     .expect("runs blocked");
+    for run in &runs {
+        crate::support::builtin_run_moved(pool, *run, "blocked").await;
+        crate::support::builtin_run_started(pool, *run).await;
+    }
     for (index, run) in runs.iter().enumerate() {
         crate::support::requests::approval(pool, *run, &format!("net-{index}"), "Net approval")
             .await;
@@ -3222,12 +3234,12 @@ async fn one_workspace_never_writes_to_another() {
     );
 }
 
-/// AWD-71: answering an approval on a run the database won't admit again (a
-/// blocked run on a provider account that isn't its requester's, as this net
-/// once made) is a 409 that says why, over HTTP and through MCP, never a 500
-/// or a "retry later". The approval stays open, so it can still be denied.
+/// AWD-71, A1.16: approving a run the database won't admit again (a blocked
+/// run on a provider account that isn't its requester's, as this net once
+/// made) fails the run with the reason when the built-in host hears the
+/// answer, never a 500 or a run left waiting; denying one stops it.
 #[tokio::test]
-async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
+async fn approving_a_run_that_cant_be_admitted_fails_it_with_the_reason() {
     let Some(fixture) = two_workspaces_with("approval_admission", false).await else {
         return;
     };
@@ -3295,6 +3307,8 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .execute(pool)
         .await
         .expect("run blocked");
+        crate::support::builtin_run_moved(pool, run, "blocked").await;
+        crate::support::builtin_run_started(pool, run).await;
         let approval = crate::support::requests::approval(
             pool,
             run,
@@ -3316,34 +3330,36 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
             json!({"requestId": approval, "optionId": option}),
         )
     };
+    // The answer is taken; the built-in host, hearing it, finds the run
+    // can't carry on and fails it, saying why.
     let (status, body) = send(app, respond("unadmitted-http", "approve")).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["code"], "run_not_admitted", "{body}");
-    assert!(
-        body["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with(reason)),
-        "{body}"
-    );
-    let (approval_status, run_state) = sqlx::query_as::<_, (String, String)>(
-        "SELECT request.status, run.state FROM requests request \
-         JOIN agent_runs run ON run.id = request.run_id WHERE request.id = $1",
+    assert_eq!(status, StatusCode::OK, "{body}");
+    agent_workspace_server::scheduler::drain_now(&fixture.state)
+        .await
+        .expect("the host hears the answer");
+    let (run_state, failure) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, failure_reason FROM agent_runs WHERE id = $1",
     )
-    .bind(approval)
+    .bind(run)
     .fetch_one(pool)
     .await
-    .expect("approval after");
-    assert_eq!(
-        (approval_status.as_str(), run_state.as_str()),
-        ("open", "blocked"),
-        "nothing changes when the run can't carry on ({run})"
+    .expect("run after");
+    assert_eq!(run_state, "failed", "the run can't carry on");
+    assert!(
+        failure
+            .as_deref()
+            .is_some_and(|failure| failure.starts_with(reason)),
+        "{failure:?}"
     );
-    // Denying still works: an interrupted run needs no admission.
-    let (status, body) = send(app, respond("unadmitted-http-deny", "deny")).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let record = sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
+        .bind(run)
+        .fetch_one(pool)
+        .await
+        .expect("run record");
+    assert_eq!(record, "failed");
 
-    // Through MCP, as the owner's connected app.
-    let (approval, _) = approvals[1];
+    // Denying works too: an interrupted run needs no admission.
+    let (approval, run) = approvals[1];
     let session = initialize(app, &a.app_token).await.expect("app MCP");
     let (_, body) = call_tool(
         app,
@@ -3352,20 +3368,21 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         "request_respond",
         json!({
             "requestId": approval,
-            "optionId": "approve",
+            "optionId": "deny",
             "clientRequestId": "unadmitted-mcp",
         }),
     )
     .await;
-    let result = structured(&body);
-    assert_eq!(result["outcome"], "conflict", "{body}");
-    assert_eq!(result["code"], "run_not_admitted", "{body}");
-    assert!(
-        result["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with(reason)),
-        "{body}"
-    );
+    assert_eq!(structured(&body)["outcome"], "ok", "{body}");
+    agent_workspace_server::scheduler::drain_now(&fixture.state)
+        .await
+        .expect("the host hears the answer");
+    let run_state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+        .bind(run)
+        .fetch_one(pool)
+        .await
+        .expect("run after");
+    assert_eq!(run_state, "interrupted");
     fixture.finish().await;
 }
 
@@ -6312,6 +6329,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"name": "Net search", "query": "net"}),
             vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
         ),
+        // C2.11: inbox views are kept per workspace, and filter only to the
+        // workspace's own spaces; B's never change from A.
+        mcp_case(
+            "inbox_view_set",
+            json!({"name": "Net view", "filter": {"view": "unread"}}),
+            vec![
+                json!({"workspace": b.organization, "name": "Net view", "filter": {}}),
+                json!({"name": "Net spaces", "filter": {"spaces": [b.project]}}),
+            ],
+        ),
         // C2.39: only someone in the workspace called can be blocked, and a
         // request in B's DM is never A's to answer.
         mcp_case(
@@ -7042,6 +7069,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        // C1.26: a page tab, only a page and channel of the caller's own.
+        mcp_case(
+            "conversation_tab_set",
+            json!({"conversationId": a.channel, "page": a.page}),
+            vec![json!({"conversationId": b.channel, "page": b.page})],
+        )
+        .rejecting(vec![json!({"conversationId": a.channel, "page": b.page})]),
+        // C2.21: a record made from a message, only from one here.
+        mcp_case(
+            "record_create",
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": a.message}),
+            vec![json!({"collection": b.collection, "title": "Net made"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
+            json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
         ]),
         mcp_case(
             "button_press",

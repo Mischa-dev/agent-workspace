@@ -168,11 +168,20 @@ pub enum HarnessEvent {
     UsageUpdated(UsageReport),
     /// Tokens used since the last report (U2).
     TokensUsed(TokenUsage),
+    /// The agent's plan, the whole list each time.
+    Plan(Vec<PlanItem>),
     /// The agent's own words between steps, for the run's log (H5). Not
     /// part of its final message.
     Note(String),
     Error,
     Ignored,
+}
+
+/// One entry of an agent's plan: `pending`, `in_progress` or `completed`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanItem {
+    pub title: String,
+    pub status: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]

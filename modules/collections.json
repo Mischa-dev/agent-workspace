@@ -17,6 +17,7 @@
     "button_press": "change",
     "collection_write": "change",
     "record_query": "query",
+    "record_create": "create",
     "record_write": "change",
     "view_list": "query",
     "view_create": "create",

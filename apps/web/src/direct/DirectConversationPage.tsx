@@ -46,6 +46,7 @@ import {
   describeError,
   showToast,
 } from '../ui'
+import { useTimeToShow } from '../telemetry/useTimeToShow'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
 import { DmStandingBar } from './DmStandingBar'
 import { useDmStanding } from './dmRules'
@@ -74,6 +75,7 @@ export function DirectConversationPage() {
   const overview = useDirectOverview()
   const projectId = overview.data?.projectId ?? ''
   const timeline = useConversationTimeline(projectId, conversationId)
+  useTimeToShow('conversation_open', conversationId, Boolean(timeline.data))
   // Kept per conversation: the page stays mounted from one DM to the next.
   const [side, setSide] = useState<{ conversationId: string; panel: SidePanel } | null>(null)
   const panel = side?.conversationId === conversationId ? side.panel : null

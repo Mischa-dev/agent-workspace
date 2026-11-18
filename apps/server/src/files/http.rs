@@ -90,6 +90,7 @@ async fn upload_to_conversation(
         actor_kind: principal.actor_kind.clone(),
         mcp_credential: None,
         via_grant_id: None,
+        run_id: None,
     };
     let mut transaction = state.pool.begin().await?;
     let conversation = lock_message_conversation(

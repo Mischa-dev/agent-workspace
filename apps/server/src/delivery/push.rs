@@ -539,7 +539,7 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
                 attempts,
                 message_id: envelope::event_id(item.event.id),
                 event_type: item.event.event_type.clone(),
-                body: envelope::envelope(&item, &delivery, &lookups).to_string(),
+                body: envelope::envelope(&item, &delivery, &lookups, None).to_string(),
                 standard: true,
             });
         }

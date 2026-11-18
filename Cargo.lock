@@ -20,6 +20,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-workspace-builtin-host"
+version = "0.0.1"
+dependencies = [
+ "agent-workspace-redaction",
+ "axum",
+ "base64 0.22.1",
+ "codex-bridge-spike",
+ "command-fds",
+ "fs2",
+ "futures-util",
+ "hex",
+ "http",
+ "reqwest",
+ "rustix",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "agent-workspace-delivery-contract"
 version = "0.0.1"
 dependencies = [
@@ -84,13 +112,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-workspace-redaction"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "agent-workspace-server"
 version = "0.0.1"
 dependencies = [
+ "agent-workspace-builtin-host",
  "agent-workspace-delivery-contract",
  "agent-workspace-host-conformance",
  "agent-workspace-host-protocol",
  "agent-workspace-minimal-host",
+ "agent-workspace-redaction",
  "anyhow",
  "argon2",
  "async-trait",

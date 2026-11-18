@@ -754,6 +754,7 @@ async fn sender(
                 actor_kind: "human".to_owned(),
                 mcp_credential: None,
                 via_grant_id: via,
+                run_id: None,
             }))
         }
         "external_agent" => {
@@ -786,6 +787,7 @@ async fn sender(
                         connection_id,
                     }),
                     via_grant_id: None,
+                    run_id: None,
                 }),
                 None => Err("The agent's connection can no longer send messages."),
             })
@@ -873,6 +875,7 @@ fn browser_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
         actor_kind: principal.actor_kind.clone(),
         mcp_credential: None,
         via_grant_id: None,
+        run_id: None,
     }
 }
 
