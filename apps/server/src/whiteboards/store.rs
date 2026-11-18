@@ -405,6 +405,10 @@ pub fn register_compaction(registry: &mut crate::jobs::JobRegistry) {
             compact_revisions(&context.state)
                 .await
                 .map_err(|error| crate::jobs::JobError::retry(error.log_category()))?;
+            // Sheets' old snapshots go the same way.
+            crate::sheets::history::compact_snapshots(&context.state)
+                .await
+                .map_err(|error| crate::jobs::JobError::retry(error.log_category()))?;
             Ok(())
         },
     );

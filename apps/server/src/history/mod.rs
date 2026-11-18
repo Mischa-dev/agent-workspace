@@ -375,7 +375,7 @@ pub async fn show(
             })
         }
         // A removed message's versions are gone with its text.
-        "sheet" => crate::sheets::history::state_at(connection, id, version)
+        "sheet" => crate::sheets::history::state_at(store, connection, id, version)
             .await?
             .map(|state| state.to_json(version)),
         "message" => sqlx::query_as::<_, (Option<String>, Option<Value>)>(
@@ -478,6 +478,7 @@ pub async fn restore(
                 return Err(AppError::Conflict("sheet", "archived"));
             }
             let applied = match crate::sheets::history::restore(
+                &restorer.files,
                 transaction,
                 &sheet,
                 restorer.actor_id,

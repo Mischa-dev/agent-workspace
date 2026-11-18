@@ -646,6 +646,28 @@ async fn any_revision_comes_back_as_a_new_one() {
         revisions.push(written["value"]["revision"].as_i64().expect("revision"));
     }
     let now = *revisions.last().expect("revisions");
+    // C1.34: snapshots past 30 days move to the file store, all but the
+    // sheet's latest, and the revisions built on them still come back.
+    sqlx::query(
+        "UPDATE sheet_snapshots SET created_at = now() - interval '40 days' WHERE sheet_id::text = $1",
+    )
+    .bind(&sheet)
+    .execute(&setup.pool)
+    .await
+    .expect("age the snapshots");
+    let state = crate::support::app::state_on(&setup.pool);
+    let moved = agent_workspace_server::sheets::history::compact_snapshots(&state)
+        .await
+        .expect("compact");
+    assert!(moved > 0, "old snapshots move out");
+    let inline = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM sheet_snapshots WHERE sheet_id::text = $1 AND payload_key IS NULL",
+    )
+    .bind(&sheet)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left inline");
+    assert_eq!(inline, 1, "the latest snapshot stays");
     // Step 12: A1 held 12, before the row moved it and before the tab.
     let twelve = revisions[11];
     let shown = call("history_show", json!({"thing": sheet, "version": twelve})).await;
