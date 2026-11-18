@@ -598,6 +598,69 @@ pub async fn restore(
     .map_err(Refusal::Problem))
 }
 
+/// Moves the state of snapshots older than 30 days, each replaced by a
+/// newer one as its sheet's latest, into the file store, compressed, a
+/// batch per run (C1.34). The row keeps its place; revisions built on it
+/// still show and restore. Returns how many moved.
+pub async fn compact_snapshots(state: &crate::AppState) -> Result<u64, AppError> {
+    let due = sqlx::query_as::<_, (Uuid, Uuid, i64)>(
+        r#"
+        SELECT snapshot.workspace_id, snapshot.sheet_id, snapshot.revision
+        FROM sheet_snapshots snapshot
+        WHERE snapshot.payload_key IS NULL
+          AND snapshot.created_at < now() - make_interval(days => $1)
+          AND EXISTS (
+              SELECT 1 FROM sheet_snapshots newer
+              WHERE newer.sheet_id = snapshot.sheet_id AND newer.revision > snapshot.revision
+          )
+        ORDER BY snapshot.created_at
+        LIMIT $2
+        "#,
+    )
+    .bind(COMPACT_AFTER_DAYS)
+    .bind(COMPACT_BATCH)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    let store = files::FileStore::from_config(&state.config);
+    let mut moved = 0;
+    for (workspace, sheet, revision) in due {
+        let snapshot = sqlx::query_scalar::<_, Json>(
+            "SELECT state FROM sheet_snapshots WHERE sheet_id = $1 AND revision = $2",
+        )
+        .bind(sheet)
+        .bind(revision)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
+        let json = serde_json::to_vec(&snapshot)
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be written"))?;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &json)
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
+        let compressed = encoder
+            .finish()
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
+        let key = format!(
+            "{}/history/sheet-{}-{revision}.json.gz",
+            workspace.simple(),
+            sheet.simple()
+        );
+        store.put(&key, &compressed).await?;
+        // A snapshot never changes once kept, so this only guards against a
+        // second run.
+        moved += sqlx::query(
+            "UPDATE sheet_snapshots SET state = '{}'::jsonb, payload_key = $3 \
+             WHERE sheet_id = $1 AND revision = $2 AND payload_key IS NULL",
+        )
+        .bind(sheet)
+        .bind(revision)
+        .bind(&key)
+        .execute(crate::db::scoped(&state.pool))
+        .await?
+        .rows_affected();
+    }
+    Ok(moved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,67 +822,4 @@ mod tests {
         }
         assert_eq!((count, most), (20, 20));
     }
-}
-
-/// Moves the state of snapshots older than 30 days, each replaced by a
-/// newer one as its sheet's latest, into the file store, compressed, a
-/// batch per run (C1.34). The row keeps its place; revisions built on it
-/// still show and restore. Returns how many moved.
-pub async fn compact_snapshots(state: &crate::AppState) -> Result<u64, AppError> {
-    let due = sqlx::query_as::<_, (Uuid, Uuid, i64)>(
-        r#"
-        SELECT snapshot.workspace_id, snapshot.sheet_id, snapshot.revision
-        FROM sheet_snapshots snapshot
-        WHERE snapshot.payload_key IS NULL
-          AND snapshot.created_at < now() - make_interval(days => $1)
-          AND EXISTS (
-              SELECT 1 FROM sheet_snapshots newer
-              WHERE newer.sheet_id = snapshot.sheet_id AND newer.revision > snapshot.revision
-          )
-        ORDER BY snapshot.created_at
-        LIMIT $2
-        "#,
-    )
-    .bind(COMPACT_AFTER_DAYS)
-    .bind(COMPACT_BATCH)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
-    let store = files::FileStore::from_config(&state.config);
-    let mut moved = 0;
-    for (workspace, sheet, revision) in due {
-        let snapshot = sqlx::query_scalar::<_, Json>(
-            "SELECT state FROM sheet_snapshots WHERE sheet_id = $1 AND revision = $2",
-        )
-        .bind(sheet)
-        .bind(revision)
-        .fetch_one(crate::db::scoped(&state.pool))
-        .await?;
-        let json = serde_json::to_vec(&snapshot)
-            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be written"))?;
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        std::io::Write::write_all(&mut encoder, &json)
-            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
-        let compressed = encoder
-            .finish()
-            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
-        let key = format!(
-            "{}/history/sheet-{}-{revision}.json.gz",
-            workspace.simple(),
-            sheet.simple()
-        );
-        store.put(&key, &compressed).await?;
-        // A snapshot never changes once kept, so this only guards against a
-        // second run.
-        moved += sqlx::query(
-            "UPDATE sheet_snapshots SET state = '{}'::jsonb, payload_key = $3 \
-             WHERE sheet_id = $1 AND revision = $2 AND payload_key IS NULL",
-        )
-        .bind(sheet)
-        .bind(revision)
-        .bind(&key)
-        .execute(crate::db::scoped(&state.pool))
-        .await?
-        .rows_affected();
-    }
-    Ok(moved)
 }
