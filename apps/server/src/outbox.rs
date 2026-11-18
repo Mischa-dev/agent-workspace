@@ -425,6 +425,14 @@ pub struct SavedSearchesChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's saved inbox views changed (C2.11). Their id only, delivered to
+/// them alone; their other tabs read the views again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InboxViewsChangedPayload {
+    pub actor_id: Uuid,
+}
+
 /// Who may message someone changed for them (C2.39): a block, or a message
 /// request answered. Their id only, delivered to them alone; their screens
 /// read the DM's standing again. A blocked account is never told.
@@ -480,6 +488,7 @@ pub enum OutboxEventPayload {
     WorkspaceThemesChanged(WorkspaceThemesChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
+    InboxViewsChanged(InboxViewsChangedPayload),
     DmRulesChanged(DmRulesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
@@ -518,6 +527,7 @@ impl OutboxEventPayload {
             Self::WorkspaceThemesChanged(_) => "workspace_themes.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
+            Self::InboxViewsChanged(_) => "inbox_views.changed",
             Self::DmRulesChanged(_) => "dm_rules.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
@@ -559,6 +569,7 @@ impl OutboxEventPayload {
             | Self::WorkspaceThemesChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
+            | Self::InboxViewsChanged(_)
             | Self::DmRulesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
@@ -578,6 +589,7 @@ impl OutboxEventPayload {
             Self::ThemeChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
+            Self::InboxViewsChanged(payload) => Some(payload.actor_id),
             Self::DmRulesChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
@@ -602,7 +614,9 @@ impl OutboxEventPayload {
             | Self::NotificationKeywordsChanged(_)
             | Self::ThemeChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
-            Self::SavedSearchesChanged(_) => OutboxResourceKind::Account,
+            Self::SavedSearchesChanged(_) | Self::InboxViewsChanged(_) => {
+                OutboxResourceKind::Account
+            }
             Self::DmRulesChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
@@ -657,6 +671,7 @@ impl OutboxEventPayload {
             Self::WorkspaceThemesChanged(payload) => payload.project_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
+            Self::InboxViewsChanged(payload) => payload.actor_id,
             Self::DmRulesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
@@ -797,6 +812,7 @@ impl OutboxEventPayload {
             Self::WorkspaceThemesChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
+            Self::InboxViewsChanged(payload) => serde_json::to_value(payload),
             Self::DmRulesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
@@ -899,6 +915,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "saved_searches.changed" => Self::SavedSearchesChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "inbox_views.changed" => Self::InboxViewsChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "dm_rules.changed" => Self::DmRulesChanged(

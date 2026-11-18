@@ -482,6 +482,20 @@ impl From<crate::policy::UnknownRole> for AppError {
     }
 }
 
+impl From<agent_workspace_builtin_host::RuntimeError> for AppError {
+    fn from(error: agent_workspace_builtin_host::RuntimeError) -> Self {
+        use agent_workspace_builtin_host::RuntimeError;
+        match error {
+            RuntimeError::Conflict(what, why) => Self::Conflict(what, why),
+            RuntimeError::Invalid(what) => Self::Invalid(what),
+            RuntimeError::Internal(what) => Self::Internal(what),
+            RuntimeError::Busy {
+                retry_after_seconds,
+            } => Self::rate_limited(retry_after_seconds),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{

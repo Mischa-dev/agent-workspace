@@ -39,42 +39,12 @@ async fn space_permissions(
     caller: &Caller,
     space_id: Uuid,
 ) -> Result<Option<PermissionSet>, OpError> {
-    let row = sqlx::query_as::<_, RoleRow>(
-        r#"
-        SELECT membership.role,
-               workspace_role_permissions(membership.role_id) AS role_permissions
-        FROM project_memberships membership
-        JOIN projects project ON project.id = membership.project_id
-        JOIN organization_memberships workspace_membership
-          ON workspace_membership.organization_id = project.organization_id
-         AND workspace_membership.actor_id = $1
-         AND workspace_membership.enabled
-        JOIN actors actor ON actor.id = $1 AND actor.status = 'active'
-        WHERE membership.project_id = $2 AND membership.actor_id = $1 AND membership.enabled
-          AND project.archived_at IS NULL
-          AND actor_can_access_project($1, $3, $2)
-        "#,
-    )
-    .bind(caller.account_id)
-    .bind(space_id)
-    .bind(caller.connection_id)
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(|error| OpError::logged("access", &error.into()))?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let held = granted(&row)?;
-    Ok(Some(match &caller.limits {
-        Some(limits) => held.intersect(
-            limits
-                .projects
-                .get(&space_id)
-                .copied()
-                .unwrap_or(PermissionSet::EMPTY),
-        ),
-        None => held,
-    }))
+    // `access` decides what a caller holds in a space (a run credential's
+    // delegation included); the module switches are this shim's own check.
+    let held = crate::access::holding(connection, caller, crate::access::Scope::Space(space_id))
+        .await
+        .map_err(|error| OpError::logged("access", &error))?;
+    Ok(held.map(|holding| holding.permissions))
 }
 
 /// What the caller's workspace role grants, narrowed by their agent limit.

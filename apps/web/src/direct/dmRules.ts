@@ -29,6 +29,7 @@ export function useBlockedAccounts(enabled = true) {
 export function invalidateDmRules(queryClient: ReturnType<typeof useQueryClient>, workspaceId?: string) {
   void queryClient.invalidateQueries({ queryKey: opPrefix('dm_standing_get', workspaceId) })
   void queryClient.invalidateQueries({ queryKey: opPrefix('account_block_list', workspaceId) })
+  void queryClient.invalidateQueries({ queryKey: opPrefix('sidebar_list', workspaceId) })
   void queryClient.invalidateQueries({ queryKey: directQueryKey })
 }
 

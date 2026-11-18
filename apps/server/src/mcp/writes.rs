@@ -209,6 +209,12 @@ pub struct NewTaskDetails {
     /// The collection that acts like a task to make it in, by name or ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// C2.20: made from this message, which the task links back to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_message_id: Option<String>,
+    /// With from_message_id, say so in its conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say_so: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -784,6 +790,27 @@ async fn create_task(
             .await;
         }
     };
+    if let Some(message) = details.from_message_id.as_deref() {
+        const MESSAGE: &str = "That message wasn't found in this space, or you can't read it. Pass a message id \
+             from conversation_read in the same space.";
+        let linked = match super::common::parse_id(message) {
+            Some(message) => {
+                crate::conversations::system_entries::task_made_from_message(
+                    &mut transaction,
+                    principal.project_id,
+                    work_item_id,
+                    principal.actor_id,
+                    message,
+                    details.say_so.unwrap_or(false),
+                )
+                .await?
+            }
+            None => false,
+        };
+        if !linked {
+            return Ok(WriteResult::invalid("fromMessageId", MESSAGE));
+        }
+    }
     let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
     let mut result = applied(
         work_item_id,

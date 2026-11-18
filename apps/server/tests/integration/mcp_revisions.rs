@@ -564,4 +564,57 @@ async fn long_calls_finish_as_tasks_any_server_can_answer() {
         Some(&json!("not_found")),
         "{refused}"
     );
+
+    // The same person's other app didn't start it: not found.
+    let other_app = connect_app(app, &setup.browser, "Another app", "full").await;
+    let (_, _, refused) = post(
+        app,
+        &other_app,
+        STATELESS,
+        None,
+        request(
+            25,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job_id } }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{refused}"
+    );
+
+    // Once the caller may no longer act where it ran (here the space is
+    // archived), the kept answer isn't shown, through either route.
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = (SELECT actor_id FROM project_memberships \
+         WHERE project_id = $1::uuid LIMIT 1) \
+         WHERE id = $1::uuid",
+    )
+    .bind(&project)
+    .execute(&setup.pool)
+    .await
+    .expect("archive the space");
+    let (_, _, hidden) = post(
+        app,
+        &token,
+        STATELESS,
+        None,
+        request(
+            26,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job_id } }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(
+        hidden.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{hidden}"
+    );
+    let (_, _, hidden) = post(app, &token, STATELESS, None, tasks_get(27, &task_id, true)).await;
+    assert!(hidden.get("error").is_some(), "{hidden}");
 }

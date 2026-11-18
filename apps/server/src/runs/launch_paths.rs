@@ -418,6 +418,41 @@ pub async fn open_request_of(
     .await?)
 }
 
+/// The reply request a run's agent answers when its host says something in
+/// the thread (`runs::say`): the request its launch came from (the
+/// hand-off message, or the message whose tag launched it), while this run
+/// is the newest attempt at it, whatever its state. `None` for a run that
+/// wasn't launched from a message.
+pub async fn reply_of(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<(Uuid, String)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT request.id, request.status
+        FROM runs run
+        JOIN launches launch ON launch.id = run.launch_id
+        JOIN reply_requests request
+          ON request.message_id = COALESCE(run.cause_message_id, launch.source_message_id)
+         AND request.agent_actor_id = run.account_id
+        WHERE run.id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM runs later
+              JOIN launches later_launch ON later_launch.id = later.launch_id
+              WHERE COALESCE(later.cause_message_id, later_launch.source_message_id)
+                    = request.message_id
+                AND later.account_id = run.account_id
+                AND (later.created_at, later.id) > (run.created_at, run.id)
+          )
+        ORDER BY request.updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 /// The runner bound a session in a conversation (`session_bind`): its
 /// active launched runs there show where to watch it and what runs it.
 pub async fn session_bound(

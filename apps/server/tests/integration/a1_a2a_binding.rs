@@ -80,9 +80,17 @@ async fn rpc(State(agent): State<Shared>, Json(call): Json<Value>) -> (StatusCod
                 (_, None) => task("input-required", Some("Which branch?")),
                 (_, Some(_)) => {
                     let mut done = task("completed", Some("Fixed it."));
-                    done["artifacts"] = json!([{"artifactId": "a1", "name": "Report", "parts": [
+                    let mut artifacts =
+                        vec![json!({"artifactId": "a1", "name": "Report", "parts": [
                         {"kind": "text", "text": "All done on the branch you named."},
-                        {"kind": "data", "data": {"passed": 3}}]}]);
+                        {"kind": "data", "data": {"passed": 3}}]})];
+                    // More than one report takes, all recorded.
+                    artifacts.extend((2..=40).map(|index| {
+                        json!({"artifactId": format!("a{index}"), "name": "Log", "parts": [
+                            {"kind": "text", "text": format!("Step {index}.")},
+                            {"kind": "data", "data": {"step": index}}]})
+                    }));
+                    done["artifacts"] = Value::Array(artifacts);
                     done
                 }
             }
@@ -279,6 +287,16 @@ async fn an_a2a_agent_runs_a_task_asks_through_a_request_and_hands_back_its_resu
         log.iter()
             .any(|(kind, payload)| kind == "result" && payload["data"]["passed"] == 3),
         "{log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|(kind, payload)| kind == "result" && payload["data"]["step"] == 40),
+        "the last of a long snapshot is recorded: {log:?}"
+    );
+    assert_eq!(
+        log.last().map(|(kind, _)| kind.as_str()),
+        Some("run_finished"),
+        "the run finishes after everything it said"
     );
     let following: i64 = sqlx::query_scalar("SELECT count(*) FROM host_a2a_tasks")
         .fetch_one(&setup.pool)

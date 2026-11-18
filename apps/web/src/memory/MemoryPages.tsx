@@ -335,6 +335,11 @@ export function PageDetailPage() {
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
+/** A page shown as a tab on a channel (C1.26), in the channel's own frame. */
+export function PageInChannel({ pageId, project }: { pageId: string; project: Project }) {
+  return <PageDetail key={pageId} pageId={pageId} project={project} />
+}
+
 type Viewing = { version: number; title: string; body: string }
 
 function PageDetail({ pageId, project }: { pageId: string; project: Project }) {

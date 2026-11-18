@@ -155,8 +155,10 @@ impl Operation for AutomationCreate {
 
     async fn run(call: &mut OpCall<'_>, input: CreateInput) -> Result<Value, OpError> {
         let (caller, space) = caller_and_space(call);
+        let state = call.state;
         let made = super::create(
-            call.state,
+            state,
+            call.tx().await?,
             &caller,
             space,
             CreateRule {

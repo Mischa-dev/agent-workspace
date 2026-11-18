@@ -241,6 +241,15 @@ pub async fn stage(
             None,
             Some(p.actor_id),
         ),
+        P::InboxViewsChanged(p) => (
+            &catalog::INBOX_VIEWS_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
         P::DmRulesChanged(p) => (
             &catalog::DM_RULES_CHANGED,
             "account",

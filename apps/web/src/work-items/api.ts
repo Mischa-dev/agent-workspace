@@ -567,6 +567,8 @@ export async function createWorkItem(input: {
   fieldValues?: Record<string, FieldValue>
   /** Made from a message: the task links back to it. */
   sourceMessageId?: string
+  /** With a source message, say so in its conversation (C2.20). */
+  saySo?: boolean
   idempotencyKey: string
 }) {
   const { projectId, idempotencyKey, ...json } = input

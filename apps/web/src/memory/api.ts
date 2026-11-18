@@ -148,7 +148,7 @@ export function listDecisions(projectId: string, includeSuperseded = false) {
 /** Records a decision through its operation (K2.5); a retry of the same call is answered once. */
 export function recordDecision(
   projectId: string,
-  input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string },
+  input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string; saySo?: boolean },
   requestId: string = newRequestId(),
 ) {
   return callOp('decision_record', { spaceId: projectId, ...input }, { requestId }).then((decision) => decision as Decision)

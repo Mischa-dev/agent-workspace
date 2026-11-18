@@ -986,17 +986,31 @@ pub(crate) async fn interrupt_run_in(
         return Ok(context.project_id);
     }
 
-    interrupt_run_unchecked(
-        &mut transaction,
-        RunToStop {
-            run_id,
-            project_id: context.project_id,
-            conversation_id: context.conversation_id,
-        },
-        "Interrupted by the requesting Actor.",
-        serde_json::json!({"actor_id": principal.actor_id()}),
-    )
-    .await?;
+    // A1.16: a run the built-in host has started is stopped by its host,
+    // as any host's is: the run's record asks it to (cancel_requested) and
+    // the host hears a cancel command, stops the turn and confirms. One
+    // still waiting to start is stopped here at once; no host has it yet.
+    let started = !matches!(context.state.as_str(), "created" | "queued");
+    if started {
+        crate::runs::ops::request_cancel(&mut transaction, principal.actor_id(), run_id, None)
+            .await
+            .map_err(|error| match error {
+                crate::runs::ops::RunOpError::App(error) => error,
+                _ => AppError::Conflict("agent_run", "only a non-terminal run can be interrupted"),
+            })?;
+    } else {
+        interrupt_run_unchecked(
+            &mut transaction,
+            RunToStop {
+                run_id,
+                project_id: context.project_id,
+                conversation_id: context.conversation_id,
+            },
+            crate::runs::state::STOPPED_BY_REQUESTER,
+            serde_json::json!({"actor_id": principal.actor_id()}),
+        )
+        .await?;
+    }
     idempotency::complete(
         &mut transaction,
         &reservation,
@@ -1007,6 +1021,19 @@ pub(crate) async fn interrupt_run_in(
     )
     .await?;
     transaction.commit().await?;
+    if started {
+        // The built-in host hears the cancel now, not at its next tick.
+        // Otherwise its next tick does.
+        if let Err(error) = crate::hosts::builtin::driver::hear_now(
+            state,
+            run_id,
+            &[agent_workspace_host_protocol::CommandKind::Cancel],
+        )
+        .await
+        {
+            tracing::warn!(%run_id, error_category = error.log_category(), "the stop waits for the host's next look");
+        }
+    }
     Ok(context.project_id)
 }
 

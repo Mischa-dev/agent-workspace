@@ -8,7 +8,7 @@ use super::{
     adapter::{AccountHandle, HarnessAdapter, HarnessError},
     run_config::RunConfig,
 };
-use crate::git_runtime::is_run_branch_prefix;
+use crate::git::is_run_branch_prefix;
 
 pub(super) async fn adapter_contract(
     adapter: &dyn HarnessAdapter,

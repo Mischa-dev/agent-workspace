@@ -34,12 +34,14 @@ use super::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, ModelPrices,
         RunLocation, RunOptionSupport, VersionRange,
     },
-    registry::ShutdownSignal,
     run_config::RunConfig,
     secret_fd,
+    shutdown::ShutdownSignal,
     slots::{RunSlot, RunSlots},
 };
-use crate::{config::AppConfig, secrets::SecretValue};
+use agent_workspace_redaction::SecretValue;
+
+use crate::config::HarnessConfig;
 
 pub const CLAUDE_CODE_KIND: &str = "claude_code";
 
@@ -185,7 +187,7 @@ pub struct ClaudeCodeAdapter {
 }
 
 impl ClaudeCodeAdapter {
-    pub fn new(config: &AppConfig, shutdown: Arc<ShutdownSignal>, host: HostCell) -> Self {
+    pub fn new(config: &HarnessConfig, shutdown: Arc<ShutdownSignal>, host: HostCell) -> Self {
         Self::with_binary(
             config.claude_binary.clone(),
             config.codex_host_concurrency_limit,
@@ -939,7 +941,10 @@ fn permission_request(value: &Value) -> Option<HarnessEvent> {
         return Some(HarnessEvent::Request(HarnessRequest {
             kind: RequestKind::Question,
             durable_id: format!("claude-question-{request_id}"),
-            summary: crate::run_log::cap(&crate::run_log::redact(&questions), 1_000),
+            summary: agent_workspace_redaction::cap(
+                &agent_workspace_redaction::redact(&questions),
+                1_000,
+            ),
             options: Vec::new(),
             token,
         }));
@@ -962,7 +967,10 @@ fn permission_request(value: &Value) -> Option<HarnessEvent> {
     Some(HarnessEvent::Request(HarnessRequest {
         kind: RequestKind::Approval,
         durable_id: format!("claude-approval-{request_id}"),
-        summary: crate::run_log::cap(&crate::run_log::redact(&summary), 1_000),
+        summary: agent_workspace_redaction::cap(
+            &agent_workspace_redaction::redact(&summary),
+            1_000,
+        ),
         options: vec![
             RequestOption {
                 id: "approve".to_owned(),
@@ -1048,7 +1056,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::provider::contract_tests::adapter_contract;
+    use crate::harness::contract_tests::adapter_contract;
 
     /// A stand-in `claude` that answers stream-json like Claude Code does:
     /// a Bash call, a permission prompt for a Write, then the result. It

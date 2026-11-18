@@ -11,6 +11,7 @@ import type {
   ReplyRequest,
   ReplyRequestStatus,
   ConversationMessage,
+  ConversationSystemEvent,
   ConversationTimelineEntry,
   ConversationTimelinePage,
   ConversationWorkItemChip,
@@ -22,6 +23,7 @@ import type {
   MessageRevisions,
   SavedMark,
 } from './types'
+import { timed } from '../telemetry/timings'
 
 export {
   createChannel,
@@ -125,6 +127,11 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
     forwarded: message.forwarded ?? null,
     replyTo: message.replyTo ?? null,
     saved: normalizeSavedMark(message.saved),
+    madeInto: Array.isArray(message.madeInto)
+      ? message.madeInto.map(asRecord).flatMap((made) =>
+          typeof made.kind === 'string' && typeof made.id === 'string' ? [{ kind: made.kind, id: made.id }] : [],
+        )
+      : [],
   }
 }
 
@@ -202,6 +209,18 @@ export function normalizeTimelineEntry(
   if ((kind === 'message' && !message) || (kind === 'worker_event' && !workerEvent)) {
     return null
   }
+  const said = asRecord(entry.system)
+  const system: ConversationSystemEvent | null =
+    said.type === 'made_into' && typeof said.actorId === 'string' && typeof said.thingKind === 'string' && typeof said.thingId === 'string'
+      ? {
+          type: 'made_into',
+          actorId: said.actorId,
+          actorName: typeof said.actorName === 'string' ? said.actorName : null,
+          thingKind: said.thingKind.slice(0, 60),
+          thingId: said.thingId,
+          ...(typeof said.messageId === 'string' ? { messageId: said.messageId } : {}),
+        }
+      : null
   return {
     id: entry.id,
     sequence: entry.sequence as number,
@@ -209,6 +228,7 @@ export function normalizeTimelineEntry(
     createdAt: string(entry.createdAt),
     message,
     workerEvent,
+    system,
   }
 }
 
@@ -379,7 +399,7 @@ export async function sendConversationMessage(input: {
       : input.kind === 'thread'
         ? 'threads'
         : 'conversations'
-  return requestJson<unknown>(
+  return timed('message_send', requestJson<unknown>(
     `/api/v1/${collection}/${encodeURIComponent(input.conversationId)}/messages`,
     {
       method: 'POST',
@@ -391,7 +411,7 @@ export async function sendConversationMessage(input: {
         replyToMessageId: input.replyTo?.messageId,
       },
     },
-  )
+  ))
 }
 
 /** The entry a send returns, when it's for this conversation: shown at once, before any refetch. */

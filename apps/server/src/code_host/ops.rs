@@ -457,7 +457,10 @@ impl Operation for GitHubInstallationLink {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = MODULE;
     const PERMISSION: Option<Perm> = Some(Perm::CodeManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Not the dispatcher's: it would hold its transaction across the calls
+    // to GitHub. Linking is safe to repeat (it links, or checks again), so a
+    // retry with the same request id changes nothing more.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Link GitHub installation";
     const DESCRIPTION: &'static str = "Link a space to a GitHub App installation with the \
         repositories it reaches, or check it again.";
@@ -470,7 +473,7 @@ impl Operation for GitHubInstallationLink {
         call: &mut OpCall<'_>,
         input: InstallationInput,
     ) -> Result<GitHubIntegrationWriteValue, OpError> {
-        write_integration(
+        let value = write_integration(
             call,
             GitHubIntegrationWriteArguments {
                 project_id: input.project_id,
@@ -481,7 +484,9 @@ impl Operation for GitHubInstallationLink {
                 expected_version: None,
             },
         )
-        .await
+        .await?;
+        call.key_honoured();
+        Ok(value)
     }
 }
 

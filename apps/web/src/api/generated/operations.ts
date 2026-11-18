@@ -54,6 +54,8 @@ export type CandidateField = { id: string; name: string; options?: string[]; tak
 
 export type CarriedValue = { field: string; followsMove?: boolean; targetField: string; taskId: string; taskKey: string; value: unknown }
 
+export type Category = ("all" | "mentions" | "tasks" | "runs" | "pull_requests") | "threads" | "usage"
+
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
 
 export type ChartStyle = ("bar" | "line" | "donut") | "number"
@@ -82,9 +84,15 @@ export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" 
 
 export type ContextMessage = { author: string; authorId: string; authorKind: string; createdAt: string; edited?: boolean; messageId: string; removed?: boolean; text: string; trust: string }
 
+export type ConversationFile = { contentType: string; createdAt: string; height?: number | null; id: string; messageId: string; name: string; size: number; width?: number | null }
+
 export type ConversationMember = { displayName: string; handle: string; id: string; kind: string; manager: boolean }
 
 export type ConversationSummary = { id: string; kind: string; lastMessage?: LastMessage | null; members?: string | null; muted?: boolean; name: string; outcome?: string | null; parentId?: string | null; parentName?: string | null; projectId: string; projectName: string; status?: string | null; unreadCount: number; url: string }
+
+export type ConversationTab = { id: string; kind: string; position: number; title: string }
+
+export type ConversationTask = { how: string; id: string; key: string; statusCategory: string; title: string }
 
 export type CreatedTask = { assignee?: string | null; criteriaCount: number; id?: string | null; index: number; key: string; labels?: string[]; parentKey?: string | null; ref?: string | null; status: string; title: string; type: string; url?: string | null; version: number }
 
@@ -107,6 +115,8 @@ export type DecisionLine = { decidedAt: string; decidedBy: string; id: string; t
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
 export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
+
+export type Density = "detailed" | "compact"
 
 export type DependencyChange = { changed: number; key: string; ready?: boolean | null; version: number }
 
@@ -170,7 +180,11 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type InboxFilter = { category?: Category; spaces?: string[]; view?: View }
+
 export type InboxItem = { conversationId: string; conversationKind: string; conversationName: string; createdAt: string; followsRequestId?: string | null; generation: number; leaseExpiresAt?: string | null; mentioned: boolean; messageAuthor: string; messageExcerpt: string; messageId: string; otherMembers: string; projectId: string; replyConversationId: string; requestId: string; required: boolean; status: string; threadId?: string | null }
+
+export type InboxViewItem = { density: Density; filter: InboxFilter; id: string; name: string; position: number }
 
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
@@ -368,7 +382,7 @@ export type SentMessage = { conversationId: string; idempotentReplay: boolean; m
 
 export type SharedSpace = { id: string; name: string }
 
-export type SidebarItem = { conversationId: string; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
+export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
 export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
 
@@ -429,6 +443,8 @@ export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { ki
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type UpdatedTask = { archived: boolean; changedFields?: string[]; id: string; index: number; key: string; status: string; url: string; version: number }
+
+export type View = ("snoozed" | "archived") | "inbox" | "unread"
 
 export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
@@ -630,6 +646,10 @@ export type ConversationContinueInput = { conversationId: string }
 
 export type ConversationContinueOutput = { agentTurnsRemaining: number; asked?: MemberRef[]; conversationId: string; idempotentReplay?: boolean; latestMessageId?: string | null }
 
+export type ConversationFileListInput = { conversationId: string }
+
+export type ConversationFileListOutput = { files: ConversationFile[] }
+
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
 export type ConversationMarkReadOutput = { conversationId: string; lastReadSequence: number; unreadCount: number }
@@ -641,6 +661,18 @@ export type ConversationMemberListOutput = { canManage: boolean; conversationId:
 export type ConversationMembersUpdateInput = { add?: string[] | null; conversationId: string; expectedVersion?: number | null; remove?: string[] | null }
 
 export type ConversationMembersUpdateOutput = { added?: MemberRef[]; conversationId: string; idempotentReplay?: boolean; left?: boolean; members: MemberRef[]; name: string; removed?: MemberRef[]; url: string; version: number }
+
+export type ConversationTabListInput = { conversationId: string }
+
+export type ConversationTabListOutput = { tabs: ConversationTab[] }
+
+export type ConversationTabSetInput = { conversationId: string; page: string; position?: number | null; remove?: boolean }
+
+export type ConversationTabSetOutput = { tabs: ConversationTab[] }
+
+export type ConversationTaskListInput = { conversationId: string }
+
+export type ConversationTaskListOutput = { tasks: ConversationTask[] }
 
 export type ConversationUpdateInput = { archived?: boolean | null; clearOutcome?: boolean | null; conversationId: string; expectedVersion?: number | null; name?: string | null; outcome?: string | null; status?: string | null }
 
@@ -686,7 +718,7 @@ export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | 
 
 export type DecisionListOutput = { decisions: DecisionView[] }
 
-export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
+export type DecisionRecordInput = { detail?: string | null; pin?: boolean; saySo?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
@@ -809,6 +841,14 @@ export type HostListOutput = { hosts: HostView[] }
 export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type InboxViewListInput = Record<string, never>
+
+export type InboxViewListOutput = { views: InboxViewItem[] }
+
+export type InboxViewSetInput = { delete?: boolean | null; density?: Density | null; filter?: InboxFilter | null; inboxViewId?: string | null; name?: string | null; position?: number | null }
+
+export type InboxViewSetOutput = { views: InboxViewItem[] }
 
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
@@ -1014,6 +1054,10 @@ export type PullRequestRefreshInput = { pullRequestId: string }
 
 export type PullRequestRefreshOutput = { job: Record<string, unknown>; queued: boolean }
 
+export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; title?: string | null }
+
+export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
 export type RecurringCreateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
 export type RecurringCreateOutput = { created: boolean; deleted: boolean; recurring?: unknown }
@@ -1194,7 +1238,7 @@ export type TaskCommentUpdateInput = { commentId: string; expectedRevision?: num
 
 export type TaskCommentUpdateOutput = { changed: boolean; commentId: string; revision: number; taskId: string }
 
-export type TaskCreateInput = { acceptanceCriteria?: string[] | null; afterTaskId?: string | null; assignee?: string | null; beforeTaskId?: string | null; collection?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; labels?: string[] | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; projectId?: string | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
+export type TaskCreateInput = { acceptanceCriteria?: string[] | null; afterTaskId?: string | null; assignee?: string | null; beforeTaskId?: string | null; collection?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; fromMessageId?: string | null; labels?: string[] | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; projectId?: string | null; saySo?: boolean | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
 
 export type TaskCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 
@@ -1417,9 +1461,13 @@ export type Operations = {
   connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
   conversation_continue: { input: ConversationContinueInput; output: ConversationContinueOutput }
+  conversation_file_list: { input: ConversationFileListInput; output: ConversationFileListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversation_member_list: { input: ConversationMemberListInput; output: ConversationMemberListOutput }
   conversation_members_update: { input: ConversationMembersUpdateInput; output: ConversationMembersUpdateOutput }
+  conversation_tab_list: { input: ConversationTabListInput; output: ConversationTabListOutput }
+  conversation_tab_set: { input: ConversationTabSetInput; output: ConversationTabSetOutput }
+  conversation_task_list: { input: ConversationTaskListInput; output: ConversationTaskListOutput }
   conversation_update: { input: ConversationUpdateInput; output: ConversationUpdateOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
@@ -1462,6 +1510,8 @@ export type Operations = {
   host_link: { input: HostLinkInput; output: HostLinkOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  inbox_view_list: { input: InboxViewListInput; output: InboxViewListOutput }
+  inbox_view_set: { input: InboxViewSetInput; output: InboxViewSetOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
@@ -1513,6 +1563,7 @@ export type Operations = {
   pull_request_list: { input: PullRequestListInput; output: PullRequestListOutput }
   pull_request_merge: { input: PullRequestMergeInput; output: PullRequestMergeOutput }
   pull_request_refresh: { input: PullRequestRefreshInput; output: PullRequestRefreshOutput }
+  record_create: { input: RecordCreateInput; output: RecordCreateOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
   recurring_update: { input: RecurringUpdateInput; output: RecurringUpdateOutput }
   reply_claim: { input: ReplyClaimInput; output: ReplyClaimOutput }

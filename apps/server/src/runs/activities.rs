@@ -40,6 +40,9 @@ pub const MAX_PER_RUN: i64 = 20_000;
 const MAX_SUMMARY_CHARS: usize = 2_000;
 const MAX_REF_CHARS: usize = 200;
 const MAX_STRING_CHARS: usize = 8_000;
+/// The most a `text_message` said in the thread may take: a whole message
+/// (stored payloads stay under 128 KiB).
+const MAX_SAID_PAYLOAD_BYTES: usize = 120_000;
 
 /// One activity as a reporter sends it.
 #[derive(Clone, Debug)]
@@ -188,7 +191,29 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
         };
     let step_ref = reference(activity.step_ref, "activities.stepRef")?;
     let parent_ref = reference(activity.parent_ref, "activities.parentRef")?;
-    let payload = redact_value(activity.payload);
+    // What the agent says in its thread is a message: it keeps a message's
+    // length, not the log's cap on a string.
+    let said = super::say::is_said_in_thread(kind, &activity.payload);
+    let said_text = activity
+        .payload
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|_| said)
+        .map(|text| {
+            run_log::cap(
+                &run_log::redact(text),
+                crate::message_content::MAX_MESSAGE_TEXT_CHARACTERS,
+            )
+        });
+    let mut payload = redact_value(activity.payload);
+    if let (Some(text), Value::Object(fields)) = (said_text, &mut payload) {
+        fields.insert("text".to_owned(), Value::String(text));
+    }
+    let payload_limit = if said {
+        MAX_SAID_PAYLOAD_BYTES
+    } else {
+        MAX_PAYLOAD_BYTES
+    };
     let effect = match kind {
         "run_finished" => {
             let outcome = payload
@@ -253,28 +278,27 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
         ),
         MAX_SUMMARY_CHARS,
     );
-    let payload = if serde_json::to_vec(&payload).map_or(usize::MAX, |bytes| bytes.len())
-        > MAX_PAYLOAD_BYTES
-    {
-        // Keep what says what it was; drop the bulk.
-        let mut kept = Map::new();
-        for key in [
-            "outcome",
-            "toolCallRef",
-            "tool",
-            "status",
-            "requestId",
-            "name",
-        ] {
-            if let Some(value) = payload.get(key) {
-                kept.insert(key.to_owned(), value.clone());
+    let payload =
+        if serde_json::to_vec(&payload).map_or(usize::MAX, |bytes| bytes.len()) > payload_limit {
+            // Keep what says what it was; drop the bulk.
+            let mut kept = Map::new();
+            for key in [
+                "outcome",
+                "toolCallRef",
+                "tool",
+                "status",
+                "requestId",
+                "name",
+            ] {
+                if let Some(value) = payload.get(key) {
+                    kept.insert(key.to_owned(), value.clone());
+                }
             }
-        }
-        kept.insert("truncated".to_owned(), Value::Bool(true));
-        Value::Object(kept)
-    } else {
-        payload
-    };
+            kept.insert("truncated".to_owned(), Value::Bool(true));
+            Value::Object(kept)
+        } else {
+            payload
+        };
     Ok(CleanActivity {
         client_id,
         kind,
@@ -294,6 +318,49 @@ pub fn clean(activity: NewActivity, still_open: i64) -> Result<CleanActivity, Ru
                 | "result"
         ),
     })
+}
+
+/// The words of an activity the agent said in its thread (`runs::say`).
+pub async fn said_text(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    activity_id: &str,
+) -> Result<Option<String>, crate::error::AppError> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        r#"
+        SELECT payload->>'text' FROM run_activities
+        WHERE run_id = $1 AND client_id = $2 AND kind = 'text_message'
+        "#,
+    )
+    .bind(run_id)
+    .bind(activity_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
+/// What a said activity's log entry keeps once its words are posted: the
+/// message they became, not the words (see [`said_text`]).
+pub async fn said_posted(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    activity_id: &str,
+    message_id: uuid::Uuid,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query(
+        r#"
+        UPDATE run_activities
+        SET payload = (payload - 'text') || jsonb_build_object('messageId', $3::uuid),
+            summary = 'Said in the thread'
+        WHERE run_id = $1 AND client_id = $2 AND kind = 'text_message'
+        "#,
+    )
+    .bind(run_id)
+    .bind(activity_id)
+    .bind(message_id)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -333,6 +400,22 @@ mod tests {
             !text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn what_an_agent_says_in_its_thread_keeps_a_whole_message() {
+        let long = "word ".repeat(3_000);
+        let said = clean(
+            activity("text_message", json!({"text": long, "inThread": true})),
+            0,
+        )
+        .expect("clean");
+        assert_eq!(
+            said.payload["text"].as_str().map(str::len),
+            Some(long.len())
+        );
+        let logged = clean(activity("text_message", json!({"text": long})), 0).expect("clean");
+        assert!(logged.payload["text"].as_str().map_or(0, str::len) < long.len());
     }
 
     #[test]

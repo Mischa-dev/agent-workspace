@@ -17,6 +17,7 @@
     "conversation_continue": "change",
     "conversation_members_update": "change",
     "conversation_member_list": "query",
+    "conversation_file_list": "query",
     "conversation_update": "change",
     "message_send": "create",
     "message_forward": "create",
@@ -90,7 +91,7 @@
   "web": { "folder": "direct" },
   "slots": {
     "pages": ["/messages", "/messages/:conversationId", "/dm/:conversationId"],
-    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies", "thing.comments", "talk.sidebar_sections"],
+    "parts": ["talk.slash_commands", "talk.scheduling", "talk.replies", "thing.comments", "talk.sidebar_sections", "channel.details"],
     "sidebar": ["rail.messages"],
     "home": [],
     "settings": [],

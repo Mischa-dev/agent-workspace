@@ -145,6 +145,14 @@ pub struct TaskCreateInput {
     /// name or ID (project_open lists them). Left out, it's a plain task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Made from this message, one in the same space you can read: the task
+    /// links back to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_message_id: Option<IdRef>,
+    /// With fromMessageId, also say so in its conversation ("… made a
+    /// message here into a task"). Off unless asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say_so: Option<bool>,
 }
 
 impl Targeted for TaskCreateInput {

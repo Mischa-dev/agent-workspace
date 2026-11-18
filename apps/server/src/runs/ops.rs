@@ -301,9 +301,9 @@ pub async fn start_unknown_to_host(
     Ok(())
 }
 
-/// A run the reporter may write: its own, with no built-in detail row (the
-/// built-in host reports through `agent_runs` until A1.14), where it still
-/// sees the conversation and belongs to the space. Locked for the change.
+/// A run the reporter may write: its own (the built-in host's too, A1.16),
+/// where it still sees the conversation and belongs to the space. Locked
+/// for the change.
 async fn load_for_report(
     transaction: &mut Transaction<'_, Postgres>,
     reporter: Reporter,
@@ -317,16 +317,14 @@ async fn load_for_report(
     }
     let reachable = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT NOT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1)
-           AND ($3::uuid IS NULL OR EXISTS (
+        SELECT ($2::uuid IS NULL OR EXISTS (
                    SELECT 1 FROM project_memberships membership
                    JOIN projects project ON project.id = membership.project_id
-                   WHERE membership.project_id = $3 AND membership.actor_id = $2
+                   WHERE membership.project_id = $2 AND membership.actor_id = $1
                      AND membership.enabled AND project.archived_at IS NULL))
-           AND ($4::uuid IS NULL OR conversation_visible_to($4, $2))
+           AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
         "#,
     )
-    .bind(run.id)
     .bind(reporter.account_id())
     .bind(run.space_id)
     .bind(run.conversation_id)
@@ -966,6 +964,22 @@ pub async fn append(
         if !inserted {
             duplicates += 1;
             continue;
+        }
+        if super::say::is_said_in_thread(activity.kind, &activity.payload) {
+            super::say::enqueue(transaction, &run, &activity.client_id).await?;
+        } else if activity.payload.get("inThread") == Some(&Value::Bool(true))
+            && let Some(conversation_id) = run.conversation_id
+        {
+            // A step the host asks to show in the thread gets its entry
+            // there (the built-in host's commands, a run that ended).
+            let activity_id = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM run_activities WHERE run_id = $1 AND client_id = $2",
+            )
+            .bind(run.id)
+            .bind(&activity.client_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+            super::steps::show_in_thread(transaction, conversation_id, activity_id).await?;
         }
         seq += 1;
         accepted += 1;

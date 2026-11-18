@@ -72,7 +72,7 @@ pub(crate) mod code;
 mod collaboration;
 mod collection_tools;
 mod comment_tools;
-mod common;
+pub(crate) mod common;
 mod criteria;
 #[cfg(test)]
 mod description_words;
@@ -2121,10 +2121,16 @@ async fn own_task(
     let unknown = || ErrorData::invalid_params("There is no task with that id.", None);
     let principal = context_principal(context).ok_or_else(unknown)?;
     let id = Uuid::parse_str(task_id).map_err(|_| unknown())?;
+    let caller = crate::ops::mcp::caller_of(state, &principal)
+        .await
+        .map_err(|_| {
+            ErrorData::internal_error("Couldn't read the task just now. Try again.", None)
+        })?;
+    let edge = crate::ops::Edge::of_mcp(&principal);
     let found = if cancel {
-        crate::ops::long::cancel(state, principal.actor_id, id).await
+        crate::ops::long::cancel(state, &caller, &edge, id).await
     } else {
-        crate::ops::long::read(state, principal.actor_id, id).await
+        crate::ops::long::read(state, &caller, &edge, id).await
     };
     match found {
         Ok(Some(task)) => Ok(task),
@@ -3437,8 +3443,14 @@ pub(crate) async fn resolve_bearer_principal(
         let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
             return Ok(None);
         };
-        let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
-            return Ok(None);
+        // The built-in host's agents are execution workers (A1.16); its run
+        // credential signs them in like any host's agent.
+        let actor_kind = match holder.account_kind.as_str() {
+            "execution_worker" => ActorKind::ExecutionWorker, // kind-check: mechanical (which account a run credential signs in)
+            other => match parse_mcp_actor_kind(other) {
+                Ok(kind) => kind,
+                Err(_) => return Ok(None),
+            },
         };
         return Ok(Some(McpPrincipal {
             credential_id: holder.credential_id,
