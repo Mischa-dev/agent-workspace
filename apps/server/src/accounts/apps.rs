@@ -44,14 +44,28 @@ pub async fn ensure_worker(
     id: Uuid,
     workspace: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO actors (id, kind, account_kind, status, owner_workspace_id, listed) \
-         VALUES ($1, 'execution_worker', 'agent', 'active', $2, false) \
-         ON CONFLICT DO NOTHING",
+    // The development seed also runs on schemas from before accounts had
+    // owners (the upgrade tests seed old data with it), where the worker is
+    // a bare row and the K1.5 migration gives it its owner later.
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute \
+         WHERE attrelid = 'actors'::regclass AND attname = 'owner_workspace_id' AND NOT attisdropped)",
     )
-    .bind(id)
-    .bind(workspace)
-    .execute(&mut *connection)
+    .fetch_one(&mut *connection)
     .await?;
+    let insert = if owned {
+        sqlx::query(
+            "INSERT INTO actors (id, kind, owner_workspace_id, listed) \
+             VALUES ($1, 'execution_worker', $2, false) ON CONFLICT DO NOTHING",
+        )
+        .bind(id)
+        .bind(workspace)
+    } else {
+        sqlx::query(
+            "INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker') ON CONFLICT DO NOTHING",
+        )
+        .bind(id)
+    };
+    insert.execute(&mut *connection).await?;
     Ok(())
 }
