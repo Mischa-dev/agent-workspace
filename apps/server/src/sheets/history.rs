@@ -344,13 +344,16 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
             });
         }
     }
-    // A sheet keeps at least one tab: when none survives, add first.
+    // A sheet keeps at least one tab and at most its limit: when none
+    // survives, add one first, then remove, then add the rest.
     if any_survives {
         changes.extend(removals);
         changes.extend(additions);
     } else {
-        changes.extend(additions);
+        let mut additions = additions.into_iter();
+        changes.extend(additions.next());
         changes.extend(removals);
+        changes.extend(additions);
     }
     for (position, tab) in target.tabs.iter().enumerate() {
         let current = now.tabs.iter().find(|current| current.id == tab.id);
@@ -696,5 +699,35 @@ mod tests {
                 "moveTab"
             ]
         );
+    }
+
+    #[test]
+    fn a_full_sheet_restores_over_a_replaced_tab_within_the_limit() {
+        // Twenty tabs then, one new tab now: one added, the new one removed,
+        // then the other nineteen, so the sheet never holds 21.
+        let names = (1..=20).map(|n| format!("T{n}")).collect::<Vec<_>>();
+        let now = State {
+            tabs: vec![tab(99, "Fresh", &[])],
+        };
+        let target = State {
+            tabs: names
+                .iter()
+                .enumerate()
+                .map(|(n, name)| tab(n as u128 + 1, name, &[]))
+                .collect(),
+        };
+        let changes = changes_to(&now, &target);
+        let mut count = 1_i32;
+        let mut most = count;
+        for change in &changes {
+            match change {
+                Change::AddTab { .. } => count += 1,
+                Change::RemoveTab { .. } => count -= 1,
+                _ => {}
+            }
+            assert!(count >= 1, "a sheet keeps a tab");
+            most = most.max(count);
+        }
+        assert_eq!((count, most), (20, 20));
     }
 }

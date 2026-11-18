@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use ironcalc_base::{
     Model,
     cell::CellValue,
+    cf_types::CfRule,
     expressions::types::Area,
     formatter::lexer::is_likely_date_number_format,
     number_format::to_excel_precision_str,
@@ -382,6 +383,10 @@ pub struct TabOutput {
     /// and deleting rows and columns moves them; None when its cells are
     /// all gone.
     pub rule_ranges: Vec<Option<String>>,
+    /// Each conditional format's formulas now, in the same order (a formula
+    /// rule's, or a comparison's two values; None where it has none):
+    /// inserting and deleting rows and columns rewrites their references.
+    pub rule_formulas: Vec<(Option<String>, Option<String>)>,
 }
 
 /// Why the engine refused. `operation` is the index of the operation that
@@ -916,20 +921,28 @@ impl FormulaEngine for IronCalc {
             .map(|(position, name)| {
                 let mut tab_cells = cells.remove(&(position as u32)).unwrap_or_default();
                 tab_cells.sort_by_key(|cell| (cell.row, cell.column));
-                let mut rule_ranges = model
+                let mut rules = model
                     .get_conditional_formatting_list(position as u32)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|view| (view.index, view.range))
-                    .collect::<Vec<_>>();
-                rule_ranges.sort_by_key(|(index, _)| *index);
+                    .unwrap_or_default();
+                rules.sort_by_key(|view| view.index);
+                let rule_formulas = rules
+                    .iter()
+                    .map(|view| match &view.cf_rule {
+                        CfRule::CellIs {
+                            formula, formula2, ..
+                        } => (Some(formula.clone()), formula2.clone()),
+                        CfRule::Formula { formula, .. } => (Some(formula.clone()), None),
+                        _ => (None, None),
+                    })
+                    .collect();
                 TabOutput {
                     name,
                     cells: tab_cells,
-                    rule_ranges: rule_ranges
+                    rule_ranges: rules
                         .into_iter()
-                        .map(|(_, range)| (!range.trim().is_empty()).then_some(range))
+                        .map(|view| (!view.range.trim().is_empty()).then_some(view.range))
                         .collect(),
+                    rule_formulas,
                 }
             })
             .collect())
@@ -1377,6 +1390,40 @@ mod tests {
             )
             .expect("ok");
         assert_eq!(again[0].cells[0], *due);
+    }
+
+    #[test]
+    fn rows_inserted_above_move_a_rules_formulas_too() {
+        let rules: Vec<ConditionalRule> = serde_json::from_value(serde_json::json!([
+            {"range": "A1:A3", "when": "formula", "formula": "=$B$1>5", "style": {"bold": true}},
+            {"range": "A1:A3", "when": "between", "value": "=$B$1", "value2": 9,
+             "style": {"bold": true}},
+        ]))
+        .expect("rules");
+        let mut sheet = tab("Money", &[(1, 2, "7")]);
+        sheet.rules = rules.clone();
+        let moved = IronCalc
+            .apply(
+                &[sheet],
+                &[Operation::InsertRows {
+                    tab: 0,
+                    row: 1,
+                    count: 1,
+                }],
+            )
+            .expect("insert");
+        let formulas = &moved[0].rule_formulas;
+        let kept = rules
+            .into_iter()
+            .zip(formulas)
+            .map(|(rule, (first, second))| {
+                serde_json::to_value(rule.with_formulas(first.as_deref(), second.as_deref()))
+                    .expect("rule")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(kept[0]["formula"], "=$B$2>5", "{formulas:?}");
+        assert_eq!(kept[1]["value"], "=$B$2", "{formulas:?}");
+        assert_eq!(kept[1]["value2"], 9, "a number stays a number");
     }
 
     #[test]

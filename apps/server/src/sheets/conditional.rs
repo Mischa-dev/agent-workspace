@@ -222,6 +222,39 @@ impl ConditionalRule {
         Ok(())
     }
 
+    /// The rule with the formulas the engine left after rows or columns
+    /// moved: a formula rule's own, and a comparison's values written as
+    /// formulas (from `=`). Numbers and text stay as they are.
+    pub(super) fn with_formulas(mut self, first: Option<&str>, second: Option<&str>) -> Self {
+        let formula = |text: &str| Json::String(format!("={}", text.trim_start_matches('=')));
+        let moved = |value: &mut Json, now: Option<&str>| {
+            if let (Json::String(was), Some(now)) = (&*value, now)
+                && was.starts_with('=')
+            {
+                *value = formula(now);
+            }
+        };
+        match &mut self.test {
+            RuleTest::Formula { formula: kept } => {
+                if let Some(now) = first {
+                    *kept = format!("={}", now.trim_start_matches('='));
+                }
+            }
+            RuleTest::LessThan { value }
+            | RuleTest::GreaterThan { value }
+            | RuleTest::AtLeast { value }
+            | RuleTest::AtMost { value }
+            | RuleTest::Equals { value }
+            | RuleTest::NotEquals { value } => moved(value, first),
+            RuleTest::Between { value, value2 } | RuleTest::NotBetween { value, value2 } => {
+                moved(value, first);
+                moved(value2, second);
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// The rule as IronCalc takes it.
     pub(super) fn input(&self) -> Result<CfRuleInput, String> {
         let format = self.dxf();

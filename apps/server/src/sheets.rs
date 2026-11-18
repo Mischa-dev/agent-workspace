@@ -1923,18 +1923,25 @@ async fn apply_unbounded(
     }
 
     // Conditional formats follow inserted and deleted rows and columns:
-    // their ranges as the engine left them; a rule whose cells all went goes.
-    if let Some(outputs) = &outputs {
+    // their ranges and formulas as the engine left them; a rule whose cells
+    // all went goes. Only when rows or columns moved (on any tab, since a
+    // formula can point at another), so a formula isn't rewritten into the
+    // engine's spelling on every edit.
+    let anything_moved = working.iter().any(|tab| !tab.moves.is_empty());
+    if let Some(outputs) = outputs.as_ref().filter(|_| anything_moved) {
         for (tab, output) in working.iter_mut().zip(outputs) {
-            if output.rule_ranges.len() != tab.rules.len() {
+            if output.rule_ranges.len() != tab.rules.len()
+                || output.rule_formulas.len() != tab.rules.len()
+            {
                 continue;
             }
             let moved = tab
                 .rules
                 .iter()
                 .cloned()
-                .zip(&output.rule_ranges)
-                .filter_map(|(mut rule, range)| {
+                .zip(output.rule_ranges.iter().zip(&output.rule_formulas))
+                .filter_map(|(rule, (range, (first, second)))| {
+                    let mut rule = rule.with_formulas(first.as_deref(), second.as_deref());
                     rule.range = range.clone()?;
                     Some(rule)
                 })
