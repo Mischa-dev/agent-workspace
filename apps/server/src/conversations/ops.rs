@@ -37,6 +37,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ConversationMemberList>()
         .add::<ConversationTaskList>()
         .add::<ConversationFileList>()
+        .add::<ConversationTabList>()
+        .add::<ConversationTabSet>()
         .add::<MessageSchedule>()
         .add::<ScheduledMessageUpdate>();
 }
@@ -1044,5 +1046,246 @@ impl Operation for ConversationFileList {
                 )
                 .collect(),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_tab_list, conversation_tab_set (C1.26)
+
+/// A page shown as a tab on a channel.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTab {
+    /// "page".
+    pub kind: String,
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub title: String,
+    pub position: i32,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTabs {
+    /// In the order shown, after the messages; a page you can't open is
+    /// left out.
+    pub tabs: Vec<ConversationTab>,
+}
+
+/// Most tabs on one channel.
+const MAX_TABS: i64 = 20;
+
+/// The tabs on `conversation` that `viewer` can open.
+async fn tabs_for(
+    connection: &mut sqlx::PgConnection,
+    conversation: uuid::Uuid,
+    viewer: uuid::Uuid,
+) -> Result<ConversationTabs, OpError> {
+    let rows = sqlx::query_as::<_, (String, uuid::Uuid, String, i32)>(
+        r#"
+        SELECT tab.thing_kind, tab.thing_id, page.title, tab.position
+        FROM conversation_tabs tab
+        JOIN project_pages page ON page.id = tab.thing_id AND page.project_id = tab.space_id
+        WHERE tab.conversation_id = $1 AND tab.thing_kind = 'page'
+          AND page.archived_at IS NULL
+          AND conversation_visible_to($1, $2)
+          AND subject_visible_to('page', page.id, $2)
+        ORDER BY tab.position, tab.added_at, tab.thing_id
+        "#,
+    )
+    .bind(conversation)
+    .bind(viewer)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(crate::error::AppError::from)?;
+    Ok(ConversationTabs {
+        tabs: rows
+            .into_iter()
+            .map(|(kind, id, title, position)| ConversationTab {
+                kind,
+                id,
+                title,
+                position,
+            })
+            .collect(),
+    })
+}
+
+pub struct ConversationTabList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTabListInput {
+    /// The channel: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationTabListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+impl Operation for ConversationTabList {
+    const NAME: &'static str = "conversation_tab_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a channel's tabs";
+    const DESCRIPTION: &'static str = "The pages shown as tabs on a channel, in order. \
+        page_get reads one; conversation_tab_set adds, moves or removes one.";
+
+    type Input = ConversationTabListInput;
+    type Output = ConversationTabs;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTabListInput,
+    ) -> Result<ConversationTabs, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let tx = call.tx().await?;
+        tabs_for(tx, input.conversation_id.id(), caller).await
+    }
+}
+
+pub struct ConversationTabSet;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTabSetInput {
+    /// The channel: its id or a link. DMs and groups have no tabs.
+    pub conversation_id: IdRef,
+    /// The page, in the channel's space: its id or a link.
+    pub page: IdRef,
+    /// Where it goes among the tabs, from 0; the end when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i32>,
+    /// Take the tab away (the page itself stays).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove: bool,
+}
+
+impl Targeted for ConversationTabSetInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+impl Operation for ConversationTabSet {
+    const NAME: &'static str = "conversation_tab_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["conversation.updated"];
+    const TITLE: &'static str = "Set a channel's page tab";
+    const DESCRIPTION: &'static str = "Show a page as a tab on a channel, move it, or take it \
+        away (remove). The page must be in the channel's space; everyone who can read both \
+        sees the tab. At most 20 tabs.";
+
+    type Input = ConversationTabSetInput;
+    type Output = ConversationTabs;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTabSetInput,
+    ) -> Result<ConversationTabs, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let workspace = call.ctx.workspace_id;
+        let conversation = input.conversation_id.id();
+        let page = input.page.id();
+        let tx = call.tx().await?;
+        let kind = sqlx::query_scalar::<_, String>(
+            "SELECT kind FROM conversations \
+             WHERE id = $1 AND project_id = $2 AND archived_at IS NULL \
+               AND conversation_visible_to(id, $3)",
+        )
+        .bind(conversation)
+        .bind(space)
+        .bind(caller)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?
+        .ok_or_else(|| OpError::not_found("That conversation"))?;
+        if kind != "channel" {
+            return Err(OpError::invalid(
+                "conversationId",
+                "Only channels have tabs. Open the channel the thread is in.",
+            ));
+        }
+        if input.remove {
+            sqlx::query(
+                "DELETE FROM conversation_tabs \
+                 WHERE conversation_id = $1 AND thing_kind = 'page' AND thing_id = $2",
+            )
+            .bind(conversation)
+            .bind(page)
+            .execute(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        } else {
+            let found = sqlx::query_scalar::<_, uuid::Uuid>(
+                "SELECT id FROM project_pages \
+                 WHERE id = $1 AND project_id = $2 AND archived_at IS NULL \
+                   AND subject_visible_to('page', id, $3)",
+            )
+            .bind(page)
+            .bind(space)
+            .bind(caller)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if found.is_none() {
+                return Err(OpError::invalid(
+                    "page",
+                    "That isn't a page you can open in this channel's space.",
+                ));
+            }
+            let (count, held) = sqlx::query_as::<_, (i64, bool)>(
+                "SELECT count(*), bool_or(thing_id = $2) IS TRUE FROM conversation_tabs \
+                 WHERE conversation_id = $1",
+            )
+            .bind(conversation)
+            .bind(page)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if !held && count >= MAX_TABS {
+                return Err(OpError::invalid(
+                    "page",
+                    "This channel has 20 tabs, the most it can. Remove one first.",
+                ));
+            }
+            let position = input.position.map(|position| position.clamp(0, 99));
+            sqlx::query(
+                r#"
+                INSERT INTO conversation_tabs (
+                    workspace_id, space_id, conversation_id, thing_kind, thing_id, position,
+                    added_by_account_id
+                )
+                VALUES ($1, $2, $3, 'page', $4, COALESCE($5, (
+                    SELECT LEAST(COALESCE(max(position) + 1, 0), 99)
+                    FROM conversation_tabs WHERE conversation_id = $3
+                )), $6)
+                ON CONFLICT (conversation_id, thing_kind, thing_id)
+                    DO UPDATE SET position = COALESCE($5, conversation_tabs.position)
+                "#,
+            )
+            .bind(workspace)
+            .bind(space)
+            .bind(conversation)
+            .bind(page)
+            .bind(position)
+            .bind(caller)
+            .execute(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        }
+        crate::conversations::system_entries::announce(tx, conversation).await?;
+        let tabs = tabs_for(tx, conversation, caller).await?;
+        call.audit_target("conversation", conversation, json!({ "page": page }));
+        Ok(tabs)
     }
 }

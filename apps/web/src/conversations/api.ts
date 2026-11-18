@@ -23,6 +23,7 @@ import type {
   MessageRevisions,
   SavedMark,
 } from './types'
+import { timed } from '../telemetry/timings'
 
 export {
   createChannel,
@@ -398,7 +399,7 @@ export async function sendConversationMessage(input: {
       : input.kind === 'thread'
         ? 'threads'
         : 'conversations'
-  return requestJson<unknown>(
+  return timed('message_send', requestJson<unknown>(
     `/api/v1/${collection}/${encodeURIComponent(input.conversationId)}/messages`,
     {
       method: 'POST',
@@ -410,7 +411,7 @@ export async function sendConversationMessage(input: {
         replyToMessageId: input.replyTo?.messageId,
       },
     },
-  )
+  ))
 }
 
 /** The entry a send returns, when it's for this conversation: shown at once, before any refetch. */

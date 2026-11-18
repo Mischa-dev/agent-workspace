@@ -58,7 +58,10 @@ pub(crate) async fn post(
 }
 
 /// Tells everyone with `conversation` open that its timeline changed.
-async fn announce(tx: &mut Transaction<'_, Postgres>, conversation: Uuid) -> Result<(), AppError> {
+pub(crate) async fn announce(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+) -> Result<(), AppError> {
     let (project, version) = sqlx::query_as::<_, (Uuid, i64)>(
         "SELECT project_id, version FROM conversations WHERE id = $1 -- visibility: checked by the caller",
     )

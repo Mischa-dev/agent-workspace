@@ -143,6 +143,9 @@ export const queryKeys = {
   /** The tasks a conversation is about or made (C2.8). */
   conversationTasks: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'tasks'] as const,
+  /** The pages shown as tabs on a channel (C1.26). */
+  conversationTabs: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'tabs'] as const,
   /** The files sent in a conversation (C2.8). */
   conversationFiles: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'files'] as const,

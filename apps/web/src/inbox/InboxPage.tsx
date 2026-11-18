@@ -27,6 +27,7 @@ import {
   showToast,
   type ToastInput,
 } from '../ui'
+import { useTimeToShow } from '../telemetry/useTimeToShow'
 import {
   groupBySubject,
   invalidateInbox,
@@ -48,7 +49,10 @@ import {
   type SnoozeTarget,
 } from './api'
 import { FAILURE_KINDS, KIND_ICON } from './kinds'
+import { InboxViewTabs } from './InboxViewTabs'
 import { NotificationDetail } from './NotificationDetail'
+import { useSwipe } from './useSwipe'
+import { currentView, filterParams, spacesParam, suggestedName, useInboxViews, type InboxFilter } from './views'
 import './inbox.css'
 
 const VIEWS: { value: InboxView; label: string }[] = [
@@ -109,8 +113,14 @@ export function InboxPage() {
     ? (params.get('category') as InboxCategory)
     : 'all'
   const filter = CATEGORIES.find((option) => option.value === category) ?? CATEGORIES[0]
-  const inbox = useInbox(view, category)
-  const mutation = useUpdateInbox(view, category)
+  const spacesValue = params.get('spaces')
+  const spaces = useMemo(() => spacesParam(spacesValue), [spacesValue])
+  const shown = useMemo<InboxFilter>(() => ({ view, category, spaces }), [view, category, spaces])
+  const savedViews = useInboxViews()
+  const density = currentView(savedViews.data?.views ?? [], shown)?.density ?? 'detailed'
+  const inbox = useInbox(view, category, spaces)
+  useTimeToShow('inbox_open', 'inbox', !inbox.isPending)
+  const mutation = useUpdateInbox(view, category, spaces)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -173,6 +183,18 @@ export function InboxPage() {
     if (showingDetail) scroller.scrollTop = 0
     else scroller.scrollTop = listScroll.current
   }, [showingDetail])
+
+  const resetSelection = () => {
+    setSelectedId(null)
+    setDetailOpen(false)
+    setKept(new Map())
+    setPicked(new Set())
+  }
+
+  const applyFilter = (next: InboxFilter) => {
+    setParams(filterParams(next), { replace: true })
+    resetSelection()
+  }
 
   const setFilter = (key: 'view' | 'category', value: string) => {
     const next = new URLSearchParams(params)
@@ -486,7 +508,7 @@ export function InboxPage() {
 
   return (
     <>
-      <div className="aw-page aw-page--full aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
+      <div className="aw-page aw-page--full aw-inbox" data-density={density} data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
         <PageHeader
           actions={
             view === 'inbox' || view === 'unread' ? (
@@ -497,6 +519,11 @@ export function InboxPage() {
           }
           icon="inbox"
           title="Inbox" />
+        <InboxViewTabs
+          filter={shown}
+          onApply={applyFilter}
+          suggestedName={suggestedName(shown, filter.label, VIEWS.find((option) => option.value === view)?.label ?? 'Inbox')}
+        />
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">
@@ -583,7 +610,7 @@ export function InboxPage() {
             <div aria-label="Notifications" className="aw-inbox__list" ref={listRef} role="list">
               {sections.map((section) =>
                 section.key === 'all' ? (
-                  <SubjectGroups groups={section.groups} heading="h2" key={section.key} onArchive={archive} onPick={togglePick} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
+                  <SubjectGroups groups={section.groups} heading="h2" key={section.key} onArchive={archive} onPick={togglePick} onRead={(item) => setRead(item, !item.read)} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
                 ) : section.items.length === 0 && section.key === 'fyi' ? null : (
                   <section aria-labelledby={`inbox-${section.key}`} className="aw-inbox__section" key={section.key}>
                     <div className="aw-inbox__section-head">
@@ -612,7 +639,7 @@ export function InboxPage() {
                         )}
                       </p>
                     ) : (
-                      <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onPick={togglePick} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
+                      <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onPick={togglePick} onRead={(item) => setRead(item, !item.read)} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
                     )}
                   </section>
                 ),
@@ -676,6 +703,7 @@ function SubjectGroups({
   heading: Heading,
   onArchive,
   onPick,
+  onRead,
   onSelect,
   picked,
   selectedId,
@@ -685,6 +713,8 @@ function SubjectGroups({
   heading: 'h2' | 'h3'
   onArchive: (item: InboxNotification) => void
   onPick: (item: InboxNotification) => void
+  /** Read or unread, from a swipe right. */
+  onRead: (item: InboxNotification) => void
   onSelect: (item: InboxNotification) => void
   picked: Set<string>
   selectedId: string | null
@@ -704,6 +734,7 @@ function SubjectGroups({
               key={item.id}
               onArchive={() => onArchive(item)}
               onPick={() => onPick(item)}
+              onRead={() => onRead(item)}
               onSelect={() => onSelect(item)}
               picked={picked.has(item.id)}
               selected={item.id === selectedId}
@@ -720,6 +751,7 @@ function NotificationRow({
   item,
   onArchive,
   onPick,
+  onRead,
   onSelect,
   picked,
   selected,
@@ -728,6 +760,7 @@ function NotificationRow({
   item: InboxNotification
   onArchive: () => void
   onPick: () => void
+  onRead: () => void
   onSelect: () => void
   picked: boolean
   selected: boolean
@@ -735,12 +768,17 @@ function NotificationRow({
 }) {
   const preview = plainPreview(item.preview, 240)
   const kindTone = FAILURE_KINDS.has(item.kind) ? ' is-failure' : ''
+  // C2.31: on a touch screen, swipe left to archive (restore in Archived), right to read or unread.
+  const swipe = useSwipe({ onLeft: onArchive, onRight: view === 'archived' ? undefined : onRead })
   return (
     <div
       aria-current={selected ? 'true' : undefined}
       className={`aw-inbox__row${item.read ? '' : ' is-unread'}${selected ? ' is-selected' : ''}${picked ? ' is-picked' : ''}`}
       data-notification={item.id}
+      data-swipe={swipe.outcome ?? undefined}
       role="listitem"
+      style={swipe.shift ? { transform: `translateX(${swipe.shift}px)` } : undefined}
+      {...swipe.handlers}
     >
       <input
         aria-label={`Pick: ${item.title}`}

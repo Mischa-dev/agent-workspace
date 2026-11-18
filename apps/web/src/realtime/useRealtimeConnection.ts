@@ -393,6 +393,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
             })
             return
           }
+          if (envelope.type === 'inbox_views.changed') {
+            // Your saved inbox views changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'inbox_view_list',
+            })
+            return
+          }
           if (envelope.type === 'account.profile_changed') {
             // Someone's profile or avatar changed: profiles and avatars read again.
             void queryClient.invalidateQueries({

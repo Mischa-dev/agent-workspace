@@ -2637,6 +2637,7 @@ async fn channel_writes_keep_to_private_channels() {
         ("dm_standing_get", json!({"conversationId": secret})),
         // C2.8: nor its details' tabs.
         ("conversation_file_list", json!({"conversationId": secret})),
+        ("conversation_tab_list", json!({"conversationId": secret})),
         (
             "dm_request_respond",
             json!({"conversationId": secret, "accept": true}),
@@ -2795,6 +2796,46 @@ async fn channel_writes_keep_to_private_channels() {
     )
     .await;
     assert!(!status.is_success(), "{refused}");
+
+    // C1.26: a page tab shows to everyone who reads the channel; only a
+    // poster sets one, and never on a channel they can't read.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/projects/{work}/pages"),
+        None,
+        json!({"title": "Launch plan", "body": "Dates"}),
+    );
+    let (status, page) = send(app, request).await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"]
+        .as_str()
+        .or_else(|| page["page"]["id"].as_str())
+        .expect("page")
+        .to_owned();
+    let (status, tabs) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": page}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tabs}");
+    let (status, seen) = op(
+        &omar.browser,
+        "conversation_tab_list",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert_eq!(seen["value"]["tabs"][0]["title"], "Launch plan", "{seen}");
+    for (who, conversation) in [(&omar.browser, &secret), (&nate.browser, &open)] {
+        let (status, refused) = op(
+            who,
+            "conversation_tab_set",
+            json!({"conversationId": conversation, "page": page}),
+        )
+        .await;
+        assert!(!status.is_success(), "{refused}");
+    }
 
     // Nate reads but can't post, so sets no topic, even on an open channel.
     let (status, refused) = op(

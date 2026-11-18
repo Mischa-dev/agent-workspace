@@ -10,7 +10,7 @@ import { formatDateTime, formatTime } from '../ui/time'
 
 export const inboxKeys = {
   root: queryKeys.inbox,
-  list: (view: InboxView, category: InboxCategory) => ['inbox', 'list', view, category] as const,
+  list: (view: InboxView, category: InboxCategory, spaces: readonly string[] = []) => ['inbox', 'list', view, category, spaces.join(',')] as const,
   /** One project's unread notifications (its overview). */
   project: (projectId: string) => ['inbox', 'project', projectId] as const,
 }
@@ -186,12 +186,13 @@ export function normalizePage(value: unknown): InboxPage {
   }
 }
 
-export function useInbox(view: InboxView, category: InboxCategory) {
+export function useInbox(view: InboxView, category: InboxCategory, spaces: readonly string[] = []) {
   return useInfiniteQuery({
-    queryKey: inboxKeys.list(view, category),
+    queryKey: inboxKeys.list(view, category, spaces),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) => {
       const search = new URLSearchParams({ view, category, limit: '50' })
+      if (spaces.length > 0) search.set('spaces', spaces.join(','))
       if (pageParam) search.set('cursor', pageParam)
       return normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))
     },
@@ -237,9 +238,9 @@ export function applyUpdate(
 
 type InboxCache = InfiniteData<InboxPage, string | null>
 
-export function useUpdateInbox(view: InboxView, category: InboxCategory) {
+export function useUpdateInbox(view: InboxView, category: InboxCategory, spaces: readonly string[] = []) {
   const queryClient = useQueryClient()
-  const key = inboxKeys.list(view, category)
+  const key = inboxKeys.list(view, category, spaces)
   return useMutation({
     mutationFn: (update: InboxUpdate) => postUpdate(update),
     onMutate: async (update) => {

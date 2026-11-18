@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -13,14 +13,16 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useShellPage } from '../shell/shellStore'
-import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton, showToast } from '../ui'
+import { Banner, Button, ConversationIntro, DocumentSkeleton, ErrorState, IconButton, MessageSkeleton, showToast } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
+import { useTimeToShow } from '../telemetry/useTimeToShow'
 import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
 import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ChannelDetails } from './ChannelDetails'
 import type { ChannelDetailsTab } from './channelDetailsTabs'
 import { ChannelMembers } from './ChannelMembers'
+import { ChannelTabs } from './ChannelTabs'
 import { ChannelTopicDialog } from './ChannelTopicDialog'
 import { ConversationHeader } from './ConversationHeader'
 import { useProjectConversationSidebar } from './hooks'
@@ -47,6 +49,8 @@ import { useFirstUnread } from './useFirstUnread'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
 import { useMessageSender } from './useMessageSender'
 
+const PageInChannel = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageInChannel })))
+
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
 type ThreadOrigin = { messageId: string; text: string; author: string }
@@ -61,6 +65,14 @@ export function ChannelPage() {
   // The details panel (C2.8) on one of its tabs; ?members=1 is the older address for its Members tab.
   const detailsParam = (searchParams.get('details') ?? (searchParams.get('members') === '1' ? 'members' : null)) as ChannelDetailsTab | null
   const openThreadId = searchParams.get('thread')
+  // A page tab (C1.26) shown in place of the messages.
+  const tabParam = searchParams.get('tab')
+  const selectTab = (pageId: string | null) => {
+    const next = new URLSearchParams(searchParams)
+    if (pageId) next.set('tab', pageId)
+    else next.delete('tab')
+    setSearchParams(next)
+  }
   const setBoardOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
     // The board, the details and an open thread share the side panel: showing one closes the others.
@@ -96,6 +108,7 @@ export function ChannelPage() {
   const queryClient = useQueryClient()
   const project = useProject(projectId)
   const timeline = useConversationTimeline(projectId, channelId, includeArchived)
+  useTimeToShow('conversation_open', channelId, Boolean(timeline.data))
   const linkedThreadSidebar = useProjectConversationSidebar(projectId, channelId, { expandedChannelId: channelId })
   // Kept per channel: the page stays mounted from one channel to the next.
   const [threadDialog, setThreadDialog] = useState<{ channelId: string; origin: ThreadOrigin | null } | null>(null)
@@ -176,6 +189,9 @@ export function ChannelPage() {
   const archived = Boolean(page?.conversation.archivedAt)
   const isPrivate = Boolean(validBoundary && page?.conversation.private)
   const detailsShown = useProjectExperience(projectId).shows('channel.details')
+  const channelExperience = useProjectExperience(projectId)
+  const tabsShown = channelExperience.shows('channel.tabs') && channelExperience.shows('area.pages')
+  const pageTab = tabsShown && validBoundary ? tabParam : null
   // Without the details panel, a private channel still lists its members.
   const detailsTab = detailsParam && (detailsShown || (detailsParam === 'members' && isPrivate)) ? detailsParam : null
   const membersOpen = detailsTab === 'members' && isPrivate && !detailsShown
@@ -446,7 +462,23 @@ export function ChannelPage() {
         </Banner>
       ) : null}
       {tools.banner}
-      {validBoundary ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
+      {validBoundary && tabsShown ? (
+        <ChannelTabs
+          canAdd={canPost}
+          channelId={channelId}
+          channelName={name}
+          onSelect={selectTab}
+          projectId={projectId}
+          selected={pageTab}
+        />
+      ) : null}
+      {validBoundary && !pageTab ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
+      {pageTab && project.data ? (
+        <Suspense fallback={<DocumentSkeleton label="Loading page" />}>
+          <PageInChannel pageId={pageTab} project={project.data} />
+        </Suspense>
+      ) : (
+        <>
 
       <ConversationTimeline
         busy={timeline.isPending || older.loading}
@@ -566,6 +598,8 @@ export function ChannelPage() {
           searchActors={async () => []}
         />
       ) : null}
+        </>
+      )}
 
       {dialog ? (
         <ThreadDialog

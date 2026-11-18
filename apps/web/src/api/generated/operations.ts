@@ -42,6 +42,8 @@ export type ButtonStepView = { arguments: Record<string, unknown>; operation: st
 
 export type ButtonView = { label: string; steps: ButtonStepView[] }
 
+export type Category = ("all" | "mentions" | "tasks" | "runs" | "pull_requests") | "threads" | "usage"
+
 export type ChartStyle = ("bar" | "line" | "donut") | "number"
 
 export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; style?: ChartStyle | null }
@@ -59,6 +61,8 @@ export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" 
 export type ConversationFile = { contentType: string; createdAt: string; height?: number | null; id: string; messageId: string; name: string; size: number; width?: number | null }
 
 export type ConversationMember = { displayName: string; handle: string; id: string; kind: string; manager: boolean }
+
+export type ConversationTab = { id: string; kind: string; position: number; title: string }
 
 export type ConversationTask = { how: string; id: string; key: string; statusCategory: string; title: string }
 
@@ -79,6 +83,8 @@ export type DateBucket = "day" | "week" | "month"
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
 export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
+
+export type Density = "detailed" | "compact"
 
 export type Direction = "asc" | "desc"
 
@@ -113,6 +119,10 @@ export type HostAgentView = { accountId: string; actions: unknown[]; backends: u
 export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type InboxFilter = { category?: Category; spaces?: string[]; view?: View }
+
+export type InboxViewItem = { density: Density; filter: InboxFilter; id: string; name: string; position: number }
 
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
@@ -255,6 +265,8 @@ export type TileInput = { height?: number | null; id?: string | null; kind?: Til
 export type TileKind = "view" | "text"
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
+
+export type View = ("snoozed" | "archived") | "inbox" | "unread"
 
 export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
@@ -412,6 +424,14 @@ export type ConversationMemberListInput = { conversationId: string }
 
 export type ConversationMemberListOutput = { canManage: boolean; conversationId: string; members: ConversationMember[] }
 
+export type ConversationTabListInput = { conversationId: string }
+
+export type ConversationTabListOutput = { tabs: ConversationTab[] }
+
+export type ConversationTabSetInput = { conversationId: string; page: string; position?: number | null; remove?: boolean }
+
+export type ConversationTabSetOutput = { tabs: ConversationTab[] }
+
 export type ConversationTaskListInput = { conversationId: string }
 
 export type ConversationTaskListOutput = { tasks: ConversationTask[] }
@@ -523,6 +543,14 @@ export type HostListOutput = { hosts: HostView[] }
 export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type InboxViewListInput = Record<string, never>
+
+export type InboxViewListOutput = { views: InboxViewItem[] }
+
+export type InboxViewSetInput = { delete?: boolean | null; density?: Density | null; filter?: InboxFilter | null; inboxViewId?: string | null; name?: string | null; position?: number | null }
+
+export type InboxViewSetOutput = { views: InboxViewItem[] }
 
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
@@ -898,6 +926,8 @@ export type Operations = {
   conversation_file_list: { input: ConversationFileListInput; output: ConversationFileListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversation_member_list: { input: ConversationMemberListInput; output: ConversationMemberListOutput }
+  conversation_tab_list: { input: ConversationTabListInput; output: ConversationTabListOutput }
+  conversation_tab_set: { input: ConversationTabSetInput; output: ConversationTabSetOutput }
   conversation_task_list: { input: ConversationTaskListInput; output: ConversationTaskListOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
@@ -926,6 +956,8 @@ export type Operations = {
   host_link: { input: HostLinkInput; output: HostLinkOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  inbox_view_list: { input: InboxViewListInput; output: InboxViewListOutput }
+  inbox_view_set: { input: InboxViewSetInput; output: InboxViewSetOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
