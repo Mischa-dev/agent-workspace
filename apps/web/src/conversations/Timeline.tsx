@@ -18,6 +18,7 @@ import { formatDateTime } from '../ui/time'
 import type {
   ConversationActor,
   ConversationMessage,
+  ConversationSystemEvent,
   ConversationTimelineEntry,
   ConversationWorkItemChip,
   ConversationWorkerEvent,
@@ -34,6 +35,7 @@ const NEAR_TOP = 300
 
 const ProfileDialog = lazy(() => import('../profiles/ProfileDialog'))
 const LinkCards = lazy(() => import('../modules/references/LinkCards'))
+const MadeThing = lazy(() => import('../modules/references/MadeThing'))
 
 /** A message's own words, with its links, for finding the things it links to. */
 function linkedThings(message: ConversationMessage) {
@@ -509,7 +511,18 @@ export function WorkerEventRow({ actor = 'Agent', createdAt, event }: { actor?: 
   )
 }
 
-export function SystemRow({ createdAt }: { createdAt: string }) {
+export function SystemRow({ createdAt, event }: { createdAt: string; event?: ConversationSystemEvent | null }) {
+  if (event?.type === 'made_into') {
+    const word = event.thingKind.replace(/_/g, ' ')
+    return (
+      <ActivityRow actor={event.actorName ?? 'Someone'} icon="link" time={formatTime(createdAt)}>
+        made {event.messageId ? 'a message here' : 'this'} into{' '}
+        <Suspense fallback={`a ${word}`}>
+          <MadeThing id={event.thingId} kind={event.thingKind} />
+        </Suspense>
+      </ActivityRow>
+    )
+  }
   return (
     <ActivityRow icon="info" time={formatTime(createdAt)}>
       The conversation settings changed.
@@ -590,7 +603,7 @@ export function TimelineEntries({
     } else if (entry.workerEvent) {
       row = <WorkerEventRow actor={agentName?.(entry.workerEvent.agentRunId)} createdAt={entry.createdAt} event={entry.workerEvent} />
     } else {
-      row = <SystemRow createdAt={entry.createdAt} />
+      row = <SystemRow createdAt={entry.createdAt} event={entry.system} />
     }
     rows.push(
       <Fragment key={entry.id}>

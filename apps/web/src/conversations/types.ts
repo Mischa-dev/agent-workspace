@@ -157,6 +157,18 @@ export type ConversationTimelineEntry = {
   createdAt: string
   message: ConversationMessage | null
   workerEvent: ConversationWorkerEvent | null
+  /** What a system entry says (C2.20); none for the older bare ones. */
+  system?: ConversationSystemEvent | null
+}
+
+/** Someone made a thing from a message here; its title is read with the reader's access. */
+export type ConversationSystemEvent = {
+  type: 'made_into'
+  actorId: string
+  actorName: string | null
+  thingKind: string
+  thingId: string
+  messageId?: string
 }
 
 export type ConversationKind = 'channel' | 'thread' | 'dm' | 'group'

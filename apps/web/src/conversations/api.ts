@@ -11,6 +11,7 @@ import type {
   ReplyRequest,
   ReplyRequestStatus,
   ConversationMessage,
+  ConversationSystemEvent,
   ConversationTimelineEntry,
   ConversationTimelinePage,
   ConversationWorkItemChip,
@@ -202,6 +203,18 @@ export function normalizeTimelineEntry(
   if ((kind === 'message' && !message) || (kind === 'worker_event' && !workerEvent)) {
     return null
   }
+  const said = asRecord(entry.system)
+  const system: ConversationSystemEvent | null =
+    said.type === 'made_into' && typeof said.actorId === 'string' && typeof said.thingKind === 'string' && typeof said.thingId === 'string'
+      ? {
+          type: 'made_into',
+          actorId: said.actorId,
+          actorName: typeof said.actorName === 'string' ? said.actorName : null,
+          thingKind: said.thingKind.slice(0, 60),
+          thingId: said.thingId,
+          ...(typeof said.messageId === 'string' ? { messageId: said.messageId } : {}),
+        }
+      : null
   return {
     id: entry.id,
     sequence: entry.sequence as number,
@@ -209,6 +222,7 @@ export function normalizeTimelineEntry(
     createdAt: string(entry.createdAt),
     message,
     workerEvent,
+    system,
   }
 }
 
