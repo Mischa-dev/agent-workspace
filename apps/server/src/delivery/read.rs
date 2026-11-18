@@ -54,6 +54,10 @@ pub struct Batch {
     pub next: i64,
     /// More may be waiting: read again now.
     pub has_more: bool,
+    /// A2.10: the position before the first event held for a paused
+    /// recipient in what was read; a read resumes from it once the recipient
+    /// is resumed.
+    pub held: Option<i64>,
 }
 
 #[derive(FromRow)]
@@ -150,7 +154,9 @@ pub async fn read_batch(
     // The modules on where each event happened, read once per place.
     let mut modules = HashMap::new();
     // A2.10: where the recipient is paused, what it would hear waits: the
-    // cursor stops before the first such event and moves on once resumed.
+    // read goes on past it (its pause, connections and stopped replies
+    // still arrive) and says where the held events start, so a read after
+    // it is resumed starts there.
     let paused = if scanned == 0 {
         Vec::new()
     } else {
@@ -167,9 +173,8 @@ pub async fn read_batch(
             && module_on(&mut *connection, &mut modules, &row).await?
         {
             if held(&paused, &row.event) {
-                batch.next = before;
-                batch.has_more = false;
-                return Ok(batch);
+                batch.held.get_or_insert(before);
+                continue;
             }
             batch.delivered.push(Delivered {
                 event: row.event,

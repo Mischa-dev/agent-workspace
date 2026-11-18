@@ -367,6 +367,16 @@ async fn a_restart_takes_up_its_tasks_and_a_lost_last_report_is_sent_again() {
         1,
         "the heartbeat names it"
     );
+    // Its credential gets old: the start to fetch again is named, and a new
+    // sink takes over.
+    let stale = restarted.stale_credentials(std::time::Duration::ZERO);
+    assert_eq!(stale, vec![(RUN.to_owned(), first.command_id.to_string())]);
+    restarted.refresh(RUN, resumed.clone());
+    assert!(
+        restarted
+            .stale_credentials(std::time::Duration::from_secs(60))
+            .is_empty()
+    );
 
     // Its last report is lost once: it stays until the report lands.
     *resumed.failing_updates.lock().expect("failing") = 1;

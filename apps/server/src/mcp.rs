@@ -162,6 +162,12 @@ pub struct McpPrincipal {
 }
 
 impl McpPrincipal {
+    /// A host's short-lived credential for one run (A1.12): it reaches the
+    /// run's space only, whatever the agent's own connection reaches.
+    pub fn is_run_credential(&self) -> bool {
+        self.authentication_class == "run_credential"
+    }
+
     /// The caller `access` decides for. An app acting for a person is held
     /// to their delegation limit, which the edge loads and sets
     /// (`ops::mcp::caller_of`); this is the caller without it.
@@ -5628,7 +5634,8 @@ async fn scoped_project(
         // belong to; agents reach the Projects their connection allows.
         // Older Project-scoped grants stay in their Project.
         let may_leave_home = match principal.actor_kind {
-            ActorKind::ExternalAgent => true,
+            // A host's run credential stays in its run's space.
+            ActorKind::ExternalAgent => !principal.is_run_credential(),
             ActorKind::Human => principal.account_wide,
             _ => false,
         };

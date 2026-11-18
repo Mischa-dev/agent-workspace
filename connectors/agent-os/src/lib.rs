@@ -79,7 +79,14 @@ struct Active<S> {
     receipt: Receipt,
     sink: S,
     since: Instant,
+    /// When `sink`'s credential was fetched: run credentials last an hour,
+    /// so a long task's start is fetched again for a fresh one.
+    sink_since: Instant,
 }
+
+/// How old a run's credential may get before its start is fetched again
+/// for a fresh one (they last an hour).
+pub const CREDENTIAL_REFRESH_AFTER: Duration = Duration::from_secs(40 * 60);
 
 pub struct Connector<C, S> {
     config: Config,
@@ -259,6 +266,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                 receipt,
                 sink,
                 since: Instant::now(),
+                sink_since: Instant::now(),
             },
         );
         Some(accepted(&task))
@@ -409,8 +417,29 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                 receipt,
                 sink,
                 since: Instant::now(),
+                sink_since: Instant::now(),
             },
         );
+    }
+
+    /// The runs whose credential is older than `older_than`, with the start
+    /// to fetch again for a fresh one.
+    pub fn stale_credentials(&self, older_than: Duration) -> Vec<(String, String)> {
+        self.active
+            .iter()
+            .filter(|(_, active)| active.sink_since.elapsed() >= older_than)
+            .filter_map(|(run_id, active)| {
+                Some((run_id.clone(), active.receipt.command_id.clone()?))
+            })
+            .collect()
+    }
+
+    /// Reports on `run_id` through `sink` from now on (a fresh credential).
+    pub fn refresh(&mut self, run_id: &str, sink: S) {
+        if let Some(active) = self.active.get_mut(run_id) {
+            active.sink = sink;
+            active.sink_since = Instant::now();
+        }
     }
 
     /// Lets go of a start from before a restart that can no longer be
@@ -658,6 +687,26 @@ pub async fn serve<C: Controller>(
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
+        refresh_credentials(&client, &mut connector).await;
         connector.tick().await;
+    }
+}
+
+/// Fetches the start of each run whose credential is getting old again,
+/// for a fresh one; a failed fetch is tried on the next turn.
+async fn refresh_credentials<C: Controller>(
+    client: &HostClient,
+    connector: &mut Connector<C, RunReporter>,
+) {
+    for (run_id, command_id) in connector.stale_credentials(CREDENTIAL_REFRESH_AFTER) {
+        let Ok(command_id) = command_id.parse::<uuid::Uuid>() else {
+            continue;
+        };
+        if let Ok(command) = client.command(command_id).await
+            && let (Some(run), Some(credential)) =
+                (command.run_id, command.workspace_credential.as_ref())
+        {
+            connector.refresh(&run_id, client.reporter(run, credential));
+        }
     }
 }

@@ -1369,6 +1369,43 @@ async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
         again["events"].as_array().expect("events").is_empty(),
         "{again}"
     );
+    // A second ask elsewhere, stopped while it waits: the stop still
+    // arrives, past what is held.
+    let random = channel(&world, "random").await;
+    post(
+        &world,
+        &random,
+        "ask-paused-stopped",
+        mention("And this ", rook.actor),
+    )
+    .await;
+    let stopped: Uuid = sqlx::query_scalar(
+        "SELECT id FROM reply_requests WHERE agent_actor_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(rook.actor)
+    .fetch_one(world.pool())
+    .await
+    .expect("second ask");
+    let (status, body) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/reply-requests/{stopped}/stop"),
+            Some("stop-paused"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let page = read(&world, rook, Some(&held_at)).await;
+    assert_eq!(of_type(&page, "reply.cancelled").len(), 1, "{page}");
+    assert!(of_type(&page, "reply.requested").is_empty(), "held: {page}");
+    let held_at = page["nextCursor"].clone();
+    let again = read(&world, rook, Some(&held_at)).await;
+    assert!(
+        again["events"].as_array().expect("events").is_empty(),
+        "not again: {again}"
+    );
 
     // Resumed, what it missed arrives.
     owner_op(&world, "agent_resume", json!({"account": rook.actor})).await;

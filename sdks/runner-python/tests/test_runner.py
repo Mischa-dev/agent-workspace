@@ -398,7 +398,10 @@ class ChannelTests(unittest.TestCase):
         channel = aw.WorkspaceChannel(
             "https://aw.example", "test-token", aw.McpClient("https://aw.example/api/v1/mcp", "test-token", fake), opener=FakeEvents(False)
         )
-        self.assertEqual(channel.send("c", "done", reply={"requestId": "r1", "generation": 2}, client_message_id="mine-1"), "m1")
+        self.assertEqual(
+            channel.send("c", "done", reply={"requestId": "r1", "generation": 2}, client_message_id="mine-1", attachment_ids=["f9"]),
+            "m1",
+        )
         self.assertEqual(channel.send("c", "hello", client_message_id="mine-2"), "m2")
         channel.edit("m2", "hello again")
         channel.react("m2", "👀")
@@ -407,7 +410,7 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(
             fake.calls,
             [
-                ("reply_send", {"requestId": "r1", "generation": 2, "text": "done", "clientRequestId": "mine-1"}),
+                ("reply_send", {"requestId": "r1", "generation": 2, "text": "done", "clientRequestId": "mine-1", "attachmentIds": ["f9"]}),
                 ("message_send", {"conversationId": "c", "text": "hello", "clientRequestId": "mine-2"}),
                 ("message_edit", {"messageId": "m2", "text": "hello again"}),
                 ("message_react", {"messageId": "m2", "emoji": "👀", "reacted": True}),

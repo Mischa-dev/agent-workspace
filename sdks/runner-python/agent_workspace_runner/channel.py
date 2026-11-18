@@ -530,6 +530,8 @@ class WorkspaceChannel:
                 args["final"] = reply["final"]
             if client_message_id:
                 args["clientRequestId"] = client_message_id
+            if attachment_ids:
+                args["attachmentIds"] = attachment_ids
             return (unwrap(self.tools.call_tool("reply_send", args)) or {}).get("messageId")
         args = {"conversationId": conversation_id, "text": text}
         if client_message_id:

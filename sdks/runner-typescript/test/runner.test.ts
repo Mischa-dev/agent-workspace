@@ -345,7 +345,10 @@ test('the channel replies through reply_send, posts through message_send, and fe
     tools: new McpClient({ url: 'https://aw.example/api/v1/mcp', token: 'token-1', fetch: server.fetchImpl }),
     fetch: server.fetchImpl,
   })
-  assert.equal(await channel.send('c', 'done', { reply: { requestId: 'r1', generation: 2 }, clientMessageId: 'mine-1' }), 'm1')
+  assert.equal(
+    await channel.send('c', 'done', { reply: { requestId: 'r1', generation: 2 }, clientMessageId: 'mine-1', attachmentIds: ['f9'] }),
+    'm1',
+  )
   assert.equal(await channel.send('c', 'hello', { clientMessageId: 'mine-2' }), 'm2')
   await channel.edit('m2', 'hello again')
   await channel.react('m2', '👀')
@@ -355,7 +358,7 @@ test('the channel replies through reply_send, posts through message_send, and fe
   assert.deepEqual(
     server.calls.map((call) => [call.name, call.arguments]),
     [
-      ['reply_send', { requestId: 'r1', generation: 2, text: 'done', clientRequestId: 'mine-1' }],
+      ['reply_send', { requestId: 'r1', generation: 2, text: 'done', clientRequestId: 'mine-1', attachmentIds: ['f9'] }],
       ['message_send', { conversationId: 'c', text: 'hello', clientRequestId: 'mine-2' }],
       ['message_edit', { messageId: 'm2', text: 'hello again' }],
       ['message_react', { messageId: 'm2', emoji: '👀', reacted: true }],

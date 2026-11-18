@@ -454,6 +454,7 @@ export class WorkspaceChannel {
       }
       if (options.reply.final !== undefined) args.final = options.reply.final
       if (options.clientMessageId) args.clientRequestId = options.clientMessageId
+      if (options.attachmentIds?.length) args.attachmentIds = options.attachmentIds
       const value = unwrap<{ messageId: string | null }>(await this.tools.callTool('reply_send', args))
       return value.messageId
     }

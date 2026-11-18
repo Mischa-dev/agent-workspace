@@ -391,12 +391,15 @@ async fn queue(state: &AppState, connection_id: Uuid) -> Result<Option<Queued>, 
         "UPDATE agent_connections SET push_cursor = GREATEST(push_cursor, $2) WHERE id = $1",
     )
     .bind(delivery.id)
-    .bind(batch.next)
+    // A2.10: while the account is paused, the cursor waits before what is
+    // held; what passed is queued again on the next sweep only once (a
+    // delivery is kept once per position).
+    .bind(batch.held.unwrap_or(batch.next))
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
     Ok(Some(Queued {
-        has_more: batch.has_more,
+        has_more: batch.has_more && batch.held.is_none(),
     }))
 }
 
