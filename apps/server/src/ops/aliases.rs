@@ -158,6 +158,13 @@ fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Valu
 /// The argument a call names its workspace with (not the module).
 const NAMED_WORKSPACE: &str = "workspace";
 
+/// What every edge takes beside an operation's own arguments: the workspace
+/// the call names, its request id (so a retry through the old name is
+/// answered once) and a preview.
+fn edge_argument(key: &str) -> bool {
+    matches!(key, NAMED_WORKSPACE | "clientRequestId" | "preview")
+}
+
 /// `automation_write`'s `operation` names the automation operation it runs.
 fn automation_write_runs(arguments: &JsonObject) -> &'static str {
     match arguments.get("operation").and_then(Value::as_str) {
@@ -193,9 +200,9 @@ fn automation_write_in(mut arguments: JsonObject) -> JsonObject {
             "enabled",
         ],
     };
-    // The workspace the call names stays for the dispatcher.
+    // What the edge reads (the workspace, request id, preview) stays.
     arguments.retain(|key, value| {
-        (keep.contains(&key.as_str()) || key == NAMED_WORKSPACE) && !value.is_null()
+        (keep.contains(&key.as_str()) || edge_argument(key)) && !value.is_null()
     });
     arguments
 }
@@ -285,10 +292,10 @@ fn github_integration_write_in(arguments: JsonObject) -> JsonObject {
     )
 }
 
-/// The arguments one operation takes, and the workspace the call names.
+/// The arguments one operation takes, and what the edge reads.
 fn keep_only(mut arguments: JsonObject, keep: &[&str]) -> JsonObject {
     arguments.retain(|key, value| {
-        (keep.contains(&key.as_str()) || key == NAMED_WORKSPACE) && !value.is_null()
+        (keep.contains(&key.as_str()) || edge_argument(key)) && !value.is_null()
     });
     arguments
 }

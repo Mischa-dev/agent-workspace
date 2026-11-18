@@ -2126,11 +2126,10 @@ async fn own_task(
         .map_err(|_| {
             ErrorData::internal_error("Couldn't read the task just now. Try again.", None)
         })?;
-    let edge = crate::ops::Edge::of_mcp(&principal);
     let found = if cancel {
-        crate::ops::long::cancel(state, &caller, &edge, id).await
+        crate::ops::long::cancel(state, &caller, id).await
     } else {
-        crate::ops::long::read(state, &caller, &edge, id).await
+        crate::ops::long::read(state, &caller, id).await
     };
     match found {
         Ok(Some(task)) => Ok(task),

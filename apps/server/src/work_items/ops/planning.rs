@@ -843,7 +843,12 @@ tool_op!(RecurringCreate {
     output: views_data::RecurringWriteValue,
     run: |call, input| {
         names_existing(input.recurring.is_some(), true, "recurring")?;
-        tool!(call, None, views_data::recurring_write, input)
+        // In the call's transaction: the schedule commits with its request id.
+        let principal = principal_for(call.ctx, None);
+        let state = call.state;
+        tool_answer(
+            views_data::recurring_write_in(state, Some(call.tx().await?), &principal, input).await,
+        )
     }
 });
 
