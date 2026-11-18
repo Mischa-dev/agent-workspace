@@ -418,48 +418,6 @@ async fn pipeline<O: Operation>(
             body,
         });
     }
-    // A2.27: the workspace's guards see every change before it runs: one
-    // may stop it, or hold it for review (answered ok, saying so, with the
-    // request that asks the reviewers).
-    let mut guard_hold = None;
-    if writes && !request.preview {
-        match crate::guards::check(
-            state,
-            &request.caller,
-            &located,
-            O::NAME,
-            target.audit(&located).0,
-            &canonical,
-        )
-        .await?
-        {
-            crate::guards::Verdict::Allow { hold } => guard_hold = hold,
-            crate::guards::Verdict::Deny { message } => {
-                return Err(OpError::Denied {
-                    reason: crate::ops::DenyReason::Rule,
-                    message: message.into(),
-                });
-            }
-            crate::guards::Verdict::Held { request_id } => {
-                let mut body = Envelope::Ok {
-                    value: serde_json::json!({
-                        "status": "pending_review",
-                        "requestId": request_id,
-                    }),
-                    request_id: request.request_id,
-                    replayed: false,
-                    replay_safe: Some(true),
-                    preview: false,
-                }
-                .to_json();
-                body["pendingReview"] = true.into();
-                return Ok(Answer {
-                    status: StatusCode::OK,
-                    body,
-                });
-            }
-        }
-    }
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
     if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
@@ -519,6 +477,51 @@ async fn pipeline<O: Operation>(
         }
     }
 
+    // A2.27: the workspace's guards see every change before it runs: one
+    // may stop it, or hold it for review (answered ok, saying so, with the
+    // request that asks the reviewers). After a retry of a finished call has
+    // had its answer above, so a lost answer doesn't ask the reviewers again;
+    // a held or stopped call gives its reservation back (its transaction
+    // rolls back).
+    let mut guard_hold = None;
+    if writes && !request.preview {
+        match crate::guards::check(
+            state,
+            &ctx.caller,
+            &located,
+            O::NAME,
+            target.audit(&located),
+            &canonical,
+        )
+        .await?
+        {
+            crate::guards::Verdict::Allow { hold } => guard_hold = hold,
+            crate::guards::Verdict::Deny { message } => {
+                return Err(OpError::Denied {
+                    reason: crate::ops::DenyReason::Rule,
+                    message: message.into(),
+                });
+            }
+            crate::guards::Verdict::Held { request_id } => {
+                let mut body = Envelope::Ok {
+                    value: serde_json::json!({
+                        "status": "pending_review",
+                        "requestId": request_id,
+                    }),
+                    request_id: ctx.request_id.clone(),
+                    replayed: false,
+                    replay_safe: Some(true),
+                    preview: false,
+                }
+                .to_json();
+                body["pendingReview"] = true.into();
+                return Ok(Answer {
+                    status: StatusCode::OK,
+                    body,
+                });
+            }
+        }
+    }
     if let Some(hold) = guard_hold {
         let tx = call.tx().await?;
         crate::guards::use_hold(tx, hold).await?;

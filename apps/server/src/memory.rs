@@ -519,6 +519,8 @@ pub async fn get_revision(
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         {joins}
         WHERE revision.page_id = $1 AND revision.version = $2
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
+               OR page_visible_to(page.id, $3))
         "#,
         joins = revision_session_joins("$3"),
     ))

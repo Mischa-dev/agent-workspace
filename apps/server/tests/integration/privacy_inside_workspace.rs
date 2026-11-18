@@ -2894,6 +2894,30 @@ async fn a_private_channels_memory_stays_with_its_members() {
     )
     .await;
     assert!(!status.is_success(), "{status} {read}");
+    // Nor any of its versions.
+    let (status, read) = send(
+        &world.app,
+        lena.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/revisions/1"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status} {read}");
+    assert!(!read.to_string().contains(&word), "{read}");
+    let (status, read) = send(
+        &world.app,
+        owner.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/revisions/1"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {read}");
     let (_, listed) = send(
         &world.app,
         lena.request(

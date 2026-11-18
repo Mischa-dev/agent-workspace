@@ -423,10 +423,27 @@ async fn guards_stop_or_hold_changes_for_people_and_agents_alike() {
         json!({"requestId": request, "optionId": "allow"}),
     )
     .await;
-    let made = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
+    let keyed = || {
+        let mut input = decide("Ship weekly");
+        input["clientRequestId"] = "ship-weekly-1".into();
+        input
+    };
+    let made = tool(&world, rook, "decision_record", keyed()).await;
     assert_eq!(made["outcome"], "ok", "{made}");
     assert!(made["value"]["status"] != "pending_review", "{made}");
     assert_eq!(decisions().await, 1);
+    // Its answer lost, the retry gets the same answer, not a new review.
+    let retried = tool(&world, rook, "decision_record", keyed()).await;
+    assert_eq!(retried["replayed"], true, "{retried}");
+    assert_eq!(retried["value"], made["value"], "{retried}");
+    assert_eq!(decisions().await, 1);
+    let reviews = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM guard_holds WHERE operation = 'decision_record' AND state = 'pending'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("holds");
+    assert_eq!(reviews, 0, "no review asked for a finished call");
     // Used once: the next one is reviewed again.
     let next = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
     assert_eq!(next["value"]["status"], "pending_review", "{next}");
@@ -455,5 +472,94 @@ async fn guards_stop_or_hold_changes_for_people_and_agents_alike() {
     .await;
     assert_eq!(declined["outcome"], "permission_denied", "{declined}");
     assert!(declined.to_string().contains("Too often"), "{declined}");
+
+    // A held message in a private channel goes only to reviewers who can
+    // read that channel, its request is the channel's, and the call's
+    // secrets are never kept or shown.
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{space}/channels"),
+            Some("guarded-private"),
+            json!({"name": "guarded", "private": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let channel = made["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let (status, added) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/members"),
+            Some("guarded-add-rook"),
+            json!({"actorId": rook.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Messages get a look", "action": "review",
+               "operations": ["message_send"],
+               "reviewers": [world.owner.actor, lena.actor]}),
+    )
+    .await;
+    let word = format!("zqheld{}", &Uuid::now_v7().simple().to_string()[20..]);
+    let held = tool(
+        &world,
+        rook,
+        "message_send",
+        json!({"conversationId": channel, "text": format!("The plan is {word}")}),
+    )
+    .await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    let request: Uuid = held["value"]["requestId"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("request");
+    let (addressed, conversation) = sqlx::query_as::<_, (Vec<Uuid>, Option<Uuid>)>(
+        "SELECT addressed_account_ids, conversation_id FROM requests WHERE id = $1",
+    )
+    .bind(request)
+    .fetch_one(world.pool())
+    .await
+    .expect("request row");
+    assert_eq!(
+        addressed,
+        vec![world.owner.actor],
+        "only a reviewer in the channel"
+    );
+    assert_eq!(conversation.map(|id| id.to_string()), Some(channel.clone()));
+    let lenas = person_op(
+        &world,
+        &lena.browser,
+        "request_get",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert_ne!(lenas["outcome"], "ok", "{lenas}");
+    assert!(!lenas.to_string().contains(&word), "{lenas}");
+    let owners = person_op(
+        &world,
+        &world.owner.browser,
+        "request_get",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert!(owners.to_string().contains(&word), "{owners}");
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM information_schema.columns \
+         WHERE table_name = 'guard_holds' AND column_name = 'input'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("columns");
+    assert_eq!(kept, 0, "a held call's input is never stored");
     world.finish().await;
 }

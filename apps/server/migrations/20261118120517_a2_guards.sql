@@ -30,8 +30,9 @@ CREATE TABLE guards (
 CREATE INDEX guards_workspace ON guards (workspace_id) WHERE enabled;
 SELECT tenancy_protect('guards', 'workspace_id');
 
--- A change a review guard held: the proposed call, kept here (its own
--- record) for the reviewers, and the request that asks them.
+-- A change a review guard held: which call it was (by the hash of its
+-- input, never the input itself, which may carry a secret) and the request
+-- that asks the reviewers.
 CREATE TABLE guard_holds (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -40,7 +41,6 @@ CREATE TABLE guard_holds (
     account_id UUID NOT NULL REFERENCES actors(id),
     operation TEXT NOT NULL,
     input_hash TEXT NOT NULL,
-    input JSONB NOT NULL,
     request_id UUID NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
     state TEXT NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'allowed', 'declined', 'used')),

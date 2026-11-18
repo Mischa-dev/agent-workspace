@@ -95,6 +95,42 @@ fn text_of(input: &Value) -> String {
     out
 }
 
+/// A call's input as reviewers see it: anything under a key that names a
+/// secret (a token, password, key or credential) is hidden.
+fn concealed(input: &Value) -> Value {
+    fn secret(key: &str) -> bool {
+        let key = key.to_ascii_lowercase();
+        [
+            "token",
+            "secret",
+            "password",
+            "apikey",
+            "api_key",
+            "credential",
+            "authorization",
+        ]
+        .iter()
+        .any(|word| key.contains(word))
+    }
+    match input {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    let shown = if secret(key) && !value.is_null() {
+                        Value::String("(hidden)".to_owned())
+                    } else {
+                        concealed(value)
+                    };
+                    (key.clone(), shown)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(concealed).collect()),
+        other => other.clone(),
+    }
+}
+
 fn hash_of(input: &Value) -> String {
     hex::encode(Sha256::digest(input.to_string().as_bytes()))
 }
@@ -105,7 +141,7 @@ pub async fn check(
     caller: &Caller,
     located: &Located,
     operation: &'static str,
-    kind: &str,
+    (kind, target_id): (&str, Uuid),
     input: &Value,
 ) -> Result<Verdict, OpError> {
     if exempt(operation) {
@@ -145,7 +181,7 @@ pub async fn check(
             message: format!("The workspace's guard \"{}\" stops this.", guard.name),
         });
     }
-    let reviewers = guard
+    let mut reviewers = guard
         .reviewers
         .iter()
         .copied()
@@ -155,14 +191,43 @@ pub async fn check(
         // Its only reviewer is the caller: nobody else to ask.
         return Ok(Verdict::Allow { hold: None });
     }
+    // A change in a conversation is shown only to reviewers who can read
+    // that conversation, and its request is tied to it, so nobody else in
+    // the space sees what was going to be said there.
+    let conversation = conversation_of(&mut transaction, kind, target_id, caller.account_id)
+        .await
+        .map_err(logged)?;
+    if let Some(conversation) = conversation {
+        reviewers = sqlx::query_scalar::<_, Uuid>(
+            "SELECT reviewer FROM unnest($1::uuid[]) reviewer \
+             WHERE conversation_visible_to($2, reviewer)",
+        )
+        .bind(&reviewers)
+        .bind(conversation)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|error| logged(error.into()))?;
+        if reviewers.is_empty() {
+            return Ok(Verdict::Deny {
+                message: format!(
+                    "The guard \"{}\" holds this for review, but none of its reviewers can read \
+                     this conversation.",
+                    guard.name
+                ),
+            });
+        }
+    }
     let verdict = review(
         &mut transaction,
         caller,
-        located,
-        operation,
-        input,
-        guard,
-        &reviewers,
+        Held {
+            located,
+            conversation,
+            operation,
+            input,
+            guard,
+            reviewers: &reviewers,
+        },
     )
     .await?;
     transaction
@@ -172,16 +237,59 @@ pub async fn check(
     Ok(verdict)
 }
 
+/// The conversation a change is in, when its target is one or is in one.
+async fn conversation_of(
+    transaction: &mut Transaction<'_, Postgres>,
+    kind: &str,
+    target_id: Uuid,
+    caller: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(match kind {
+        "conversation" => Some(target_id),
+        "message" | "message_record" => sqlx::query_scalar::<_, Uuid>(
+            "SELECT conversation_id FROM messages \
+             WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+        )
+        .bind(target_id)
+        .bind(caller)
+        .fetch_optional(&mut **transaction)
+        .await?,
+        "scheduled_message" => sqlx::query_scalar::<_, Uuid>(
+            "SELECT conversation_id FROM scheduled_messages \
+             WHERE id = $1 AND author_actor_id = $2 AND conversation_visible_to(conversation_id, $2)",
+        )
+        .bind(target_id)
+        .bind(caller)
+        .fetch_optional(&mut **transaction)
+        .await?,
+        _ => None,
+    })
+}
+
+/// A call a review guard holds.
+struct Held<'a> {
+    located: &'a Located,
+    conversation: Option<Uuid>,
+    operation: &'static str,
+    input: &'a Value,
+    guard: &'a GuardRow,
+    reviewers: &'a [Uuid],
+}
+
 /// The review of one call: asked once, then settled by its request.
 async fn review(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
-    located: &Located,
-    operation: &'static str,
-    input: &Value,
-    guard: &GuardRow,
-    reviewers: &[Uuid],
+    held: Held<'_>,
 ) -> Result<Verdict, OpError> {
+    let Held {
+        located,
+        conversation,
+        operation,
+        input,
+        guard,
+        reviewers,
+    } = held;
     let logged = |error: AppError| OpError::logged(operation, &error);
     let hash = hash_of(input);
     let held = sqlx::query_as::<_, (Uuid, Uuid, String, Option<Value>)>(
@@ -236,7 +344,9 @@ async fn review(
     };
     let hold = Uuid::now_v7();
     let shown = crate::run_log::cap(
-        &crate::run_log::redact(&serde_json::to_string_pretty(input).unwrap_or_default()),
+        &crate::run_log::redact(
+            &serde_json::to_string_pretty(&concealed(input)).unwrap_or_default(),
+        ),
         6_000,
     );
     let raised = crate::requests::open(
@@ -247,7 +357,7 @@ async fn review(
             space_id: Some(space_id),
             run_id: None,
             host_request_ref: None,
-            conversation_id: None,
+            conversation_id: conversation,
             work_item_id: None,
             subject: Some(("guard_hold", hold)),
             field: "guard",
@@ -273,9 +383,9 @@ async fn review(
     sqlx::query(
         r#"
         INSERT INTO guard_holds (
-            id, workspace_id, space_id, guard_id, account_id, operation, input_hash, input,
+            id, workspace_id, space_id, guard_id, account_id, operation, input_hash,
             request_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(hold)
@@ -285,7 +395,6 @@ async fn review(
     .bind(caller.account_id)
     .bind(operation)
     .bind(&hash)
-    .bind(input)
     .bind(raised.request_id)
     .execute(&mut **transaction)
     .await
@@ -334,4 +443,28 @@ pub async fn use_hold(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn reviewers_never_see_a_calls_secrets() {
+        let shown = super::concealed(&json!({
+            "name": "Team host",
+            "token": "abc123",
+            "auth": {"apiKey": "k", "headers": [{"Authorization": "Bearer x"}]},
+            "clientSecret": null,
+        }));
+        assert_eq!(
+            shown,
+            json!({
+                "name": "Team host",
+                "token": "(hidden)",
+                "auth": {"apiKey": "(hidden)", "headers": [{"Authorization": "(hidden)"}]},
+                "clientSecret": null,
+            })
+        );
+    }
 }
