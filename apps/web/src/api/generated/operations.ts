@@ -108,6 +108,10 @@ export type FollowedThreadView = { id: string; lastActivityAt: string; messageCo
 
 export type GroupView = { description: string; handle: string; id: string; memberCount: number; memberIds?: string[] | null; name: string }
 
+export type GuardAction = "deny" | "review"
+
+export type GuardView = { accounts: string[]; action: string; enabled: boolean; id: string; name: string; operations: string[]; reviewers: string[]; spaceId?: string | null; targetKinds: string[]; terms: string[]; version: number }
+
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
@@ -145,6 +149,8 @@ export type LinkArgument = { targetId: string; targetKind: string }
 export type LinkView = { key?: string | null; projectId: string; projectName: string; targetId: string; targetKind: string; title: string; url: string }
 
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
+
+export type MemoryPageView = { body: string; pageId: string; spaceId: string; title: string; updatedAt: string; version: number }
 
 export type MessageContent = { nodes: MessageNode[]; version: number }
 
@@ -500,6 +506,14 @@ export type GroupListInput = { members?: boolean; prefix?: string | null }
 
 export type GroupListOutput = { groups: GroupView[] }
 
+export type GuardListInput = Record<string, never>
+
+export type GuardListOutput = { guards: GuardView[] }
+
+export type GuardSetInput = { accounts?: string[] | null; action?: GuardAction | null; enabled?: boolean | null; expectedVersion?: number | null; guardId?: string | null; name?: string | null; operations?: string[] | null; remove?: boolean; reviewers?: string[] | null; space?: string | null; targetKinds?: string[] | null; terms?: string[] | null }
+
+export type GuardSetOutput = { guard?: GuardView | null }
+
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
 export type HistoryListOutput = { caps: HistoryCaps; entries: HistoryEntry[]; kind: string }
@@ -547,6 +561,14 @@ export type InviteLinkListOutput = { links: InviteLinkView[] }
 export type InviteLinkRevokeInput = { link: string }
 
 export type InviteLinkRevokeOutput = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
+export type MemoryPageOpenInput = { conversation?: string | null; space?: string | null }
+
+export type MemoryPageOpenOutput = { page?: MemoryPageView | null }
+
+export type MemoryPageSetInput = { body: string; conversation?: string | null; expectedVersion?: number | null; note?: string | null; space?: string | null }
+
+export type MemoryPageSetOutput = { body: string; pageId: string; spaceId: string; title: string; updatedAt: string; version: number }
 
 export type MessageDeleteInput = { messageId: string }
 
@@ -927,6 +949,8 @@ export type Operations = {
   follow_set: { input: FollowSetInput; output: FollowSetOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
+  guard_list: { input: GuardListInput; output: GuardListOutput }
+  guard_set: { input: GuardSetInput; output: GuardSetOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
@@ -939,6 +963,8 @@ export type Operations = {
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
+  memory_page_open: { input: MemoryPageOpenInput; output: MemoryPageOpenOutput }
+  memory_page_set: { input: MemoryPageSetInput; output: MemoryPageSetOutput }
   message_delete: { input: MessageDeleteInput; output: MessageDeleteOutput }
   message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }

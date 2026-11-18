@@ -24,7 +24,9 @@
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
-    "decision_record": "create"
+    "decision_record": "create",
+    "memory_page_open": "query",
+    "memory_page_set": "change"
   },
   "routes": [
     "/api/v1/pages/*",
@@ -80,7 +82,7 @@
   "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "talk.channel_memory"],
     "sidebar": [],
     "home": [],
     "settings": [],

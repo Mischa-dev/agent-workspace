@@ -885,6 +885,36 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
+    "module": "agents",
+    "name": "guard_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Guards"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "guards.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "guard_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a guard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
     "module": "workspace",
     "name": "history_list",
     "permission": null,
@@ -1062,6 +1092,36 @@
     "preview": false,
     "proposable": false,
     "title": "Revoke an invitation link"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "pages",
+    "name": "memory_page_open",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open memory"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "memory_page_set",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Write memory"
   },
   {
     "automation": true,

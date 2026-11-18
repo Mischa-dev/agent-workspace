@@ -569,6 +569,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "guards",
+                table: "guards",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_account_id", "actors"),
+                    ("updated_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_harnesses",
                 table: "custom_harnesses",
                 references: &[
@@ -580,6 +591,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "guard_holds",
+                "runtime state of this server (queues, leases, retries)",
+            ),
             (
                 "agent_schedules",
                 "runtime state of this server (queues, leases, retries)",

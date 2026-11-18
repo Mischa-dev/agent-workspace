@@ -571,6 +571,12 @@ pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     None,
     "A workspace's custom emoji changed",
 );
+pub static GUARDS_CHANGED: EventType = signal(
+    "guards.changed",
+    "agents",
+    None,
+    "A workspace's guards changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -698,6 +704,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
+        &GUARDS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,

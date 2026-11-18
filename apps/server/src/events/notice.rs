@@ -286,6 +286,15 @@ pub async fn stage(
             None,
             None,
         ),
+        P::GuardsChanged(p) => (
+            &catalog::GUARDS_CHANGED,
+            "workspace",
+            p.workspace_id,
+            None,
+            Audience::Workspace,
+            None,
+            None,
+        ),
         // A workspace board has no project of its own: whoever can see the
         // board hears it, checked per event (as realtime does today).
         P::WhiteboardUpdated(p) => (

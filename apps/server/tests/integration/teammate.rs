@@ -316,3 +316,144 @@ async fn ambient_mode_invites_one_request_at_a_time_and_waits_out_its_cooldown()
     assert_ne!(refused["outcome"], "ok", "{refused}");
     world.finish().await;
 }
+
+async fn person_op(
+    world: &Workspace,
+    who: &super::support::app::Browser,
+    name: &str,
+    input: Value,
+) -> Value {
+    let (_, body) = send(
+        &world.app,
+        who.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await;
+    body
+}
+
+/// A2.27: a team's own guards. A deny guard stops the changes it matches
+/// and nothing else; a review guard holds a change until a reviewer allows
+/// it, then the same call goes through once; declined, it is refused. A
+/// person is held like an agent.
+#[tokio::test]
+async fn guards_stop_or_hold_changes_for_people_and_agents_alike() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("teammate_guards")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let lena = &world.people["lena"];
+    let space = world.project("WORK");
+    let decide = |title: &str| json!({"spaceId": space, "title": title});
+
+    let denied = op(
+        &world,
+        "guard_set",
+        json!({"name": "No launch talk", "action": "deny",
+               "operations": ["decision_record"], "terms": ["LAUNCH"]}),
+    )
+    .await;
+    let deny_guard = denied["guard"]["id"].clone();
+    let refused = tool(&world, rook, "decision_record", decide("Launch is Friday")).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert!(refused.to_string().contains("No launch talk"), "{refused}");
+    let fine = tool(&world, rook, "decision_record", decide("Use Postgres")).await;
+    assert_eq!(fine["outcome"], "ok", "{fine}");
+    // Anyone may read the guards.
+    let listed = tool(&world, rook, "guard_list", json!({})).await;
+    assert_eq!(
+        listed["value"]["guards"][0]["name"], "No launch talk",
+        "{listed}"
+    );
+    // Only those who manage settings change them.
+    let not_rooks = tool(
+        &world,
+        rook,
+        "guard_set",
+        json!({"guardId": deny_guard, "remove": true}),
+    )
+    .await;
+    assert_ne!(not_rooks["outcome"], "ok", "{not_rooks}");
+    op(
+        &world,
+        "guard_set",
+        json!({"guardId": deny_guard, "remove": true}),
+    )
+    .await;
+
+    // Review: held, allowed, then the same call goes through once.
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Decisions get a look", "action": "review",
+               "operations": ["decision_record"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let held = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
+    assert_eq!(held["outcome"], "ok", "{held}");
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    let request = held["value"]["requestId"].clone();
+    let again = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
+    assert_eq!(
+        again["value"]["requestId"], request,
+        "a retry waits on the same review"
+    );
+    let decisions = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM project_decisions WHERE title = 'Ship weekly'",
+        )
+        .fetch_one(world.pool())
+        .await
+        .expect("decisions")
+    };
+    assert_eq!(decisions().await, 0);
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": request, "optionId": "allow"}),
+    )
+    .await;
+    let made = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert!(made["value"]["status"] != "pending_review", "{made}");
+    assert_eq!(decisions().await, 1);
+    // Used once: the next one is reviewed again.
+    let next = tool(&world, rook, "decision_record", decide("Ship weekly")).await;
+    assert_eq!(next["value"]["status"], "pending_review", "{next}");
+
+    // A person is held the same way, and a declined change is refused.
+    let held = person_op(
+        &world,
+        &lena.browser,
+        "decision_record",
+        decide("Ship daily"),
+    )
+    .await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["value"]["requestId"], "optionId": "deny", "text": "Too often"}),
+    )
+    .await;
+    let declined = person_op(
+        &world,
+        &lena.browser,
+        "decision_record",
+        decide("Ship daily"),
+    )
+    .await;
+    assert_eq!(declined["outcome"], "permission_denied", "{declined}");
+    assert!(declined.to_string().contains("Too often"), "{declined}");
+    world.finish().await;
+}

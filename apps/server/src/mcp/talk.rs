@@ -425,6 +425,10 @@ pub(super) struct ConversationOpenValue {
     /// Pages, decisions and messages pinned here: what's true for this
     /// conversation right now.
     pub pinned: Vec<PinItem>,
+    /// This channel's or thread's memory page, with its first lines: read
+    /// it before acting here, and keep it current with memory_page_set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::memory::memory_pages::MemoryPointer>,
     pub highest_sequence: i64,
     pub last_read_sequence: i64,
     pub unread_count: i64,
@@ -933,9 +937,17 @@ pub(super) async fn conversation_open(
         if arguments.mark_read.unwrap_or(false) && principal.can_write() {
             mark(state, principal, &conversation, highest).await?;
         }
+        let memory = crate::memory::memory_pages::pointer_from_pool(
+            &state.pool,
+            crate::memory::memory_pages::MemoryFor::Conversation,
+            conversation.id,
+            principal.actor_id,
+        )
+        .await;
         Ok::<_, AppError>(ToolResult::ok(ConversationOpenValue {
             conversation: detail,
             pinned,
+            memory,
             highest_sequence: highest,
             last_read_sequence: last_read,
             unread_count,

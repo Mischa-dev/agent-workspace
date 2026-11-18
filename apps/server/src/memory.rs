@@ -32,6 +32,7 @@ use crate::{
     },
 };
 
+pub mod memory_pages;
 pub mod ops;
 pub mod templates;
 
@@ -382,6 +383,9 @@ pub async fn list_pages(
         LEFT JOIN project_memberships editor
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
         WHERE page.project_id = $1 AND ($2 OR page.archived_at IS NULL)
+          -- A conversation's memory page is opened from its conversation
+          -- (A2.16), never listed with the space's pages.
+          AND page.memory_for_kind IS DISTINCT FROM 'conversation'
         ORDER BY page.is_guide DESC, page.updated_at DESC, page.id
         LIMIT 500
         "#,
@@ -404,6 +408,7 @@ const PAGE_SELECT: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = $1
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
 "#;
 
 /// A page with its latest versions; `viewer` decides which agent sessions'
@@ -416,6 +421,7 @@ pub async fn get_page(
     let Some(mut page) = sqlx::query_as::<_, PageView>(PAGE_SELECT)
         .bind(page_id)
         .bind(STALE_AFTER_DAYS)
+        .bind(viewer)
         .fetch_optional(crate::db::scoped(pool))
         .await?
     else {
@@ -711,10 +717,13 @@ pub async fn update_page(
             r#"
             SELECT project_id, title, body, version, is_guide, skill_description,
                    archived_at IS NOT NULL, is_template
-            FROM project_pages WHERE id = $1 FOR UPDATE
+            FROM project_pages WHERE id = $1
+              AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))
+            FOR UPDATE
             "#,
         )
         .bind(page_id)
+        .bind(writer.actor_id)
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("page"))?;

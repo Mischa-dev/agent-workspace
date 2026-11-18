@@ -454,6 +454,10 @@ pub(super) struct ProjectOverview {
     /// The project's guide page: how this project works. Read it first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide: Option<GuidePage>,
+    /// The project's memory page, with its first lines: durable facts for
+    /// anyone working here. Keep it current with memory_page_set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::memory::memory_pages::MemoryPointer>,
     /// Skills: instructions for a kind of work, each with when to use it.
     /// Load the ones that fit your work with skill_get.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -806,7 +810,15 @@ pub(super) async fn project_open(
         };
         let repositories = if on("code") { repositories } else { Vec::new() };
         let modules_off = modules.off().map(|module| module.id.clone()).collect();
+        let memory = crate::memory::memory_pages::pointer_from_pool(
+            &state.pool,
+            crate::memory::memory_pages::MemoryFor::Space,
+            project_id,
+            principal.actor_id,
+        )
+        .await;
         Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
+            memory,
             project: ProjectHeader {
                 id: project_id.to_string(),
                 key,

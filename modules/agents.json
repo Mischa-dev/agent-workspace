@@ -43,7 +43,9 @@
     "connection_redeliver": "change",
     "schedule_list": "query",
     "schedule_create": "create",
-    "schedule_update": "change"
+    "schedule_update": "change",
+    "guard_set": "change",
+    "guard_list": "query"
   },
   "routes": [
     "/api/v1/agents/*",
@@ -57,7 +59,7 @@
     "/api/v1/host/*",
     "/api/v1/events*"
   ],
-  "events": { "emits": ["agent.paused", "agent.resumed", "account.managers_changed", "reply.requested", "reply.followup", "reply.cancelled", "schedule.due", "connection.push_disabled", "connection.changed", "schedule.changed"], "listens": ["message.created", "task.updated", "run.finished"] },
+  "events": { "emits": ["agent.paused", "agent.resumed", "account.managers_changed", "reply.requested", "reply.followup", "reply.cancelled", "schedule.due", "connection.push_disabled", "connection.changed", "schedule.changed", "guards.changed"], "listens": ["message.created", "task.updated", "run.finished"] },
   "notifications": ["connection_problem", "agent_unresponsive", "budget_warning"],
   "search": [],
   "automations": { "triggers": [], "actions": ["ask_agent"] },

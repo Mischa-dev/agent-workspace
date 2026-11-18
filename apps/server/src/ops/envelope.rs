@@ -87,6 +87,7 @@ pub fn schema(mut output: Value) -> Value {
             "replaySafe": { "type": "boolean" },
             "preview": { "type": "boolean" },
             "paused": { "const": false },
+            "pendingReview": { "const": false },
         },
         "required": ["outcome", "value"],
     })];
@@ -124,6 +125,28 @@ pub fn schema(mut output: Value) -> Value {
             "preview": { "type": "boolean" },
         },
         "required": ["outcome", "paused", "value"],
+    }));
+    // A change a team's guard holds for review (A2.27, R37) is still `ok`:
+    // it is kept with a request to the reviewers, and the same call made
+    // again once they allow it goes through.
+    branches.push(json!({
+        "type": "object",
+        "properties": {
+            "outcome": { "const": "ok" },
+            "pendingReview": { "const": true },
+            "value": {
+                "type": "object",
+                "properties": {
+                    "status": { "const": "pending_review" },
+                    "requestId": { "type": "string" },
+                },
+                "required": ["status", "requestId"],
+            },
+            "requestId": { "type": "string" },
+            "replayed": { "type": "boolean" },
+            "replaySafe": { "type": "boolean" },
+        },
+        "required": ["outcome", "pendingReview", "value"],
     }));
     let mut schema = json!({ "type": "object", "oneOf": branches });
     for (key, found) in definitions {

@@ -323,8 +323,10 @@ pub async fn run(reporter: &RunReporter, start: &AssistantStart) -> Outcome {
     let run_id = reporter.run_id();
     if let Err(error) = reporter
         .activities(
-            vec![json!({"id": format!("assistant-started:{run_id}"), "kind": "run_started",
-                        "payload": {}})],
+            vec![
+                json!({"id": format!("assistant-started:{run_id}"), "kind": "run_started",
+                        "payload": {}}),
+            ],
             &format!("assistant-started-{run_id}"),
         )
         .await
@@ -377,8 +379,10 @@ pub async fn run(reporter: &RunReporter, start: &AssistantStart) -> Outcome {
         for (index, (id, name, input)) in calls.into_iter().enumerate() {
             let _ = reporter
                 .activities(
-                    vec![json!({"id": format!("assistant-tool:{run_id}:{call}:{index}"),
-                                "kind": "tool_call", "payload": {"tool": name, "toolCallRef": id}})],
+                    vec![
+                        json!({"id": format!("assistant-tool:{run_id}:{call}:{index}"),
+                                "kind": "tool_call", "payload": {"tool": name, "toolCallRef": id}}),
+                    ],
                     &format!("assistant-tool-{run_id}-{call}-{index}"),
                 )
                 .await;
@@ -433,9 +437,11 @@ async fn fail(reporter: &RunReporter, reason: &str) -> Outcome {
     let run_id = reporter.run_id();
     let _ = reporter
         .activities(
-            vec![json!({"id": format!("assistant-failed:{run_id}"), "kind": "text_message",
+            vec![
+                json!({"id": format!("assistant-failed:{run_id}"), "kind": "text_message",
                         "payload": {"text": format!("I couldn't answer: {reason}"),
-                                    "inThread": true}})],
+                                    "inThread": true}}),
+            ],
             &format!("assistant-failed-{run_id}"),
         )
         .await;

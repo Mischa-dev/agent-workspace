@@ -96,6 +96,8 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("github_pull_request_workspace_links", WORKSPACE_ID),
     ("github_pull_requests", WORKSPACE_ID),
     ("github_webhook_deliveries", WORKSPACE_ID),
+    ("guard_holds", WORKSPACE_ID),
+    ("guards", WORKSPACE_ID),
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
     ("host_a2a_tasks", WORKSPACE_ID),
