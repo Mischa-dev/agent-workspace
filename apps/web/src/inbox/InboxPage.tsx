@@ -15,6 +15,7 @@ import {
   IconButton,
   Kbd,
   ListSkeleton,
+  Menu,
   PageHeader,
   SegmentedControl,
   countLabel,
@@ -35,7 +36,7 @@ import {
   answerRequest,
   approveOption,
   sectionsByNeed,
-  snoozeChoices,
+  snoozeMenu,
   unreadIds,
   useInbox,
   useUpdateInbox,
@@ -44,6 +45,7 @@ import {
   type InboxUpdate,
   type InboxUpdateResult,
   type InboxView,
+  type SnoozeTarget,
 } from './api'
 import { FAILURE_KINDS, KIND_ICON } from './kinds'
 import { NotificationDetail } from './NotificationDetail'
@@ -113,6 +115,8 @@ export function InboxPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [marking, setMarking] = useState(false)
+  // Rows picked for one action on them all (C2.10): x picks, Shift+J and Shift+K extend.
+  const [picked, setPicked] = useState<Set<string>>(() => new Set())
   // In Unread, rows you read stay put until you leave the view, so you can still act on them.
   const [kept, setKept] = useState<Map<string, InboxNotification>>(() => new Map())
   const listRef = useRef<HTMLDivElement>(null)
@@ -143,6 +147,7 @@ export function InboxPage() {
   // Keyboard order follows the grouped order on screen.
   const ordered = useMemo(() => sections.flatMap((section) => section.groups.flatMap((group) => group.items)), [sections])
   const selectedIndex = ordered.findIndex((item) => item.id === selectedId)
+  const pickedItems = useMemo(() => ordered.filter((item) => picked.has(item.id)), [ordered, picked])
   const selected = selectedIndex >= 0 ? ordered[selectedIndex] : null
   const canMarkAll =
     view !== 'archived' && view !== 'snoozed' && (category === 'all' ? unreadCount > 0 : notifications.some((item) => !item.read) || inbox.hasNextPage)
@@ -177,7 +182,16 @@ export function InboxPage() {
     setSelectedId(null)
     setDetailOpen(false)
     setKept(new Map())
+    setPicked(new Set())
   }
+
+  const togglePick = (item: InboxNotification, on?: boolean) =>
+    setPicked((current) => {
+      const next = new Set(current)
+      if (on ?? !next.has(item.id)) next.add(item.id)
+      else next.delete(item.id)
+      return next
+    })
 
   const undo = useCallback(
     (update: InboxUpdate) => postUpdate(update).then(() => invalidateInbox(queryClient)),
@@ -256,44 +270,70 @@ export function InboxPage() {
     [advance, change, keep, selectedId, undo, view],
   )
 
-  /** Archives every FYI notification on screen at once, with Undo. */
-  const archiveFyi = (items: InboxNotification[]) => {
-    const ids = items.map((item) => item.id)
-    if (ids.length === 0) return
-    setKept(new Map())
-    change(
-      { action: 'archive', ids },
-      {
-        success: (result) => ({
-          tone: 'success',
-          title: `Archived ${countLabel(result.updated.length || ids.length, 'notification')}`,
-          onUndo: () => undo({ action: 'restore', ids }),
-        }),
-        failed: 'They weren’t archived',
-      },
-    )
+  /** After rows leave the view, the selection moves to one that stays. */
+  const leaving = (ids: string[]) => {
     if (selected && ids.includes(selected.id)) {
-      const next = ordered.find((item) => !ids.includes(item.id))
+      const next = ordered.slice(selectedIndex + 1).find((item) => !ids.includes(item.id)) ?? ordered.find((item) => !ids.includes(item.id))
       setSelectedId(next ? next.id : null)
       if (!next) setDetailOpen(false)
     }
   }
 
-  const snooze = useCallback(
-    (item: InboxNotification, until: Date) => {
-      const ids = [item.id]
-      keep(item, null)
-      change(
-        { action: 'snooze', ids, snoozeUntil: until.toISOString() },
-        {
-          success: () => ({ tone: 'success', title: `Snoozed until ${atPhrase(until)}`, onUndo: () => undo({ action: 'unsnooze', ids }) }),
-          failed: 'It wasn’t snoozed',
-        },
-      )
-      if (item.id === selectedId && view !== 'snoozed') advance()
-    },
-    [advance, change, keep, selectedId, undo, view],
-  )
+  /** Archives (in Archived, restores) several at once, with Undo: the FYI section, or what's picked. */
+  const archiveMany = (items: InboxNotification[]) => {
+    const ids = items.map((item) => item.id)
+    if (ids.length === 0) return
+    const restoring = view === 'archived'
+    setKept(new Map())
+    setPicked(new Set())
+    change(
+      { action: restoring ? 'restore' : 'archive', ids },
+      {
+        success: (result) => ({
+          tone: 'success',
+          title: restoring
+            ? `Moved ${countLabel(result.updated.length || ids.length, 'notification')} back to the inbox`
+            : `Archived ${countLabel(result.updated.length || ids.length, 'notification')}`,
+          onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids }),
+        }),
+        failed: restoring ? 'They weren’t moved back' : 'They weren’t archived',
+      },
+    )
+    leaving(ids)
+  }
+
+  /** Marks what's picked read, or unread when it's all read already. */
+  const readMany = (items: InboxNotification[]) => {
+    const read = items.some((item) => !item.read)
+    for (const item of items) keep(item, read)
+    change(
+      { action: read ? 'read' : 'unread', ids: items.map((item) => item.id) },
+      { failed: read ? 'They weren’t marked read' : 'They weren’t marked unread' },
+    )
+  }
+
+  /** Snoozes one or several until a time, or until something new happens on each. */
+  const snoozeMany = (items: InboxNotification[], until: SnoozeTarget) => {
+    const ids = items.map((item) => item.id)
+    if (ids.length === 0) return
+    for (const item of items) keep(item, null)
+    setPicked(new Set())
+    const when = until === 'activity' ? 'something new happens' : atPhrase(until)
+    change(
+      until === 'activity' ? { action: 'snooze_until_activity', ids } : { action: 'snooze', ids, snoozeUntil: until.toISOString() },
+      {
+        success: () => ({
+          tone: 'success',
+          title: ids.length === 1 ? `Snoozed until ${when}` : `Snoozed ${countLabel(ids.length, 'notification')} until ${when}`,
+          onUndo: () => undo({ action: 'unsnooze', ids }),
+        }),
+        failed: ids.length === 1 ? 'It wasn’t snoozed' : 'They weren’t snoozed',
+      },
+    )
+    if (view !== 'snoozed') leaving(ids)
+  }
+
+  const snooze = (item: InboxNotification, until: SnoozeTarget) => snoozeMany([item], until)
 
   const unsnooze = (item: InboxNotification) => {
     change({ action: 'unsnooze', ids: [item.id] }, { success: () => ({ tone: 'success', title: 'Back in the inbox' }), failed: 'It’s still snoozed' })
@@ -360,7 +400,46 @@ export function InboxPage() {
       lastG.current = key === 'g' ? Date.now() : 0
       if (afterG) return
       const current = selected ?? undefined
-      if (key === 'j' || key === 'ArrowDown') {
+      const many = pickedItems.length > 0
+      if ((key === 'J' || key === 'K') && event.shiftKey) {
+        // Extends the pick from where you are, one row at a time.
+        event.preventDefault()
+        const from = current ?? ordered[0]
+        if (!from) return
+        const next = ordered[selectedIndex + (key === 'J' ? 1 : -1)]
+        togglePick(from, true)
+        if (next) {
+          togglePick(next, true)
+          select(next)
+        }
+      } else if (key === 'x') {
+        event.preventDefault()
+        const item = current ?? ordered[0]
+        if (item) {
+          togglePick(item)
+          if (!current) select(item)
+        }
+      } else if ((key === 'e' || key === 'y' || key === '#') && many) {
+        event.preventDefault()
+        archiveMany(pickedItems)
+      } else if (key === 'u' && many) {
+        event.preventDefault()
+        readMany(pickedItems)
+      } else if (key === 's' && (many || current) && view !== 'archived') {
+        // The snooze menu: for what's picked, or for the one you're on.
+        const trigger = document.querySelector<HTMLElement>(many ? '[data-snooze="many"]' : '[data-snooze="one"]')
+        if (trigger) {
+          event.preventDefault()
+          trigger.click()
+        }
+      } else if (key === 'r' && current?.replyConversationId && !current.request && view !== 'archived') {
+        // Reply in place: the preview opens with its reply box.
+        event.preventDefault()
+        select(current, true)
+        window.requestAnimationFrame(() => document.getElementById('inbox-reply')?.focus())
+      } else if (key === 'Escape' && many) {
+        setPicked(new Set())
+      } else if (key === 'j' || key === 'ArrowDown') {
         event.preventDefault()
         select(ordered[selectedIndex + 1] ?? ordered[selectedIndex] ?? ordered[0])
       } else if (key === 'k' || key === 'ArrowUp') {
@@ -385,10 +464,6 @@ export function InboxPage() {
       } else if (key === 'u' && current) {
         event.preventDefault()
         setRead(current, !current.read)
-      } else if (key === 's' && current && view !== 'snoozed' && view !== 'archived') {
-        event.preventDefault()
-        const tomorrow = snoozeChoices().find((choice) => choice.id === 'tomorrow')
-        if (tomorrow) snooze(current, tomorrow.until)
       } else if (key === 'I' && event.shiftKey && canMarkAll && !marking) {
         event.preventDefault()
         void markAllRead()
@@ -451,7 +526,9 @@ export function InboxPage() {
             <li><Kbd>Esc</Kbd> close the preview</li>
             <li><Kbd>e</Kbd> archive (restore in Archived)</li>
             <li><Kbd>u</Kbd> read or unread</li>
-            <li><Kbd>s</Kbd> snooze until tomorrow</li>
+            <li><Kbd>s</Kbd> snooze: later today, tomorrow, next week or when something new happens</li>
+            <li><Kbd>r</Kbd> reply to a mention or message</li>
+            <li><Kbd>x</Kbd> pick, <Kbd>Shift</Kbd>+<Kbd>J</Kbd> <Kbd>Shift</Kbd>+<Kbd>K</Kbd> pick the next or previous too; then <Kbd>e</Kbd>, <Kbd>u</Kbd> or <Kbd>s</Kbd> act on all picked</li>
             <li><Kbd>a</Kbd> approve</li>
             <li><Kbd>Shift</Kbd>+<Kbd>I</Kbd> {filter.markRead.toLowerCase()}</li>
           </ul>
@@ -475,12 +552,38 @@ export function InboxPage() {
           </EmptyState>
         ) : null}
 
+        {pickedItems.length > 0 ? (
+          <div aria-label="Picked notifications" className="aw-inbox__picked" role="toolbar">
+            <span className="aw-inbox__picked-count">{countLabel(pickedItems.length, 'picked', 'picked')}</span>
+            <Button disabled={mutation.isPending} icon={view === 'archived' ? 'undo' : 'archive'} onClick={() => archiveMany(pickedItems)} size="sm">
+              {view === 'archived' ? 'Restore' : 'Archive'}
+            </Button>
+            <Button disabled={mutation.isPending} onClick={() => readMany(pickedItems)} size="sm">
+              {pickedItems.some((item) => !item.read) ? 'Mark read' : 'Mark unread'}
+            </Button>
+            {view !== 'archived' ? (
+              <Menu
+                items={snoozeMenu((until) => snoozeMany(pickedItems, until))}
+                label="Snooze picked until"
+                trigger={
+                  <Button data-snooze="many" icon="clock" iconEnd="chevron-down" size="sm">
+                    Snooze
+                  </Button>
+                }
+              />
+            ) : null}
+            <Button onClick={() => setPicked(new Set())} size="sm" variant="ghost">
+              Clear
+            </Button>
+          </div>
+        ) : null}
+
         {notifications.length > 0 ? (
           <div className="aw-inbox__panes">
             <div aria-label="Notifications" className="aw-inbox__list" ref={listRef} role="list">
               {sections.map((section) =>
                 section.key === 'all' ? (
-                  <SubjectGroups groups={section.groups} heading="h2" key={section.key} onArchive={archive} onSelect={(item) => select(item, true)} selectedId={selectedId} view={view} />
+                  <SubjectGroups groups={section.groups} heading="h2" key={section.key} onArchive={archive} onPick={togglePick} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
                 ) : section.items.length === 0 && section.key === 'fyi' ? null : (
                   <section aria-labelledby={`inbox-${section.key}`} className="aw-inbox__section" key={section.key}>
                     <div className="aw-inbox__section-head">
@@ -489,7 +592,7 @@ export function InboxPage() {
                         <span className="aw-inbox__section-count">{section.items.length}</span>
                       </h2>
                       {section.key === 'fyi' && view === 'inbox' ? (
-                        <Button disabled={mutation.isPending} icon="archive" onClick={() => archiveFyi(section.items)} size="sm" variant="ghost">
+                        <Button disabled={mutation.isPending} icon="archive" onClick={() => archiveMany(section.items)} size="sm" variant="ghost">
                           Archive these
                         </Button>
                       ) : null}
@@ -509,7 +612,7 @@ export function InboxPage() {
                         )}
                       </p>
                     ) : (
-                      <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onSelect={(item) => select(item, true)} selectedId={selectedId} view={view} />
+                      <SubjectGroups groups={section.groups} heading="h3" onArchive={archive} onPick={togglePick} onSelect={(item) => select(item, true)} picked={picked} selectedId={selectedId} view={view} />
                     )}
                   </section>
                 ),
@@ -530,6 +633,9 @@ export function InboxPage() {
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}
                   onOpen={() => open(selected)}
+                  onReplied={() => {
+                    if (!selected.read) setRead(selected, true)
+                  }}
                   onSnooze={(until) => snooze(selected, until)}
                   onToggleRead={() => setRead(selected, !selected.read)}
                   onUnsnooze={() => unsnooze(selected)}
@@ -569,14 +675,18 @@ function SubjectGroups({
   groups,
   heading: Heading,
   onArchive,
+  onPick,
   onSelect,
+  picked,
   selectedId,
   view,
 }: {
   groups: ReturnType<typeof groupBySubject>
   heading: 'h2' | 'h3'
   onArchive: (item: InboxNotification) => void
+  onPick: (item: InboxNotification) => void
   onSelect: (item: InboxNotification) => void
+  picked: Set<string>
   selectedId: string | null
   view: InboxView
 }) {
@@ -593,7 +703,9 @@ function SubjectGroups({
               item={item}
               key={item.id}
               onArchive={() => onArchive(item)}
+              onPick={() => onPick(item)}
               onSelect={() => onSelect(item)}
+              picked={picked.has(item.id)}
               selected={item.id === selectedId}
               view={view}
             />
@@ -607,13 +719,17 @@ function SubjectGroups({
 function NotificationRow({
   item,
   onArchive,
+  onPick,
   onSelect,
+  picked,
   selected,
   view,
 }: {
   item: InboxNotification
   onArchive: () => void
+  onPick: () => void
   onSelect: () => void
+  picked: boolean
   selected: boolean
   view: InboxView
 }) {
@@ -622,10 +738,17 @@ function NotificationRow({
   return (
     <div
       aria-current={selected ? 'true' : undefined}
-      className={`aw-inbox__row${item.read ? '' : ' is-unread'}${selected ? ' is-selected' : ''}`}
+      className={`aw-inbox__row${item.read ? '' : ' is-unread'}${selected ? ' is-selected' : ''}${picked ? ' is-picked' : ''}`}
       data-notification={item.id}
       role="listitem"
     >
+      <input
+        aria-label={`Pick: ${item.title}`}
+        checked={picked}
+        className="aw-inbox__pick"
+        onChange={onPick}
+        type="checkbox"
+      />
       <button className="aw-inbox__row-main" onClick={onSelect} type="button">
         <span aria-hidden="true" className="aw-inbox__dot" />
         {item.actor ? (
@@ -647,6 +770,10 @@ function NotificationRow({
           <time className="aw-inbox__time" dateTime={item.snoozedUntil} title={`Back ${formatFullDate(item.snoozedUntil)}`}>
             <Icon name="clock" size={12} /> {backAt(item.snoozedUntil)}
           </time>
+        ) : item.untilActivity ? (
+          <span className="aw-inbox__time" title="Back when something new happens">
+            <Icon name="activity" size={12} /> when new
+          </span>
         ) : (
           <time className="aw-inbox__time" dateTime={item.at} title={formatFullDate(item.at)}>
             {formatRelativeShort(item.at)}

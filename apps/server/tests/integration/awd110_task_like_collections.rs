@@ -223,6 +223,32 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         vec!["Crash on save", "Login loops", "Typo in footer"]
     );
     assert_eq!(listed("Tasks").await, vec!["Plain task"]);
+    // The project's task list and board show every task, whatever
+    // collection it was made in.
+    let (status, page) = super::support::app::send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/work-items?limit=50"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+    let mut titles = page["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|task| task["title"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    titles.sort();
+    for title in ["Crash on save", "Plain task", "Water the plants"] {
+        assert!(
+            titles.iter().any(|seen| seen == title),
+            "{title}: {titles:?}"
+        );
+    }
 
     // task_open names the collection and its fields; task_update sets them.
     let opened = call("task_open", json!({"taskId": crash.to_string()})).await;

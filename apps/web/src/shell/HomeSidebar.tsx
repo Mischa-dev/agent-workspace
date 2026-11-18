@@ -1,8 +1,12 @@
+import { lazy, Suspense } from 'react'
+
 import { useWorkspaceHref } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { rowLabel, sidebarRows } from '../modules/registry'
 import { useInboxUnread } from './homeSpace'
 import { SidebarFrame, SidebarLink } from './SidebarParts'
+
+const SidebarSections = lazy(() => import('../conversations/SidebarSections'))
 
 /** The Home space's sidebar: your inbox, work and saved things across every project. Its rows are the modules' registrations (M1.4) and follow the workspace's layout. */
 export function HomeSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
@@ -25,6 +29,11 @@ export function HomeSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; o
           />
         ))}
       </ul>
+      {experience.shows('talk.sidebar_sections') ? (
+        <Suspense fallback={null}>
+          <SidebarSections onNavigate={onNavigate} />
+        </Suspense>
+      ) : null}
     </SidebarFrame>
   )
 }

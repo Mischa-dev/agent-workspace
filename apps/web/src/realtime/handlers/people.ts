@@ -1,6 +1,6 @@
 import { agentKeys } from '../../agents/keys'
 import { queryKeys } from '../../api/queryKeys'
-import { direct, inbox, payloadId, rail, type Handler } from './touches'
+import { direct, inbox, opAnswers, payloadId, rail, type Handler } from './touches'
 
 // Membership, notifications and account managers.
 
@@ -56,7 +56,13 @@ const customEmojiChanged: Handler = (event) => {
 /** One of your own lists changed on another device: that operation's queries. */
 const ownList =
   (op: string): Handler =>
-  () => [{ id: `op:${op}`, filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op } }]
+  () => [opAnswers(op)]
+
+/** A block, or a message request answered (C2.39): DM standings, blocks and the DM list. */
+const dmRulesChanged: Handler = () => [opAnswers('dm_standing_get'), opAnswers('account_block_list'), direct]
+
+/** Someone's profile or avatar changed: profiles and avatars read again. */
+const profileChanged: Handler = () => [opAnswers('profile_get'), opAnswers('profile_avatar_list')]
 
 /** Someone's status changed: the names that show it read it again. */
 const statusChanged: Handler = () => [{ id: 'statuses', filters: { queryKey: queryKeys.statuses } }]
@@ -69,5 +75,9 @@ export const peopleHandlers: Record<string, Handler> = {
   'custom_emoji.changed': customEmojiChanged,
   'message_draft.changed': ownList('message_draft_list'),
   'notification_keywords.changed': ownList('notification_keyword_list'),
+  'sidebar.changed': ownList('sidebar_list'),
+  'saved_searches.changed': ownList('saved_search_list'),
+  'dm_rules.changed': dmRulesChanged,
+  'account.profile_changed': profileChanged,
   'account.status.changed': statusChanged,
 }

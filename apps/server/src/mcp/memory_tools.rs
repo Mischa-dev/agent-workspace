@@ -71,6 +71,11 @@ pub(crate) fn writer(principal: &McpPrincipal) -> Writer {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.
+    /// Filters narrow it: from:@handle (or from:me), in:#channel,
+    /// in:@person (your DM with them), during:2026-10, on:2026-10-05,
+    /// before:/after: a day, has:file|link|reaction|pin|task,
+    /// is:thread|dm|unread|saved|mine, kind:message|task|page|... . A query
+    /// of filters alone lists matching messages, threads and files.
     pub query: String,
     /// Any of: messages, threads, tasks, pages, decisions, records, files, whiteboards, sheets. Default: all.
     pub kinds: Option<Vec<String>>,
@@ -118,6 +123,8 @@ pub(crate) struct SearchValue {
     pub results: Vec<SearchResult>,
     pub hint: &'static str,
 }
+
+const SEARCH_HINT: &str = "Open a message's conversation around it with conversation_read (aroundMessageId). Decisions and pages are the settled version; prefer them over old messages.";
 
 pub(crate) async fn search_tool(
     state: &AppState,
@@ -172,6 +179,16 @@ pub(crate) async fn search_tool(
     if !(1..=100).contains(&limit) {
         return ToolResult::invalid("limit", "Use a limit from 1 to 100.");
     }
+    let parsed = search::grammar::parse(&query);
+    if !parsed.errors.is_empty() {
+        return ToolResult::invalid(
+            "query",
+            format!(
+                "{} takes other values. Filters: from:@handle, in:#channel or in:@person, during:/on:/before:/after: YYYY-MM-DD, has:file|link|reaction|pin|task, is:thread|dm|unread|saved|mine, kind:<kind>.",
+                parsed.errors.join(", ")
+            ),
+        );
+    }
     let result = async {
         let projects = scope_projects(state, principal).await?;
         let author_id = match arguments.from.as_deref().map(str::trim) {
@@ -196,20 +213,42 @@ pub(crate) async fn search_tool(
             },
             None => None,
         };
+        let Some(resolved) = search::resolve(
+            &state.pool,
+            principal.actor_id,
+            &projects,
+            &parsed,
+            &kinds,
+            SearchFilter {
+                conversation_ids: conversation_id.map(|id| vec![id]),
+                author_ids: author_id.map(|id| vec![id]),
+                since,
+                until,
+                flags: Vec::new(),
+                confined: super::common::confined_project(principal).is_some(),
+            },
+        )
+        .await?
+        else {
+            return Ok(ToolResult::ok(SearchValue {
+                results: Vec::new(),
+                hint: SEARCH_HINT,
+            }));
+        };
+        if resolved.text.is_empty() && !resolved.filter.narrows() {
+            return Ok(ToolResult::invalid(
+                "query",
+                "Add words to search for, or a filter such as from: or in:.",
+            ));
+        }
         let hits = search::search(
             &state.pool,
             crate::addresses::Addresses::of(state),
             principal.actor_id,
             &projects,
-            &query,
-            &kinds,
-            &SearchFilter {
-                conversation_id,
-                author_id,
-                since,
-                until,
-                confined: super::common::confined_project(principal).is_some(),
-            },
+            &resolved.text,
+            &resolved.kinds,
+            &resolved.filter,
             limit,
         )
         .await?;
@@ -234,7 +273,7 @@ pub(crate) async fn search_tool(
                     url: public_url(state, &hit.path),
                 })
                 .collect(),
-            hint: "Open a message's conversation around it with conversation_read (aroundMessageId). Decisions and pages are the settled version; prefer them over old messages.",
+            hint: SEARCH_HINT,
         }))
     }
     .await;

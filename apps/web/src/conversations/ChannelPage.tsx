@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { callOp } from '../api/ops'
+import { toastError } from '../app/mutations'
 import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
@@ -11,11 +13,13 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useShellPage } from '../shell/shellStore'
-import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton } from '../ui'
+import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton, showToast } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
 import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
+import { ChannelMembers } from './ChannelMembers'
+import { ChannelTopicDialog } from './ChannelTopicDialog'
 import { ConversationHeader } from './ConversationHeader'
 import { useProjectConversationSidebar } from './hooks'
 import { useConversationTimeline } from './useConversationTimeline'
@@ -23,6 +27,7 @@ import { ReplyStatusList } from './ReplyStatus'
 import { groupReplyRequests } from './replyStatusModel'
 import { PinnedBar } from '../memory/ConversationMemory'
 import { useConversationTools } from '../later/useConversationTools'
+import { useSidebarPlacement } from './useSidebarPlacement'
 import { useMessageActions } from './MessageActions'
 import { useReplyTarget } from './replyTarget'
 import { StructuredComposer } from './StructuredComposer'
@@ -51,20 +56,31 @@ export function ChannelPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const includeArchived = searchParams.get('includeArchived') === 'true'
   const boardOpen = searchParams.get('threads') === 'all'
+  const membersParam = searchParams.get('members') === '1'
   const openThreadId = searchParams.get('thread')
   const setBoardOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
-    // The board and an open thread share the side panel: showing one closes the other.
+    // The board, the members and an open thread share the side panel: showing one closes the others.
+    next.delete('members')
     if (open) {
       next.set('threads', 'all')
       next.delete('thread')
     } else next.delete('threads')
     setSearchParams(next, { replace: true })
   }
+  const setMembersOpen = (open: boolean) => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('threads')
+    next.delete('thread')
+    if (open) next.set('members', '1')
+    else next.delete('members')
+    setSearchParams(next, { replace: true })
+  }
   // Threads open beside the channel, so you keep your place in it.
   const openThread = (threadId: string | null) => {
     const next = new URLSearchParams(searchParams)
     next.delete('threads')
+    next.delete('members')
     if (threadId) next.set('thread', threadId)
     else next.delete('thread')
     setSearchParams(next)
@@ -152,6 +168,35 @@ export function ChannelPage() {
   const name = validBoundary ? (page?.conversation.name ?? 'Channel') : 'Channel'
   usePageTitle(validBoundary ? `#${name}` : null)
   const archived = Boolean(page?.conversation.archivedAt)
+  const isPrivate = Boolean(validBoundary && page?.conversation.private)
+  const membersOpen = membersParam && isPrivate
+  // Its topic, whether you're in it, and what you may change (C2.7).
+  const details = useQuery({
+    queryKey: queryKeys.channelDetails(projectId, channelId),
+    queryFn: () => callOp('channel_get', { channelId }, { retries: 0 }),
+    enabled: Boolean(validBoundary && channelId),
+  })
+  const browseShown = useProjectExperience(projectId).shows('channel.browse')
+  // Starring it, or keeping it in a section you named (C2.9).
+  const placement = useSidebarPlacement(validBoundary ? channelId : '', useProjectExperience(projectId).shows('talk.sidebar_sections'))
+  const [topicOpen, setTopicOpen] = useState(false)
+  const [joining, setJoining] = useState(false)
+  const joinChannel = (join: boolean) => {
+    setJoining(true)
+    void callOp(join ? 'channel_join' : 'channel_leave', { channelId })
+      .then(async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.channelDetails(projectId, channelId) }),
+          refreshSidebar(),
+        ])
+        showToast({ tone: 'success', title: join ? `Joined #${name}` : `Left #${name}` })
+        if (!join && isPrivate) navigate(`/projects/${encodeURIComponent(projectId)}`)
+      })
+      .catch((reason: unknown) => toastError(join ? `You didn’t join #${name}` : `You didn’t leave #${name}`, reason))
+      .finally(() => setJoining(false))
+  }
+  const topic = details.data?.topic ?? null
+  const notJoined = Boolean(details.data && !details.data.joined && !details.data.archived && !isPrivate)
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
   // A layout without threads keeps the threads already here reachable but doesn't offer new ones.
   const threadsShown = useProjectExperience(projectId).shows('talk.threads')
@@ -241,6 +286,14 @@ export function ChannelPage() {
                 threadId={openThreadId}
                 viewer={viewer}
               />
+            ) : membersOpen ? (
+              <ChannelMembers
+                channelId={channelId}
+                onClose={() => setMembersOpen(false)}
+                onLeft={() => navigate(`/projects/${encodeURIComponent(projectId)}`)}
+                projectId={projectId}
+                viewerId={viewer.actorId}
+              />
             ) : boardOpen ? (
               <ThreadBoard
                 conversationId={channelId}
@@ -250,9 +303,9 @@ export function ChannelPage() {
                 projectId={projectId}
               />
             ) : undefined,
-          contextKey: openThreadId ?? (boardOpen ? 'threads' : undefined),
+          contextKey: openThreadId ?? (membersOpen ? 'members' : boardOpen ? 'threads' : undefined),
           mainClassName: 'aw-main--conversation',
-          onContextDismiss: () => (openThreadId ? openThread(null) : setBoardOpen(false)),
+          onContextDismiss: () => (openThreadId ? openThread(null) : membersOpen ? setMembersOpen(false) : setBoardOpen(false)),
           project: project.data,
           selectedChannelId: validBoundary ? channelId : undefined,
         }
@@ -283,6 +336,15 @@ export function ChannelPage() {
       <ConversationHeader
         actions={
           <>
+            {isPrivate ? (
+              <IconButton
+                icon="users"
+                label={membersOpen ? 'Hide members' : 'Members'}
+                onClick={() => setMembersOpen(!membersOpen)}
+                pressed={membersOpen}
+                side="bottom"
+              />
+            ) : null}
             {threadsShown || boardOpen ? (
               <IconButton
                 icon="list"
@@ -295,9 +357,12 @@ export function ChannelPage() {
             {canStartThread ? <IconButton icon="messages" label="Start a thread" onClick={() => startThread(null)} side="bottom" /> : null}
           </>
         }
-        icon="hash"
+        icon={isPrivate ? 'lock' : 'hash'}
         menu={[
           ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
+          ...(details.data?.canEdit ? [{ label: topic ? 'Change topic' : 'Set a topic', icon: 'pencil' as const, onSelect: () => setTopicOpen(true) }] : []),
+          ...(browseShown && details.data?.joined ? [{ label: 'Leave channel', icon: 'arrow-left' as const, onSelect: () => joinChannel(false) }] : []),
+          ...placement.menu,
           ...tools.levelMenu,
           { separator: true as const },
           {
@@ -314,9 +379,36 @@ export function ChannelPage() {
               ]
             : []),
         ]}
+        subtitle={topic ?? undefined}
         tag={tools.levelMark}
         title={name}
       />
+      {placement.dialog}
+      {topicOpen && details.data ? (
+        <ChannelTopicDialog
+          autoJoin={details.data.autoJoin}
+          canManage={details.data.canManage}
+          channelId={channelId}
+          isPrivate={isPrivate}
+          onClose={() => setTopicOpen(false)}
+          open
+          projectId={projectId}
+          topic={topic ?? ''}
+          version={details.data.version}
+        />
+      ) : null}
+      {notJoined && browseShown ? (
+        <Banner
+          action={
+            <Button busy={joining} onClick={() => joinChannel(true)} size="sm" variant="primary">
+              Join channel
+            </Button>
+          }
+          title={`You’re not in #${name}.`}
+        >
+          Join it to keep it in your sidebar. You can read and post here either way.
+        </Banner>
+      ) : null}
       {tools.banner}
       {validBoundary ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
 
@@ -354,7 +446,11 @@ export function ChannelPage() {
               </>
             }
           >
-            {archived ? null : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
+            {archived
+              ? null
+              : isPrivate
+                ? 'This channel is private: only its members can find it and read it. Mention someone with @ to ask them directly.'
+                : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
           </ConversationIntro>
         ) : null}
         <TimelineEntries

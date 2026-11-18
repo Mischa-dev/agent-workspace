@@ -11,6 +11,7 @@ import {
   references,
   search,
   sidebar,
+  sidebarSections,
   threads,
   type Handler,
   type HandlerContext,
@@ -49,6 +50,7 @@ const created: Handler = (event, context) => {
   const kind = typeof event.payload.kind === 'string' ? event.payload.kind : null
   return [
     sidebar(event.projectId),
+    sidebarSections,
     rail,
     conversationThing(id),
     ...when(mayBeThread(event, context, kind), threads(event.projectId)),
@@ -63,6 +65,7 @@ const updated: Handler = (event, context) => {
   return [
     conversation(event.projectId, id),
     sidebar(event.projectId),
+    sidebarSections,
     conversationThing(id),
     inbox,
     ...when(mayBeThread(event, context), threads(event.projectId)),
@@ -82,6 +85,7 @@ const messageCreated: Handler = (event, context) => {
   return [
     conversation(event.projectId, id),
     sidebar(event.projectId),
+    sidebarSections,
     rail,
     conversationThing(id),
     references,
@@ -101,6 +105,7 @@ const messageUpdated: Handler = (event, context) => {
     conversation(event.projectId, id),
     // Thread names come from the message they started from.
     sidebar(event.projectId),
+    sidebarSections,
     threads(event.projectId),
     { id: `pins:${event.projectId}:${id}`, filters: { queryKey: memoryKeys.pins(event.projectId, id) } },
     { id: `decisions:${event.projectId}`, filters: { queryKey: memoryKeys.decisions(event.projectId) } },
@@ -119,6 +124,7 @@ const reactions: Handler = (event) => (event.conversationId ? [conversation(even
 /** The viewer read up to somewhere: unread marks. */
 const readState: Handler = (event, context) => [
   sidebar(event.projectId),
+    sidebarSections,
   rail,
   ...when(mayBeThread(event, context), threads(event.projectId)),
   ...when(mayBeDirect(event, context), direct),
@@ -131,7 +137,8 @@ const readState: Handler = (event, context) => [
  */
 const memberRemoved: Handler = (event) => {
   const id = payloadId(event, 'conversationId', 'conversation_id')
-  return [rail, direct, sidebar(event.projectId), ...(id ? [conversationThing(id)] : [])]
+  return [rail, direct, sidebar(event.projectId),
+    sidebarSections, ...(id ? [conversationThing(id)] : [])]
 }
 
 export const conversationHandlers: Record<string, Handler> = {

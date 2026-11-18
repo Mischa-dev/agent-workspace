@@ -45,6 +45,10 @@ pub(crate) struct ConversationValue {
     /// existed and was returned instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<bool>,
+    /// A private channel (or a thread in one): its members only. Left
+    /// out when it isn't.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 async fn conversation_value(
@@ -76,6 +80,7 @@ async fn conversation_value(
         kind: view.kind.clone(),
         name: view.name.clone(),
         archived: view.archived_at.is_some(),
+        private: view.private,
         status: view.thread_status.clone(),
         outcome: view.thread_outcome.clone(),
         version: view.version,
@@ -112,6 +117,15 @@ pub(crate) struct ChannelCreateArguments {
     pub project_id: String,
     /// The channel's name, such as "design" or "releases".
     pub name: String,
+    /// true for a private channel: only its members see it, starting with
+    /// you. Add people with conversation_members.
+    #[serde(default)]
+    pub private: Option<bool>,
+    /// A public channel: false to have only you join it now, with others
+    /// joining as they choose (channel_join). Left out, everyone in the
+    /// project joins it, and so does everyone who arrives later.
+    #[serde(default)]
+    pub auto_join: Option<bool>,
 }
 
 pub(crate) async fn channel_create(
@@ -161,10 +175,12 @@ pub(crate) async fn channel_create(
             SELECT id FROM conversations
             WHERE project_id = $1 AND kind = 'channel' AND archived_at IS NULL
               AND lower(name) = lower($2)
+              AND conversation_visible_to(id, $3)
             "#,
         )
         .bind(project_id)
         .bind(&name)
+        .bind(principal.actor_id)
         .fetch_optional(&mut *transaction)
         .await?
         {
@@ -175,8 +191,17 @@ pub(crate) async fn channel_create(
             ));
         }
         mark_via(&mut transaction, principal).await?;
-        let channel_id =
-            insert_channel(&mut transaction, project_id, principal.actor_id, &name).await?;
+        let channel_id = insert_channel(
+            &mut transaction,
+            project_id,
+            principal.actor_id,
+            &name,
+            crate::conversations::NewChannel {
+                private: arguments.private.unwrap_or(false),
+                auto_join: arguments.auto_join.unwrap_or(true),
+            },
+        )
+        .await?;
         insert_audit(
             &mut transaction,
             principal,

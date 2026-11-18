@@ -133,7 +133,8 @@ function normalizeSavedMark(value: unknown): SavedMark | null {
   return typeof saved.id === 'string' ? { id: saved.id, remindAt: nullableString(saved.remindAt) } : null
 }
 
-const REACTION_NAME = /^[a-z0-9_]{1,32}$/
+// A standard emoji's name, or a custom emoji's id.
+const REACTION_NAME = /^(?:[a-z0-9_]{1,32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 const MAX_REACTION_ACTORS = 20
 
 function normalizeReaction(value: unknown): MessageReaction | null {

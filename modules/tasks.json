@@ -201,7 +201,18 @@
       "k:*"
     ],
     "shortcuts": ["create-task", "go-my-work", "go-tasks", "go-board"],
-    "slash": ["task"],
+    "slash": [
+      {
+        "name": "task",
+        "usage": "title",
+        "description": "Create a task in this project",
+        "icon": "work",
+        "operation": "task_create",
+        "args": "text",
+        "field": "title",
+        "where": "space"
+      }
+    ],
     "setup": ["tasks"]
   },
   "settings": [],

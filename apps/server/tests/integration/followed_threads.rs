@@ -12,13 +12,22 @@ use super::support::{
 };
 
 async fn followed(app: &axum::Router, browser: &Browser, workspace: Uuid) -> Vec<Value> {
+    followed_with(app, browser, workspace, json!({})).await
+}
+
+async fn followed_with(
+    app: &axum::Router,
+    browser: &Browser,
+    workspace: Uuid,
+    input: Value,
+) -> Vec<Value> {
     let (status, listed) = send(
         app,
         browser.request(
             "POST",
             &format!("/api/v2/w/{workspace}/ops/thread_followed_list"),
             Some(&Uuid::now_v7().to_string()),
-            json!({}),
+            input,
         ),
     )
     .await;
@@ -131,6 +140,26 @@ async fn followed_threads_are_the_ones_you_can_read() {
     assert_eq!(launch_row["outcome"], "Ship on Friday");
     assert_eq!(launch_row["parentName"], "general");
     assert_eq!(listed[0]["unread"], true, "Lena's reply is new to Nina");
+
+    // Open leaves out a settled thread, and a discussion's Resolved settles
+    // one too.
+    let (status, resolved) = send(
+        app,
+        lena.browser.request(
+            "PATCH",
+            &format!("/api/v1/threads/{budget}"),
+            Some("followed-resolve"),
+            json!({"status": "Resolved"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{resolved}");
+    let open = followed_with(app, &nina.browser, workspace, json!({"openOnly": true})).await;
+    let open = open
+        .iter()
+        .map(|thread| thread["id"].as_str().expect("id").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(open, vec![private.clone()], "only Gift is open");
 
     // Out of OTHER and out of the group, Nina follows only Launch.
     sqlx::query(

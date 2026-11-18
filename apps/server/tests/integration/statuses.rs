@@ -110,6 +110,46 @@ async fn statuses_show_where_they_belong_and_clear_themselves() {
         .await
         .expect("membership");
     }
+    // A change to the owner's account-wide status, made from this
+    // workspace, reaches the other workspace's spaces too, where it shows.
+    let there_space = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO projects (id, organization_id, project_key, name) VALUES ($1, $2, 'ELSE', 'Elsewhere')",
+    )
+    .bind(there_space)
+    .bind(elsewhere)
+    .execute(pool)
+    .await
+    .expect("space elsewhere");
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES (gen_random_uuid(), $1, $2, 'member', 'Owner', 'owner')",
+    )
+    .bind(there_space)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("member elsewhere");
+    let again = tool(
+        app,
+        &desk.token,
+        &desk.session,
+        "status_set",
+        json!({"text": "In a meeting", "emoji": "📅", "workspace": world.organization}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let heard_there = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'account.status.changed' \
+         AND payload->>'accountId' = $1 AND notice.project_id = $2",
+    ))
+    .bind(owner.to_string())
+    .bind(there_space)
+    .fetch_one(pool)
+    .await
+    .expect("events elsewhere");
+    assert!(heard_there >= 1, "the other workspace didn't hear of it");
+
     let mut connection = pool.acquire().await.expect("connection");
     let there = statuses::shown_in(&mut connection, elsewhere, &[owner, rook.actor])
         .await

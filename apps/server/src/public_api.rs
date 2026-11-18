@@ -357,13 +357,16 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
-    for branch in branches {
+    for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
             // A paused account's answer (A2.10) is the same for every
             // operation: shared too.
             Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
-            Some("ok") => continue,
+            Some("ok") => {
+                share_ok_envelope(branch, components);
+                continue;
+            }
             Some("started") => "Started".to_owned(),
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
@@ -384,6 +387,65 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         if shared == branch {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
+    }
+    // The shared branches together (paused, started, each refusal) are the
+    // same list for most operations: one `oneOf` of them, named once.
+    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+        .drain(..)
+        .partition(|branch| !is_shared_branch(branch));
+    if shared.len() < 2 {
+        branches.extend(kept);
+        branches.extend(shared);
+        return;
+    }
+    let others = json!({ "oneOf": shared });
+    let key = (1..)
+        .map(|index| match index {
+            1 => "NotOk".to_owned(),
+            index => format!("NotOk{index}"),
+        })
+        .find(|key| components.get(key).is_none_or(|known| *known == others))
+        .unwrap_or_default();
+    components.entry(key.clone()).or_insert(others);
+    branches.extend(kept);
+    branches.push(json!({ "$ref": format!("#/components/schemas/{key}") }));
+}
+
+/// A branch that is only a reference to a shared one (not the `ok` branch,
+/// which carries the operation's own value beside its reference).
+fn is_shared_branch(branch: &Value) -> bool {
+    branch
+        .as_object()
+        .is_some_and(|object| object.len() == 1 && object.contains_key("$ref"))
+}
+
+/// The `ok` branch's envelope (everything but its `value`) is the same for
+/// every operation: written once as `Ok` and referenced beside the
+/// operation's own `value`, which keeps the document small as operations
+/// are added.
+fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
+    let Some(object) = branch.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Object(properties)) = object.get("properties") else {
+        return;
+    };
+    let Some(value) = properties.get("value").cloned() else {
+        return;
+    };
+    let mut envelope = object.clone();
+    if let Some(Value::Object(properties)) = envelope.get_mut("properties") {
+        properties.remove("value");
+    }
+    let envelope = Value::Object(envelope);
+    let shared = components
+        .entry("Ok".to_owned())
+        .or_insert_with(|| envelope.clone());
+    if *shared == envelope {
+        *branch = json!({
+            "$ref": "#/components/schemas/Ok",
+            "properties": { "value": value },
+        });
     }
 }
 
@@ -502,7 +564,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
-        let output = tool
+        let (result, output) = tool
             .output_schema
             .as_ref()
             .map(|schema| {
@@ -522,24 +584,22 @@ pub(crate) fn document() -> Value {
                         key
                     }
                 };
-                json!({ "$ref": format!("#/components/schemas/{key}") })
+                let reference = json!({ "$ref": format!("#/components/schemas/{key}") });
+                (key, reference)
             })
-            .unwrap_or_else(|| json!({ "type": "object" }));
-        // The result, for success and refusal alike: one response per
-        // operation that its 200 and its refusing statuses all point at, so
-        // the document stays small as tools are added. The introduction says
-        // what each status means.
-        let mut responses = Map::new();
-        let result = format!("{}Result", pascal(&name));
-        refusals.insert(
-            result.clone(),
+            .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
+        // The result, and a refusal (the same result with its `outcome`),
+        // are one response that 200 and the refusing statuses point at,
+        // shared by every operation with that result, so the document stays
+        // small as tools are added. The introduction says what each status
+        // means.
+        refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                // Short: it repeats once per operation. The introduction
-                // says what each status and outcome means.
-                "description": "The result; its `outcome` says how it went.",
+                "description": "The result, or a refusal: see its `outcome`.",
                 "content": { "application/json": { "schema": output } },
-            }),
-        );
+            })
+        });
+        let mut responses = Map::new();
         let own = json!({ "$ref": format!("#/components/responses/{result}") });
         responses.insert("200".to_owned(), own.clone());
         // The refusing statuses (403, 404, 409, 422, 503) share it through
@@ -654,6 +714,9 @@ mod tests {
         // Raised from 768 KiB with AWD-62's question tools; past this, serve
         // it compressed or slim the result schemas rather than raise it again.
         let size = serde_json::to_vec(&document).expect("serialize").len();
+        if std::env::var_os("SHOW_PUBLIC_API_SIZE").is_some() {
+            eprintln!("the public API document is {size} bytes");
+        }
         assert!(size < 896 * 1024, "the document is {size} bytes");
         let mut references = Vec::new();
         collect_refs(&document, &mut references);

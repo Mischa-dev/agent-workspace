@@ -91,3 +91,15 @@ export const search: Touch = { id: 'search', filters: { queryKey: queryKeys.sear
 
 /** Tasks across projects (My work). */
 export const myWork: Touch = { id: 'my-work', filters: { queryKey: queryKeys.myWork } }
+
+/** An operation's answers, wherever they're cached (`op` keys name the operation third). */
+export const opAnswers = (op: string): Touch => ({
+  id: `op:${op}`,
+  filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op },
+})
+
+/** Your sidebar sections (C2.9): they show unread and mentions for the conversations in them, wherever they live. */
+export const sidebarSections: Touch = opAnswers('sidebar_list')
+
+/** A dashboard tile over tasks counts them. */
+export const dashboards: Touch = opAnswers('dashboard_get')

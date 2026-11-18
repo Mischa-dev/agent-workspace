@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { useProjects } from '../projects/hooks'
 import { useShellPage } from '../shell/shellStore'
@@ -10,12 +11,15 @@ import {
   Banner,
   Button,
   EmptyState,
+  Icon,
+  IconButton,
   ListSkeleton,
   PageHeader,
   Row,
   RowList,
   StatusChip,
   TextField,
+  showToast,
   describeLoadError,
   formatFullDate,
   formatRelative,
@@ -23,6 +27,8 @@ import {
   withEllipses,
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
+import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
 
 type SearchHit = {
@@ -67,6 +73,16 @@ function titleAndStatus(hit: SearchHit): { title: string; status: string | null 
   return { title: hit.title, status: null }
 }
 
+/** Filters offered as one click under the box, when they aren't in the query already. */
+const QUICK_FILTERS = [
+  { token: 'from:me', label: 'From you' },
+  { token: 'is:dm', label: 'In DMs' },
+  { token: 'is:unread', label: 'Unread' },
+  { token: 'is:saved', label: 'Saved' },
+  { token: 'has:file', label: 'Has a file' },
+  { token: 'has:link', label: 'Has a link' },
+]
+
 const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
 const START = '\u0001'
@@ -105,8 +121,11 @@ export function SearchPage() {
       if (projectId) search.set('projectId', projectId)
       return requestJson<{ hits: SearchHit[] }>(`/api/v1/search?${search}`)
     },
-    enabled: query.trim().length > 0,
+    // A filter typed wrong is shown on its chip, not sent.
+    enabled: query.trim().length > 0 && parseSearchQuery(query).errors.length === 0,
+    retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })
+  const wrong = parseSearchQuery(query).errors
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const next = new URLSearchParams(params)
@@ -117,6 +136,24 @@ export function SearchPage() {
   const resultsRef = useRef<HTMLDivElement>(null)
   useListKeys(resultsRef, '.aw-row__link')
   useShellPage({ mainClassName: 'aw-main--page', project: scope })
+  const filters = queryFilters(query)
+  const savedSearches = useSavedSearches()
+  const setSaved = useSetSavedSearch()
+  const saved = savedSearches.data?.searches ?? []
+  const savedHere = saved.find((search) => search.query.trim() === query.trim()) ?? null
+  const failed = (title: string) => (reason: unknown) =>
+    showToast({ tone: 'danger', title, description: reason instanceof Error ? reason.message : 'Try again.' })
+  const saveThis = () =>
+    void setSaved({ name: savedSearchName(query), query: query.trim() }).then(
+      () => showToast({ tone: 'success', title: 'Search saved', description: 'It’s under Saved searches here and in the command menu.' }),
+      failed('The search wasn’t saved'),
+    )
+  const forget = (id: string) => void setSaved({ savedSearchId: id, delete: true }).catch(failed('The saved search wasn’t removed'))
+  const searchFor = (next: string) => {
+    const search = new URLSearchParams(params)
+    search.set('q', next)
+    setParams(search)
+  }
   const searchEverything = () => {
     const next = new URLSearchParams(params)
     next.delete('projectId')
@@ -133,13 +170,63 @@ export function SearchPage() {
             id="search-query"
             maxLength={200}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="theming decision, AWD-12, “exact phrase”…"
+            placeholder="theming decision, AWD-12, “exact phrase”, from:@name…"
             value={draft}
           />
           <Button disabled={!draft.trim()} icon="search" type="submit" variant="primary">
             Search
           </Button>
         </form>
+        <div className="aw-search__filters">
+          {filters.length ? (
+            <ul aria-label="Filters in this search" className="aw-search__chips">
+              {filters.map((filter) => (
+                <li className={filter.ok ? 'aw-search__chip' : 'aw-search__chip aw-search__chip--wrong'} key={filter.token}>
+                  <span title={filter.ok ? filter.token : 'This filter takes other values.'}>{describeFilter(filter)}</span>
+                  <button aria-label={`Remove filter: ${describeFilter(filter)}`} onClick={() => searchFor(withoutToken(query, filter.token))} type="button">
+                    <Icon name="x" size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {query.trim()
+            ? QUICK_FILTERS.filter((quick) => !filters.some((filter) => filter.token.toLowerCase() === quick.token)).map((quick) => (
+                <Button icon="plus" key={quick.token} onClick={() => searchFor(withToken(query, quick.token))} size="sm" variant="ghost">
+                  {quick.label}
+                </Button>
+              ))
+            : null}
+          {query.trim() ? (
+            savedHere ? (
+              <Button icon="star" onClick={() => forget(savedHere.id)} size="sm" variant="ghost">
+                Saved · remove
+              </Button>
+            ) : (
+              <Button icon="star" onClick={saveThis} size="sm" variant="secondary">
+                Save search
+              </Button>
+            )
+          ) : null}
+        </div>
+        {!query.trim() && saved.length ? (
+          <section aria-label="Saved searches" className="aw-search__saved">
+            <h2>Saved searches</h2>
+            <ul>
+              {saved.map((search) => (
+                <li key={search.id}>
+                  <Link to={`?${new URLSearchParams({ q: search.query })}`}>{search.name}</Link>
+                  {search.name !== search.query ? <code>{search.query}</code> : null}
+                  <IconButton icon="x" label={`Remove saved search ${search.name}`} onClick={() => forget(search.id)} size="sm" />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <p className="aw-search__help">
+          Narrow with <code>from:@name</code>, <code>in:#channel</code>, <code>during:2026-10</code>, <code>has:link</code>, <code>is:unread</code> or{' '}
+          <code>kind:task</code>.
+        </p>
         {projectId ? (
           <p className="aw-search__scope">
             <span>
@@ -151,6 +238,11 @@ export function SearchPage() {
           </p>
         ) : null}
         <div className="aw-search__results" ref={resultsRef}>
+          {wrong.length ? (
+            <Banner role="note" title={`${wrong.join(', ')} isn’t a filter this search knows.`} tone="warning">
+              Fix it or take it out to search. The filters are from:, in:, during:, on:, before:, after:, has:, is: and kind:.
+            </Banner>
+          ) : null}
           {results.isLoading ? <ListSkeleton label="Searching" rows={3} /> : null}
           {results.isError ? (
             <Banner onRetry={() => void results.refetch()} tone="danger" title="Search didn’t work.">
@@ -169,7 +261,7 @@ export function SearchPage() {
               icon="search"
               title="Nothing found"
             >
-              Try fewer or different words.
+              {filters.length ? 'Try fewer filters or different words.' : 'Try fewer or different words.'}
             </EmptyState>
           ) : null}
           {results.data && results.data.hits.length > 0 ? (
