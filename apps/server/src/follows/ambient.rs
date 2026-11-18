@@ -207,10 +207,8 @@ impl Operation for ConversationAgentSettingsSet {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Set ambient mode";
     const DESCRIPTION: &'static str = "Turn ambient mode on or off for an account in a channel \
-        or thread: when on, it hears every new message there and each one nobody prompted \
-        invites it to reply (an optional reply request), unless it already has one open there \
-        or answered within replyCooldownSeconds. It answers with reply_send or reply_pass. \
-        conversation_agent_settings_list shows who could be and who is.";
+        or thread: when on, each new message nobody prompted invites it to reply (an optional \
+        reply request), unless it answered within replyCooldownSeconds.";
     const EMITS: &'static [&'static str] = &["conversation.updated"];
 
     type Input = ConversationAgentSettingsSetInput;

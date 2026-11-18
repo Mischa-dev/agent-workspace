@@ -74,9 +74,8 @@ impl Operation for FollowSet {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Follow";
     const DESCRIPTION: &'static str = "Follow a space, task, page, sheet, record, whiteboard or \
-        conversation to hear about it in your events and notifications: level changes hears \
-        its updates, everything adds its comments and messages. on: false stops. Following \
-        never shows you more than you can already see. follow_list lists what you follow.";
+        conversation to hear about it: level changes hears its updates, everything adds its \
+        comments and messages. on: false stops.";
     const EMITS: &'static [&'static str] = &["follows.changed"];
 
     type Input = FollowSetInput;

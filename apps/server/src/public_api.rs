@@ -357,10 +357,23 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
-            // A paused account's answer (A2.10) is the same for every
-            // operation: shared too.
-            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
-            Some("ok") => continue,
+            // A call set aside, by a paused account (A2.10) or a team's
+            // guard (A2.27), is answered the same for every operation:
+            // shared too.
+            Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
+            // The flags that keep the `ok` branch apart from SetAside for
+            // a validator are left out here, where every operation would
+            // repeat them: a reader tells the two apart by SetAside's
+            // `paused` or `pendingReview`.
+            Some("ok") => {
+                if let Some(properties) =
+                    branch.get_mut("properties").and_then(Value::as_object_mut)
+                {
+                    properties.remove("paused");
+                    properties.remove("pendingReview");
+                }
+                continue;
+            }
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
             // all: shared too, under the first name free or already

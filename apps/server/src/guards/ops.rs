@@ -71,8 +71,7 @@ pub struct GuardWriteInput {
     /// The guard to change; left out, a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_id: Option<IdRef>,
-    /// Only changes in this space; left out, the whole workspace. Fixed
-    /// once the guard is made.
+    /// Only changes in this space; left out, the whole workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<IdRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,12 +82,10 @@ pub struct GuardWriteInput {
     /// Operation names it watches, such as message_send; empty: every change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<Vec<String>>,
-    /// Kinds of thing it watches, such as conversation, task, page or
-    /// space; empty: any.
+    /// Kinds of thing it watches, such as task; empty: any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_kinds: Option<Vec<String>>,
-    /// Words or phrases it looks for in the change's text, any case; empty:
-    /// any change.
+    /// Words it looks for in the change's text; empty: any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terms: Option<Vec<String>>,
     /// The accounts it watches; empty: everyone.
@@ -151,11 +148,9 @@ impl Operation for GuardWrite {
     const PERMISSION: Option<Perm> = Some(Perm::SettingsManage);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Set a guard";
-    const DESCRIPTION: &'static str = "Make, change or remove one of the workspace's guards: a \
-        rule on the changes accounts make, by operation, kind of thing, account and words in \
-        the text. deny stops a matching change; review holds it for reviewers, and the caller \
-        is answered status pending_review with the request to wait on, then calls again once \
-        allowed. Applies to people and agents alike.";
+    const DESCRIPTION: &'static str = "Make, change or remove a guard: a rule on the changes \
+        accounts make. deny stops a match; review holds it, answering status pending_review \
+        with the request to wait on: call again once it is allowed.";
     const EMITS: &'static [&'static str] = &["guards.changed"];
 
     type Input = GuardWriteInput;
@@ -382,9 +377,8 @@ impl Operation for GuardList {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "Guards";
-    const DESCRIPTION: &'static str = "The workspace's guards: the rules that stop changes or \
-        hold them for review, and whom they watch. Anyone in the workspace can read them, so \
-        nobody is surprised by one; guard_set changes them.";
+    const DESCRIPTION: &'static str = "The workspace's guards: rules that stop changes or hold \
+        them for review. Anyone in the workspace can read them.";
 
     type Input = GuardListInput;
     type Output = GuardListOutput;

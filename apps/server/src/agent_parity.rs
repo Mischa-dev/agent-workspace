@@ -1035,6 +1035,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/runs",
+            Plumbing("a host handing over a run it started itself, with its own credential"),
+        ),
+        (
+            Post,
             "/api/v1/host/runs/{run_id}/model",
             Plumbing(
                 "a built-in assistant run asking for its next model turn, with its own credential",
