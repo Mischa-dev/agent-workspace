@@ -24,7 +24,12 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use super::upkeep::FACT_DAYS;
-use crate::{AppState, error::AppError, files::store::FileStore, jobs::JobRegistry};
+use crate::{
+    AppState,
+    error::AppError,
+    files::store::{FileStore, Readers},
+    jobs::JobRegistry,
+};
 
 pub const ARCHIVE_KIND: &str = "events.archive";
 
@@ -139,7 +144,8 @@ pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Resul
     let mut things = rows.iter().filter_map(|row| row.2).collect::<Vec<_>>();
     things.sort_unstable();
     things.dedup();
-    let store = FileStore::for_uploads(state, &mut connection, workspace).await?;
+    let store =
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Workspace).await?;
     connection.commit().await?;
 
     let mut lines = Vec::new();

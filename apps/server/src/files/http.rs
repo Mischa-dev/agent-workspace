@@ -44,7 +44,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/files/{id}", delete(remove))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
-        .route("/api/v1/files/links/{token}", get(super::links::open_link))
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,10 +100,7 @@ async fn upload_to_conversation(
     let row = store_body(
         &state,
         principal.actor_id,
-        Destination::Conversation {
-            project_id: conversation.project_id,
-            conversation_id: conversation.id,
-        },
+        Destination::conversation(&conversation),
         query.name,
         declared_type(&headers),
         body,
@@ -234,7 +230,7 @@ async fn content(
         let store = FileStore::resolve(&state, &row.store_id).await?;
         if let Some(url) = store.presign_get(
             &row.storage_key,
-            super::links::DEFAULT_TTL,
+            super::link::DEFAULT_TTL,
             served_content_type(&row),
             &content_disposition(&row.name, true),
         )? {

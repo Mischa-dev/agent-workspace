@@ -20,7 +20,6 @@
 pub mod http;
 pub mod image;
 pub mod link;
-pub mod links;
 pub mod migrate;
 pub mod object;
 pub mod ops;
@@ -36,7 +35,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-pub use store::FileStore;
+pub use store::{FileStore, Readers};
 
 use crate::{
     AppState,
@@ -293,6 +292,8 @@ pub(crate) enum Destination {
     Conversation {
         project_id: Uuid,
         conversation_id: Uuid,
+        /// A DM or group (or a thread in one): only its members read it.
+        members_only: bool,
     },
     /// A task's own file, attached at once, or (`for_comment`) for a comment
     /// on it, attached when the comment is posted.
@@ -307,6 +308,25 @@ impl Destination {
     pub(crate) fn project_id(self) -> Uuid {
         match self {
             Self::Conversation { project_id, .. } | Self::Task { project_id, .. } => project_id,
+        }
+    }
+
+    /// Who reads a file kept here, which decides the store it may go in.
+    pub(crate) fn readers(self) -> Readers {
+        match self {
+            Self::Conversation {
+                members_only: true, ..
+            } => Readers::Members,
+            Self::Conversation { .. } | Self::Task { .. } => Readers::Workspace,
+        }
+    }
+
+    /// For a message in `conversation`, as the caller locked it.
+    pub(crate) fn conversation(conversation: &crate::conversations::ConversationAccessRow) -> Self {
+        Self::Conversation {
+            project_id: conversation.project_id,
+            conversation_id: conversation.id,
+            members_only: matches!(conversation.effective_kind(), "dm" | "group"),
         }
     }
 }
@@ -373,7 +393,7 @@ pub(crate) async fn store_upload(
     upload: Upload,
 ) -> Result<FileRow, AppError> {
     let prepared = prepare_upload(upload).await?;
-    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let staged = stage_prepared(state, destination, prepared).await?;
     let mut transaction = match crate::db::scoped_tx(&state.pool).await {
         Ok(transaction) => transaction,
         Err(error) => {
@@ -468,15 +488,16 @@ impl StagedUpload {
     }
 }
 
-/// Writes a prepared upload's bytes for a file in `project_id`, outside any
+/// Writes a prepared upload's bytes for a file in `destination`, outside any
 /// transaction: a full workspace or disk refuses first. Pair it with
 /// [`store_prepared`], or [`abandon_staged`] when no row will follow.
 pub(crate) async fn stage_prepared(
     state: &AppState,
-    project_id: Uuid,
+    destination: Destination,
     prepared: PreparedUpload,
 ) -> Result<StagedUpload, AppError> {
-    let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
+    let organization_id =
+        organization_of(crate::db::scoped(&state.pool), destination.project_id()).await?;
     let PreparedUpload {
         name,
         bytes,
@@ -498,7 +519,13 @@ pub(crate) async fn stage_prepared(
             0,
         )
         .await?;
-        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+        FileStore::for_uploads(
+            state,
+            &mut transaction,
+            organization_id,
+            destination.readers(),
+        )
+        .await?
     };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
@@ -653,7 +680,13 @@ pub(crate) async fn store_body(
             0,
         )
         .await?;
-        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+        FileStore::for_uploads(
+            state,
+            &mut transaction,
+            organization_id,
+            destination.readers(),
+        )
+        .await?
     };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);

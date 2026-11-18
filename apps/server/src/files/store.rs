@@ -35,6 +35,18 @@ pub const OBJECT: &str = "object";
 /// A workspace's own bucket's id starts with this (K5.20).
 pub const WORKSPACE_PREFIX: &str = "ws-";
 
+/// Who reads what a store is asked to keep. A workspace's own bucket is
+/// read with keys its managers hold, so it keeps only what the workspace
+/// may read; a DM's or group's files, and archives that hold them, stay in
+/// the server's store (`files.members_only` holds this in the database).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Readers {
+    /// Anyone the workspace lets read it.
+    Workspace,
+    /// A DM's or group's members only.
+    Members,
+}
+
 /// Files on this machine's disk, under `<data root>/files`.
 #[derive(Clone, Debug)]
 pub struct LocalDisk {
@@ -92,13 +104,18 @@ impl FileStore {
     }
 
     /// Where a workspace's new uploads go: its own bucket when it has one
-    /// (K5.20), otherwise the server's primary store. Read on each upload,
-    /// never held per workspace.
+    /// (K5.20) and the workspace may read what's kept, otherwise the
+    /// server's primary store. Read on each upload, never held per
+    /// workspace.
     pub async fn for_uploads(
         state: &crate::AppState,
         connection: &mut sqlx::PgConnection,
         workspace: uuid::Uuid,
+        readers: Readers,
     ) -> Result<Self, AppError> {
+        if readers == Readers::Members {
+            return Ok(Self::from_config(&state.config));
+        }
         match super::workspace_store::active(&state.config, connection, workspace).await? {
             Some(bucket) => Ok(Self::Object(bucket)),
             None => Ok(Self::from_config(&state.config)),

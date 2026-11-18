@@ -355,12 +355,12 @@ pub(super) async fn file_read(
         };
     }
     if row.byte_size > MCP_FILE_BYTES as i64 {
-        match files::links::link(
+        match files::link::link(
             state,
             reader(principal),
             row.id,
-            files::links::Variant::Original,
-            files::links::DEFAULT_TTL,
+            files::link::Variant::Original,
+            files::link::DEFAULT_TTL,
         ) {
             Ok((url, expires)) => {
                 value.note =
@@ -521,7 +521,7 @@ pub(super) async fn file_upload(
         // the retry key and the file's row in one transaction: a retry waits
         // for this one and answers with its file, and a crash leaves neither
         // (the sweep takes unclaimed bytes away).
-        let staged = files::stage_prepared(state, destination.project_id(), prepared).await?;
+        let staged = files::stage_prepared(state, destination, prepared).await?;
         let reserved = async {
             let mut transaction = crate::db::scoped_tx(&state.pool).await?;
             let reserved = reserve_create(
@@ -695,13 +695,7 @@ async fn conversation_destination(
     {
         return Err(AppError::NotFound("conversation"));
     }
-    Ok((
-        Destination::Conversation {
-            project_id: conversation.project_id,
-            conversation_id: conversation.id,
-        },
-        limit,
-    ))
+    Ok((Destination::conversation(&conversation), limit))
 }
 
 /// Where an upload to a task goes, and the most it may be, once the caller

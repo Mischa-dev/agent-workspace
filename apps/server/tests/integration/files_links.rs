@@ -762,6 +762,19 @@ async fn files_move_between_stores_and_resume() {
         .join(setup.organization_id.simple().to_string());
     let on_disk_count = || std::fs::read_dir(&folder).expect("folder").count();
     assert_eq!(on_disk_count(), 250);
+    // Another move (a workspace's, say) holds one file: this one passes it
+    // by and writes nothing of it.
+    let held = ids[5].parse::<Uuid>().expect("id");
+    let held_key = format!("{}/{}", setup.organization_id.simple(), held.simple());
+    sqlx::query(
+        "UPDATE files SET move_lease = $2, move_lease_until = now() + interval '1 hour' \
+         WHERE id = $1",
+    )
+    .bind(held)
+    .bind(Uuid::now_v7())
+    .execute(&setup.pool)
+    .await
+    .expect("hold");
 
     let mut payload = files::migrate::MovePayload {
         to: "object".to_owned(),
@@ -771,7 +784,11 @@ async fn files_move_between_stores_and_resume() {
     let first = files::migrate::move_batch(&state, &payload)
         .await
         .expect("first batch");
-    assert_eq!((first.moved, first.failed), (100, 0));
+    assert_eq!((first.moved, first.failed, first.skipped), (99, 0, 1));
+    assert!(
+        !fake.objects.lock().expect("lock").contains_key(&held_key),
+        "nothing written for a held file"
+    );
     // Stopped here; a file uploaded now goes to the new store.
     let (status, during) = upload(
         &on_object,
@@ -797,6 +814,28 @@ async fn files_move_between_stores_and_resume() {
         }
     }
     assert_eq!(batches, 3);
+    // Let go, it moves on the next pass; the rest are already there.
+    sqlx::query("UPDATE files SET move_lease = NULL, move_lease_until = NULL WHERE id = $1")
+        .bind(held)
+        .execute(&setup.pool)
+        .await
+        .expect("let go");
+    let mut again = files::migrate::MovePayload {
+        after: None,
+        ..payload.clone()
+    };
+    let mut moved_again = 0;
+    loop {
+        let moved = files::migrate::move_batch(&state, &again)
+            .await
+            .expect("again");
+        moved_again += moved.moved;
+        match moved.next {
+            Some(next) => again.after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(moved_again, 1);
     let stores: Vec<(String, String, Option<String>)> =
         sqlx::query_as("SELECT storage_key, store_id, moved_from_store_id FROM files ORDER BY id")
             .fetch_all(&setup.pool)
@@ -1185,6 +1224,83 @@ async fn a_workspace_bucket_takes_new_uploads() {
         assert_eq!(found, 0, "the secret is in {table}");
     }
 
+    // A group's file is for its members: it stays in the server's store,
+    // whose keys the workspace's managers don't hold, by either path.
+    let space = space(&setup).await;
+    let (rook, _) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let (status, group) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("group-rook"),
+            json!({"name": "plans", "memberIds": [rook]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let own_before = own.objects.lock().expect("lock").len();
+    let (status, private) = upload(
+        &setup.app,
+        &setup.browser,
+        &format!("/api/v1/conversations/{group}/files?name=private.txt"),
+        Body::from("for the group only"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{private}");
+    let private = private["id"].as_str().expect("file").to_owned();
+    let (stored, members_only): (String, bool) =
+        sqlx::query_as("SELECT store_id, members_only FROM files WHERE id = $1::uuid")
+            .bind(&private)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("row");
+    assert_eq!((stored.as_str(), members_only), ("object", true));
+    let bytes = b"straight, for the group".to_vec();
+    let (_, started) = op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": group, "name": "g.txt", "size": bytes.len(),
+               "sha256": sha256_hex(&bytes)}),
+    )
+    .await;
+    assert_eq!(
+        put_direct(&started, bytes.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(own.objects.lock().expect("lock").len(), own_before);
+    assert_eq!(fake.objects.lock().expect("lock").len(), 2);
+    // Moving the workspace's files into its bucket passes the group's by.
+    let moved = files::migrate::move_batch(
+        &state,
+        &files::migrate::MovePayload {
+            to: store_id.clone(),
+            workspace: Some(setup.organization_id),
+            after: None,
+        },
+    )
+    .await
+    .expect("move");
+    assert_eq!(moved.failed, 0);
+    let stored: String = sqlx::query_scalar("SELECT store_id FROM files WHERE id = $1::uuid")
+        .bind(&private)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("row");
+    assert_eq!(stored, "object");
+    let (status, _) = op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": started["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
     // Stopping: new uploads go to the server's store; old files still read.
     let (status, cleared) = op(&setup, "workspace_store_revoke", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
@@ -1196,7 +1312,7 @@ async fn a_workspace_bucket_takes_new_uploads() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{later}");
-    assert_eq!(fake.objects.lock().expect("lock").len(), 1);
+    assert_eq!(fake.objects.lock().expect("lock").len(), 3);
     let response = get(
         &setup.app,
         Some(&setup.browser),

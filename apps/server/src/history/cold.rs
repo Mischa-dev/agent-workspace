@@ -20,7 +20,7 @@ use crate::{
     AppState,
     error::AppError,
     events::archive::{gunzip, gzip},
-    files::store::FileStore,
+    files::store::{FileStore, Readers},
     jobs::JobRegistry,
 };
 
@@ -112,7 +112,8 @@ pub async fn archive_page(
         return Ok(false);
     };
     let (first, last) = (first.0, last.0);
-    let store = FileStore::for_uploads(state, &mut connection, workspace).await?;
+    let store =
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Workspace).await?;
     connection.commit().await?;
 
     let numbers = versions

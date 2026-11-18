@@ -73,10 +73,7 @@ pub(crate) async fn destination(
             )
             .await?;
             require_active_conversation(&conversation)?;
-            Destination::Conversation {
-                project_id: conversation.project_id,
-                conversation_id: conversation.id,
-            }
+            Destination::conversation(&conversation)
         }
         Place::Task { id, for_comment } => {
             let project_id =
@@ -168,7 +165,8 @@ pub(crate) async fn start(
     }
     let project_id = destination.project_id();
     let organization_id = organization_of(&mut **transaction, project_id).await?;
-    let store = FileStore::for_uploads(state, transaction, organization_id).await?;
+    let store =
+        FileStore::for_uploads(state, transaction, organization_id, destination.readers()).await?;
     hold_room(state, transaction, organization_id, declared.size, 0).await?;
     let content_type = file_content_type(&name, declared.content_type.as_deref(), &[]);
     let id = Uuid::now_v7();
@@ -399,7 +397,7 @@ async fn finish_picture(
     };
     // The stripped picture goes into the store before the transaction that
     // records it opens.
-    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let staged = stage_prepared(state, destination, prepared).await?;
     let claimed = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let claimed = claim(&mut transaction, upload.id).await?;

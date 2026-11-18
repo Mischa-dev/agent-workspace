@@ -80,7 +80,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("removed_by_actor_id", "actors"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // A move in progress on this server (K5.13).
+                exclude: &["move_lease", "move_lease_until"],
             },
             KindDecl {
                 kind: "layout_presets",

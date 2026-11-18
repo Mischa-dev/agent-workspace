@@ -52,7 +52,7 @@ use crate::{
     accounts::{NewPerson, create_person},
     error::AppError,
     events,
-    files::store::FileStore,
+    files::store::{FileStore, Readers},
     jobs::{JobError, JobRegistry, NewJob},
     tenancy::tables,
     workspace::lifecycle::{self, NewWorkspace},
@@ -486,11 +486,11 @@ pub async fn start_import(
         record_map(&mut connection, id, workspace, &map).await?;
         connection.commit().await?;
 
-        // The archive goes into the new workspace's store, so any process
-        // can pick the import up.
+        // The archive goes into the server's store, so any process can pick
+        // the import up; it holds DMs, so never a workspace's own bucket.
         let store = {
             let mut connection = crate::db::scoped_tx(&state.pool).await?;
-            FileStore::for_uploads(state, &mut connection, workspace).await?
+            FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
         };
         let key = format!("{}/imports/{}.awx", workspace.simple(), id.simple());
         let file = tokio::fs::File::open(input.path).await.map_err(io)?;
@@ -1480,9 +1480,11 @@ async fn fill(
         .iter()
         .map(|(_, _, table)| *table)
         .collect::<BTreeSet<_>>();
+    // Files arrive in the server's store, DMs' among them; an owner moves
+    // the rest into the workspace's own bucket once it has one.
     let store = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        FileStore::for_uploads(state, &mut connection, workspace).await?
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
     };
     let mut cursor = claimed.cursor.clone();
     if cursor.phase.is_empty() {

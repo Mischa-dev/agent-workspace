@@ -39,7 +39,7 @@ use crate::{
     auth::AuthenticatedActor,
     error::{ApiPath, AppError},
     events::{self, Audience, NewEvent, catalog},
-    files::store::FileStore,
+    files::store::{FileStore, Readers},
     jobs::{JobError, JobRegistry, NewJob},
     policy::Permission,
     spaces::SpaceKind,
@@ -298,7 +298,7 @@ async fn store_archive(
 ) -> Result<(), AppError> {
     let store = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        FileStore::for_uploads(state, &mut connection, workspace).await?
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
     };
     let key = format!("{}/exports/{}.awx", workspace.simple(), transfer.simple());
     let file = tokio::fs::File::open(path)
@@ -354,6 +354,23 @@ fn zip_error<E>(_: E) -> AppError {
     AppError::Internal("the export archive could not be written")
 }
 
+/// Whether the snapshot holds a page version kept in cold storage whose
+/// body `cold` lacks.
+async fn cold_missing(
+    snapshot: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    cold: &HashMap<(Uuid, i64), String>,
+) -> Result<bool, AppError> {
+    let kept = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT page_id, version::bigint FROM project_page_revisions \
+         WHERE workspace_id = $1 AND body IS NULL",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *snapshot)
+    .await?;
+    Ok(kept.iter().any(|key| !cold.contains_key(key)))
+}
+
 /// Writes the whole archive to `path`.
 async fn write_archive(
     state: &AppState,
@@ -361,14 +378,32 @@ async fn write_archive(
     path: &Path,
 ) -> Result<Written, AppError> {
     // Before the snapshot: bodies of page versions kept in cold storage
-    // (K3.25), so every version leaves whole.
-    let cold = crate::history::cold::cold_page_bodies(state, workspace).await?;
+    // (K3.25), so every version leaves whole. A version archived after they
+    // were read and before the snapshot would leave without its body: the
+    // snapshot checks it has every one, and they are read again if not.
+    let (cold, mut snapshot) = {
+        let mut tries = 0;
+        loop {
+            let cold = crate::history::cold::cold_page_bodies(state, workspace).await?;
+            let mut snapshot = crate::db::scoped_snapshot(&state.pool).await?;
+            if !cold_missing(&mut snapshot, workspace, &cold).await? {
+                break (cold, snapshot);
+            }
+            snapshot.rollback().await?;
+            tries += 1;
+            if tries == 3 {
+                return Err(AppError::Conflict(
+                    "export",
+                    "page history kept moving to cold storage; try again",
+                ));
+            }
+        }
+    };
     let file = std::fs::File::create(path)
         .map_err(|_| AppError::Internal("the export file could not be made"))?;
     let mut zip = ZipWriter::new(file);
     let mut counts = BTreeMap::new();
     let (blobs, slug) = {
-        let mut snapshot = crate::db::scoped_snapshot(&state.pool).await?;
         let hidden = not_spaces(&mut snapshot, workspace).await?;
         let header = workspace_entry(&mut snapshot, workspace).await?;
         write_json(&mut zip, "workspace/workspace.json", &header)?;
@@ -719,9 +754,11 @@ async fn write_kind(
                     .unwrap_or_default(),
                 data["version"].as_i64().unwrap_or_default(),
             );
-            if let Some(body) = cold.get(&key) {
-                data["body"] = Value::String(body.clone());
-            }
+            // `write_archive` checked the snapshot has every cold body.
+            let body = cold
+                .get(&key)
+                .ok_or(AppError::Internal("a cold page version has no body"))?;
+            data["body"] = Value::String(body.clone());
         }
         if !started {
             zip.start_file(&name, options(true)).map_err(zip_error)?;

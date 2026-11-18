@@ -102,8 +102,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/direct",
     "/api/v1/events",
     "/api/v1/events/catalogue",
+    "/api/v1/file-links/{token}",
     "/api/v1/files/{id}/content",
-    "/api/v1/files/links/{token}",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
     "/api/v1/inbox",
@@ -271,13 +271,6 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
          people; covered in awd110_collection_forms",
-    ),
-    (
-        "/api/v1/file-links/{token}",
-        "a short-lived file link (A2.12) is read by its signed token, not a session; the \
-         token names the account it was made for, which must still be able to read the file \
-         when it is fetched; covered in delivery (a_client_id_comes_back_and_a_file_link_\
-         follows_access), and file_link_get, which makes one, has a case here",
     ),
     (
         "/api/v1/auth/csrf",
@@ -1878,7 +1871,7 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
     // A signed link is its own credential (K5.12): A's owner's link to A's
     // file opens; one made for A's owner naming B's file never does.
     cases.push(case(
-        "/api/v1/files/links/{token}",
+        "/api/v1/file-links/{token}",
         vec![a.file_link.clone()],
         vec![a.foreign_file_link.clone()],
         vec![],
