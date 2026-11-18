@@ -370,6 +370,14 @@ export function useRealtimeConnection(): RealtimeContextValue {
             })
             return
           }
+          if (envelope.type === 'account.profile_changed') {
+            // Someone's profile or avatar changed: profiles and avatars read again.
+            void queryClient.invalidateQueries({
+              predicate: (query) =>
+                query.queryKey[0] === 'op' && (query.queryKey[2] === 'profile_get' || query.queryKey[2] === 'profile_avatar_list'),
+            })
+            return
+          }
           if (envelope.type === 'account.status.changed') {
             // Someone's status changed: the names that show it read it again.
             void queryClient.invalidateQueries({ queryKey: queryKeys.statuses })

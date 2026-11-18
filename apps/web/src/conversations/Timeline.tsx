@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { ActorTag, Avatar, Button, Dots, Icon, IconButton, actorKind, countLabel, type IconName } from '../ui'
@@ -29,6 +29,8 @@ const GROUP_WINDOW_MS = 5 * 60 * 1000
 const PINNED_SLACK = 120
 /** Scrolling up to within this many pixels of the top loads earlier messages. */
 const NEAR_TOP = 300
+
+const ProfileDialog = lazy(() => import('../profiles/ProfileDialog'))
 
 function prefersReducedMotion() {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -322,6 +324,7 @@ export function MessageRow({
   toolbar?: ReactNode
   viewerId?: string
 }) {
+  const [profileOpen, setProfileOpen] = useState(false)
   const message = entry.message
   if (!message) return null
   const kind = actorKind(message.author.kind)
@@ -356,7 +359,17 @@ export function MessageRow({
       <div className="aw-msg__main">
         {continued ? null : (
           <div className="aw-msg__meta">
-            <span className="aw-msg__author">{message.author.displayName}</span>
+            <span className="aw-msg__author">
+              {/* C2.17: the name opens their profile. */}
+              <button
+                aria-haspopup="dialog"
+                className="aw-msg__author-button"
+                onClick={() => setProfileOpen(true)}
+                type="button"
+              >
+                {message.author.displayName}
+              </button>
+            </span>
             <ActorTag kind={kind} />
             {message.via ? <span className="aw-msg__via">via {message.via}</span> : null}
             {message.saved && !removed ? <Icon className="aw-msg__saved" label="Saved for later" name="bookmark" size={14} /> : null}
@@ -398,6 +411,11 @@ export function MessageRow({
           </div>
         )}
         {removed || editor || !message.forwarded ? null : <ForwardedQuote value={message.forwarded} />}
+        {profileOpen ? (
+          <Suspense fallback={null}>
+            <ProfileDialog accountId={message.author.id} name={message.author.displayName} onClose={() => setProfileOpen(false)} />
+          </Suspense>
+        ) : null}
         {removed || editor ? null : reactions}
         {extras}
       </div>

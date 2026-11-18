@@ -1528,6 +1528,30 @@ async fn chat_writes_keep_to_what_the_writer_may_see() {
             .expect("statuses");
     assert_eq!(lenas, 0);
 
+    // Nor their profile; and a profile shows no space the reader can't see.
+    let (status, refused) = op(
+        &omar.browser,
+        "profile_update",
+        json!({"title": "Intern", "account": world.people["lena"].actor}),
+    )
+    .await;
+    assert!(!status.is_success(), "omar sets lena's title: {refused}");
+    let profiles =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM account_profiles WHERE account_id = $1")
+            .bind(world.people["lena"].actor)
+            .fetch_one(pool)
+            .await
+            .expect("profiles");
+    assert_eq!(profiles, 0);
+    let (status, read) = op(
+        &omar.browser,
+        "profile_get",
+        json!({"account": world.people["lena"].actor}),
+    )
+    .await;
+    assert!(status.is_success(), "{read}");
+    assert!(!read.to_string().contains(PRIVATE), "{read}");
+
     // A role that can't manage settings can't retire the owner's emoji.
     let emoji = Uuid::now_v7();
     sqlx::query(

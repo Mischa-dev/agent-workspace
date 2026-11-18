@@ -1,7 +1,7 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useContext, type CSSProperties, type ReactNode } from 'react'
 
 import { Icon, type IconName } from './icons'
-import { initials, swatchFor, type ActorKind } from './identityModel'
+import { AvatarSources, initials, swatchFor, type ActorKind } from './identityModel'
 
 
 const TAGS: Record<ActorKind, string | null> = {
@@ -34,6 +34,8 @@ export function Avatar({
   src?: string | null
   working?: boolean
 }) {
+  const sources = useContext(AvatarSources)
+  const image = src || (seed ? sources(seed) : undefined)
   const square = kind !== 'person'
   const classes = [
     'aw-avatar',
@@ -56,7 +58,7 @@ export function Avatar({
         '--av-bg': `var(--swatch-${kind === 'worker' ? 'slate' : swatchFor(seed ?? name)})`,
       } as CSSProperties}
     >
-      {src ? <img alt="" src={src} /> : <span className="aw-avatar__initials">{initials(name)}</span>}
+      {image ? <img alt="" src={image} /> : <span className="aw-avatar__initials">{initials(name)}</span>}
       {presence && !square ? <span className={`aw-presence aw-presence--${presence}`} /> : null}
     </span>
   )

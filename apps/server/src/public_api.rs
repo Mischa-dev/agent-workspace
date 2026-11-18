@@ -199,6 +199,9 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
     }
 }
 
+/// The statuses an operation refuses with, answered with its own result.
+const REFUSING: &[&str] = &["403", "404", "409", "422", "503"];
+
 const ERROR_STATUSES: &[(&str, &str)] = &[
     (
         "401",
@@ -512,38 +515,32 @@ pub(crate) fn document() -> Value {
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));
-        let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({
-                // Short, since every operation repeats it; the introduction
-                // says how `outcome` reads.
-                "description": "The result.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
+        // One response per operation, its own result: 200 when it worked,
+        // and the refusing statuses with its `outcome` and `message`. The
+        // statuses that aren't the operation's (no token, too large, too
+        // many calls) share one `default`. Written once and referenced, so
+        // the document stays small as operations are added; the
+        // introduction says what each status means.
+        let result = format!("{}Result", pascal(&name));
         refusals.insert(
-            refused.clone(),
+            result.clone(),
             json!({
-                "description": "Refused: see `outcome` and `message`.",
+                "description": "The result; when refused, `outcome` and `message` say why.",
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
+        let mut responses = Map::new();
+        let reference = json!({ "$ref": format!("#/components/responses/{result}") });
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
-            } else {
-                // The same for every operation, so referenced rather than
-                // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
-            };
-            responses.insert((*status).to_owned(), response);
+            if REFUSING.contains(status) {
+                responses.insert((*status).to_owned(), reference.clone());
+            }
         }
+        responses.insert("200".to_owned(), reference);
+        responses.insert(
+            "default".to_owned(),
+            json!({ "$ref": "#/components/responses/Error" }),
+        );
         paths.insert(
             format!("/{name}"),
             json!({
@@ -583,22 +580,22 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
-            "responses": ERROR_STATUSES
-                .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
-                .map(|(status, description)| {
-                    (
-                        format!("Error{status}"),
-                        json!({
-                            "description": description,
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Error" },
-                                },
-                            },
-                        }),
-                    )
-                })
+            "responses": std::iter::once((
+                "Error".to_owned(),
+                json!({
+                    "description": ERROR_STATUSES
+                        .iter()
+                        .filter(|(status, _)| !REFUSING.contains(status))
+                        .map(|(status, description)| format!("{status}: {description}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/Error" },
+                        },
+                    },
+                }),
+            ))
                 .chain(refusals)
                 .collect::<Map<_, _>>(),
             "securitySchemes": {

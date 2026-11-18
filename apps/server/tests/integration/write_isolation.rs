@@ -568,6 +568,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "settings_set",
     "sidebar_item_move",
     "sidebar_section_set",
+    "profile_update",
     "status_delete",
     "status_set",
     "task_claim",
@@ -6236,6 +6237,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sidebar_item_move",
             json!({"conversationId": a.channel, "starred": true}),
             vec![json!({"conversationId": b.channel, "starred": true})],
+        ),
+        // C2.17: an agent's profile is set by those who manage it; B's
+        // agent isn't A's to change.
+        mcp_case(
+            "profile_update",
+            json!({"title": "Net title", "account": a.agent}),
+            vec![json!({"title": "Net title", "account": b.agent})],
         ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;

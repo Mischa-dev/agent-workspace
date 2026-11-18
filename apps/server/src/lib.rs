@@ -87,6 +87,7 @@ pub mod policy;
 pub mod policy_inventory;
 pub mod preflight;
 pub mod profile_runtime;
+pub mod profiles;
 pub mod projects;
 pub mod provider;
 pub mod public_api;

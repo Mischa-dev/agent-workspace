@@ -1,4 +1,5 @@
 /** Identity helpers: how people and agents get their colors, initials and kinds. */
+import { createContext } from 'react'
 
 export type ActorKind = 'person' | 'agent' | 'worker' | 'app'
 
@@ -26,3 +27,10 @@ export function actorKind(kind: string): ActorKind {
   if (kind === 'integration' || kind === 'system') return 'app'
   return 'person'
 }
+
+/**
+ * Where an account's avatar image is, by account id (C2.17). The workspace
+ * provides it from its avatar list, so every avatar shown with an id finds
+ * its picture without each list carrying the address.
+ */
+export const AvatarSources = createContext<(accountId: string) => string | undefined>(() => undefined)

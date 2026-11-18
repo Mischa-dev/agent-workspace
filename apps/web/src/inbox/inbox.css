@@ -457,7 +457,7 @@
 
 .aw-inbox__picked-count {
   margin-right: auto;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 /* Reply in place, in the preview. */

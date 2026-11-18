@@ -17,6 +17,9 @@
     "status_set": "change",
     "status_delete": "change",
     "status_list": "query",
+    "profile_get": "describe",
+    "profile_update": "change",
+    "profile_avatar_list": "query",
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",
@@ -81,6 +84,7 @@
     "/api/v2/*",
     "/api/v1/account/*",
     "/api/v1/account-claims/*",
+    "/api/v1/accounts/{id}/avatar",
     "/api/v1/invite-links/*",
     "/api/v1/links/resolve",
     "/api/v1/auth/*",
@@ -102,7 +106,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
+    "emits": ["file.attached", "file.removed", "account.status_changed", "account.profile_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],

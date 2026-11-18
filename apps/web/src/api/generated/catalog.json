@@ -1115,6 +1115,50 @@
     "title": "Add a person who hasn't signed in yet"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_avatar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List avatars"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get profile"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.profile_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update profile"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

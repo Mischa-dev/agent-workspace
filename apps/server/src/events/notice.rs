@@ -241,6 +241,15 @@ pub async fn stage(
             None,
             Some(p.account_id),
         ),
+        P::AccountProfileChanged(p) => (
+            &catalog::ACCOUNT_PROFILE_CHANGED,
+            "account",
+            p.account_id,
+            None,
+            Audience::Workspace,
+            None,
+            Some(p.account_id),
+        ),
         P::CustomEmojiChanged(p) => (
             &catalog::CUSTOM_EMOJI_CHANGED,
             "custom_emoji",

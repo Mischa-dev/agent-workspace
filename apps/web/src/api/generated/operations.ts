@@ -28,6 +28,8 @@ export type ArchiveParts = "archive" | "keep"
 
 export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
+export type AvatarLine = { accountId: string; url: string }
+
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
@@ -201,6 +203,8 @@ export type ScheduledLine = { conversationId: string; failure?: string | null; i
 export type SectionShow = "all" | "unread"
 
 export type SectionSort = "manual" | "alpha" | "recent"
+
+export type SharedSpace = { id: string; name: string }
 
 export type SidebarItem = { conversationId: string; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
@@ -528,6 +532,18 @@ export type PersonCreateInput = { displayName: string; handle: string; roleId?: 
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
+export type ProfileAvatarListInput = Record<string, never>
+
+export type ProfileAvatarListOutput = { avatars: AvatarLine[] }
+
+export type ProfileGetInput = { account?: string | null }
+
+export type ProfileGetOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
+
+export type ProfileUpdateInput = { account?: string | null; avatarBase64?: string | null; pronouns?: string | null; removeAvatar?: boolean; timeZone?: string | null; title?: string | null }
+
+export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
+
 export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
@@ -790,6 +806,9 @@ export type Operations = {
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
+  profile_avatar_list: { input: ProfileAvatarListInput; output: ProfileAvatarListOutput }
+  profile_get: { input: ProfileGetInput; output: ProfileGetOutput }
+  profile_update: { input: ProfileUpdateInput; output: ProfileUpdateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

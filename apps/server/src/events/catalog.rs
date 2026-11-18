@@ -535,6 +535,12 @@ pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
     "Someone's status changed",
 )
 .legacy(&["account.status.changed"]);
+pub static ACCOUNT_PROFILE_CHANGED: EventType = signal(
+    "account.profile_changed",
+    "workspace",
+    None,
+    "Someone's profile or avatar changed",
+);
 pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     "custom_emoji.changed",
     "workspace",
@@ -659,6 +665,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &ACCOUNT_STATUS_CHANGED,
+        &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,

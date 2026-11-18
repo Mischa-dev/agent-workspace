@@ -85,6 +85,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/account/appearance",
     "/api/v1/account/security",
     "/api/v1/account/sessions",
+    "/api/v1/accounts/{id}/avatar",
     "/api/v1/auth/password-reset",
     "/api/v1/auth/session",
     "/api/v1/auth/workos",
@@ -1891,6 +1892,13 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         linked(b),
         vec![],
     ));
+    // C2.17: an avatar shows only to people who share a workspace.
+    cases.push(case(
+        "/api/v1/accounts/{id}/avatar",
+        vec![format!("/api/v1/accounts/{}/avatar", a.rook)],
+        vec![format!("/api/v1/accounts/{}/avatar", b.rook)],
+        vec![],
+    ));
     // C2.19: a workspace's own emoji shows only to its members.
     cases.push(case(
         "/api/v1/custom-emoji/{id}",
@@ -2079,6 +2087,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "notification_list",
     "notification_keyword_list",
     "sidebar_list",
+    "profile_get",
+    "profile_avatar_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2665,6 +2675,23 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // C2.13: keywords are kept per workspace; B's never list in A.
         case(
             "notification_keyword_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.17: B's people's profiles never read from A, and A's
+        // avatars list only A's people.
+        case(
+            "profile_get",
+            vec![json!({}), json!({"account": a.rook})],
+            vec![
+                json!({"account": b.rook}),
+                json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        case(
+            "profile_avatar_list",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],

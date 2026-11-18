@@ -236,6 +236,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "an account's status: accounts are server-wide (R19); a row naming a workspace shows only there",
     ),
     (
+        "account_profiles",
+        "an account's profile and avatar: accounts are server-wide (R19), shown only to people who share a workspace with it",
+    ),
+    (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
     ),
