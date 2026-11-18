@@ -361,16 +361,33 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             // guard (A2.27), is answered the same for every operation:
             // shared too.
             Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
-            // The flags that keep the `ok` branch apart from SetAside for
-            // a validator are left out here, where every operation would
-            // repeat them: a reader tells the two apart by SetAside's
-            // `paused` or `pendingReview`.
+            // The `ok` branch's envelope (everything but its `value`) is the
+            // same for every operation: written once as `Ok`, which each
+            // branch extends with its value. The flags that keep it apart
+            // from SetAside for a validator are left out of the document: a
+            // reader tells the two apart by SetAside's `paused` or
+            // `pendingReview`.
             Some("ok") => {
-                if let Some(properties) =
-                    branch.get_mut("properties").and_then(Value::as_object_mut)
+                let Some(value) = branch["properties"].get("value").cloned() else {
+                    continue;
+                };
+                let mut envelope = branch.clone();
+                if let Some(properties) = envelope
+                    .get_mut("properties")
+                    .and_then(Value::as_object_mut)
                 {
+                    properties.remove("value");
                     properties.remove("paused");
                     properties.remove("pendingReview");
+                }
+                let shared = components
+                    .entry("Ok".to_owned())
+                    .or_insert_with(|| envelope.clone());
+                if *shared == envelope {
+                    *branch = json!({
+                        "allOf": [{ "$ref": "#/components/schemas/Ok" }],
+                        "properties": { "value": value },
+                    });
                 }
                 continue;
             }

@@ -27,6 +27,7 @@ import {
   withEllipses,
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import { useTimeToShow } from '../telemetry/useTimeToShow'
 import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
 import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
@@ -125,6 +126,7 @@ export function SearchPage() {
     enabled: query.trim().length > 0 && parseSearchQuery(query).errors.length === 0,
     retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })
+  useTimeToShow('search_results', query.trim(), results.isSuccess && !results.isFetching)
   const wrong = parseSearchQuery(query).errors
   const submit = (event: FormEvent) => {
     event.preventDefault()

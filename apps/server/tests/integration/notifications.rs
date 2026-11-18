@@ -1162,3 +1162,110 @@ async fn get_level(
     )
     .await
 }
+
+/// C2.11: a saved inbox view is its owner's alone, filters only to spaces
+/// they can open, never shows another space's rows, and keeps its place.
+#[tokio::test]
+async fn saved_inbox_views_keep_to_their_spaces() {
+    let Some(setup) = setup("notify_views").await else {
+        return;
+    };
+    let alpha = create_project(&setup, "ALP", "Alpha").await;
+    let beta = create_project(&setup, "BET", "Beta").await;
+    let gamma = create_project(&setup, "GAM", "Gamma").await;
+    let general = create_channel(&setup, &alpha, "general").await;
+    let other = create_channel(&setup, &beta, "general").await;
+    let (mara, mara_browser) = add_person(&setup, &[&alpha, &beta], "mara").await;
+    let (_, ben_browser) = add_person(&setup, &[&alpha, &beta], "ben").await;
+    say(
+        &setup,
+        &setup.browser,
+        &general,
+        "v1",
+        mention(mara, "Alpha "),
+    )
+    .await;
+    say(&setup, &setup.browser, &other, "v2", mention(mara, "Beta ")).await;
+    drain(&setup).await;
+
+    // The list filtered to a space shows that space's rows only; the badge
+    // still counts the whole inbox.
+    let page = inbox(&setup, &mara_browser, &format!("?spaces={alpha}")).await;
+    assert_eq!(items(&page).len(), 1, "{page}");
+    assert_eq!(items(&page)[0]["projectId"], alpha.as_str());
+    assert_eq!(page["unreadCount"], 2);
+    let (status, _) = get(&setup, &mara_browser, "/api/v1/inbox?spaces=nope").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let workspace = setup.organization_id;
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        send(&setup.app, request)
+    };
+    // Unknown filter keys, and a space Mara can't open, are refused.
+    for filter in [
+        json!({"view": "unread", "who": "anyone"}),
+        json!({"spaces": [gamma]}),
+        json!({"spaces": [Uuid::now_v7()]}),
+    ] {
+        let (status, refused) = op(
+            &mara_browser,
+            "inbox_view_set",
+            json!({"name": "Nope", "filter": filter}),
+        )
+        .await;
+        assert!(!status.is_success(), "{refused}");
+    }
+    let (status, saved) = op(
+        &mara_browser,
+        "inbox_view_set",
+        json!({"name": "Alpha", "filter": {"spaces": [alpha]}, "density": "compact"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, saved) = op(
+        &mara_browser,
+        "inbox_view_set",
+        json!({"name": "Mentions", "filter": {"view": "unread", "category": "mentions"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let views = saved["value"]["views"].as_array().expect("views").clone();
+    assert_eq!(views.len(), 2, "{saved}");
+    assert_eq!(views[0]["name"], "Alpha");
+    assert_eq!(views[0]["density"], "compact");
+    assert_eq!(views[0]["filter"]["spaces"], json!([alpha]));
+    let (alpha_view, mentions_view) = (views[0]["id"].clone(), views[1]["id"].clone());
+
+    // Reordering persists.
+    for (id, position) in [(&mentions_view, 0), (&alpha_view, 1)] {
+        let (status, moved) = op(
+            &mara_browser,
+            "inbox_view_set",
+            json!({"inboxViewId": id, "position": position}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{moved}");
+    }
+    let (_, listed) = op(&mara_browser, "inbox_view_list", json!({})).await;
+    assert_eq!(listed["value"]["views"][0]["id"], mentions_view, "{listed}");
+    assert_eq!(listed["value"]["views"][1]["id"], alpha_view, "{listed}");
+
+    // Ben can't see, change or remove Mara's views.
+    for input in [
+        json!({"inboxViewId": alpha_view, "name": "Mine now"}),
+        json!({"inboxViewId": alpha_view, "delete": true}),
+    ] {
+        let (status, refused) = op(&ben_browser, "inbox_view_set", input).await;
+        assert!(!status.is_success(), "{refused}");
+    }
+    let (_, bens) = op(&ben_browser, "inbox_view_list", json!({})).await;
+    assert_eq!(bens["value"]["views"], json!([]), "{bens}");
+    let (_, listed) = op(&mara_browser, "inbox_view_list", json!({})).await;
+    assert_eq!(listed["value"]["views"].as_array().map(Vec::len), Some(2));
+}

@@ -1,7 +1,8 @@
 import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { ActorTag, Avatar, Button, Dots, Icon, IconButton, actorKind, countLabel, type IconName } from '../ui'
+import { ActorTag, Avatar, Button, Dots, Icon, IconButton, Sheet, actorKind, countLabel, type IconName } from '../ui'
+import { usePhoneWidth } from '../ui/useCoarsePointer'
 import { Markdown } from '../ui/markdown/Markdown'
 import { Attachments, LinkPreviews } from '../files/Attachments'
 import type { FileAttachment } from '../files/model'
@@ -10,6 +11,7 @@ import './chat.css'
 import type { ComposerSubmission } from './composerModel'
 import { ForwardedQuote } from './ForwardedQuote'
 import { ReplyQuote } from './ReplyQuote'
+import { useLongPress } from './useLongPress'
 import { MessageContent } from './MessageContent'
 import { parseMessageContent } from './messageContentModel'
 import { thingsLinkedIn } from '../modules/references/thingLinks'
@@ -18,6 +20,7 @@ import { formatDateTime } from '../ui/time'
 import type {
   ConversationActor,
   ConversationMessage,
+  ConversationSystemEvent,
   ConversationTimelineEntry,
   ConversationWorkItemChip,
   ConversationWorkerEvent,
@@ -34,6 +37,8 @@ const NEAR_TOP = 300
 
 const ProfileDialog = lazy(() => import('../profiles/ProfileDialog'))
 const LinkCards = lazy(() => import('../modules/references/LinkCards'))
+const MadeThing = lazy(() => import('../modules/references/MadeThing'))
+const MadeIntoChips = lazy(() => import('../modules/references/MadeThing').then((module) => ({ default: module.MadeIntoChips })))
 
 /** A message's own words, with its links, for finding the things it links to. */
 function linkedThings(message: ConversationMessage) {
@@ -126,6 +131,15 @@ export function ConversationTimeline({
   const last = useRef({ height: 0, top: 0, olderKey })
   const lastTop = useRef(0)
   const linking = followLinks && location.hash.startsWith('#message-')
+
+  // Another conversation opens with its header showing (C2.31).
+  useEffect(() => {
+    const page = followLinks ? scroller.current?.closest('main') : null
+    if (page) delete page.dataset.headFolded
+    return () => {
+      if (page) delete page.dataset.headFolded
+    }
+  }, [followLinks, label])
 
   // Earlier messages went in above: move down by what they added, so the
   // message you were reading stays put.
@@ -245,6 +259,9 @@ export function ConversationTimeline({
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < PINNED_SLACK
           if (pinned.current) setShowLatest(false)
           const movingUp = element.scrollTop < lastTop.current
+          // C2.31: on a phone the conversation's header folds away while you read back, and returns as you come down.
+          const page = followLinks ? element.closest('main') : null
+          if (page && element.scrollTop !== lastTop.current) page.dataset.headFolded = movingUp && !pinned.current ? 'true' : 'false'
           lastTop.current = element.scrollTop
           last.current = { ...last.current, top: element.scrollTop }
           if (movingUp && element.scrollTop < NEAR_TOP && hasOlder && onLoadOlder) onLoadOlder()
@@ -335,6 +352,11 @@ export function MessageRow({
   viewerId?: string
 }) {
   const [profileOpen, setProfileOpen] = useState(false)
+  // C2.31: on a phone, holding a message opens its actions in a bottom sheet.
+  const phone = usePhoneWidth()
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const sheeted = phone && Boolean(toolbar) && !editor
+  const press = useLongPress(sheeted ? () => setSheetOpen(true) : undefined)
   const message = entry.message
   if (!message) return null
   const kind = actorKind(message.author.kind)
@@ -357,6 +379,8 @@ export function MessageRow({
       // Focusable by tap, not Tab: touch screens have no hover, so tapping a
       // message is how its toolbar appears (see .aw-msg:focus-within).
       tabIndex={-1}
+      {...press}
+      onContextMenu={sheeted ? (event) => event.preventDefault() : undefined}
     >
       <div className="aw-msg__gutter">
         {continued ? (
@@ -419,6 +443,12 @@ export function MessageRow({
                 previews={normalizeLinkPreviews(message.linkPreviews)}
               />
             ) : null}
+            {/* C2.20: what this message was made into, as the reader may see it. */}
+            {message.madeInto?.length ? (
+              <Suspense fallback={null}>
+                <MadeIntoChips things={message.madeInto} />
+              </Suspense>
+            ) : null}
             {/* C2.23: a card for each thing in this app it links to, as the reader may see it. */}
             {linked.length ? (
               <Suspense fallback={null}>
@@ -436,11 +466,27 @@ export function MessageRow({
         {removed || editor ? null : reactions}
         {extras}
       </div>
-      {editor || !toolbar ? null : (
+      {editor || !toolbar || (sheeted && sheetOpen) ? null : (
         <div aria-label="Message actions" className="aw-msg__toolbar" role="toolbar">
           {toolbar}
         </div>
       )}
+      {sheeted && sheetOpen ? (
+        <Sheet label="Message actions" onClose={() => setSheetOpen(false)}>
+          <div
+            aria-label="Message actions"
+            className="aw-msg__sheet-actions"
+            onClickCapture={(event) => {
+              // An action that opens a menu keeps the sheet; any other closes it once done.
+              const button = (event.target as HTMLElement).closest('button')
+              if (button && !button.hasAttribute('aria-haspopup')) window.setTimeout(() => setSheetOpen(false), 0)
+            }}
+            role="toolbar"
+          >
+            {toolbar}
+          </div>
+        </Sheet>
+      ) : null}
     </article>
   )
 }
@@ -509,7 +555,18 @@ export function WorkerEventRow({ actor = 'Agent', createdAt, event }: { actor?: 
   )
 }
 
-export function SystemRow({ createdAt }: { createdAt: string }) {
+export function SystemRow({ createdAt, event }: { createdAt: string; event?: ConversationSystemEvent | null }) {
+  if (event?.type === 'made_into') {
+    const word = event.thingKind.replace(/_/g, ' ')
+    return (
+      <ActivityRow actor={event.actorName ?? 'Someone'} icon="link" time={formatTime(createdAt)}>
+        made {event.messageId ? 'a message here' : 'this'} into{' '}
+        <Suspense fallback={`a ${word}`}>
+          <MadeThing id={event.thingId} kind={event.thingKind} />
+        </Suspense>
+      </ActivityRow>
+    )
+  }
   return (
     <ActivityRow icon="info" time={formatTime(createdAt)}>
       The conversation settings changed.
@@ -590,7 +647,7 @@ export function TimelineEntries({
     } else if (entry.workerEvent) {
       row = <WorkerEventRow actor={agentName?.(entry.workerEvent.agentRunId)} createdAt={entry.createdAt} event={entry.workerEvent} />
     } else {
-      row = <SystemRow createdAt={entry.createdAt} />
+      row = <SystemRow createdAt={entry.createdAt} event={entry.system} />
     }
     rows.push(
       <Fragment key={entry.id}>

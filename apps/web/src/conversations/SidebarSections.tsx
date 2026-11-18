@@ -5,6 +5,7 @@ import { useWorkspaceHref } from '../app/workspace'
 import { orderAfterDrop } from '../shell/dragOrder'
 import { SidebarLink, SidebarSection } from '../shell/SidebarParts'
 import type { IconName, MenuEntry } from '../ui'
+import { usePrefetchTimeline } from './prefetchTimeline'
 import { SectionNameDialog } from './SectionNameDialog'
 import { sidebarItemHref, useSidebarSections, useSidebarWrites, type SidebarItem, type SidebarSection as Section } from './sidebarSections'
 
@@ -31,6 +32,7 @@ function itemIcon(item: SidebarItem): IconName {
 export default function SidebarSections({ onNavigate }: { onNavigate: () => void }) {
   const sidebar = useSidebarSections()
   const writes = useSidebarWrites()
+  const prefetch = usePrefetchTimeline()
   const href = useWorkspaceHref()
   const [drag, setDrag] = useState<Drag | null>(null)
   const [naming, setNaming] = useState<Naming | null>(null)
@@ -98,7 +100,7 @@ export default function SidebarSections({ onNavigate }: { onNavigate: () => void
           onToggle={(open) => change(section, { collapsed: !open })}
           open={!section.collapsed}
         >
-          {section.items.map((item) => {
+          {section.items.filter((item) => !item.hidden && (section.show !== 'unread' || item.unread)).map((item) => {
             const mark = drag?.over?.id === item.conversationId && drag.id !== item.conversationId ? (drag.over.after ? 'is-drop-after' : 'is-drop-before') : undefined
             const movable = section.sort === 'manual'
             return (
@@ -107,6 +109,7 @@ export default function SidebarSections({ onNavigate }: { onNavigate: () => void
                 keep={item.unread}
                 key={item.conversationId}
                 label={item.name}
+                onIntent={item.kind === 'channel' ? () => prefetch(item.spaceId, item.conversationId) : undefined}
                 onNavigate={onNavigate}
                 row={{
                   className: ['aw-sidebar__placed', mark, drag?.id === item.conversationId ? 'is-dragging' : undefined].filter(Boolean).join(' '),

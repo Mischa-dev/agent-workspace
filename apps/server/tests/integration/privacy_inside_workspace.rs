@@ -2635,6 +2635,9 @@ async fn channel_writes_keep_to_private_channels() {
         // C2.39: a conversation Omar can't read has no standing for him,
         // and no request of his to answer.
         ("dm_standing_get", json!({"conversationId": secret})),
+        // C2.8: nor its details' tabs.
+        ("conversation_file_list", json!({"conversationId": secret})),
+        ("conversation_tab_list", json!({"conversationId": secret})),
         (
             "dm_request_respond",
             json!({"conversationId": secret, "accept": true}),
@@ -2674,6 +2677,204 @@ async fn channel_writes_keep_to_private_channels() {
     }
     let (_, omars) = op(&omar.browser, "saved_search_list", json!({})).await;
     assert_eq!(omars["value"]["searches"], json!([]), "{omars}");
+
+    // C2.21: a record is made only from a message its maker can read, and
+    // only by a role that may add records.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/projects/{work}/collections"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"name": "Notes"}),
+    );
+    let (status, collection) = send(app, request).await;
+    assert_eq!(status, StatusCode::CREATED, "{collection}");
+    let collection = collection["collection"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let said = |channel: &str, words: &'static str| {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"content": text(words)}),
+        );
+        async move {
+            let (status, sent) = send(app, request).await;
+            assert!(status.is_success(), "{sent}");
+            sent["message"]["id"].as_str().expect("message").to_owned()
+        }
+    };
+    let hidden = said(&secret, "secret-plans launch day").await;
+    let shown = said(&open, "Open plans launch day").await;
+    let (status, refused) = op(
+        &omar.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": hidden, "saySo": true}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    assert!(!refused.to_string().contains("secret-plans"), "{refused}");
+    let (status, made) = op(
+        &omar.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": shown}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(made["value"]["title"], "Open plans launch day", "{made}");
+    let (status, refused) = op(
+        &nate.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": shown}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    let made_from = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT source_message_id FROM collection_records WHERE collection_id = $1::uuid",
+    )
+    .bind(&collection)
+    .fetch_all(pool)
+    .await
+    .expect("records");
+    assert_eq!(
+        made_from,
+        vec![Some(Uuid::parse_str(&shown).expect("shown"))]
+    );
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let chips = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(shown))
+        .map(|entry| entry["message"]["madeInto"].clone());
+    assert_eq!(
+        chips,
+        Some(json!([{"kind": "record", "id": made["value"]["id"]}])),
+        "{timeline}"
+    );
+
+    // C2.8: a channel's Tasks tab lists what its tasks are only to people
+    // who read the channel and may see tasks.
+    let (status, task) = op(
+        &lena.browser,
+        "task_create",
+        json!({"projectId": work, "title": "Plan launch", "fromMessageId": hidden}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{task}");
+    let (status, listed) = op(
+        &lena.browser,
+        "conversation_task_list",
+        json!({"conversationId": secret}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["value"]["tasks"][0]["how"], "made_from", "{listed}");
+    assert_eq!(
+        listed["value"]["tasks"][0]["title"], "Plan launch",
+        "{listed}"
+    );
+    let (status, refused) = op(
+        &omar.browser,
+        "conversation_task_list",
+        json!({"conversationId": secret}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    assert!(!refused.to_string().contains("Plan launch"), "{refused}");
+    let (status, refused) = op(
+        &nate.browser,
+        "conversation_task_list",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+
+    // C1.26: a page tab shows to everyone who reads the channel; only a
+    // poster sets one, and never on a channel they can't read.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/projects/{work}/pages"),
+        None,
+        json!({"title": "Launch plan", "body": "Dates"}),
+    );
+    let (status, page) = send(app, request).await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"]
+        .as_str()
+        .or_else(|| page["page"]["id"].as_str())
+        .expect("page")
+        .to_owned();
+    let (status, tabs) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": page}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tabs}");
+    let (status, seen) = op(
+        &omar.browser,
+        "conversation_tab_list",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert_eq!(seen["value"]["tabs"][0]["title"], "Launch plan", "{seen}");
+    // Moving the last tab to the front shifts the others along.
+    let mut pages = vec![page.clone()];
+    for title in ["Budget", "Retro"] {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": title, "body": "Notes"}),
+        );
+        let (status, made) = send(app, request).await;
+        assert!(status.is_success(), "{made}");
+        let id = made["id"]
+            .as_str()
+            .or_else(|| made["page"]["id"].as_str())
+            .expect("page")
+            .to_owned();
+        let (status, tabs) = op(
+            &lena.browser,
+            "conversation_tab_set",
+            json!({"conversationId": open, "page": id}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tabs}");
+        pages.push(id);
+    }
+    let (status, moved) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": pages[2], "position": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let titles: Vec<&str> = moved["value"]["tabs"]
+        .as_array()
+        .expect("tabs")
+        .iter()
+        .filter_map(|tab| tab["title"].as_str())
+        .collect();
+    assert_eq!(titles, ["Retro", "Launch plan", "Budget"], "{moved}");
+    for (who, conversation) in [(&omar.browser, &secret), (&nate.browser, &open)] {
+        let (status, refused) = op(
+            who,
+            "conversation_tab_set",
+            json!({"conversationId": conversation, "page": page}),
+        )
+        .await;
+        assert!(!status.is_success(), "{refused}");
+    }
 
     // Nate reads but can't post, so sets no topic, even on an open channel.
     let (status, refused) = op(

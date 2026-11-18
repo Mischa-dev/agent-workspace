@@ -421,6 +421,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          workspace, and takes no ID",
     ),
     (
+        "POST /api/v1/client-timings",
+        "browser speed timings: counted per known name in process metrics, never \
+         stored with a workspace, and takes no ID",
+    ),
+    (
         "POST /api/v1/integrations/github/webhook",
         "GitHub's own signed delivery, checked against the app's webhook secret, not a \
          session; covered in the GitHub tests",
@@ -515,6 +520,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "field_write",
     "collection_write",
     "record_write",
+    "record_create",
+    "conversation_tab_set",
     "button_press",
     "sheet_write",
     "later_save",
@@ -599,6 +606,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
+    "inbox_view_set",
     "profile_update",
     "account_block_set",
     "dm_request_respond",
@@ -6330,6 +6338,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"name": "Net search", "query": "net"}),
             vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
         ),
+        // C2.11: inbox views are kept per workspace, and filter only to the
+        // workspace's own spaces; B's never change from A.
+        mcp_case(
+            "inbox_view_set",
+            json!({"name": "Net view", "filter": {"view": "unread"}}),
+            vec![
+                json!({"workspace": b.organization, "name": "Net view", "filter": {}}),
+                json!({"name": "Net spaces", "filter": {"spaces": [b.project]}}),
+            ],
+        ),
         // C2.39: only someone in the workspace called can be blocked, and a
         // request in B's DM is never A's to answer.
         mcp_case(
@@ -7060,6 +7078,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        // C1.26: a page tab, only a page and channel of the caller's own.
+        mcp_case(
+            "conversation_tab_set",
+            json!({"conversationId": a.channel, "page": a.page}),
+            vec![json!({"conversationId": b.channel, "page": b.page})],
+        )
+        .rejecting(vec![json!({"conversationId": a.channel, "page": b.page})]),
+        // C2.21: a record made from a message, only from one here.
+        mcp_case(
+            "record_create",
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": a.message}),
+            vec![json!({"collection": b.collection, "title": "Net made"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
+            json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
         ]),
         mcp_case(
             "button_press",

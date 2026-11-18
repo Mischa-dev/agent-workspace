@@ -282,6 +282,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "sidebar.changed"
                 | "saved_searches.changed"
                 | "follows.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
@@ -321,6 +322,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "sidebar.changed"
                 | "saved_searches.changed"
                 | "follows.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
@@ -346,6 +348,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "sidebar.changed"
                 | "saved_searches.changed"
                 | "follows.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );

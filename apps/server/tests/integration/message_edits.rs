@@ -2235,3 +2235,77 @@ async fn editing_a_message_rechecks_access_after_parent_membership_is_revoked() 
         .expect("message");
     assert_eq!(value, "Keep this unchanged");
 }
+
+/// Counts the statements sqlx runs while it is the thread's subscriber.
+#[derive(Clone, Default)]
+struct StatementCount(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StatementCount {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() == "sqlx::query" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// C2.29: opening a timeline costs the same few statements however many
+/// messages it shows: nothing is read message by message.
+#[tokio::test]
+async fn a_timeline_reads_in_a_fixed_number_of_statements() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let Some(setup) = setup("timeline_statements").await else {
+        return;
+    };
+    let project = create_project(&setup, "SPD", "Speed").await;
+    let quiet = create_channel(&setup, &project, "quiet").await;
+    let busy = create_channel(&setup, &project, "busy").await;
+    for index in 0..3 {
+        say(
+            &setup,
+            &setup.browser,
+            &quiet,
+            &format!("q{index}"),
+            text(&format!("Quiet {index}")),
+        )
+        .await;
+    }
+    for index in 0..30 {
+        say(
+            &setup,
+            &setup.browser,
+            &busy,
+            &format!("b{index}"),
+            text(&format!("Busy {index}")),
+        )
+        .await;
+    }
+    let mut counts = Vec::new();
+    for channel in [&quiet, &busy] {
+        let counter = StatementCount::default();
+        let subscriber = tracing_subscriber::registry().with(counter.clone());
+        let guard = tracing::subscriber::set_default(subscriber);
+        let (status, timeline) = get(
+            &setup,
+            &setup.browser,
+            &format!("/api/v1/conversations/{channel}/timeline"),
+        )
+        .await;
+        drop(guard);
+        assert_eq!(status, StatusCode::OK, "{timeline}");
+        counts.push(counter.0.load(std::sync::atomic::Ordering::Relaxed));
+    }
+    assert!(counts[0] > 0, "statements are counted: {counts:?}");
+    assert_eq!(
+        counts[0], counts[1],
+        "3 messages and 30 cost the same: {counts:?}"
+    );
+    assert!(
+        counts[1] <= 40,
+        "a timeline takes at most 40 statements: {counts:?}"
+    );
+}
