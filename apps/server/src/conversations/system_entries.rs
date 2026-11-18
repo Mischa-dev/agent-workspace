@@ -71,6 +71,61 @@ pub(crate) async fn post(
     Ok(sequence)
 }
 
+/// A task made from a message (C2.20): links the task back to the message,
+/// which must be one in `space` that `actor` can read, and with `say_so`
+/// says so in the message's conversation. The one writer of these links for
+/// every edge (the web's New task from this message, and task_create's
+/// fromMessageId). Returns false, having written nothing, when the message
+/// isn't one the actor can read there.
+pub(crate) async fn task_made_from_message(
+    tx: &mut Transaction<'_, Postgres>,
+    space: Uuid,
+    task: Uuid,
+    actor: Uuid,
+    message: Uuid,
+    say_so: bool,
+) -> Result<bool, AppError> {
+    let conversation = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO work_item_links (
+            work_item_id, project_id, target_kind, target_id, created_by_actor_id
+        )
+        SELECT $1, $2, 'message', message.id, $3
+        FROM messages message
+        WHERE message.id = $4 AND message.project_id = $2
+          AND message.removed_at IS NULL
+          AND conversation_visible_to(message.conversation_id, $3)
+        ON CONFLICT (work_item_id, target_kind, target_id)
+            DO UPDATE SET created_at = work_item_links.created_at
+        RETURNING (SELECT conversation_id FROM messages WHERE id = $4 -- visibility: checked in this statement
+        )
+        "#,
+    )
+    .bind(task)
+    .bind(space)
+    .bind(actor)
+    .bind(message)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(conversation) = conversation else {
+        return Ok(false);
+    };
+    if say_so {
+        post(
+            tx,
+            conversation,
+            &SystemEvent::MadeInto {
+                actor_id: actor,
+                thing_kind: "task".to_owned(),
+                thing_id: task,
+                message_id: Some(message),
+            },
+        )
+        .await?;
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

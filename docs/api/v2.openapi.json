@@ -54052,6 +54052,14 @@
                       "null"
                     ]
                   },
+                  "fromMessageId": {
+                    "description": "Made from this message, one in the same space you can read: the task\nlinks back to it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "labels": {
                     "description": "Labels by name or ID, at most 20. They must exist already; create one\nwith label_write.",
                     "items": {
@@ -54096,6 +54104,13 @@
                     "maxLength": 2048,
                     "type": [
                       "string",
+                      "null"
+                    ]
+                  },
+                  "saySo": {
+                    "description": "With fromMessageId, also say so in its conversation (\"… made a\nmessage here into a task\"). Off unless asked.",
+                    "type": [
+                      "boolean",
                       "null"
                     ]
                   },

@@ -673,6 +673,31 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     )
     .await;
     assert!(status.is_client_error());
+    // Agents and apps do the same through task_create.
+    let op = |key: &'static str, input: Value| {
+        call(
+            setup,
+            &pat_browser,
+            "POST",
+            "/api/v2/ops/task_create",
+            Some(key),
+            input,
+        )
+    };
+    let (status, created) = op(
+        "op-say-so",
+        json!({"projectId": project, "title": "Fetch plates", "fromMessageId": open, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
+    assert_eq!(made(&told).len(), 2, "{told}");
+    let (status, refused) = op(
+        "op-secret",
+        json!({"projectId": project, "title": "Peek", "fromMessageId": secret}),
+    )
+    .await;
+    assert!(status.is_client_error(), "{refused}");
 }
 
 #[tokio::test]

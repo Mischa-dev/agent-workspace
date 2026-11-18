@@ -2569,50 +2569,18 @@ async fn create_work_item(
                     return Err(AppError::Internal("new Work Item had a board position"));
                 }
             };
-            if let Some(message_id) = request.source_message_id {
-                let linked = sqlx::query(
-                    r#"
-                    INSERT INTO work_item_links (
-                        work_item_id, project_id, target_kind, target_id, created_by_actor_id
-                    )
-                    SELECT $1, $2, 'message', message.id, $3
-                    FROM messages message
-                    WHERE message.id = $4 AND message.project_id = $2
-                      AND message.removed_at IS NULL
-                      AND conversation_visible_to(message.conversation_id, $3)
-                    ON CONFLICT DO NOTHING
-                    "#,
+            if let Some(message_id) = request.source_message_id
+                && !crate::conversations::system_entries::task_made_from_message(
+                    &mut transaction,
+                    project_id,
+                    work_item_id,
+                    principal.actor_id,
+                    message_id,
+                    request.say_so,
                 )
-                .bind(work_item_id)
-                .bind(project_id)
-                .bind(principal.actor_id)
-                .bind(message_id)
-                .execute(&mut *transaction)
                 .await?
-                .rows_affected();
-                if linked == 0 {
-                    return Err(AppError::Validation("sourceMessageId"));
-                }
-                if request.say_so {
-                    // visibility: the message was checked with conversation_visible_to just above.
-                    let conversation = sqlx::query_scalar::<_, Uuid>(
-                        "SELECT conversation_id FROM messages WHERE id = $1 -- visibility: checked just above",
-                    )
-                    .bind(message_id)
-                    .fetch_one(&mut *transaction)
-                    .await?;
-                    crate::conversations::system_entries::post(
-                        &mut transaction,
-                        conversation,
-                        &crate::conversations::system_entries::SystemEvent::MadeInto {
-                            actor_id: principal.actor_id,
-                            thing_kind: "task".to_owned(),
-                            thing_id: work_item_id,
-                            message_id: Some(message_id),
-                        },
-                    )
-                    .await?;
-                }
+            {
+                return Err(AppError::Validation("sourceMessageId"));
             }
             let row = fetch_work_item_in_transaction(
                 &mut transaction,
