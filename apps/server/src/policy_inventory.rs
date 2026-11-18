@@ -31,6 +31,9 @@ pub enum MutationAction {
     /// token from that push. The command it runs is authorized as that
     /// person, exactly as in the app.
     NotificationActionToken,
+    /// A push notification's own receipt (C2.34), saying it showed or was
+    /// tapped. It sets those two times on that one push and nothing else.
+    PushReceipt,
     /// A report sent to a project's bug report link. The task is created as
     /// the link's maker, through the task tools, after checking that they
     /// can still add tasks in the project.
@@ -1107,6 +1110,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/notification-actions",
         NotificationActionToken
     ),
+    boundary_route!("push", Post, "/api/v1/push-receipts", PushReceipt),
     boundary_route!(
         "usage",
         Post,

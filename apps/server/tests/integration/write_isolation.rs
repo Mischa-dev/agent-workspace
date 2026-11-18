@@ -414,6 +414,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "the MCP transport: every tool behind it that writes has a case in mcp_cases",
     ),
     ("POST /api/v1/notification-actions", CAPABILITY),
+    ("POST /api/v1/push-receipts", CAPABILITY),
     ("POST /api/v1/account-claims/accept", CAPABILITY),
     ("POST /api/v1/invite-links/accept-existing", CAPABILITY),
     ("POST /api/v1/invite-links/accept-new", CAPABILITY),

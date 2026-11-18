@@ -327,6 +327,11 @@ function DevicesSection() {
                   {device.failureCount > 0 ? (
                     <span>{countLabel(device.failureCount, 'failed push', 'failed pushes')}</span>
                   ) : null}
+                  {device.recentSent ? (
+                    <span title="Pushes sent to this device in the last 30 days: how many it showed, and how many you opened">
+                      {device.recentShown ?? 0} of {countLabel(device.recentSent, 'push', 'pushes')} shown, {device.recentOpened ?? 0} opened
+                    </span>
+                  ) : null}
                 </span>
               }
               title={

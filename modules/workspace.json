@@ -100,6 +100,7 @@
     "/api/v1/home",
     "/api/v1/notification-settings*",
     "/api/v1/notification-actions",
+    "/api/v1/push-receipts",
     "/api/v1/organizations/{organization_id}*",
     "/api/v1/push/*",
     "/api/v1/realtime",

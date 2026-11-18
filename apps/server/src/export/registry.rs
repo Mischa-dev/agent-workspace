@@ -1483,6 +1483,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             ),
             ("notification_email_digests", "a delivery log"),
             ("push_deliveries", "a delivery log"),
+            ("push_receipts", "a delivery log"),
             (
                 "push_subscriptions",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",

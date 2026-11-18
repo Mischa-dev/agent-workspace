@@ -292,6 +292,10 @@ export type PushDevice = {
   lastSentAt: string | null
   lastFailureAt: string | null
   failureCount: number
+  /** Of the pushes sent to it in the last 30 days, how many showed and were tapped (C2.34). */
+  recentSent?: number
+  recentShown?: number
+  recentOpened?: number
 }
 
 export const getPushConfig = () => requestJson<{ organizationId: string; publicKey: string }>('/api/v1/push/config')
