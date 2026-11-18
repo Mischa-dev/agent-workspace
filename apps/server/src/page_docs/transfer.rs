@@ -402,7 +402,10 @@ async fn pdf_embeds(
                 sheet_id,
                 tab_id,
                 range,
-            }) => sheet_picture(state, principal, project_id, sheet_id, tab_id, range).await?,
+                name,
+            }) => {
+                sheet_picture(state, principal, project_id, sheet_id, tab_id, range, name).await?
+            }
             None => None,
         };
         if let Some(picture) = picture {
@@ -422,11 +425,13 @@ enum EmbedTarget {
         sheet_id: Uuid,
         tab_id: Option<Uuid>,
         range: Option<String>,
+        /// A named range (C1.20), kept by its name so it follows the range.
+        name: Option<String>,
     },
 }
 
 /// What an embed's same-origin path names, as the web's `embedTarget` reads
-/// it: `/projects/{p}/sheets/{s}?tab=&range=`, or a board at
+/// it: `/projects/{p}/sheets/{s}?tab=&range=` (or `?name=`), or a board at
 /// `…/whiteboards/{id}`.
 fn embed_target(href: &str) -> Option<EmbedTarget> {
     let base = url::Url::parse("https://app.invalid/").ok()?;
@@ -451,6 +456,7 @@ fn embed_target(href: &str) -> Option<EmbedTarget> {
                 sheet_id: sheet.parse().ok()?,
                 tab_id: query("tab").and_then(|tab| tab.parse().ok()),
                 range: query("range"),
+                name: query("name"),
             })
         }
         ["files", file] => file.parse().ok().map(EmbedTarget::File),
@@ -550,6 +556,7 @@ async fn sheet_picture(
     sheet_id: Uuid,
     tab_id: Option<Uuid>,
     range: Option<String>,
+    name: Option<String>,
 ) -> Result<Option<pdf::EmbedPicture>, AppError> {
     use crate::sheets;
     if project_access(
@@ -567,6 +574,26 @@ async fn sheet_picture(
     let Some(sheet) = sheets::find(&state.pool, project_id, &sheet_id.to_string()).await? else {
         return Ok(None);
     };
+    // A named range is read where it is now; a name that's gone shows the
+    // embed as a link.
+    let (tab_id, block) = match name.as_deref() {
+        Some(name) => {
+            let mut connection = state.pool.acquire().await?;
+            match sheets::ranges::resolve(&mut connection, sheet.id, name)
+                .await?
+                .filter(|located| located.name.is_some())
+            {
+                Some(located) => (Some(located.tab_id), Some(located.range)),
+                None => return Ok(None),
+            }
+        }
+        None => (
+            tab_id,
+            range.as_deref().and_then(|range| {
+                sheets::address::range(range, sheets::MAX_ROWS, sheets::MAX_COLUMNS)
+            }),
+        ),
+    };
     let tabs = sheets::tabs(&state.pool, sheet.id).await?;
     let Some(tab) = tab_id
         .and_then(|id| tabs.iter().find(|tab| tab.id == id))
@@ -574,10 +601,7 @@ async fn sheet_picture(
     else {
         return Ok(None);
     };
-    let (rows, columns) = match range
-        .as_deref()
-        .and_then(|range| sheets::address::range(range, sheets::MAX_ROWS, sheets::MAX_COLUMNS))
-    {
+    let (rows, columns) = match block {
         Some(range) => (range.rows, range.columns),
         None => {
             let (rows, columns) = sheets::used_extent(&state.pool, tab.id).await?;
@@ -675,6 +699,17 @@ mod tests {
                 sheet_id: id,
                 tab_id: None,
                 range: Some("A1:B2".to_owned()),
+                name: None,
+            })
+        );
+        assert_eq!(
+            embed_target(&format!("/projects/{id}/sheets/{id}?name=Totals")),
+            Some(EmbedTarget::Sheet {
+                project_id: id,
+                sheet_id: id,
+                tab_id: None,
+                range: None,
+                name: Some("Totals".to_owned()),
             })
         );
         assert_eq!(

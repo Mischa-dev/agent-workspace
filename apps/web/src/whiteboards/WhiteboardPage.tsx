@@ -176,7 +176,8 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
     if (!elements.length) return
     setSending(true)
     try {
-      const sent = await callOp('whiteboard_propose', { whiteboardId: whiteboard.id, elements }, { requestId: newRequestId() })
+      const readVersions = draftRef.current?.readVersions() ?? {}
+      const sent = await callOp('whiteboard_propose', { whiteboardId: whiteboard.id, elements, readVersions }, { requestId: newRequestId() })
       await draftRef.current?.discard()
       void queryClient.invalidateQueries({ queryKey: opPrefix('proposal_list') })
       showToast(
@@ -345,6 +346,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             onSaveState={setSaveState}
             onSelection={setSelection}
             onViewport={setViewport}
+            paused={sending}
             suggesting={suggesting}
             whiteboardId={whiteboard.id}
           />

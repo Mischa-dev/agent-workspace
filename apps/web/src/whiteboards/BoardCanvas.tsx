@@ -29,6 +29,11 @@ export type SaveFailure = { message: string; retry: () => void }
 export type DraftHandle = {
   /** The elements changed here since the server's copy, to send as a proposal. */
   draft: () => StoredElement[]
+  /**
+   * The server's version of each drafted element when drawing on it began
+   * (0 for a new one), so a change made there since is caught.
+   */
+  readVersions: () => Record<string, number>
   /** Puts the board back as the server holds it. */
   discard: () => Promise<void>
 }
@@ -44,6 +49,8 @@ export type BoardCanvasProps = {
   onSaveFailure?: (failure: SaveFailure | null) => void
   /** The role only suggests: drawing stays here until it's sent as a proposal. */
   suggesting?: boolean
+  /** The drawing is being sent: hold it still so nothing drawn now is lost. */
+  paused?: boolean
   /** How many elements the unsent drawing changes. */
   onDraft?: (count: number) => void
   draftRef?: MutableRefObject<DraftHandle | null>
@@ -69,6 +76,7 @@ export default function BoardCanvas({
   onEditors,
   onSaveFailure,
   suggesting = false,
+  paused = false,
   onDraft,
   draftRef,
   edited,
@@ -87,6 +95,8 @@ export default function BoardCanvas({
     return seeded
   })
   const seq = useRef(initial.sceneSeq)
+  // Suggest mode: each drafted element's server version when drawing on it began.
+  const baseline = useRef(new Map<string, number>())
   const loadedFiles = useRef(new Set<string>())
   const uploadedFiles = useRef(new Set(initial.files.map((file) => file.id)))
   const saveTimer = useRef<number | undefined>(undefined)
@@ -251,7 +261,12 @@ export default function BoardCanvas({
     if (!draftRef) return
     draftRef.current = {
       draft: () => unsaved(asStored(api.current?.getSceneElementsIncludingDeleted() ?? []), known),
+      readVersions: () => {
+        const drafted = unsaved(asStored(api.current?.getSceneElementsIncludingDeleted() ?? []), known)
+        return Object.fromEntries(drafted.map((element) => [element.id, baseline.current.get(element.id) ?? known.get(element.id)?.version ?? 0]))
+      },
       discard: async () => {
+        baseline.current.clear()
         const scene = await getScene(whiteboardId)
         remember(known, scene.elements)
         seq.current = Math.max(seq.current, scene.sceneSeq)
@@ -287,7 +302,14 @@ export default function BoardCanvas({
     (elements: readonly Element[], appState: AppState) => {
       watch(elements, appState)
       if (suggesting) {
-        callbacks.current.onDraft?.(unsaved(asStored(elements), known).length)
+        const drafted = unsaved(asStored(elements), known)
+        const ids = new Set(drafted.map((element) => element.id))
+        // An element the server's copy caught up with is no longer drafted.
+        for (const id of baseline.current.keys()) if (!ids.has(id)) baseline.current.delete(id)
+        for (const element of drafted) {
+          if (!baseline.current.has(element.id)) baseline.current.set(element.id, known.get(element.id)?.version ?? 0)
+        }
+        callbacks.current.onDraft?.(drafted.length)
         return
       }
       if (!editable) return
@@ -384,7 +406,7 @@ export default function BoardCanvas({
         canvasActions: { loadScene: false, saveToActiveFile: false, toggleTheme: false, export: false },
       }}
       validateEmbeddable={false}
-      viewModeEnabled={!editable && !suggesting}
+      viewModeEnabled={paused || (!editable && !suggesting)}
     />
   )
 }

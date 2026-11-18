@@ -2198,6 +2198,7 @@ async fn apply_unbounded(
                     )
                     .await?;
                     ranges::follow_moves(&mut *connection, *id, &moves).await?;
+                    proposals::follow_moves(&mut *connection, sheet.id, *id, &moves).await?;
                 }
             }
         }

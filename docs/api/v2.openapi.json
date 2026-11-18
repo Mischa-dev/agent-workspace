@@ -69568,6 +69568,14 @@
                       "null"
                     ]
                   },
+                  "readVersions": {
+                    "additionalProperties": {
+                      "format": "int32",
+                      "type": "integer"
+                    },
+                    "description": "Each changed element's version as your drawing found it, by id (0\nfor one you added). One changed on the board since is refused, so\naccepting never undoes a change you hadn't seen.",
+                    "type": "object"
+                  },
                   "whiteboardId": {
                     "description": "an id, or a link to it",
                     "maxLength": 2048,

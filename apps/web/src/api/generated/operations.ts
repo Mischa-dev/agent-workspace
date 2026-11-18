@@ -960,7 +960,7 @@ export type WhiteboardLinkInput = { remove?: boolean | null; targetId: string; t
 
 export type WhiteboardLinkOutput = { changed: boolean; linked: boolean; links: LinkView[]; whiteboardId: string }
 
-export type WhiteboardProposeInput = { elements: unknown[]; note?: string | null; whiteboardId: string }
+export type WhiteboardProposeInput = { elements: unknown[]; note?: string | null; readVersions?: Record<string, number>; whiteboardId: string }
 
 export type WhiteboardProposeOutput = { elements: number; proposalId?: string | null }
 

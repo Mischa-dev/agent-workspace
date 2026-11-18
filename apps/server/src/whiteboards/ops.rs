@@ -286,6 +286,11 @@ pub struct WhiteboardProposeInput {
     /// Changed elements as Excalidraw writes them.
     #[schemars(with = "Vec<serde_json::Value>")]
     pub elements: Vec<serde_json::Value>,
+    /// Each changed element's version as your drawing found it, by id (0
+    /// for one you added). One changed on the board since is refused, so
+    /// accepting never undoes a change you hadn't seen.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub read_versions: std::collections::BTreeMap<String, i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -356,6 +361,40 @@ impl Operation for WhiteboardPropose {
         let tx = call.tx().await?;
         let (board, _) = board_for_writing(tx, &caller, &access_caller, id).await?;
         let scene_seq = super::store::lock(tx, id).await?;
+        let read = input
+            .read_versions
+            .into_iter()
+            .filter(|(element, version)| {
+                *version > 0 && elements.iter().any(|sent| &sent.id == element)
+            })
+            .collect::<Vec<_>>();
+        if !read.is_empty() {
+            let (ids, versions): (Vec<String>, Vec<i32>) = read.into_iter().unzip();
+            let changed = sqlx::query_scalar::<_, String>(
+                "SELECT stored.element_id FROM whiteboard_elements stored \
+                 JOIN unnest($2::text[], $3::int[]) AS read(element_id, version) \
+                   ON read.element_id = stored.element_id \
+                 WHERE stored.whiteboard_id = $1 AND stored.version <> read.version \
+                 LIMIT 1",
+            )
+            .bind(id)
+            .bind(&ids)
+            .bind(&versions)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if changed.is_some() {
+                return Err(OpError::Conflict {
+                    reason: ConflictReason::State {
+                        code: "changed_since_read",
+                    },
+                    message: "Someone changed part of what you drew on since you started. \
+                              Reload the board to see their change, then draw yours again."
+                        .into(),
+                    current: None,
+                });
+            }
+        }
         let (proposal_id, count) =
             propose(tx, &caller, &board, scene_seq, elements, Self::NAME, note).await?;
         if let Some(proposal) = proposal_id {
