@@ -139,7 +139,16 @@ pub struct LiveRouter {
     /// `AGENT_WORKSPACE_LIVE_URL`), not by this instance's own tail.
     external: bool,
     draining: Arc<AtomicBool>,
+    /// Sessions signed out lately, with when (unix seconds), so a
+    /// connection that opens later with one of their tickets is refused
+    /// (a revoke reaches only the connections open when it arrives).
+    revoked: Arc<Mutex<VecDeque<(Uuid, i64)>>>,
 }
+
+/// How long a signed-out session is remembered: past any ticket's life.
+const REVOKED_FOR_SECONDS: i64 = 15 * 60;
+/// The most signed-out sessions remembered; the oldest go first.
+const REVOKED_KEPT: usize = 10_000;
 
 impl LiveRouter {
     pub fn new(capacity: usize, external: bool) -> Self {
@@ -150,7 +159,32 @@ impl LiveRouter {
             start: Arc::new(AtomicI64::new(i64::MAX)),
             external,
             draining: Arc::new(AtomicBool::new(false)),
+            revoked: Arc::new(Mutex::new(VecDeque::new())),
         }
+    }
+
+    /// Whether `session` was signed out within a ticket's life.
+    fn is_revoked(&self, session: Uuid, now: i64) -> bool {
+        self.revoked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|(revoked, at)| *revoked == session && now - at <= REVOKED_FOR_SECONDS)
+    }
+
+    fn remember_revoked(&self, session: Uuid, now: i64) {
+        let mut revoked = self
+            .revoked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while revoked
+            .front()
+            .is_some_and(|(_, at)| now - at > REVOKED_FOR_SECONDS)
+            || revoked.len() >= REVOKED_KEPT
+        {
+            revoked.pop_front();
+        }
+        revoked.push_back((session, now));
     }
 
     /// This instance's feed starts after `position` (its tail's start).
@@ -167,6 +201,9 @@ impl LiveRouter {
 
     /// Route one item to this instance's connections.
     pub fn publish(&self, item: Publish) {
+        if let Publish::Revoke { session } = &item {
+            self.remember_revoked(*session, chrono::Utc::now().timestamp());
+        }
         let item = Arc::new(item);
         if let Publish::Frame {
             position: Some(position),
@@ -311,7 +348,10 @@ async fn serve(
         Ok(Some(Ok(Message::Text(text)))) => ticket_in(&text, "hello"),
         _ => None,
     };
-    let Some(mut ticket) = hello.and_then(|token| ticket::verify(&token, keys, now())) else {
+    let Some(mut ticket) = hello
+        .and_then(|token| ticket::verify(&token, keys, now()))
+        .filter(|ticket| !router.is_revoked(ticket.session, now()))
+    else {
         let _ = send(
             &mut socket,
             json!({"type": "error", "reason": "ticket"}).to_string(),
@@ -571,6 +611,17 @@ mod tests {
         let kept = router.after(6).expect("window");
         assert_eq!(kept.len(), 2, "the frame and the change, once each");
         assert_eq!(kept[1].as_ref(), &stale);
+    }
+
+    #[test]
+    fn a_signed_out_session_is_remembered_for_a_tickets_life() {
+        let router = LiveRouter::new(16, false);
+        let session = Uuid::now_v7();
+        router.publish(Publish::Revoke { session });
+        let now = chrono::Utc::now().timestamp();
+        assert!(router.is_revoked(session, now));
+        assert!(!router.is_revoked(Uuid::now_v7(), now));
+        assert!(!router.is_revoked(session, now + REVOKED_FOR_SECONDS + 1));
     }
 
     #[test]

@@ -167,7 +167,26 @@ pub(crate) async fn start(
     let organization_id = organization_of(&mut **transaction, project_id).await?;
     let store =
         FileStore::for_uploads(state, transaction, organization_id, destination.readers()).await?;
-    hold_room(state, transaction, organization_id, declared.size, 0).await?;
+    // Unfinished uploads hold their declared size until they finish or are
+    // swept, so starts can't outrun the quota by never finishing. Read
+    // under the quota lock `hold_room` takes (taken here first; it stacks).
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{organization_id}"))
+        .execute(&mut **transaction)
+        .await
+        .map_err(AppError::from)?;
+    let reserved = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(sum(byte_size), 0)::bigint FROM file_uploads \
+         WHERE workspace_id = $1 AND finished_at IS NULL AND file_id IS NULL",
+    )
+    .bind(organization_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(AppError::from)?;
+    let reserving = declared
+        .size
+        .saturating_add(u64::try_from(reserved).unwrap_or(0));
+    hold_room(state, transaction, organization_id, reserving, 0).await?;
     let content_type = file_content_type(&name, declared.content_type.as_deref(), &[]);
     let id = Uuid::now_v7();
     let storage_key = upload_key(organization_id, id);

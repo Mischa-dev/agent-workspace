@@ -1114,6 +1114,42 @@ async fn direct_uploads_skip_the_server() {
             .keys()
             .any(|key| key.ends_with(&image_id.simple().to_string()))
     );
+
+    // Unfinished uploads hold their size: with room for 30 more bytes, a
+    // 20-byte start goes and a second one is refused until the first ends.
+    let (_, usage) = op(&setup, "workspace_usage_get", json!({})).await;
+    let stored = usage["meters"]
+        .as_array()
+        .expect("meters")
+        .iter()
+        .find(|meter| meter["meter"] == "storage_bytes")
+        .and_then(|meter| meter["used"].as_i64())
+        .expect("stored bytes");
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, meter, period, \
+         hard_limit, set_by_actor_id) \
+         SELECT $1, $2, 'workspace', $2, 'storage_bytes', 'month', $3, actor_id \
+         FROM users WHERE login_name = 'owner'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(stored + 30)
+    .execute(&setup.pool)
+    .await
+    .expect("storage limit");
+    let twenty = vec![b'r'; 20];
+    let start_twenty = |name: &'static str| {
+        op(
+            &setup,
+            "file_upload_start",
+            json!({"conversationId": channel, "name": name, "size": twenty.len(),
+                   "sha256": sha256_hex(&twenty)}),
+        )
+    };
+    let (status, first) = start_twenty("first.bin").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = start_twenty("second.bin").await;
+    assert_eq!(second["outcome"], "limit_reached", "{status} {second}");
 }
 
 /// K5.20: a workspace's own bucket takes its new uploads, through the
