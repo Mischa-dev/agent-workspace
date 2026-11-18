@@ -45,14 +45,24 @@ async fn idle(pool: &PgPool) -> (i64, i64) {
     (transactions_after - transactions, rows_after - rows)
 }
 
-/// Until the log has nothing staged, for at most a minute.
+/// Until the server has caught up with what making the workspaces wrote,
+/// for at most three minutes: nothing staged, every consumer of the log
+/// that is moving at its head, and no job due or running. Catching up on
+/// a backlog isn't idle work; anything still running after it is.
 async fn settle(pool: &PgPool) {
-    for _ in 0..120 {
-        let staged = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_staging")
-            .fetch_one(pool)
-            .await
-            .expect("staged");
-        if staged == 0 {
+    for _ in 0..360 {
+        let busy = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM event_staging) \
+                 OR EXISTS (SELECT 1 FROM event_consumers \
+                            WHERE position < (SELECT next_position - 1 FROM event_position_counter) \
+                              AND updated_at > now() - interval '1 minute') \
+                 OR EXISTS (SELECT 1 FROM background_jobs \
+                            WHERE state = 'running' OR (state = 'queued' AND run_at <= now()))",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("busy");
+        if !busy {
             break;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
