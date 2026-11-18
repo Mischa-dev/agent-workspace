@@ -410,6 +410,8 @@ struct SheetBody {
     can_suggest: bool,
     /// The sheet's named ranges, by name (C1.20).
     ranges: Vec<super::ranges::NamedRange>,
+    /// The sheet's charts, in order (C1.18).
+    charts: Vec<super::charts::Chart>,
 }
 
 async fn sheet_body(
@@ -440,6 +442,7 @@ async fn sheet_body(
     )
     .await?;
     let ranges = super::ranges::named(&mut *connection, sheet.id).await?;
+    let charts = super::charts::list(&mut *connection, sheet.id).await?;
     Ok(SheetBody {
         sheet: SheetSummary {
             id: sheet.id.to_string(),
@@ -481,6 +484,7 @@ async fn sheet_body(
         can_edit,
         can_suggest,
         ranges,
+        charts,
     })
 }
 

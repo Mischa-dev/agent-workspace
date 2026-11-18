@@ -29,7 +29,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<SheetViewCreate>()
         .add::<SheetViewUpdate>()
         .add::<SheetViewDelete>()
-        .add::<SheetRangeSet>();
+        .add::<SheetRangeSet>()
+        .add::<super::chart_ops::SheetChartSet>()
+        .add::<super::chart_ops::SheetChartGet>();
 }
 
 const SHEET: &str = "That sheet";

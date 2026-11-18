@@ -509,6 +509,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_view_update",
     "sheet_view_delete",
     "sheet_range_set",
+    "sheet_chart_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -7018,6 +7019,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sheet_range_set",
             json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
             vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
+        // C1.18: B's sheet can't be given a chart from A.
+        mcp_case(
+            "sheet_chart_set",
+            json!({"sheetId": a.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart"}),
+            vec![json!({"sheetId": b.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart-b"})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,

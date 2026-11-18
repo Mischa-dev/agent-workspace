@@ -480,7 +480,6 @@ pub async fn sheet_figures(
     tile: &Tile,
     reader: Uuid,
 ) -> Result<Result<Figures, Unseen>, AppError> {
-    use crate::sheets::{engine::Value as Cell, ranges, text_of};
     let Some(sheet_id) = tile.sheet else {
         return Ok(Err(Unseen::Gone));
     };
@@ -496,8 +495,28 @@ pub async fn sheet_figures(
     let Some(sheet_name) = name else {
         return Ok(Err(Unseen::Gone));
     };
-    let Some(located) = ranges::resolve(&mut *connection, sheet_id, &tile.range).await? else {
-        return Ok(Err(Unseen::Range));
+    let style = style_name(tile.style.unwrap_or_default());
+    Ok(
+        range_figures(&mut *connection, sheet_id, sheet_name, &tile.range, style)
+            .await?
+            .ok_or(Unseen::Range),
+    )
+}
+
+/// The figures of a block of a sheet (`reference`: a named range or a
+/// block such as Summary!A1:B12), drawn as `style`: labels from its first
+/// column, numbers from its second, a header row naming them. `None` when
+/// the reference names nothing. The caller has checked the sheet is seen.
+pub async fn range_figures(
+    connection: &mut PgConnection,
+    sheet_id: Uuid,
+    sheet_name: String,
+    reference: &str,
+    style: &str,
+) -> Result<Option<Figures>, AppError> {
+    use crate::sheets::{engine::Value as Cell, ranges, text_of};
+    let Some(located) = ranges::resolve(&mut *connection, sheet_id, reference).await? else {
+        return Ok(None);
     };
     let block = ranges::read_range(&mut *connection, located.tab_id, located.range).await?;
     let value_column = usize::from(block.rows.first().is_some_and(|row| row.len() > 1));
@@ -547,7 +566,7 @@ pub async fn sheet_figures(
             });
         }
     }
-    Ok(Ok(Figures {
+    Ok(Some(Figures {
         view_type: "chart".to_owned(),
         view_name: located
             .name
@@ -555,7 +574,7 @@ pub async fn sheet_figures(
         collection_name: sheet_name,
         total,
         value: Some(sum),
-        style: Some(style_name(tile.style.unwrap_or_default()).to_owned()),
+        style: Some(style.to_owned()),
         measure: Some(format!("sum of {}", header.as_deref().unwrap_or("values"))),
         groups,
         records: Vec::new(),

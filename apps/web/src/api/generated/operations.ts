@@ -38,6 +38,10 @@ export type ButtonView = { label: string; steps: ButtonStepView[] }
 
 export type ChangeSetView = { actor?: string | null; actorId: string; createdAt: string; id: string; proposalId?: string | null; thingId: string; thingKind: string; touched: unknown; undoable: boolean; undoes?: string | null; undoneBy?: string | null; updatedAt: string; versionFrom: number; versionTo: number }
 
+export type Chart = { id: string; source: string; style: string; title: string }
+
+export type ChartPoint = { label: string; value: number }
+
 export type ChartStyle = ("bar" | "line" | "donut") | "number"
 
 export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; style?: ChartStyle | null }
@@ -672,6 +676,14 @@ export type ScheduledMessageUpdateInput = { cancel?: boolean | null; id: string;
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
+export type SheetChartGetInput = { chartId: string; sheetId: string; withoutPicture?: boolean }
+
+export type SheetChartGetOutput = { found: boolean; id: string; measure?: string | null; points: ChartPoint[]; source: string; style: string; svg?: string | null; title: string; total?: number | null }
+
+export type SheetChartSetInput = { chartId?: string | null; remove?: boolean; sheetId: string; source?: string | null; style?: ChartStyle | null; title?: string | null }
+
+export type SheetChartSetOutput = { chartId?: string | null; charts: Chart[] }
+
 export type SheetRangeSetInput = { name: string; range?: string | null; remove?: boolean; sheetId: string }
 
 export type SheetRangeSetOutput = { ranges: NamedRange[] }
@@ -910,6 +922,8 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }
+  sheet_chart_set: { input: SheetChartSetInput; output: SheetChartSetOutput }
   sheet_range_set: { input: SheetRangeSetInput; output: SheetRangeSetOutput }
   sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
   sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }

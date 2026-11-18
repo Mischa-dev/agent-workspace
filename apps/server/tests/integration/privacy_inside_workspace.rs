@@ -2099,6 +2099,24 @@ async fn personal_sheet_views_stay_their_owners() {
     )
     .await;
     assert_eq!(body["outcome"], "ok", "lena names a range: {status} {body}");
+    // A chart (C1.18) changes the sheet for everyone too: sheets.edit.
+    let (status, body) = op(
+        nate,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nate's", "source": "A1:B2"}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate charts: {status} {body}");
+    let (status, body) = op(
+        &world.people["lena"].browser,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Lena's", "source": "Lenas"}),
+    )
+    .await;
+    assert_eq!(
+        body["outcome"], "ok",
+        "lena charts her range: {status} {body}"
+    );
     world.finish().await;
 }
 

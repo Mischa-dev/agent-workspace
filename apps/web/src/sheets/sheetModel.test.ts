@@ -52,6 +52,7 @@ const body = (): SheetBody => ({
   canEdit: true,
   canSuggest: false,
   ranges: [],
+  charts: [],
 })
 
 describe('sheet model', () => {

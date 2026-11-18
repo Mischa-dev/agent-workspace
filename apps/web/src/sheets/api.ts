@@ -125,7 +125,14 @@ export type SheetBody = {
   canSuggest: boolean
   /** The sheet's named ranges, by name (C1.20). */
   ranges: NamedRange[]
+  /** The sheet's charts, in order (C1.18). */
+  charts: SheetChart[]
 }
+
+/** A chart of a block of the sheet: bars, a line, a donut or one number (C1.18). */
+export type SheetChart = { id: string; title: string; style: 'bar' | 'line' | 'donut' | 'number'; source: string }
+
+const CHART_STYLES = ['bar', 'line', 'donut', 'number'] as const
 
 /** A block of one tab with a name, such as Totals for Costs!A1:B9 (C1.20). */
 export type NamedRange = { name: string; tabId: string; tab: string; range: string }
@@ -280,6 +287,11 @@ export function normalizeBody(value: unknown): SheetBody {
       return typeof range.name === 'string' && typeof range.tabId === 'string' && typeof range.range === 'string'
         ? [{ name: range.name, tabId: range.tabId, tab: asString(range.tab), range: range.range }]
         : []
+    }),
+    charts: asArray(raw.charts).flatMap((entry) => {
+      const chart = asRecord(entry)
+      const style = CHART_STYLES.find((known) => known === chart.style) ?? 'bar'
+      return typeof chart.id === 'string' ? [{ id: chart.id, title: asString(chart.title), style, source: asString(chart.source) }] : []
     }),
   }
 }

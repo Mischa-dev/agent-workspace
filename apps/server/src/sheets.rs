@@ -21,6 +21,8 @@
 //! sheet's own row lock orders writes to one sheet.
 
 pub mod address;
+pub mod chart_ops;
+pub mod charts;
 pub mod conditional;
 pub mod engine;
 pub mod history;

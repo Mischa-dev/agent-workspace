@@ -986,3 +986,118 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
         "the rule moved: {moved}"
     );
 }
+
+/// C1.18: a chart over a named range follows its cells: it reads them as
+/// they are, keeps to the range as rows go in above it, and draws an SVG
+/// for agents; one whose range is removed says so instead of guessing.
+#[tokio::test]
+async fn a_chart_over_a_named_range_follows_its_cells() {
+    let Some(setup) = setup("c1_sheet_charts").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "CHART", "Charts").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "CHART",
+            "name": "Costs",
+            "cells": [
+                {"cell": "A1", "input": "Item"}, {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "Rent"}, {"cell": "B2", "input": "1200"},
+                {"cell": "A3", "input": "Food"}, {"cell": "B3", "input": "300"},
+            ],
+            "clientRequestId": "costs-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let named = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "range": "A1:B3", "clientRequestId": "spend"}),
+    )
+    .await;
+    assert_eq!(named["outcome"], "ok", "{named}");
+    let refused = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nothing", "source": "Nowhere", "clientRequestId": "bad-chart"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let charted = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Spend", "style": "bar", "source": "Spend", "clientRequestId": "chart-1"}),
+    )
+    .await;
+    assert_eq!(charted["outcome"], "ok", "{charted}");
+    let chart = charted["value"]["chartId"]
+        .as_str()
+        .expect("chart")
+        .to_owned();
+    let read = |call_name: &'static str| {
+        let chart = chart.clone();
+        let sheet = sheet.clone();
+        let call = &call;
+        async move { call(call_name, json!({"sheetId": sheet, "chartId": chart})).await }
+    };
+    let first = read("sheet_chart_get").await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(
+        first["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 300.0}]),
+        "{first}"
+    );
+    assert!(
+        first["value"]["svg"]
+            .as_str()
+            .is_some_and(|svg| svg.starts_with("<svg")),
+        "{first}"
+    );
+
+    // A cell changes, and rows go in above: the chart reads the range where it is.
+    let changed = call(
+        "sheet_write",
+        json!({"projectId": "CHART", "sheet": sheet, "cells": [{"cell": "B3", "input": "450"}],
+               "clientRequestId": "costs-2"}),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "CHART", "sheet": sheet,
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 2}], "clientRequestId": "costs-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let after = read("sheet_chart_get").await;
+    assert_eq!(
+        after["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 450.0}]),
+        "{after}"
+    );
+
+    // The range goes: the chart says what it draws isn't there.
+    let removed = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "remove": true, "clientRequestId": "unspend"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let gone = read("sheet_chart_get").await;
+    assert_eq!(gone["value"]["found"], false, "{gone}");
+    let dropped = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "chartId": chart, "remove": true, "clientRequestId": "drop-chart"}),
+    )
+    .await;
+    assert_eq!(dropped["outcome"], "ok", "{dropped}");
+    assert_eq!(dropped["value"]["charts"], json!([]), "{dropped}");
+}

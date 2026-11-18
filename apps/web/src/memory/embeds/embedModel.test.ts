@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { collectionEmbed, embedTarget, fileEmbed, sheetEmbed } from './embedModel'
+import { collectionEmbed, embedTarget, fileEmbed, sheetChartEmbed, sheetEmbed } from './embedModel'
 
 describe('what an embed shows', () => {
   it('reads a collection and its view from the path, and anything else as a link', () => {
@@ -20,8 +20,8 @@ describe('what an embed shows', () => {
   })
 
   it('reads a sheet, its tab and range from the path, and names them', () => {
-    expect(embedTarget('/projects/p/sheets/s?tab=t&range=A1%3AC4')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: 't', range: 'A1:C4', name: null })
-    expect(embedTarget('/projects/p/sheets/s')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: null, range: null, name: null })
+    expect(embedTarget('/projects/p/sheets/s?tab=t&range=A1%3AC4')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: 't', range: 'A1:C4', name: null, chart: null })
+    expect(embedTarget('/projects/p/sheets/s')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: null, range: null, name: null, chart: null })
     expect(embedTarget('/projects/p/sheets')).toEqual({ kind: 'link' })
     const sheet = { id: 's', name: 'Budget' }
     expect(sheetEmbed('p', sheet, { id: 't', name: 'Q1' }, 2, 'A1:C4')).toEqual({ href: '/projects/p/sheets/s?tab=t&range=A1%3AC4', label: 'Budget · Q1 A1:C4' })
@@ -30,6 +30,7 @@ describe('what an embed shows', () => {
     // A named range is kept by its name alone, so the embed follows it.
     expect(sheetEmbed('p', sheet, { id: 't', name: 'Q1' }, 2, 'A1:C4', 'Totals')).toEqual({ href: '/projects/p/sheets/s?name=Totals', label: 'Budget · Totals' })
     expect(embedTarget('/projects/p/sheets/s?name=Totals')).toMatchObject({ kind: 'sheet', name: 'Totals', tabId: null })
+    expect(embedTarget(sheetChartEmbed('p', { id: 's', name: 'Plan' }, { id: 'c1', title: 'Costs' }).href)).toMatchObject({ kind: 'sheet', chart: 'c1' })
   })
 
   it('reads a file of the page from its path', () => {

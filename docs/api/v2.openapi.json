@@ -338,6 +338,48 @@
         ],
         "type": "object"
       },
+      "Chart": {
+        "description": "A chart as stored.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "description": "What it draws: a named range or a block such as Summary!A1:B12.",
+            "type": "string"
+          },
+          "style": {
+            "description": "bar, line, donut or number.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "style",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ChartPoint": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "type": "object"
+      },
       "ChartStyle": {
         "description": "How a chart draws its groups.",
         "oneOf": [
@@ -45899,6 +45941,801 @@
         "summary": "Change scheduled message",
         "tags": [
           "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/sheet_chart_get": {
+      "post": {
+        "description": "A sheet's chart as its labels and numbers now, with an SVG picture of it.",
+        "operationId": "sheet_chart_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "chartId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "sheetId": {
+                    "description": "The sheet: its id or link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "withoutPicture": {
+                    "description": "Leave out the SVG picture.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "sheetId",
+                  "chartId"
+                ],
+                "title": "SheetChartGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A chart as stored.",
+                          "properties": {
+                            "found": {
+                              "description": "False when its source names nothing now (a named range removed).",
+                              "type": "boolean"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "measure": {
+                              "description": "What its numbers are, from the header row (such as \"sum of Cost\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "points": {
+                              "description": "Its labels and numbers in order; empty when the source names nothing.",
+                              "items": {
+                                "$ref": "#/components/schemas/ChartPoint"
+                              },
+                              "type": "array"
+                            },
+                            "source": {
+                              "description": "What it draws: a named range or a block such as Summary!A1:B12.",
+                              "type": "string"
+                            },
+                            "style": {
+                              "description": "bar, line, donut or number.",
+                              "type": "string"
+                            },
+                            "svg": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "total": {
+                              "description": "Every number added up.",
+                              "format": "double",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "title",
+                            "style",
+                            "source",
+                            "points",
+                            "found"
+                          ],
+                          "title": "SheetChartOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A chart as stored.",
+                          "properties": {
+                            "found": {
+                              "description": "False when its source names nothing now (a named range removed).",
+                              "type": "boolean"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "measure": {
+                              "description": "What its numbers are, from the header row (such as \"sum of Cost\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "points": {
+                              "description": "Its labels and numbers in order; empty when the source names nothing.",
+                              "items": {
+                                "$ref": "#/components/schemas/ChartPoint"
+                              },
+                              "type": "array"
+                            },
+                            "source": {
+                              "description": "What it draws: a named range or a block such as Summary!A1:B12.",
+                              "type": "string"
+                            },
+                            "style": {
+                              "description": "bar, line, donut or number.",
+                              "type": "string"
+                            },
+                            "svg": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "total": {
+                              "description": "Every number added up.",
+                              "format": "double",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "title",
+                            "style",
+                            "source",
+                            "points",
+                            "found"
+                          ],
+                          "title": "SheetChartOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Read a sheet chart",
+        "tags": [
+          "sheets"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/sheet_chart_set": {
+      "post": {
+        "description": "Add a chart of a block of a sheet (a named range keeps it in place as rows move), or change or remove one. It shows the cells as they are; a page embeds it. Needs \"Edit sheets\" where it acts.",
+        "operationId": "sheet_chart_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "chartId": {
+                    "description": "The chart to change or remove; leave out to add one.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "remove": {
+                    "type": "boolean"
+                  },
+                  "sheetId": {
+                    "description": "The sheet: its id or link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "source": {
+                    "description": "What it draws: a named range, or a block such as Summary!A1:B12\n(labels in its first column, numbers in its second).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "style": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ChartStyle"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "bar (the default), line, donut or number."
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "sheetId"
+                ],
+                "title": "SheetChartSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "chartId": {
+                              "description": "The chart added or changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "charts": {
+                              "description": "The sheet's charts now, in order.",
+                              "items": {
+                                "$ref": "#/components/schemas/Chart"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "charts"
+                          ],
+                          "title": "SheetChartsOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "chartId": {
+                              "description": "The chart added or changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "charts": {
+                              "description": "The sheet's charts now, in order.",
+                              "items": {
+                                "$ref": "#/components/schemas/Chart"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "charts"
+                          ],
+                          "title": "SheetChartsOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Chart a sheet range",
+        "tags": [
+          "sheets"
         ],
         "x-operation-kind": "change"
       }
