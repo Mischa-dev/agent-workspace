@@ -1778,6 +1778,15 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("custom emoji");
+    // C2.17: rook's avatar, served only to people who share a workspace.
+    sqlx::query(
+        "INSERT INTO account_profiles (account_id, avatar, avatar_type) VALUES ($1, $2, 'image/png')",
+    )
+    .bind(rook)
+    .bind(tiny_png())
+    .execute(pool)
+    .await
+    .expect("avatar");
     let module = Uuid::now_v7();
     sqlx::query(
         r#"

@@ -484,7 +484,10 @@ async fn a_run_in_a_private_thread_stays_private() {
     };
     full.run(&pool).await.expect("migrate");
     let seed = seed(&pool, &root).await;
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1) UPDATE conversations SET visibility = 'members' WHERE id = $1",
+    )
         .bind(seed.channel_id)
         .execute(&pool)
         .await

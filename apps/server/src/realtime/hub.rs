@@ -342,6 +342,9 @@ pub(super) fn checked_delivery(
                 | "account.managers.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -365,6 +368,7 @@ pub(super) fn checked_delivery(
                 | "notifications.updated"
                 | "account.managers.changed"
                 | "account.status.changed"
+                | "account.profile_changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
@@ -375,6 +379,9 @@ pub(super) fn checked_delivery(
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
         let project_scoped_event = matches!(
@@ -384,6 +391,7 @@ pub(super) fn checked_delivery(
                 | "notifications.updated"
                 | "account.managers.changed"
                 | "account.status.changed"
+                | "account.profile_changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
@@ -394,6 +402,9 @@ pub(super) fn checked_delivery(
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "sidebar.changed"
+                | "saved_searches.changed"
+                | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {

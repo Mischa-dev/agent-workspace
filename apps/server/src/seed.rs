@@ -251,6 +251,25 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(project_id)
     .fetch_one(&mut *transaction)
     .await?;
+    // Everyone in the project is in it (C2.7), where the schema has members.
+    if sqlx::query_scalar::<_, bool>("SELECT to_regclass('conversation_members') IS NOT NULL")
+        .fetch_one(&mut *transaction)
+        .await?
+    {
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+            SELECT $1, $2, membership.actor_id, membership.actor_id
+            FROM project_memberships membership
+            WHERE membership.project_id = $1 AND membership.enabled
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(project_id)
+        .bind(channel_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
 
     // Upgrade tests also seed schemas from before threads could go unnamed,
     // whose unique thread names have no unnamed threads to leave out.

@@ -427,7 +427,8 @@ async fn receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    state.rate_limits.check_incoming_hook(hook_id).await?;
+    // The hook is looked up first, by its key alone, so an address naming
+    // no hook keeps no counter: per-hook counters exist only for real hooks.
     let target = sqlx::query_as::<_, Target>(
         "SELECT workspace_id, space_id, secret_id FROM incoming_hooks WHERE id = $1",
     )
@@ -437,6 +438,7 @@ async fn receive(
     let Some(target) = target else {
         return Err(AppError::NotFound("incoming hook"));
     };
+    state.rate_limits.check_incoming_hook(hook_id).await?;
     state
         .rate_limits
         .check_workspace_public_submission(target.workspace_id)

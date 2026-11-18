@@ -5,7 +5,8 @@ import { listThreads } from './sidebarApi'
 /** Suggested thread statuses. Any short status works too. */
 export const THREAD_STATUSES = ['Open', 'In progress', 'Decided', 'Done', 'Dropped', 'Blocked']
 
-const SETTLED = new Set(['decided', 'done', 'dropped'])
+// A discussion's "Resolved" closes a thread too.
+const SETTLED = new Set(['decided', 'done', 'dropped', 'resolved'])
 
 export function isSettled(status: string) {
   return SETTLED.has(status.toLowerCase())

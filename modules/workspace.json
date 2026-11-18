@@ -17,6 +17,13 @@
     "status_set": "change",
     "status_delete": "change",
     "status_list": "query",
+    "profile_get": "describe",
+    "profile_update": "change",
+    "profile_avatar_list": "query",
+    "group_list": "query",
+    "saved_search_list": "query",
+    "saved_search_set": "change",
+    "place_search": "query",
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",
@@ -99,6 +106,7 @@
     "/live/v1/*",
     "/api/v1/account/*",
     "/api/v1/account-claims/*",
+    "/api/v1/accounts/{id}/avatar",
     "/api/v1/invite-links/*",
     "/api/v1/links/resolve",
     "/api/v1/auth/*",
@@ -112,6 +120,7 @@
     "/api/v1/home",
     "/api/v1/notification-settings*",
     "/api/v1/notification-actions",
+    "/api/v1/push-receipts",
     "/api/v1/organizations/{organization_id}*",
     "/api/v1/push/*",
     "/api/v1/realtime",
@@ -123,7 +132,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["account.access_changed", "account.status_changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "link.created", "link.deleted", "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
+    "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "link.created", "link.deleted", "saved_searches.changed", "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],
@@ -180,6 +189,8 @@
       "a:sign-out",
       "g:home",
       "g:search",
+      "j:*",
+      "ss:*",
       "g:appearance",
       "g:settings",
       "theme:*"

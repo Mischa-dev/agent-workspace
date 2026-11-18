@@ -954,7 +954,10 @@ async fn people_arrive_where_their_role_says() {
             .await
             .expect("owner");
     // Both private; the owner is in leads only.
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = ANY($1)")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = ANY($1)) UPDATE conversations SET visibility = 'members' WHERE id = ANY($1)",
+    )
         .bind(vec![leads_id, secret_id])
         .execute(&setup.pool)
         .await

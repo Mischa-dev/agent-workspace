@@ -23,5 +23,6 @@ export function useCustomEmoji(enabled: boolean, workspace?: string | null): Rea
     name: emoji.name,
     label: `:${emoji.name}:`,
     imageUrl: emoji.imageUrl,
+    customEmojiId: emoji.id,
   }))
 }
