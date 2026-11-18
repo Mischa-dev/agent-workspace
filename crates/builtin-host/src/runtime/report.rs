@@ -256,15 +256,20 @@ fn short(key: &str) -> String {
 /// One step as a run activity.
 pub fn activity(key: &str, step: &str, summary: &str, payload: Value, in_thread: bool) -> Value {
     let kind = activity_kind(step, &payload);
-    let mut payload = activity_payload(step, payload);
-    if kind == "tool_call" {
+    let mut payload = activity_payload(step, payload, in_thread);
+    // A tool call's start and its completion are two activities of one
+    // call: their ids differ by step, their toolCallRef is the item's key.
+    let id = if kind == "tool_call" {
         payload["toolCallRef"] = json!(client_id(key));
-    }
+        client_id(&format!("{key}:{step}"))
+    } else {
+        client_id(key)
+    };
     if in_thread {
         payload["inThread"] = Value::Bool(true);
     }
     json!({
-        "id": client_id(key),
+        "id": id,
         "kind": kind,
         "summary": summary.chars().take(2_000).collect::<String>(),
         "payload": payload,
@@ -290,8 +295,10 @@ fn activity_kind(step: &str, payload: &Value) -> &'static str {
 }
 
 /// What the activity's payload holds: the step's own, its name, and the
-/// outcome a finishing step reports.
-fn activity_payload(step: &str, payload: Value) -> Value {
+/// outcome a finishing step reports. What the agent says in its thread is
+/// never cut here: the server keeps up to a whole message of it and posts
+/// it, so dropping it would lose the reply.
+fn activity_payload(step: &str, payload: Value, in_thread: bool) -> Value {
     let to = payload.get("to").and_then(Value::as_str).map(str::to_owned);
     let mut fields = match payload {
         Value::Object(fields) => fields,
@@ -313,7 +320,7 @@ fn activity_payload(step: &str, payload: Value) -> Value {
         fields.insert("role".to_owned(), Value::String("note".to_owned()));
     }
     let payload = Value::Object(fields);
-    if payload.to_string().len() > MAX_PAYLOAD_BYTES {
+    if !in_thread && payload.to_string().len() > MAX_PAYLOAD_BYTES {
         return json!({"step": step, "truncated": true});
     }
     payload
@@ -325,4 +332,28 @@ fn client_id(key: &str) -> String {
         return key.to_owned();
     }
     format!("sha256:{}", hex::encode(Sha256::digest(key.as_bytes())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_reply_in_the_thread_keeps_its_text() {
+        let long = "word ".repeat(20_000);
+        let said = activity("k", "agent_reply", "Said", json!({"text": long}), true);
+        assert_eq!(said["payload"]["text"], long.as_str());
+        assert_eq!(said["payload"]["inThread"], true);
+        let noted = activity("k", "agent_note", "Note", json!({"text": long}), false);
+        assert_eq!(noted["payload"]["truncated"], true);
+    }
+
+    #[test]
+    fn a_tool_calls_start_and_completion_are_two_activities_of_one_call() {
+        let started = activity("t1", "command_started", "Ran", json!({}), true);
+        let completed = activity("t1", "command_completed", "Ran", json!({}), true);
+        assert_ne!(started["id"], completed["id"]);
+        assert_eq!(started["payload"]["toolCallRef"], "t1");
+        assert_eq!(completed["payload"]["toolCallRef"], "t1");
+    }
 }
