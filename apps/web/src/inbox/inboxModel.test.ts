@@ -15,17 +15,20 @@ const base: InboxNotification = {
   read: false,
   archived: false,
   snoozedUntil: null,
+  untilActivity: false,
+  replyConversationId: null,
   at: '2026-10-16T08:00:00.000000Z',
   href: '/projects/p1/channels/c1',
   launchHref: null,
   request: null,
   batch: null,
+  attention: 'needs_you',
 }
 
 describe('inbox model', () => {
   it('puts what asks something of you first, and the rest under FYI', () => {
     const mention = { ...base, id: 'm' }
-    const done = { ...base, id: 'd', kind: 'run_completed' }
+    const done = { ...base, id: 'd', kind: 'run_completed', attention: 'fyi' as const }
     const approval = { id: 'a1', kind: 'approval', status: 'open', title: 'Allow it?', options: [], allowText: false, answer: null }
     const pending = { ...base, id: 'p', kind: 'request_raised', request: approval }
     const answered = { ...pending, id: 'x', request: { ...approval, status: 'answered' } }
@@ -65,6 +68,9 @@ describe('inbox model', () => {
     })
     expect(page.notifications).toHaveLength(1)
     expect(page.notifications[0].href).toBe('/projects/p1')
+    // The server says what needs you; anything else reads as FYI.
+    expect(page.notifications[0].attention).toBe('needs_you')
+    expect(normalizePage({ notifications: [{ ...base, attention: 'maybe' }] }).notifications[0].attention).toBe('fyi')
     expect(page.nextCursor).toBe('1.x')
     expect(page.unreadCount).toBe(3)
   })

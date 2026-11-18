@@ -62,12 +62,70 @@ pub struct Slots {
     /// Keyboard shortcuts, by action.
     #[serde(default)]
     pub shortcuts: Vec<String>,
-    /// Slash commands in the message box, by name.
+    /// Slash commands in the message box: a name the web app handles
+    /// itself, or a command that runs an operation (C2.24).
     #[serde(default)]
-    pub slash: Vec<String>,
+    pub slash: Vec<SlashEntry>,
     /// Setup steps (`onboarding::STEPS`).
     #[serde(default)]
     pub setup: Vec<String>,
+}
+
+/// A slash command a module adds (C2.24): by name only when the web app
+/// runs it itself (`/remind`, `/mute`), or with the operation it runs.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum SlashEntry {
+    Name(String),
+    Command(SlashCommand),
+}
+
+impl SlashEntry {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Name(name) => name,
+            Self::Command(command) => &command.name,
+        }
+    }
+}
+
+/// A slash command that runs an operation: `/task Fix the login` calls
+/// `task_create` with `title` set to what follows the name.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SlashCommand {
+    pub name: String,
+    /// What follows the name, as the list shows it.
+    #[serde(default)]
+    pub usage: String,
+    pub description: String,
+    /// The web app's icon for it.
+    pub icon: String,
+    /// The operation it runs.
+    pub operation: String,
+    /// What follows the name: `text` (required, into `field`) or `none`.
+    pub args: SlashArgs,
+    /// The input field the text goes in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// `space`: only in a space's conversations, and the call names the
+    /// space (`projectId`); `any`: anywhere.
+    #[serde(rename = "where")]
+    pub place: SlashPlace,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashArgs {
+    Text,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashPlace {
+    Space,
+    Any,
 }
 
 /// Where a module's web part lives.

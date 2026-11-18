@@ -46,6 +46,31 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "saved_searches",
+                table: "saved_searches",
+                references: &[("account_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "account_groups",
+                table: "account_groups",
+                references: &[("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "account_group_members",
+                table: "account_group_members",
+                references: &[
+                    ("group_id", "account_groups"),
+                    ("account_id", "actors"),
+                    ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_emojis",
                 table: "custom_emojis",
                 references: &[
@@ -719,6 +744,24 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("external_agent_connection_id", "external_agent_connections"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
                     ("message_id", "messages"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "sidebar_sections",
+                table: "sidebar_sections",
+                references: &[("account_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "sidebar_items",
+                table: "sidebar_items",
+                references: &[
+                    ("section_id", "sidebar_sections"),
+                    ("account_id", "actors"),
+                    ("conversation_id", "conversations"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1480,6 +1523,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             ),
             ("notification_email_digests", "a delivery log"),
             ("push_deliveries", "a delivery log"),
+            ("push_receipts", "a delivery log"),
             (
                 "push_subscriptions",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",

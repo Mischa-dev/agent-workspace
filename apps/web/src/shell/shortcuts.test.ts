@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { filterCommands, type CommandItem } from '../ui'
-import { pageTitleFor, unreadCount } from './documentTitleModel'
+import { pageTitleFor } from './documentTitleModel'
 import { SHORTCUTS } from './shortcutSheet'
 import { createShortcutMatcher, parseTaskKey } from './shortcuts'
 
@@ -108,10 +108,6 @@ describe('command menu filtering', () => {
 
 describe('document title', () => {
   const projects = [{ id: 'p1', name: 'Agent Workspace', attentionCount: 2, archivedAt: null }, { id: 'p2', name: 'Old', attentionCount: 5, archivedAt: '2026-01-01' }]
-
-  it('counts the inbox’s unread and the conversations with unread messages', () => {
-    expect(unreadCount(2, [{ unread: true }, { unread: false }])).toBe(3)
-  })
 
   it('names the page and its project', () => {
     expect(pageTitleFor('/projects/p1/work-items', '?view=board', projects, null)).toBe('Board · Agent Workspace')

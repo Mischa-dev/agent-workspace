@@ -360,7 +360,10 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             // A paused account's answer (A2.10) is the same for every
             // operation: shared too.
             Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
-            Some("ok") => continue,
+            Some("ok") => {
+                share_envelope(branch, components);
+                continue;
+            }
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
             // all: shared too, under the first name free or already
@@ -381,6 +384,31 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
     }
+}
+
+/// The `ok` branch's envelope (`outcome`, `paused`, `requestId`, ...) is the
+/// same for every operation; only its `value` differs. The envelope is
+/// written once as `Answered` and the branch refers to it beside its own
+/// `value`.
+fn share_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
+    let Some(properties) = branch.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let envelope = properties
+        .iter()
+        .filter(|(name, _)| *name != "value")
+        .map(|(name, schema)| (name.clone(), schema.clone()))
+        .collect::<Map<String, Value>>();
+    let shared = json!({ "type": "object", "properties": envelope });
+    if components
+        .entry("Answered".to_owned())
+        .or_insert_with(|| shared.clone())
+        != &shared
+    {
+        return;
+    }
+    properties.retain(|name, _| name == "value");
+    branch["$ref"] = json!("#/components/schemas/Answered");
 }
 
 fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
@@ -498,7 +526,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
-        let output = tool
+        let (result, output) = tool
             .output_schema
             .as_ref()
             .map(|schema| {
@@ -518,30 +546,26 @@ pub(crate) fn document() -> Value {
                         key
                     }
                 };
-                json!({ "$ref": format!("#/components/schemas/{key}") })
+                let reference = json!({ "$ref": format!("#/components/schemas/{key}") });
+                (key, reference)
             })
-            .unwrap_or_else(|| json!({ "type": "object" }));
-        // One response per operation, its own result: 200 and the refusing
-        // statuses (403, 404, 409, 422, 503, through the 4XX and 5XX ranges)
-        // all point at it, as a refusal is the result with its `outcome`.
-        // The introduction says what each status means. The statuses every
-        // operation answers the same way are named, which takes precedence
-        // over a range.
-        let answer = format!("{}Answer", pascal(&name));
-        refusals.insert(
-            answer.clone(),
+            .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
+        // The result, and a refusal (the same result with its `outcome`),
+        // are one response that 200 and the refusing statuses point at,
+        // shared by every operation with that result, so the document stays
+        // small as tools are added. The introduction says what each status
+        // means.
+        refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "The result; its `outcome` says whether it worked.",
+                "description": "See `outcome`.",
                 "content": { "application/json": { "schema": output } },
-            }),
-        );
+            })
+        });
         let mut responses = Map::new();
-        for status in ["200", "4XX", "5XX"] {
-            responses.insert(
-                status.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{answer}") }),
-            );
-        }
+        responses.insert(
+            "200".to_owned(),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
+        );
         for (status, _) in ERROR_STATUSES {
             if !refuses(status) {
                 // The same for every operation, so referenced rather than
@@ -551,6 +575,12 @@ pub(crate) fn document() -> Value {
                     json!({ "$ref": format!("#/components/responses/Error{status}") }),
                 );
             }
+        }
+        for range in ["4XX", "5XX"] {
+            responses.insert(
+                range.to_owned(),
+                json!({ "$ref": format!("#/components/responses/{result}") }),
+            );
         }
         paths.insert(
             format!("/{name}"),
@@ -629,6 +659,7 @@ fn share_common_properties(document: &mut Value) {
     const SHARED: &[(&str, &str)] = &[
         ("workspace", "WorkspaceSelector"),
         ("clientRequestId", "ClientRequestId"),
+        ("projectId", "ProjectSelector"),
     ];
     for (property, component) in SHARED {
         let mut seen: BTreeMap<String, (usize, Value)> = BTreeMap::new();

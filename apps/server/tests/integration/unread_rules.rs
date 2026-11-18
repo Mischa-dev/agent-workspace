@@ -459,3 +459,120 @@ async fn unread_follows_the_rules() {
 
     world.finish().await;
 }
+
+/// C2.4: the badge counts the places that need you, once each, on the
+/// server: five mentions in one channel and two DMs are three, and a run
+/// finishing (for your information) adds nothing. Each notification says
+/// which it is.
+#[tokio::test]
+async fn the_badge_counts_what_needs_you() {
+    let Some(world) = WorldBuilder::default()
+        .project("BD")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nina", "member")
+        .dm("lena", "mara")
+        .dm("nina", "mara")
+        .build("c2_4_badge")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let project = world.project("BD").to_owned();
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let nina = &world.people["nina"];
+    let (status, created) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("badge-general"),
+            json!({"name": "general"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{created}");
+    let general = created["conversation"]["id"]
+        .as_str()
+        .or_else(|| created["id"].as_str())
+        .expect("channel")
+        .to_owned();
+    let post = |browser: &Browser, conversation: String, key: String, content: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{conversation}/messages"),
+            Some(&key),
+            json!({ "content": content }),
+        );
+        async move {
+            let (status, sent) = send(app, request).await;
+            assert!(status.is_success(), "{key}: {sent}");
+        }
+    };
+    for n in 0..5 {
+        post(
+            &lena.browser,
+            general.clone(),
+            format!("badge-mention-{n}"),
+            mention(mara.actor, "Look "),
+        )
+        .await;
+    }
+    post(
+        &lena.browser,
+        world.conversations["lena+mara"].clone(),
+        "badge-dm-lena".to_owned(),
+        words("Hi"),
+    )
+    .await;
+    post(
+        &nina.browser,
+        world.conversations["nina+mara"].clone(),
+        "badge-dm-nina".to_owned(),
+        words("Hello"),
+    )
+    .await;
+    drain_outbox(&world.state).await;
+    // A run finishing is for your information.
+    sqlx::query(
+        "INSERT INTO notifications (id, project_id, recipient_actor_id, kind, subject_kind, \
+         subject_id, group_key) VALUES ($1, $2::uuid, $3, 'run_completed', 'agent_run', $1, $4)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&project)
+    .bind(mara.actor)
+    .bind(format!("run:{}", Uuid::now_v7()))
+    .execute(pool)
+    .await
+    .expect("a finished run");
+
+    let (status, summary) = send(
+        app,
+        mara.browser
+            .request("GET", "/api/v1/inbox/summary", None, Value::Null),
+    )
+    .await;
+    assert!(status.is_success(), "{summary}");
+    assert_eq!(summary["needsYouConversations"], 3, "{summary}");
+    assert_eq!(summary["fyiUnread"], 1, "{summary}");
+    let (status, listed) = send(
+        app,
+        mara.browser
+            .request("GET", "/api/v1/inbox?limit=50", None, Value::Null),
+    )
+    .await;
+    assert!(status.is_success(), "{listed}");
+    for notification in listed["notifications"].as_array().expect("notifications") {
+        let expected = if notification["kind"] == "run_completed" {
+            "fyi"
+        } else {
+            "needs_you"
+        };
+        assert_eq!(notification["attention"], expected, "{notification}");
+    }
+
+    world.finish().await;
+}

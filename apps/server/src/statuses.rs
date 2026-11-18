@@ -252,6 +252,32 @@ pub async fn announce(
     Ok(())
 }
 
+/// Announces a change to `account_id`'s status wherever it shows: a line
+/// about one workspace's work in that workspace, an account-wide one in
+/// every workspace the account is in (readers in each have it on screen).
+pub async fn announce_where_shown(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    workspace_only: Option<Uuid>,
+) -> Result<(), AppError> {
+    let workspaces = match workspace_only {
+        Some(workspace_id) => vec![workspace_id],
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT organization_id FROM organization_memberships \
+                 WHERE actor_id = $1 AND enabled ORDER BY organization_id LIMIT 50",
+            )
+            .bind(account_id)
+            .fetch_all(&mut **transaction)
+            .await?
+        }
+    };
+    for workspace in workspaces {
+        announce(transaction, account_id, workspace, workspace_only.is_some()).await?;
+    }
+    Ok(())
+}
+
 /// The statuses shown in `workspace_id` for `accounts`: each account's own
 /// one and its line for this workspace, for accounts that are members of it
 /// (anyone else's status is none of this workspace's business). Expired
@@ -447,28 +473,7 @@ pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError>
     .fetch_all(&mut *transaction)
     .await?;
     for (account_id, workspace_id) in &cleared {
-        // A status shown everywhere was shown in each of its workspaces.
-        let workspaces = match workspace_id {
-            Some(workspace_id) => vec![*workspace_id],
-            None => {
-                sqlx::query_scalar::<_, Uuid>(
-                    "SELECT organization_id FROM organization_memberships \
-                     WHERE actor_id = $1 AND enabled ORDER BY organization_id LIMIT 50",
-                )
-                .bind(account_id)
-                .fetch_all(&mut *transaction)
-                .await?
-            }
-        };
-        for workspace in workspaces {
-            announce(
-                &mut transaction,
-                *account_id,
-                workspace,
-                workspace_id.is_some(),
-            )
-            .await?;
-        }
+        announce_where_shown(&mut transaction, *account_id, *workspace_id).await?;
     }
     // A paused account's own words run out; the pause stays.
     sqlx::query(

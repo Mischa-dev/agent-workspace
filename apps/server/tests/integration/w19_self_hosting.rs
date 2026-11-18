@@ -29,7 +29,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{Browser, PASSWORD, connect_app, send},
     mcp_admin::{Setup, create_project},
-    message_edits::{add_person, copies, create_channel, owner_id, say},
+    message_edits::{add_person, copies, create_channel, direct_space, owner_id, say},
     notifications::drain,
     w9_capacity_and_push::{Fixture, call, fixture_with},
 };
@@ -647,7 +647,9 @@ async fn notification_email_waits_for_a_confirmed_address_and_respects_the_diges
     set_up_mail(setup, port).await;
     let project = create_project(setup, "EML", "Email").await;
     let general = create_channel(setup, &project, "general").await;
-    let (mara_id, mara) = add_person(setup, &[&project], "mara").await;
+    // In the direct space too, so the owner can DM her.
+    let direct = direct_space(setup).await;
+    let (mara_id, mara) = add_person(setup, &[&project, &direct], "mara").await;
     let (mara_user, _) = user_of(setup, mara_id).await;
 
     // Without a confirmed address, email can't be chosen to any effect.
@@ -740,6 +742,30 @@ async fn notification_email_waits_for_a_confirmed_address_and_respects_the_diges
         mention("four"),
     )
     .await;
+    // A DM, which Mara never chose email for, still makes the digest, first
+    // (C2.14).
+    let (status, dm) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({"actorId": mara_id}),
+        ),
+    )
+    .await;
+    let dm = dm["conversation"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{status} {dm}"))
+        .to_owned();
+    say(
+        setup,
+        &setup.browser,
+        &dm,
+        "dm-1",
+        json!({"version": 1, "nodes": [{"type": "text", "text": "Straight to you five"}]}),
+    )
+    .await;
     drain(setup).await;
     assert_eq!(queued(notification_email::SEND_KIND).await, 0);
     let before = mail_count(&inbox);
@@ -765,6 +791,14 @@ async fn notification_email_waits_for_a_confirmed_address_and_respects_the_diges
     assert!(
         !digest.body().contains("Look at this three"),
         "read ones stay out"
+    );
+    let body = digest.body();
+    let five = body
+        .find("Straight to you five")
+        .expect("the DM is in the digest");
+    assert!(
+        five < body.find("Look at this four").expect("four"),
+        "DMs come first: {body}"
     );
     // And not again until tomorrow.
     jobs::enqueue(

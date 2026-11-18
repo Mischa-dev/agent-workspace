@@ -550,7 +550,10 @@ async fn private_sources_never_reach_someone_who_cant_see_them() {
         .parse::<Uuid>()
         .expect("channel id");
     // Only the owner belongs to it.
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1) UPDATE conversations SET visibility = 'members' WHERE id = $1",
+    )
         .bind(channel_id)
         .execute(&fixture.pool)
         .await

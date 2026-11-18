@@ -97,7 +97,42 @@ impl Operation for CustomEmojiCreate {
         let account = call.account_id();
         let workspace_id = call.ctx.workspace_id;
         let id = Uuid::now_v7();
+        super::charge_announcement(call.state, workspace_id).await?;
         let tx = call.tx().await?;
+        // One workspace's emoji at a time, so two adds can't both pass the
+        // quota.
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('custom_emoji:' || $1::text, 0))",
+        )
+        .bind(workspace_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(AppError::from)?;
+        let (live, total) = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE retired_at IS NULL), \
+                    COALESCE(sum(octet_length(image)), 0)::bigint \
+             FROM custom_emojis WHERE workspace_id = $1",
+        )
+        .bind(workspace_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(AppError::from)?;
+        if live >= super::MAX_EMOJI {
+            return Err(OpError::Invalid {
+                field: "name".into(),
+                message: format!(
+                    "This workspace has {} emoji, its most: retire one first.",
+                    super::MAX_EMOJI
+                )
+                .into(),
+            });
+        }
+        if total + bytes.len() as i64 > super::MAX_TOTAL_BYTES {
+            return Err(OpError::invalid(
+                "imageBase64",
+                "This workspace's emoji images take all the room they have (16 MB).",
+            ));
+        }
         let view = sqlx::query_as::<_, CustomEmojiView>(&format!(
             r#"
             INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
@@ -230,6 +265,7 @@ impl Operation for CustomEmojiUpdate {
         let workspace_id = call.ctx.workspace_id;
         let caller = call.ctx.caller.clone();
         let id = input.id.id();
+        super::charge_announcement(call.state, workspace_id).await?;
         let tx = call.tx().await?;
         let added_by = sqlx::query_scalar::<_, Uuid>(
             "SELECT created_by_account_id FROM custom_emojis WHERE id = $1 AND workspace_id = $2 FOR UPDATE",

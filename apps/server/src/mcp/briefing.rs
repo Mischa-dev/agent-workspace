@@ -722,12 +722,11 @@ pub(super) async fn project_open(
             let item = summary(state, principal.actor_id, row);
             if item.kind == "channel" {
                 channels.push(item);
-            } else if item.status.as_deref().is_some_and(|status| {
-                !matches!(
-                    status.to_ascii_lowercase().as_str(),
-                    "done" | "dropped" | "decided"
-                )
-            }) && open_threads.len() < 15
+            } else if item
+                .status
+                .as_deref()
+                .is_some_and(|status| !crate::conversations::is_settled_thread_status(status))
+                && open_threads.len() < 15
             {
                 open_threads.push(item);
             }
