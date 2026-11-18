@@ -173,6 +173,8 @@
       "a:sign-out",
       "g:home",
       "g:search",
+      "j:*",
+      "ss:*",
       "g:appearance",
       "g:settings",
       "theme:*"
