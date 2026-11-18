@@ -33,6 +33,20 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// The logged event at `position`, if there is one. The caller decides who
+/// may see it (delivery checks an app's limits with it).
+pub async fn logged_at(
+    connection: &mut PgConnection,
+    position: i64,
+) -> Result<Option<LoggedEvent>, sqlx::Error> {
+    sqlx::query_as::<_, LoggedEvent>(&format!(
+        "SELECT {LOGGED_EVENT_COLUMNS} FROM events WHERE position = $1"
+    ))
+    .bind(position)
+    .fetch_optional(connection)
+    .await
+}
+
 /// Events waiting for a position in the log: how many, and the age in
 /// seconds of the oldest (0 when none wait). For the status page and the
 /// metrics, which read the log only through this module.

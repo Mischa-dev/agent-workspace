@@ -521,29 +521,27 @@ pub(crate) fn document() -> Value {
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));
-        let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({
-                "description": "The result. Its `outcome` says whether it worked.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
+        // One response per operation, its own result: 200 and the refusing
+        // statuses (403, 404, 409, 422, 503, through the 4XX and 5XX ranges)
+        // all point at it, as a refusal is the result with its `outcome`.
+        // The introduction says what each status means. The statuses every
+        // operation answers the same way are named, which takes precedence
+        // over a range.
+        let answer = format!("{}Answer", pascal(&name));
         refusals.insert(
-            refused.clone(),
+            answer.clone(),
             json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
-                "content": { "application/json": { "schema": output.clone() } },
+                "description": "The result; its `outcome` says whether it worked.",
+                "content": { "application/json": { "schema": output } },
             }),
         );
-        // The refusing statuses (403, 404, 409, 422, 503) share it through
-        // the 4XX and 5XX ranges; the statuses every operation answers the
-        // same way are named, which takes precedence over a range.
+        let mut responses = Map::new();
+        for status in ["200", "4XX", "5XX"] {
+            responses.insert(
+                status.to_owned(),
+                json!({ "$ref": format!("#/components/responses/{answer}") }),
+            );
+        }
         for (status, _) in ERROR_STATUSES {
             if !refuses(status) {
                 // The same for every operation, so referenced rather than
@@ -553,12 +551,6 @@ pub(crate) fn document() -> Value {
                     json!({ "$ref": format!("#/components/responses/Error{status}") }),
                 );
             }
-        }
-        for range in ["4XX", "5XX"] {
-            responses.insert(
-                range.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{refused}") }),
-            );
         }
         paths.insert(
             format!("/{name}"),
