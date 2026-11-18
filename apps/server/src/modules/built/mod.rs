@@ -252,7 +252,7 @@ pub async fn object_place(
         "collection" => {
             "SELECT project.organization_id, project.id FROM collections object \
              JOIN projects project ON project.id = object.project_id \
-             WHERE object.id = $1 AND object.builtin IS NULL"
+             WHERE object.id = $1 AND object.builtin IS NULL AND NOT object.acts_like_task"
         }
         "form" => {
             "SELECT object.organization_id, object.project_id FROM bug_report_links object \
@@ -619,6 +619,25 @@ pub async fn collection_parts(
     .bind(module_id)
     .fetch_all(&mut *connection)
     .await?)
+}
+
+/// Detaches every part but `kept` (and its nav entries): those objects
+/// live on as plain ones. A package's removal keeps only what its install
+/// made in the module it archives, so nothing it reused is hidden with it.
+pub async fn detach_all_but(
+    connection: &mut PgConnection,
+    module: &ModuleRow,
+    kept: &[Uuid],
+) -> Result<u64, AppError> {
+    Ok(sqlx::query(
+        "DELETE FROM module_parts WHERE module_id = $1 AND part_kind <> 'nav' \
+         AND NOT (object_id = ANY($2))",
+    )
+    .bind(module.id)
+    .bind(kept)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected())
 }
 
 /// Archives a module. With `keep`, its parts are detached and live on as

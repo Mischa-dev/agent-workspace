@@ -148,6 +148,8 @@ pub(crate) fn status_for(result: &Value) -> StatusCode {
 fn outcome_status(outcome: &str) -> Option<StatusCode> {
     Some(match outcome {
         "ok" | "applied" | "found" | "events" | "requested" => StatusCode::OK,
+        // K2.21: a long call kept and run by a job.
+        "started" => StatusCode::ACCEPTED,
         "not_found" => StatusCode::NOT_FOUND,
         "permission_denied" => StatusCode::FORBIDDEN,
         "invalid_request" | "invalid_transition" | "rejected" => StatusCode::UNPROCESSABLE_ENTITY,
@@ -346,51 +348,27 @@ fn merge_identical(components: &mut Map<String, Value>, others: &mut [&mut Map<S
     }
 }
 
-/// An operation's result is the envelope: its `ok` branch and one branch
-/// per refusal, the same for every operation. Each refusal branch is
+/// An operation's result is the envelope: its `ok` branch, the refusal
+/// branch every operation shares (its `outcome` names which refusal), and
+/// for a long operation the `started` branch. Each branch but `ok` is
 /// written once in `components.schemas` and referenced, which keeps the
 /// document small as operations are added.
 fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
-    for branch in branches {
+    for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
             // A call set aside, by a paused account (A2.10) or a team's
             // guard (A2.27), is answered the same for every operation:
             // shared too.
             Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
-            // The `ok` branch's envelope (everything but its `value`) is the
-            // same for every operation: written once as `Ok`, which each
-            // branch extends with its value. The flags that keep it apart
-            // from SetAside for a validator are left out of the document: a
-            // reader tells the two apart by SetAside's `paused` or
-            // `pendingReview`.
             Some("ok") => {
-                let Some(value) = branch["properties"].get("value").cloned() else {
-                    continue;
-                };
-                let mut envelope = branch.clone();
-                if let Some(properties) = envelope
-                    .get_mut("properties")
-                    .and_then(Value::as_object_mut)
-                {
-                    properties.remove("value");
-                    properties.remove("paused");
-                    properties.remove("pendingReview");
-                }
-                let shared = components
-                    .entry("Ok".to_owned())
-                    .or_insert_with(|| envelope.clone());
-                if *shared == envelope {
-                    *branch = json!({
-                        "allOf": [{ "$ref": "#/components/schemas/Ok" }],
-                        "properties": { "value": value },
-                    });
-                }
+                share_ok_envelope(branch, components);
                 continue;
             }
+            Some("started") => "Started".to_owned(),
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
             // all: shared too, under the first name free or already
@@ -410,6 +388,65 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         if shared == branch {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
+    }
+    // The shared branches together (paused, started, each refusal) are the
+    // same list for most operations: one `oneOf` of them, named once.
+    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+        .drain(..)
+        .partition(|branch| !is_shared_branch(branch));
+    if shared.len() < 2 {
+        branches.extend(kept);
+        branches.extend(shared);
+        return;
+    }
+    let others = json!({ "oneOf": shared });
+    let key = (1..)
+        .map(|index| match index {
+            1 => "NotOk".to_owned(),
+            index => format!("NotOk{index}"),
+        })
+        .find(|key| components.get(key).is_none_or(|known| *known == others))
+        .unwrap_or_default();
+    components.entry(key.clone()).or_insert(others);
+    branches.extend(kept);
+    branches.push(json!({ "$ref": format!("#/components/schemas/{key}") }));
+}
+
+/// A branch that is only a reference to a shared one (not the `ok` branch,
+/// which carries the operation's own value beside its reference).
+fn is_shared_branch(branch: &Value) -> bool {
+    branch
+        .as_object()
+        .is_some_and(|object| object.len() == 1 && object.contains_key("$ref"))
+}
+
+/// The `ok` branch's envelope (everything but its `value`) is the same for
+/// every operation: written once as `Ok` and referenced beside the
+/// operation's own `value`, which keeps the document small as operations
+/// are added.
+fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
+    let Some(object) = branch.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Object(properties)) = object.get("properties") else {
+        return;
+    };
+    let Some(value) = properties.get("value").cloned() else {
+        return;
+    };
+    let mut envelope = object.clone();
+    if let Some(Value::Object(properties)) = envelope.get_mut("properties") {
+        properties.remove("value");
+    }
+    let envelope = Value::Object(envelope);
+    let shared = components
+        .entry("Ok".to_owned())
+        .or_insert_with(|| envelope.clone());
+    if *shared == envelope {
+        *branch = json!({
+            "$ref": "#/components/schemas/Ok",
+            "properties": { "value": value },
+        });
     }
 }
 
@@ -564,13 +601,11 @@ pub(crate) fn document() -> Value {
             })
         });
         let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({ "$ref": format!("#/components/responses/{result}") }),
-        );
-        // The refusing statuses (403, 404, 409, 422, 503) share it through
-        // the 4XX and 5XX ranges; the statuses every operation answers the
-        // same way are named, which takes precedence over a range.
+        let own = json!({ "$ref": format!("#/components/responses/{result}") });
+        responses.insert("200".to_owned(), own.clone());
+        // The refusing statuses (403, 404, 409, 422, 503) and a long call's
+        // 202 share it as the `default` answer; the statuses every operation
+        // answers the same way are named, which take precedence over it.
         for (status, _) in ERROR_STATUSES {
             if !refuses(status) {
                 // The same for every operation, so referenced rather than
@@ -581,29 +616,24 @@ pub(crate) fn document() -> Value {
                 );
             }
         }
-        for range in ["4XX", "5XX"] {
-            responses.insert(
-                range.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{result}") }),
-            );
+        responses.insert("default".to_owned(), own);
+        let mut post = json!({
+            "operationId": name,
+            "summary": title,
+            "description": tool.description.as_deref().unwrap_or_default(),
+            "tags": [tag],
+            "requestBody": {
+                "required": true,
+                "content": { "application/json": { "schema": input } },
+            },
+            "responses": responses,
+        });
+        // Only reads say so: a missing mark is a write, which keeps the
+        // document small as operations are added.
+        if read_only {
+            post["x-read-only"] = true.into();
         }
-        paths.insert(
-            format!("/{name}"),
-            json!({
-                "post": {
-                    "operationId": name,
-                    "summary": title,
-                    "description": tool.description.as_deref().unwrap_or_default(),
-                    "tags": [tag],
-                    "x-read-only": read_only,
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": input } },
-                    },
-                    "responses": responses,
-                }
-            }),
-        );
+        paths.insert(format!("/{name}"), json!({ "post": post }));
     }
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({
@@ -683,6 +713,9 @@ mod tests {
         // Raised from 768 KiB with AWD-62's question tools; past this, serve
         // it compressed or slim the result schemas rather than raise it again.
         let size = serde_json::to_vec(&document).expect("serialize").len();
+        if std::env::var_os("SHOW_PUBLIC_API_SIZE").is_some() {
+            eprintln!("the public API document is {size} bytes");
+        }
         assert!(size < 896 * 1024, "the document is {size} bytes");
         let mut references = Vec::new();
         collect_refs(&document, &mut references);

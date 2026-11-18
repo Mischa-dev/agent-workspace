@@ -707,6 +707,8 @@ impl Operation for ButtonPress {
                 unkeyed: Unkeyed::RunOnce,
                 preview: false,
                 renamed_from: None,
+                // A button's steps run in its press, one after another.
+                defer_long: false,
             };
             let answer =
                 crate::ops::dispatch(call.state, request, &step.operation, arguments).await;

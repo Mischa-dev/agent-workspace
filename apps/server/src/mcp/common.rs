@@ -43,7 +43,7 @@ pub(super) fn archived_task_message(task: &str) -> String {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub(super) enum ToolResult<T> {
+pub(crate) enum ToolResult<T> {
     Ok {
         value: T,
     },
@@ -209,12 +209,14 @@ pub(super) async fn accessible_project_ids_in(
          AND membership.enabled
         WHERE project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
+          AND ($3::uuid IS NULL OR project.organization_id = $3)
         ORDER BY project.id
         LIMIT 500
         "#,
     )
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
+    .bind(principal.workspace_id)
     .fetch_all(executor)
     .await?)
 }

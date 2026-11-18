@@ -2686,6 +2686,7 @@ async fn create_acceptance_criterion(
     let operations = [CriteriaOperation::Add {
         text: request.text.clone(),
         position: None,
+        completed: false,
     }];
     let outcome = change_criteria(
         &mut transaction,

@@ -319,7 +319,7 @@ async fn webhooks_and_automations_walk() {
         "/task_create",
         "/task_list",
         "/connection_create",
-        "/automation_write",
+        "/automation_create",
     ] {
         assert!(
             document.2["paths"][operation]["post"].is_object(),

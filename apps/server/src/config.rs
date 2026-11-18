@@ -186,6 +186,18 @@ pub struct AppConfig {
     /// How long a lease lives unless renewed (K5.2): renewed every third,
     /// given up by its holder after two thirds.
     pub lease_ttl: Duration,
+    /// A folder of packages (`*.json` inline packages, `*.zip` packages, or
+    /// folders holding a `package.json`) every workspace's directory lists
+    /// (`AGENT_WORKSPACE_DIRECTORY_DIR`, M1.11). Read at start-up and hourly.
+    pub directory_dir: Option<PathBuf>,
+    /// URL lists (a JSON index of packages) every workspace's directory
+    /// lists (`AGENT_WORKSPACE_DIRECTORY_URLS`, separated by spaces or
+    /// commas).
+    pub directory_urls: Vec<String>,
+    /// Whether a workspace may add its own URL lists to its directory
+    /// (`AGENT_WORKSPACE_DIRECTORY_WORKSPACE_SOURCES`; on, except on a
+    /// hosted server).
+    pub directory_workspace_sources: bool,
     /// What this instance does (K5.7): `AGENT_WORKSPACE_ROLES`, any of
     /// `api`, `live` and `work` (default all three).
     pub roles: crate::cluster::Roles,
@@ -675,6 +687,43 @@ impl AppConfig {
                 reason: "must be between 2 and 300".into(),
             });
         }
+        let directory_dir = values
+            .get(&format!("{PREFIX}DIRECTORY_DIR"))
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        if directory_dir
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DIRECTORY_DIR"),
+                reason: "name an absolute directory".into(),
+            });
+        }
+        let directory_urls = optional(values, "DIRECTORY_URLS", "")
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if directory_urls
+            .iter()
+            .any(|url| !(url.starts_with("https://") || url.starts_with("http://")))
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DIRECTORY_URLS"),
+                reason: "list http or https URLs separated by spaces or commas".into(),
+            });
+        }
+        let directory_workspace_sources = parse(
+            values,
+            "DIRECTORY_WORKSPACE_SOURCES",
+            if profile == Profile::Hosted {
+                "false"
+            } else {
+                "true"
+            },
+        )?;
         let roles = optional(values, "ROLES", "api,live,work")
             .parse::<crate::cluster::Roles>()
             .map_err(|reason| ConfigError::Invalid {
@@ -762,6 +811,9 @@ impl AppConfig {
             server_mail,
             instance_label,
             lease_ttl: Duration::from_secs(lease_seconds),
+            directory_dir,
+            directory_urls,
+            directory_workspace_sources,
             roles,
             builtin_host,
             drain: Duration::from_secs(drain_seconds),

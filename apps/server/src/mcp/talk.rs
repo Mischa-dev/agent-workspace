@@ -167,9 +167,9 @@ pub(super) struct PeopleSearchArguments {
     pub limit: Option<u16>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ThreadStartArguments {
+pub(crate) struct ThreadStartArguments {
     /// The channel, DM, or group the thread goes in.
     pub conversation_id: String,
     /// Start the thread from this message, by ID or link (the usual case
@@ -182,9 +182,9 @@ pub(super) struct ThreadStartArguments {
     pub text: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ThreadUpdateArguments {
+pub(crate) struct ThreadUpdateArguments {
     pub thread_id: String,
     /// A new name.
     pub name: Option<String>,
@@ -203,7 +203,7 @@ pub(super) struct ThreadUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ConversationSummary {
+pub(crate) struct ConversationSummary {
     pub id: String,
     pub kind: String,
     pub name: String,
@@ -231,7 +231,7 @@ pub(super) struct ConversationSummary {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LastMessage {
+pub(crate) struct LastMessage {
     pub author: String,
     /// "Message removed" when it was removed.
     pub text: String,
@@ -398,7 +398,7 @@ pub(super) struct ParentRef {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PinItem {
+pub(crate) struct PinItem {
     pub kind: String,
     pub id: String,
     pub title: String,
@@ -504,7 +504,7 @@ pub(super) struct PeopleValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThreadValue {
+pub(crate) struct ThreadValue {
     pub id: String,
     pub name: String,
     pub status: String,
@@ -2114,7 +2114,7 @@ pub(super) async fn people_search(
 // ---------------------------------------------------------------------------
 // Threads
 
-pub(super) async fn thread_start(
+pub(crate) async fn thread_start(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ThreadStartArguments,
@@ -2240,7 +2240,7 @@ fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
     }
 }
 
-pub(super) async fn thread_update(
+pub(crate) async fn thread_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ThreadUpdateArguments,

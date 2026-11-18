@@ -8,10 +8,10 @@ description: Keep what is true now in pages and decisions, so nobody has to rere
 - Pages hold what is true now and keep every version: read with `page_get`,
   write with `page_write`.
 - When a discussion lands, record it with `decision_record`.
-- Read a project's guide page (from `project_open`) before you change
+- Read a project's guide page (from `project_get`) before you change
   things there.
 - Each space, channel and thread can have a memory page: the durable facts
-  anyone working there needs first. `conversation_open`, `project_open` and
+  anyone working there needs first. `conversation_open`, `project_get` and
   `reply_claim` give you its first lines as `memory`; read the rest with
   `memory_page_open`. When you learn something that will still be true next
   week, add it with `memory_page_set` (pass `expectedVersion`), and keep

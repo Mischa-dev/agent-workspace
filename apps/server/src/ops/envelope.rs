@@ -66,8 +66,8 @@ impl<T: Serialize> Envelope<T> {
 
 /// The schema of an operation's envelope, given its output's schema. The
 /// output's definitions move to the envelope's root, where its `$ref`s
-/// point.
-pub fn schema(mut output: Value) -> Value {
+/// point. A long operation (`long`) may also answer `started` (K2.21).
+pub fn schema(mut output: Value, long: bool) -> Value {
     let mut definitions = Vec::new();
     if let Some(object) = output.as_object_mut() {
         object.remove("$schema");
@@ -91,9 +91,8 @@ pub fn schema(mut output: Value) -> Value {
         },
         "required": ["outcome", "value"],
     })];
-    // One branch for every refusal: they share a shape, and a branch per
-    // outcome repeated in every operation's schema made the documents
-    // several times their size.
+    // Every refusal shares one branch (the outcome names which), so the
+    // schema stays small across hundreds of tools.
     branches.push(json!({
         "type": "object",
         "properties": {
@@ -107,6 +106,27 @@ pub fn schema(mut output: Value) -> Value {
         },
         "required": ["outcome", "message", "retryCategory"],
     }));
+    if long {
+        branches.push(json!({
+            "type": "object",
+            "properties": {
+                "outcome": { "const": "started" },
+                "value": {
+                    "type": "object",
+                    "properties": {
+                        "jobId": { "type": "string" },
+                        "op": { "type": "string" },
+                        "status": { "type": "string" },
+                        "createdAt": { "type": "string" },
+                    },
+                    "required": ["jobId"],
+                },
+                "requestId": { "type": "string" },
+                "replayed": { "type": "boolean" },
+            },
+            "required": ["outcome", "value"],
+        }));
+    }
     // A call set aside is still `ok`, so a client doesn't retry, but not the
     // operation's value: a paused account's write (A2.10) does nothing and
     // says `paused`; a change a team's guard holds for review (A2.27, R37)
@@ -142,14 +162,14 @@ mod tests {
 
     #[test]
     fn the_envelope_schema_lists_every_outcome() {
-        let schema = schema(json!({ "type": "object" }));
+        let schema = schema(json!({ "type": "object" }), false);
         let branches = schema["oneOf"].as_array().expect("branches");
         assert_eq!(branches[0]["properties"]["outcome"]["const"], "ok");
-        let refused = branches[1]["properties"]["outcome"]["enum"]
+        let refusals = branches[1]["properties"]["outcome"]["enum"]
             .as_array()
             .expect("refusals");
         for outcome in ERROR_OUTCOMES {
-            assert!(refused.contains(&json!(outcome)), "{outcome}");
+            assert!(refusals.contains(&json!(outcome)), "{outcome}");
         }
         let ok = Envelope::Ok {
             value: json!({"id": 1}),

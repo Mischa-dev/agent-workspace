@@ -15,13 +15,11 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, mark_via, one_or_many, parse_id, parse_message_id, parse_since,
-        project_is_chosen, public_url, scope_projects, snippet, string_or_number,
-        version_conflict_message,
+        flag_or_text, one_or_many, parse_id, parse_message_id, parse_since, project_is_chosen,
+        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
-    talk::can_write_in,
     writes::{self, WriteAccess, WriteResult},
 };
 use crate::{
@@ -29,7 +27,6 @@ use crate::{
     collections::{task_query, tasks},
     error::AppError,
     fields::{FieldClause, FieldOp},
-    policy::Action,
     views::{
         definition::{Direction, SortRule, ViewConfig},
         filter::Filter,
@@ -46,8 +43,6 @@ use crate::{
     work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
     work_items::decode_work_item_timeline_cursor,
 };
-
-const DEFAULT_CLAIM_MINUTES: i32 = 120;
 
 // ---------------------------------------------------------------------------
 // task_list
@@ -70,9 +65,9 @@ const STATUS_GROUPS: [&str; 7] = [
 ];
 const UPDATED_SINCE_MESSAGE: &str = "Use a date (YYYY-MM-DD), a timestamp such as 2026-09-30T14:00:00Z, or a span such as 24h or 7d.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskListArguments {
+pub(crate) struct TaskListArguments {
     /// Only this project (ID, link, or key such as AWD). Leave it out for
     /// tasks across all your projects. The MCP middleware also scopes the
     /// call to it.
@@ -192,7 +187,7 @@ pub(super) struct TaskListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskSummary {
+pub(crate) struct TaskSummary {
     pub id: String,
     pub key: String,
     pub title: String,
@@ -223,6 +218,12 @@ pub(super) struct TaskSummary {
     /// Its milestone, by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+    /// How many of its acceptance criteria are checked, out of
+    /// criteriaTotal. Both left out when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_done: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_total: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
     pub project: String,
@@ -243,7 +244,7 @@ pub(super) struct TaskSummary {
 
 /// The planning columns of a task line: blocked (marked or by an unfinished
 /// dependency), how many unfinished tasks it waits on, whether it's ready,
-/// its due date and milestone.
+/// its due date, milestone and acceptance criteria progress.
 fn task_planning_columns() -> String {
     format!(
         r#"
@@ -253,7 +254,14 @@ fn task_planning_columns() -> String {
         item.due_date::text AS due_date,
         ({OVERDUE}) AS overdue,
         (SELECT milestone.name FROM project_milestones milestone
-          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id) AS milestone
+          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id) AS milestone,
+        (SELECT CASE WHEN count(*) > 0 THEN count(*) FILTER (WHERE criterion.completed) END
+           FROM work_item_acceptance_criteria criterion
+          WHERE criterion.project_id = item.project_id
+            AND criterion.work_item_id = item.id) AS criteria_done,
+        (SELECT NULLIF(count(*), 0) FROM work_item_acceptance_criteria criterion
+          WHERE criterion.project_id = item.project_id
+            AND criterion.work_item_id = item.id) AS criteria_total
         "#
     )
 }
@@ -296,7 +304,7 @@ const TASK_LABELS_COLUMN: &str = r#"
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskListValue {
+pub(crate) struct TaskListValue {
     pub tasks: Vec<TaskSummary>,
     /// Every task that matches, across all pages.
     pub total: i64,
@@ -330,7 +338,7 @@ fn listed(
     Ok(values)
 }
 
-pub(super) async fn task_list(
+pub(crate) async fn task_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskListArguments,
@@ -1511,7 +1519,7 @@ async fn resolve_actor(
 /// projects. Returns the task and its project. A moved task's old key leads
 /// to where it went when the caller can reach that project; anyone else
 /// gets the archived original they could always see.
-pub(super) async fn resolve_task(
+pub(crate) async fn resolve_task(
     state: &AppState,
     principal: &McpPrincipal,
     identifier: &str,
@@ -1522,7 +1530,7 @@ pub(super) async fn resolve_task(
 
 /// `resolve_task` for several references, in order, reading the caller's
 /// projects once.
-pub(super) async fn resolve_tasks(
+pub(crate) async fn resolve_tasks(
     state: &AppState,
     principal: &McpPrincipal,
     references: &[String],
@@ -1601,7 +1609,7 @@ async fn resolve_among(
 
 /// Why an assignee can't be used.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum AssigneeProblem {
+pub(crate) enum AssigneeProblem {
     /// Nobody by that handle or ID is in the project.
     NotInProject(String),
     /// They're in the project but can't hold tasks (inactive, or not a
@@ -1610,7 +1618,7 @@ pub(super) enum AssigneeProblem {
 }
 
 impl AssigneeProblem {
-    pub(super) fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Self::NotInProject(message) | Self::CantBeAssigned(message) => message,
         }
@@ -1620,7 +1628,7 @@ impl AssigneeProblem {
 /// An assignee as agents write one: "me", "none" (nobody), an @handle or an
 /// actor ID of someone in the project who can hold tasks. `Ok(None)` means
 /// unassigned.
-pub(super) async fn resolve_assignee(
+pub(crate) async fn resolve_assignee(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
@@ -1682,7 +1690,7 @@ fn assignee_error(person: &str, problem: AssigneeProblem) -> WriteResult {
     }
 }
 
-pub(super) fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal {
+pub(crate) fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal {
     let mut scoped = principal.clone();
     scoped.project_id = project_id;
     scoped.project_explicit = true;
@@ -1692,9 +1700,9 @@ pub(super) fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal
 // ---------------------------------------------------------------------------
 // task_open
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskOpenArguments {
+pub(crate) struct TaskOpenArguments {
     /// The task's ID, link, or key such as AW-12.
     #[serde(alias = "identifier")]
     pub task_id: String,
@@ -1759,7 +1767,7 @@ fn history_request(
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskDetail {
+pub(crate) struct TaskDetail {
     pub task: WorkItemProjection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<ClaimValue>,
@@ -1839,7 +1847,7 @@ pub(super) struct TaskDetail {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MilestoneRef {
+pub(crate) struct MilestoneRef {
     pub id: String,
     pub name: String,
     /// YYYY-MM-DD, if it has one.
@@ -1862,7 +1870,7 @@ struct PlanningRow {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LinkedItem {
+pub(crate) struct LinkedItem {
     pub kind: String,
     pub id: String,
     pub title: String,
@@ -1873,7 +1881,7 @@ pub(super) struct LinkedItem {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CommentItem {
+pub(crate) struct CommentItem {
     pub id: String,
     pub author: String,
     pub text: String,
@@ -1889,7 +1897,7 @@ pub(super) struct CommentItem {
     pub files: Vec<super::file_tools::FileSummary>,
 }
 
-pub(super) async fn task_open(
+pub(crate) async fn task_open(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskOpenArguments,
@@ -2167,7 +2175,7 @@ pub(super) async fn task_open(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskCreateArguments {
+pub(crate) struct TaskCreateArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// The project to create it in. Not needed for a subtask.
@@ -2228,7 +2236,7 @@ pub(super) struct TaskCreateArguments {
     pub say_so: Option<bool>,
 }
 
-pub(super) async fn task_create(
+pub(crate) async fn task_create(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskCreateArguments,
@@ -2349,7 +2357,7 @@ async fn assignee_for(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskUpdateArguments {
+pub(crate) struct TaskUpdateArguments {
     // No parentWorkItemId alias here, ever: the middleware takes the
     // project from parentWorkItemId before taskId, and a task_update must
     // act in the task's own project.
@@ -2447,7 +2455,7 @@ impl TaskUpdateArguments {
     }
 }
 
-pub(super) async fn task_update(
+pub(crate) async fn task_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskUpdateArguments,
@@ -2539,9 +2547,9 @@ pub(super) async fn task_update(
 // ---------------------------------------------------------------------------
 // task_reorder
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskReorderArguments {
+pub(crate) struct TaskReorderArguments {
     /// Tasks in the order you want them, all in one status column (IDs,
     /// links, or keys such as AWD-12).
     pub task_ids: Vec<String>,
@@ -2556,7 +2564,7 @@ pub(super) struct TaskReorderArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReorderValue {
+pub(crate) struct ReorderValue {
     pub status: String,
     /// The whole column after the change, top first.
     pub column: Vec<String>,
@@ -2568,7 +2576,7 @@ pub(super) struct ReorderValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReorderedTask {
+pub(crate) struct ReorderedTask {
     pub id: String,
     pub key: String,
     pub version: i64,
@@ -2585,7 +2593,7 @@ enum ReorderPlace {
     After(Uuid),
 }
 
-pub(super) async fn task_reorder(
+pub(crate) async fn task_reorder(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskReorderArguments,
@@ -3001,7 +3009,7 @@ async fn lock_for_task_write<T>(
 
 /// AWD-75: whether Tasks is on for the actor in a project (their role there
 /// included), for a tool whose project the module gate couldn't see.
-pub(super) async fn tasks_on(
+pub(crate) async fn tasks_on(
     connection: &mut PgConnection,
     project_id: Uuid,
     actor_id: Uuid,
@@ -3016,48 +3024,14 @@ pub(super) async fn tasks_on(
 
 /// The command actor for a write in `project_id` that takes no
 /// clientRequestId; the audit row gets a fresh request ID.
-pub(super) fn command_actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
+pub(crate) fn command_actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
     writes::mcp_actor(&scoped(principal, project_id), Uuid::now_v7().to_string())
 }
 
 // ---------------------------------------------------------------------------
-// Claims
+// Claims (the operations are in `work_items::ops::claims`)
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskClaimArguments {
-    #[serde(rename = "taskId", alias = "workItemId")]
-    pub task_id: String,
-    /// What you're doing, shown to others.
-    pub note: Option<String>,
-    /// How long the claim lasts, in minutes (default 120, at most 1440).
-    /// Claiming again renews it.
-    pub minutes: Option<u16>,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ClaimValue {
-    pub task_id: String,
-    pub claimed_by: String,
-    pub note: Option<String>,
-    pub claimed_at: String,
-    pub expires_at: String,
-    /// On a claim you just took: the last handoff note left on the task.
-    /// Read it before you start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<HandoffNote>,
-}
-
-#[derive(Clone, Debug, FromRow, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct HandoffNote {
-    pub by: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub via: Option<String>,
-    pub note: String,
-    pub at: String,
-}
+use crate::work_items::ops::claims::{ClaimValue, HandoffNote};
 
 /// The latest handoff notes on a task, newest first.
 async fn handoff_notes(
@@ -3065,293 +3039,31 @@ async fn handoff_notes(
     task_id: Uuid,
     limit: i64,
 ) -> Result<Vec<HandoffNote>, AppError> {
-    Ok(sqlx::query_as::<_, HandoffNote>(
-        r#"
-        SELECT COALESCE(member.display_name, 'Former member') AS by,
-               via_client.client_name AS via, handoff.note, handoff.created_at::text AS at
-        FROM work_item_handoffs handoff
-        LEFT JOIN project_memberships member
-          ON member.project_id = handoff.project_id AND member.actor_id = handoff.actor_id
-        LEFT JOIN mcp_oauth_grants via_grant
-          ON via_grant.id = handoff.via_oauth_grant_id AND via_grant.show_via
-        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-        WHERE handoff.work_item_id = $1
-        ORDER BY handoff.created_at DESC, handoff.id DESC
-        LIMIT $2
-        "#,
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    Ok(
+        crate::work_item_commands::claims::handoffs(&mut connection, task_id, limit)
+            .await?
+            .into_iter()
+            .map(HandoffNote::from)
+            .collect(),
     )
-    .bind(task_id)
-    .bind(limit)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?)
-}
-
-#[derive(Debug, FromRow)]
-struct ClaimRow {
-    work_item_id: Uuid,
-    claimed_by: String,
-    note: Option<String>,
-    claimed_at: String,
-    expires_at: String,
 }
 
 async fn current_claim(state: &AppState, task_id: Uuid) -> Result<Option<ClaimValue>, AppError> {
-    Ok(sqlx::query_as::<_, ClaimRow>(
-        r#"
-        SELECT claim.work_item_id, COALESCE(member.display_name, 'Someone') AS claimed_by,
-               claim.note, claim.claimed_at::text AS claimed_at,
-               claim.expires_at::text AS expires_at
-        FROM work_item_claims claim
-        LEFT JOIN project_memberships member
-          ON member.project_id = claim.project_id AND member.actor_id = claim.actor_id
-        WHERE claim.work_item_id = $1 AND claim.expires_at > now()
-        "#,
-    )
-    .bind(task_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .map(|row| ClaimValue {
-        task_id: row.work_item_id.to_string(),
-        claimed_by: row.claimed_by,
-        note: row.note,
-        claimed_at: row.claimed_at,
-        expires_at: row.expires_at,
-        handoff: None,
-    }))
-}
-
-pub(super) async fn task_claim(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: TaskClaimArguments,
-) -> ToolResult<ClaimValue> {
-    if !principal.can_write() {
-        return ToolResult::read_only();
-    }
-    let minutes = arguments.minutes.map_or(DEFAULT_CLAIM_MINUTES, i32::from);
-    if !(5..=1440).contains(&minutes) {
-        return ToolResult::invalid("minutes", "Claim for 5 to 1440 minutes.");
-    }
-    let note = arguments
-        .note
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| snippet(value, 500));
-    let result = async {
-        let Some((task_id, project_id)) =
-            resolve_task(state, principal, &arguments.task_id).await?
-        else {
-            return Ok(ToolResult::not_found("That task"));
-        };
-        if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
-            return Ok(ToolResult::denied(
-                "You can't work on tasks in that project.",
-            ));
-        }
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        mark_via(&mut transaction, principal).await?;
-        // The claim takes its turn on the project row before the task, as
-        // every task write does (lock_membership) before it locks tasks and
-        // the board column a status change or reorder lands in. Locked the
-        // other way round, such a write waited for this task while this
-        // claim's insert waited on the project row for its foreign key. NO
-        // KEY UPDATE waits for those writes but never for a foreign key's
-        // share lock.
-        sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
-            .bind(project_id)
-            .fetch_optional(&mut *transaction)
-            .await?;
-        // Claimers take turns on the task row. With a shared lock here, two
-        // agents claiming at once deadlocked: the winner's activity write
-        // waited on the loser's lock while the loser waited on the claim.
-        let archived = sqlx::query_scalar::<_, bool>(
-            "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1 FOR NO KEY UPDATE",
-        )
-        .bind(task_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if archived {
-            return Ok(ToolResult::conflict("That task is archived."));
-        }
-        // The second claimer runs after the first commits and finds a live
-        // claim it doesn't own, so the update below changes nothing.
-        let claimed = sqlx::query_as::<_, (Uuid, bool)>(
-            r#"
-            INSERT INTO work_item_claims (work_item_id, project_id, actor_id, note, expires_at)
-            VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))
-            ON CONFLICT (work_item_id) DO UPDATE
-            SET actor_id = EXCLUDED.actor_id,
-                note = COALESCE(EXCLUDED.note, work_item_claims.note),
-                claimed_at = CASE WHEN work_item_claims.actor_id = EXCLUDED.actor_id
-                                  THEN work_item_claims.claimed_at ELSE now() END,
-                expires_at = EXCLUDED.expires_at
-            WHERE work_item_claims.actor_id = EXCLUDED.actor_id
-               OR work_item_claims.expires_at <= now()
-            RETURNING actor_id, (xmax = 0) AS inserted
-            "#,
-        )
-        .bind(task_id)
-        .bind(project_id)
-        .bind(principal.actor_id)
-        .bind(&note)
-        .bind(minutes)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some((_, fresh)) = claimed else {
-            transaction.rollback().await?;
-            let holder = current_claim(state, task_id).await?;
-            return Ok(ToolResult::conflict(match holder {
-                Some(holder) => format!(
-                    "{} is working on this until {}{}. Pick another task, or ask them.",
-                    holder.claimed_by,
-                    holder.expires_at,
-                    holder
-                        .note
-                        .map(|note| format!(" ({note})"))
-                        .unwrap_or_default()
-                ),
-                None => "Someone else just claimed this task. Try again.".to_owned(),
-            }));
-        };
-        if fresh {
-            insert_activity(
-                &mut transaction,
-                project_id,
-                task_id,
-                principal.actor_id,
-                "work_item_updated",
-                "Started working on this",
-                &serde_json::json!({ "claim": true }),
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        let mut claim = current_claim(state, task_id)
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    Ok(
+        crate::work_item_commands::claims::current(&mut connection, task_id)
             .await?
-            .ok_or(AppError::Internal("claim just written"))?;
-        claim.handoff = handoff_notes(state, task_id, 1).await?.into_iter().next();
-        Ok::<_, AppError>(ToolResult::ok(claim))
-    }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "task_claim"))
-}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskReleaseArguments {
-    #[serde(rename = "taskId", alias = "workItemId")]
-    pub task_id: String,
-    /// For whoever picks the task up next: where the work got to, what's
-    /// left, and anything that would trip them up (a branch, a failing test,
-    /// a question you're waiting on). Up to 4,000 characters. The next
-    /// task_claim returns it, and task_open shows it.
-    pub handoff: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ReleaseValue {
-    pub task_id: String,
-    pub released: bool,
-    /// Whether your handoff note was saved.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub handoff_saved: bool,
-}
-
-const MAX_HANDOFF_CHARS: usize = 4_000;
-
-pub(super) async fn task_release(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: TaskReleaseArguments,
-) -> ToolResult<ReleaseValue> {
-    if !principal.can_write() {
-        return ToolResult::read_only();
-    }
-    let handoff = arguments
-        .handoff
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if handoff.is_some_and(|note| note.chars().count() > MAX_HANDOFF_CHARS || note.contains('\0')) {
-        return ToolResult::invalid("handoff", "Keep the handoff note to 4,000 characters.");
-    }
-    let result = async {
-        let Some((task_id, project_id)) =
-            resolve_task(state, principal, &arguments.task_id).await?
-        else {
-            return Ok(ToolResult::not_found("That task"));
-        };
-        if handoff.is_some()
-            && !can_write_in(state, principal, project_id, Action::WorkItemEdit).await?
-        {
-            return Ok(ToolResult::denied(
-                "You can't work on tasks in that project.",
-            ));
-        }
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let released =
-            sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1 AND actor_id = $2")
-                .bind(task_id)
-                .bind(principal.actor_id)
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected()
-                == 1;
-        // Only whoever held the task hands it off: a note from anyone else
-        // would read to the next claimer as the last holder's word, and a
-        // retried release would save it twice.
-        if handoff.is_some() && !released {
-            transaction.rollback().await?;
-            return Ok(ToolResult::conflict(
-                "You don't hold this task's claim, so there's nothing to hand off. Comment on the task instead.",
-            ));
-        }
-        if let Some(note) = handoff {
-            sqlx::query(
-                r#"
-                INSERT INTO work_item_handoffs (
-                    id, project_id, work_item_id, actor_id, via_oauth_grant_id, note
-                ) VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-            )
-            .bind(Uuid::now_v7())
-            .bind(project_id)
-            .bind(task_id)
-            .bind(principal.actor_id)
-            .bind(principal.via_grant_id())
-            .bind(note)
-            .execute(&mut *transaction)
-            .await?;
-            insert_activity(
-                &mut transaction,
-                project_id,
-                task_id,
-                principal.actor_id,
-                "work_item_updated",
-                &format!("Handed off: {}", snippet(note, 200)),
-                &serde_json::json!({ "handoff": true }),
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok::<_, AppError>(ToolResult::ok(ReleaseValue {
-            task_id: task_id.to_string(),
-            released,
-            handoff_saved: handoff.is_some(),
-        }))
-    }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "task_release"))
+            .map(ClaimValue::from),
+    )
 }
 
 // ---------------------------------------------------------------------------
 // task_link
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskLinkArguments {
+pub(crate) struct TaskLinkArguments {
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
     /// A thread or conversation about this task.
@@ -3386,7 +3098,7 @@ pub(super) struct TaskLinkArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LinkValue {
+pub(crate) struct LinkValue {
     pub task_id: String,
     /// The task's key, such as AWD-12.
     pub key: String,
@@ -3427,7 +3139,7 @@ enum LinkTarget {
     },
 }
 
-pub(super) async fn task_link(
+pub(crate) async fn task_link(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskLinkArguments,

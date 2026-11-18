@@ -55,7 +55,7 @@ pub(super) async fn page_write_mode(
     )
 }
 
-pub(super) fn writer(principal: &McpPrincipal) -> Writer {
+pub(crate) fn writer(principal: &McpPrincipal) -> Writer {
     Writer {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind,
@@ -67,9 +67,9 @@ pub(super) fn writer(principal: &McpPrincipal) -> Writer {
 // ---------------------------------------------------------------------------
 // search
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SearchArguments {
+pub(crate) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.
     /// Filters narrow it: from:@handle (or from:me), in:#channel,
     /// in:@person (your DM with them), during:2026-10, on:2026-10-05,
@@ -97,7 +97,7 @@ pub(super) struct SearchArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SearchResult {
+pub(crate) struct SearchResult {
     pub kind: String,
     pub id: String,
     pub title: String,
@@ -119,14 +119,14 @@ pub(super) struct SearchResult {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SearchValue {
+pub(crate) struct SearchValue {
     pub results: Vec<SearchResult>,
     pub hint: &'static str,
 }
 
 const SEARCH_HINT: &str = "Open a message's conversation around it with conversation_read (aroundMessageId). Decisions and pages are the settled version; prefer them over old messages.";
 
-pub(super) async fn search_tool(
+pub(crate) async fn search_tool(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SearchArguments,
@@ -285,7 +285,7 @@ pub(super) async fn search_tool(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageListArguments {
+pub(crate) struct PageListArguments {
     /// The project, or "workspace" for the workspace's own pages.
     pub project_id: String,
     /// Include archived pages.
@@ -294,7 +294,7 @@ pub(super) struct PageListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageLineValue {
+pub(crate) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
@@ -315,11 +315,11 @@ pub(super) struct PageLineValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageListValue {
+pub(crate) struct PageListValue {
     pub pages: Vec<PageLineValue>,
 }
 
-pub(super) async fn page_list(
+pub(crate) async fn page_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageListArguments,
@@ -369,7 +369,7 @@ pub(super) async fn page_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageGetArguments {
+pub(crate) struct PageGetArguments {
     pub page_id: String,
     /// Read an earlier version instead of the current one.
     pub version: Option<i64>,
@@ -377,7 +377,7 @@ pub(super) struct PageGetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageValue {
+pub(crate) struct PageValue {
     pub id: String,
     pub project_id: String,
     pub title: String,
@@ -419,7 +419,7 @@ fn is_zero(value: &i64) -> bool {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RevisionLine {
+pub(crate) struct RevisionLine {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -430,7 +430,7 @@ pub(super) struct RevisionLine {
     pub at: String,
 }
 
-pub(super) async fn page_get(
+pub(crate) async fn page_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageGetArguments,
@@ -526,7 +526,7 @@ pub(super) async fn page_get(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageWriteArguments {
+pub(crate) struct PageWriteArguments {
     /// The page to change. Leave it out to create a page (then projectId and
     /// title are needed).
     pub page_id: Option<String>,
@@ -569,7 +569,7 @@ pub(super) struct PageWriteArguments {
     pub client_request_id: Option<String>,
 }
 
-pub(super) async fn page_write(
+pub(crate) async fn page_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageWriteArguments,
@@ -877,7 +877,7 @@ const BLOCK_PREVIEW_CHARACTERS: usize = 120;
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageBlocksArguments {
+pub(crate) struct PageBlocksArguments {
     pub page_id: String,
     /// The version positions came from: needed when section, from or to is
     /// a position, and the read is then refused if the page has changed
@@ -903,7 +903,7 @@ pub(super) struct PageBlocksArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageBlocksValue {
+pub(crate) struct PageBlocksValue {
     pub page_id: String,
     pub project_id: String,
     pub title: String,
@@ -930,7 +930,7 @@ pub(super) struct PageBlocksValue {
 /// Edits kept as a suggestion for the page's owner to accept or reject.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SuggestionMade {
+pub(crate) struct SuggestionMade {
     pub suggestion_id: String,
     /// pending until someone decides; see page_suggestions.
     pub status: String,
@@ -938,7 +938,7 @@ pub(super) struct SuggestionMade {
 }
 
 impl SuggestionMade {
-    pub(super) fn pending(id: Uuid) -> Self {
+    pub(crate) fn pending(id: Uuid) -> Self {
         Self {
             suggestion_id: id.to_string(),
             status: "pending".to_owned(),
@@ -949,7 +949,7 @@ impl SuggestionMade {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct OutlineLine {
+pub(crate) struct OutlineLine {
     pub id: String,
     pub position: usize,
     pub level: u8,
@@ -961,7 +961,7 @@ pub(super) struct OutlineLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BlockLine {
+pub(crate) struct BlockLine {
     /// The block's lasting id: it stays the same while the block is edited
     /// or moved. Pass it to page_edit as blockId.
     pub id: String,
@@ -1198,7 +1198,7 @@ fn blocks_value(
     }
 }
 
-pub(super) async fn page_blocks(
+pub(crate) async fn page_blocks(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageBlocksArguments,
@@ -1298,7 +1298,7 @@ fn missing_block<T>(message: String, reference: &str) -> ToolResult<T> {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageEditArguments {
+pub(crate) struct PageEditArguments {
     pub page_id: String,
     /// The version you read. Needed when an edit names a block by position,
     /// and then the edit is refused if the page has changed since; with
@@ -1317,7 +1317,7 @@ pub(super) struct PageEditArguments {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageEditInput {
+pub(crate) struct PageEditInput {
     /// replace, insertBefore, insertAfter, delete, or append (to the end of
     /// the page; names no block).
     pub op: String,
@@ -1333,7 +1333,7 @@ pub(super) struct PageEditInput {
     pub markdown: Option<String>,
 }
 
-pub(super) async fn page_edit(
+pub(crate) async fn page_edit(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageEditArguments,
@@ -1539,13 +1539,13 @@ pub(super) async fn page_edit(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SkillListArguments {
+pub(crate) struct SkillListArguments {
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillLine {
+pub(crate) struct SkillLine {
     /// Pass this to skill_get.
     pub name: String,
     /// When to use it.
@@ -1560,11 +1560,11 @@ pub(super) struct SkillLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillListValue {
+pub(crate) struct SkillListValue {
     pub skills: Vec<SkillLine>,
 }
 
-pub(super) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
+pub(crate) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
     pages
         .into_iter()
         .filter_map(|page| {
@@ -1581,7 +1581,7 @@ pub(super) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
         .collect()
 }
 
-pub(super) async fn skill_list(
+pub(crate) async fn skill_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SkillListArguments,
@@ -1612,7 +1612,7 @@ pub(super) async fn skill_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SkillGetArguments {
+pub(crate) struct SkillGetArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// The project. Needed with name; not with pageId.
@@ -1625,7 +1625,7 @@ pub(super) struct SkillGetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillValue {
+pub(crate) struct SkillValue {
     pub name: String,
     pub description: String,
     /// The instructions, in Markdown.
@@ -1646,7 +1646,7 @@ pub(super) struct SkillValue {
 
 /// A skill in the SKILL.md format: YAML front matter with the name and
 /// description, then the instructions.
-pub(super) fn skill_md(name: &str, description: &str, body: &str) -> String {
+pub(crate) fn skill_md(name: &str, description: &str, body: &str) -> String {
     let quoted = serde_json::to_string(description).unwrap_or_default();
     format!(
         "---\nname: {name}\ndescription: {quoted}\n---\n\n{}\n",
@@ -1654,7 +1654,7 @@ pub(super) fn skill_md(name: &str, description: &str, body: &str) -> String {
     )
 }
 
-pub(super) async fn skill_get(
+pub(crate) async fn skill_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SkillGetArguments,

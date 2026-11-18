@@ -1,0 +1,9 @@
+{
+  "open": [
+    { "name": "page list", "key": ["pages", "$project"] },
+    { "name": "page", "key": ["page", "$project", "$page"] },
+    { "name": "channel timeline", "key": ["timeline", "$project", "$channel"], "data": { "conversation": { "kind": "channel", "parentKind": null }, "linkedWorkItems": [], "entries": [] } },
+    { "name": "sheet list", "key": ["sheets", "$project"] },
+    { "name": "rail", "key": ["rail"] }
+  ]
+}

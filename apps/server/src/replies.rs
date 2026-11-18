@@ -12,6 +12,8 @@
 //! - Claiming starts a lease. A lapsed lease becomes "expired" and waits for a
 //!   person to retry it, rather than being handed out again silently.
 
+pub mod ops;
+
 use std::{collections::BTreeSet, time::Duration};
 
 use axum::{

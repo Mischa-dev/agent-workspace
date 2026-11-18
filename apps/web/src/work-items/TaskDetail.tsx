@@ -33,6 +33,8 @@ import { listeners as moveListeners, pending as pendingMoves } from './moveStore
 import { FieldEditor } from '../fields/FieldEditor'
 import { TaskNotice } from './TaskNotice'
 import { BlockForm, BlockedNotice, ClaimNotice, HandoffNotice } from './TaskNotes'
+import { useClaimTask } from './planningHooks'
+import { claimErrorMessage } from './taskEdits'
 import { useArchive, useBoardCount, useEditShortcut, useWide } from './taskPageHooks'
 import { TaskProperties } from './TaskProperties'
 import { TaskSearchPicker } from './TaskSearchPicker'
@@ -207,6 +209,7 @@ function TaskDetailBody({
   const taskFiles = useTaskFiles(item.projectId, item.id)
   const boards = useBoardCount(item.id)
   const archive = useArchive(item, projectArchived)
+  const claim = useClaimTask()
   const [adding, setAdding] = useState<Adding>(null)
   const [dependency, setDependency] = useState<DependencyRequest | null>(null)
   const [parentAnchor, setParentAnchor] = useState<HTMLElement | null>(null)
@@ -285,6 +288,18 @@ function TaskDetailBody({
         ? { label: 'Unblock', icon: 'circle-check', onSelect: () => save.save('blocked', { blockedReason: null }) }
         : { label: 'Mark as blocked…', icon: 'circle-minus', onSelect: () => afterMenu(() => setBlocking(true)) },
     )
+    // Claiming says you're on it, the way agents do before they start; the notice above then offers Release.
+    if (!item.claim) {
+      menu.push({
+        label: 'I’m working on this',
+        icon: 'play',
+        onSelect: () =>
+          claim.mutate(
+            { projectId: item.projectId, workItemId: item.id },
+            { onError: (error) => showToast({ tone: 'danger', title: claimErrorMessage(error, 'Claiming it') }) },
+          ),
+      })
+    }
   }
   if (local) menu.push({ separator: true }, { label: 'Open locally', icon: 'terminal', onSelect: () => window.location.assign(local) })
   if (archive.allowed) {

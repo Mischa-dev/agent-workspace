@@ -386,6 +386,7 @@ pub async fn list_pages(
           -- A conversation's memory page is opened from its conversation
           -- (A2.16), never listed with the space's pages.
           AND page.memory_for_kind IS DISTINCT FROM 'conversation'
+          AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         ORDER BY page.is_guide DESC, page.updated_at DESC, page.id
         LIMIT 500
         "#,
@@ -409,6 +410,9 @@ const PAGE_SELECT: &str = r#"
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = $1
       AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
+      -- A page that is a part of a module that's off or archived is hidden
+      -- with it (M1.6), as collections are.
+      AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
 "#;
 
 /// A page with its latest versions; `viewer` decides which agent sessions'
@@ -488,6 +492,7 @@ pub async fn list_skills(pool: &PgPool, project_id: Uuid) -> Result<Vec<PageSumm
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
         WHERE page.project_id = $1 AND page.skill_description IS NOT NULL
           AND page.archived_at IS NULL
+          AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         ORDER BY lower(page.title), page.id
         LIMIT 200
         "#,
@@ -521,6 +526,7 @@ pub async fn get_revision(
         WHERE revision.page_id = $1 AND revision.version = $2
           AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
                OR page_visible_to(page.id, $3))
+          AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         "#,
         joins = revision_session_joins("$3"),
     ))
@@ -719,7 +725,8 @@ pub async fn update_page(
             r#"
             SELECT project_id, title, body, version, is_guide, skill_description,
                    archived_at IS NOT NULL, is_template
-            FROM project_pages WHERE id = $1
+            FROM project_pages
+            WHERE id = $1 AND module_part_on('page', id) AND module_part_on('skill', id)
               AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))
             FOR UPDATE
             "#,

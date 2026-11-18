@@ -3,11 +3,13 @@ import { toastError } from '../app/toastError'
 import { onboardingKeys, updateOnboarding, type Onboarding } from '../onboarding/api'
 import { changeRole, listRoles, roleKeys, workspaceAssignable, type WorkspaceRoleView } from '../settings/workspace/roles'
 import { Button, ButtonLink, ErrorState, Row, RowList, SelectField, SettingsSkeleton, StatusChip, countLabel } from '../ui'
+import { ShapePicker } from './ShapePicker'
 import { TemplatePicker } from './TemplatePicker'
 import './templates.css'
 
-// AWD-76: the first two steps of setup. Pick a template (Everything first),
-// then say who gets what in plain words.
+// AWD-76: the first two steps of setup. Pick what the workspace is for
+// (M1.17) or a template (Everything first), then say who gets what in plain
+// words.
 
 function useConfirm(onboarding: Onboarding) {
   const queryClient = useQueryClient()
@@ -22,7 +24,16 @@ export function TemplateStep({ onboarding }: { onboarding: Onboarding }) {
   if (!onboarding.canManageWorkspace) {
     return <p className="aw-onboarding__intro">An owner or admin picks how the workspace is set up. You’re set to go on.</p>
   }
-  return <TemplatePicker confirm={false} organizationId={onboarding.organizationId} />
+  // M1.17: first run asks what the workspace is for; a template is the
+  // other way to start.
+  return (
+    <div className="aw-templates__start">
+      <h3 className="aw-templates__name">What is this workspace for?</h3>
+      <ShapePicker canChange organizationId={onboarding.organizationId} />
+      <h3 className="aw-templates__name">Or start from a template</h3>
+      <TemplatePicker confirm={false} organizationId={onboarding.organizationId} />
+    </div>
+  )
 }
 
 /** What holding a role means, in a sentence. */

@@ -133,6 +133,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("notifications", WORKSPACE_ID),
     ("onboarding_progress", ORGANIZATION_ID),
     ("operation_alias_usage", WORKSPACE_ID),
+    ("operation_tasks", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
     ("package_installs", WORKSPACE_ID),
@@ -268,6 +269,14 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "deleted_workspaces",
         "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
+    ),
+    (
+        "directory_entries",
+        "what the package directory offers, read from its sources: a server-wide source's entries belong to no workspace; a workspace's own list's entries carry its workspace_id",
+    ),
+    (
+        "directory_sources",
+        "where the package directory reads from: the operator's folder and lists are server-wide; a workspace's own URL list carries its workspace_id",
     ),
     (
         "dm_requests",

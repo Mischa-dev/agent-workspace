@@ -769,7 +769,7 @@ function ActionFields({
         </>
       )
     case 'run_operation':
-      // Made by an agent or a script (automation_write); the builder for
+      // Made by an agent or a script (automation_create); the builder for
       // these comes with the operation catalogue.
       return <p className="aw-quiet">Runs {action.operation || 'an operation'} with the input it was saved with.</p>
   }

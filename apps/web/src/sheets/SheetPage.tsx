@@ -7,11 +7,11 @@ import { isApiError } from '../api/errors'
 import { opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
 import { useProjectExperience } from '../experience/layout'
-import { useAuthenticatedSession, type SessionUser } from '../auth/session'
+import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { usePageTitle } from '../shell/documentTitleModel'
 import {
   Banner,
@@ -60,28 +60,25 @@ const START: Selection = {
 
 /** One sheet: a grid you edit in place (cards on a phone), its tabs under it. */
 export function SheetPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '', sheetId = '' } = useParams()
   const project = useProject(projectId)
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading the sheet" />
-      </AppShell>
+      <ProjectPageLoading label="Loading the sheet" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
-  return <SheetWorkspace key={sheetId} project={project.data} sheetId={sheetId} user={session.user} />
+  return <SheetWorkspace key={sheetId} project={project.data} sheetId={sheetId} />
 }
 
-function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId: string; user: SessionUser }) {
+function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: string }) {
   const projectId = project.id
+  const { user } = useAuthenticatedSession()
   const client = useQueryClient()
   const phone = usePhoneWidth()
   const [params, setParams] = useSearchParams()
@@ -93,6 +90,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const [dialog, setDialog] = useState<Dialogs | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  useShellPage({ project })
   usePageTitle(sheet.data?.sheet.name ?? null)
 
   const body = sheet.data
@@ -107,34 +105,30 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
 
   if (sheet.isPending) {
     return (
-      <AppShell project={project} user={user}>
-        <div aria-busy="true" className="aw-page aw-page--full">
-          <ListSkeleton label="Loading the sheet" rows={6} />
-        </div>
-      </AppShell>
+      <div aria-busy="true" className="aw-page aw-page--full">
+        <ListSkeleton label="Loading the sheet" rows={6} />
+      </div>
     )
   }
   if (!body) {
     const gone = isApiError(sheet.error) && sheet.error.status === 404
     return (
-      <AppShell project={project} user={user}>
-        <div className="aw-page">
-          {gone ? (
-            <ErrorState
-              action={
-                <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/sheets`} variant="primary">
-                  See the sheets
-                </ButtonLink>
-              }
-              title="This sheet isn’t here"
-            >
-              It may have been removed, or the link is wrong.
-            </ErrorState>
-          ) : (
-            <ErrorState error={sheet.error} onRetry={() => void sheet.refetch()} title="The sheet didn’t load" />
-          )}
-        </div>
-      </AppShell>
+      <div className="aw-page">
+        {gone ? (
+          <ErrorState
+            action={
+              <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/sheets`} variant="primary">
+                See the sheets
+              </ButtonLink>
+            }
+            title="This sheet isn’t here"
+          >
+            It may have been removed, or the link is wrong.
+          </ErrorState>
+        ) : (
+          <ErrorState error={sheet.error} onRetry={() => void sheet.refetch()} title="The sheet didn’t load" />
+        )}
+      </div>
     )
   }
 
@@ -476,7 +470,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const writable = editable && !body.sheet.archived
 
   return (
-    <AppShell project={project} user={user}>
+    <>
       <div className="aw-page aw-page--full aw-sheet">
         <PageHeader
           actions={sheetItems.length ? <Menu items={sheetItems} label="Sheet actions" placement="bottom-end" trigger={<IconButton icon="more" label="Sheet actions" />} /> : null}
@@ -634,7 +628,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           }}
         />
       ) : null}
-    </AppShell>
+    </>
   )
 }
 

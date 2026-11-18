@@ -1,0 +1,6 @@
+{
+  "about": "An agent writes a page in three quick steps: the page and the page list refetch once, a few seconds on; nothing else does.",
+  "settleMs": 3400,
+  "fetched": { "page list": 1, "page": 1 },
+  "untouched": ["channel timeline", "sheet list", "rail"]
+}
