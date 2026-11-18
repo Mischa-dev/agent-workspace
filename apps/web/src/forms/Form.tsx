@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { BrandMark } from '../auth/AuthLayout'
 import { FormPiece } from '../pieces/FormPiece'
 import { Button } from '../ui'
-import { fetchForm, formFields, FormProblem, sendAnswers, type PublicForm } from './formModel'
+import { fetchForm, formFields, FormProblem, MIN_RENDER_AGE_MS, sendAnswers, type PublicForm } from './formModel'
 import './forms.css'
 
 type Loaded = { state: 'loading' } | { state: 'ready'; form: PublicForm } | { state: 'gone'; message: string }
@@ -17,12 +17,14 @@ export function FormPage() {
   const { token = '' } = useParams()
   const [loaded, setLoaded] = useState<Loaded>({ state: 'loading' })
   const [thanks, setThanks] = useState<string | null>(null)
+  const loadedAt = useRef(0)
 
   useEffect(() => {
     let live = true
     fetchForm(token).then(
       (form) => {
         if (!live) return
+        loadedAt.current = Date.now()
         setLoaded({ state: 'ready', form })
         document.title = form.name || form.collection
       },
@@ -86,8 +88,15 @@ export function FormPage() {
         }
         fields={formFields(form)}
         labelledBy="form-title"
-        onSubmit={async (answers) => setThanks(await sendAnswers(token, form, answers))}
+        onSubmit={async (answers) => {
+          // The form refuses answers sent sooner after it loaded than a person
+          // could type them; a quick person (or autofill) just waits it out.
+          const wait = loadedAt.current + MIN_RENDER_AGE_MS + 200 - Date.now()
+          if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
+          setThanks(await sendAnswers(token, form, answers))
+        }}
         submitLabel="Send"
+        trap={form.honeypot || undefined}
       />
     </FormShell>
   )

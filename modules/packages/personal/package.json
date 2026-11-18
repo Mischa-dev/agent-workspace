@@ -11,6 +11,7 @@
       "key": "switches",
       "body": {
         "off": [
+          "dashboards",
           "code",
           "runs",
           "automations"

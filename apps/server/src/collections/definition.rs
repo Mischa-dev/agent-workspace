@@ -52,8 +52,10 @@ pub struct FieldWrite {
     pub name: Option<String>,
     /// For a new field: text, long_text, number, date, single_choice,
     /// multiple_choice, status, person, url, email, phone, checkbox or link;
-    /// or created_time, edited_time, created_by, edited_by or auto_id,
-    /// which show the record's own and take no values. It never changes.
+    /// created_time, edited_time, created_by, edited_by or auto_id, which
+    /// show the record's own and take no values; formula, worked out from
+    /// the record's other fields (give `formula`); or button, which runs
+    /// operations when pressed (give `button`). It never changes.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
     /// What it's for, on one line. "" clears it.
@@ -75,6 +77,14 @@ pub struct FieldWrite {
     /// true archives it (hidden, values kept), false restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// A formula field's formula, fields in braces (the title by its
+    /// name): `IF({Due} < TODAY(), "Late", {Price} * {Qty})`. & joins text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    /// A button field's button: its label and 1 to 3 steps, each an
+    /// operation and its arguments, filled from the record when pressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button: Option<fields::button::ButtonInput>,
 }
 
 /// A filter by field name, as agents write one.
@@ -116,6 +126,23 @@ pub struct ColumnWrite {
     pub width: Option<u16>,
 }
 
+/// A chart view's style and what it adds up.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChartWrite {
+    /// "bar" (the default), "line", "donut", or "number" (one figure over
+    /// every record).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::views::definition::ChartStyle>,
+    /// "count" (the default), "sum", "average", "min" or "max" for each
+    /// group (the view's groupBy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<crate::views::definition::MeasureOp>,
+    /// The number field a sum, average, min or max reads, by name or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
 /// A view as a definition holds it, or a change to one. Each part given
 /// replaces that part; the rest stays.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
@@ -128,9 +155,9 @@ pub struct ViewWrite {
     /// Its name, or a new name when `view` names it: 1 to 80 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// "table" (the default), "board", "gallery" or "calendar". A board's
-    /// columns are its groupBy field's values; a calendar puts records on
-    /// its dateField. A new one without them takes the first field that
+    /// "table" (the default), "board", "list", "gallery", "calendar",
+    /// "timeline" or "chart". A board's columns and a chart's bars are its
+    /// groupBy field's values; a calendar puts records on its dateField. A new one without them takes the first field that
     /// fits. The type doesn't change once made.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub view_type: Option<String>,
@@ -154,9 +181,17 @@ pub struct ViewWrite {
     /// The title column's width in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
-    /// A calendar's date field, by name or ID.
+    /// A calendar's date field, by name or ID; where a timeline's bars
+    /// start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_field: Option<String>,
+    /// Where a timeline's bars end, a date field by name or ID; "" for
+    /// one-day bars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<String>,
+    /// A chart's style and measure; its groups are the view's groupBy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<ChartWrite>,
     /// Its place among the views, 1 being first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<i32>,
@@ -222,7 +257,7 @@ fn filter_written(
     let values = clause
         .values
         .iter()
-        .map(|value| match field.field_type.behaves_as() {
+        .map(|value| match field.behaves_as() {
             FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => field
                 .option(value)
                 .map_or_else(|| value.clone(), |option| option.name.clone()),
@@ -299,6 +334,19 @@ fn view_written(
             .date_field
             .and_then(field)
             .map(|field| field.name.clone()),
+        end_field: config
+            .end_field
+            .and_then(field)
+            .map(|field| field.name.clone()),
+        chart: config.chart.map(|chart| ChartWrite {
+            style: Some(chart.style),
+            measure: Some(chart.measure.op),
+            field: chart
+                .measure
+                .field
+                .and_then(field)
+                .map(|field| field.name.clone()),
+        }),
         ..ViewWrite::default()
     }
 }
@@ -358,6 +406,14 @@ pub async fn describe(
                     ),
                     other => other.written(None),
                 }),
+                formula: field.config.formula.as_ref().map(|formula| {
+                    fields::formula::shown(formula, definitions, &collection.title_name)
+                }),
+                button: field
+                    .config
+                    .button
+                    .as_ref()
+                    .map(|button| fields::button::shown(button, definitions)),
                 ..FieldWrite::default()
             })
             .collect(),
@@ -418,7 +474,7 @@ pub async fn clauses_from_written(
         let mut values = Vec::with_capacity(filter.values.len());
         let mut me = false;
         for value in &filter.values {
-            match field.field_type.behaves_as() {
+            match field.behaves_as() {
                 FieldType::Person if value.trim().eq_ignore_ascii_case(views::ME) => {
                     // Checked as anyone in the project; stored as "me".
                     me = true;
@@ -627,6 +683,45 @@ async fn config_from_written(
             }
         }
     }
+    if let Some(end_field) = &write.end_field {
+        if end_field.trim().is_empty() {
+            config.end_field = None;
+        } else {
+            match active_field(collection, definitions, end_field) {
+                Ok(field) if field.field_type == FieldType::Date => {
+                    config.end_field = Some(field.id);
+                }
+                Ok(field) => {
+                    return Ok(Err(format!(
+                        "\"{}\" isn't a date field. A timeline's bars end on a date field.",
+                        field.name
+                    )));
+                }
+                Err(message) => return Ok(Err(message)),
+            }
+        }
+    }
+    if let Some(chart) = &write.chart {
+        let mut next = config.chart.unwrap_or_default();
+        if let Some(style) = chart.style {
+            next.style = style;
+        }
+        if let Some(op) = chart.measure {
+            next.measure.op = op;
+            if op == crate::views::definition::MeasureOp::Count {
+                next.measure.field = None;
+            }
+        }
+        match chart.field.as_deref().map(str::trim) {
+            None => {}
+            Some("") => next.measure.field = None,
+            Some(name) => match active_field(collection, definitions, name) {
+                Ok(field) => next.measure.field = Some(field.id),
+                Err(message) => return Ok(Err(message)),
+            },
+        }
+        config.chart = Some(next);
+    }
     Ok(Ok(config))
 }
 
@@ -825,7 +920,7 @@ pub async fn apply(
                     ProblemKind::Invalid,
                     format!("{at}.type"),
                     format!(
-                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by or auto_id."
+                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by, auto_id, formula or button."
                     ),
                 ));
             };
@@ -878,6 +973,8 @@ pub async fn apply(
                     field_type,
                     config,
                     position: write.position,
+                    formula: write.formula.clone(),
+                    button: write.button.clone(),
                 },
             )
             .await?
@@ -903,6 +1000,9 @@ pub async fn apply(
                             fields::MAX_FIELD_ROWS
                         ),
                     ));
+                }
+                CreateFieldOutcome::InvalidSetting(part, message) => {
+                    return Ok(stop(ProblemKind::Invalid, format!("{at}.{part}"), message));
                 }
             }
             continue;
@@ -978,6 +1078,8 @@ pub async fn apply(
                 config,
                 position: write.position,
                 archived: write.archived,
+                formula: write.formula.clone(),
+                button: write.button.clone(),
                 expected_version: None,
             },
         )
@@ -1025,6 +1127,9 @@ pub async fn apply(
                         fields::MAX_ACTIVE_FIELDS
                     ),
                 ));
+            }
+            ChangeFieldOutcome::InvalidSetting(part, message) => {
+                return Ok(stop(ProblemKind::Invalid, format!("{at}.{part}"), message));
             }
         }
     }
@@ -1093,7 +1198,15 @@ pub async fn apply(
                     ),
                 ));
             };
-            match views::remove(connection, project_id, collection.id, view.id).await? {
+            match views::remove(
+                connection,
+                project_id,
+                collection.id,
+                views::Scope::Shared,
+                view.id,
+            )
+            .await?
+            {
                 RemoveViewOutcome::Removed(view) => {
                     changes.push(format!("view \"{}\" removed", view.name));
                 }
@@ -1178,6 +1291,7 @@ pub async fn apply(
                     view_type,
                     config,
                     position: write.position,
+                    scope: views::Scope::Shared,
                 },
             )
             .await?
@@ -1220,12 +1334,14 @@ pub async fn apply(
             connection,
             project_id,
             collection.id,
+            views::Scope::Shared,
             view.id,
             ViewChange {
                 name: rename,
                 config: (Some(&config) != current.as_ref()).then_some(config),
                 position: write.position,
                 expected_version: None,
+                share: false,
             },
         )
         .await?
@@ -1238,7 +1354,9 @@ pub async fn apply(
                 });
             }
             ChangeViewOutcome::Unchanged(_) => {}
-            ChangeViewOutcome::NotFound | ChangeViewOutcome::VersionConflict(_) => {
+            ChangeViewOutcome::NotFound
+            | ChangeViewOutcome::VersionConflict(_)
+            | ChangeViewOutcome::Full => {
                 return Ok(stop(
                     ProblemKind::NotFound,
                     format!("{at}.view"),
@@ -1310,6 +1428,8 @@ mod tests {
                 }],
                 target: None,
                 collection: None,
+                formula: None,
+                button: None,
             },
             position: 0,
             archived: false,

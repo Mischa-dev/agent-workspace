@@ -545,3 +545,53 @@
     animation: none;
   }
 }
+
+/* A formula's error for one record (T1.17): its message on hover and to screen readers. */
+.aw-prop__formula-error {
+  color: var(--danger);
+}
+
+/* A formula field's formula (T1.17): fields offered as it's typed, and a preview. */
+.aw-formula {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-formula__source textarea {
+  font: var(--t-code);
+}
+
+.aw-formula__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.aw-formula__preview {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+/* A button field (T1.21): its button in a cell or the record panel, and
+   each step in the field dialog. */
+.aw-recordbutton {
+  display: inline-flex;
+  max-inline-size: 100%;
+}
+.aw-buttonfield {
+  display: grid;
+  gap: var(--space-3);
+}
+.aw-buttonfield__step {
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+}
+.aw-buttonfield__step legend {
+  font-weight: var(--weight-semibold);
+  padding-inline: var(--space-1);
+}

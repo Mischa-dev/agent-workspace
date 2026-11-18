@@ -29,12 +29,15 @@ use crate::{
     roles,
 };
 
+pub mod a2a;
 pub mod builtin;
 pub mod commands;
 pub mod dispatch;
 pub mod ops;
 pub mod protocol;
+pub mod register;
 pub mod routes;
+pub mod windows;
 
 /// The protocol version this server speaks, and every one it still serves.
 pub const PROTOCOL: &str = "2026-11";
@@ -551,16 +554,14 @@ fn label(value: Option<&str>) -> Result<Option<String>, AppError> {
     Ok(Some(value.to_owned()))
 }
 
-/// Make a one-time code that links a host to `owner`. A person may own a
-/// host; a workspace's host needs `hosts.manage` there.
-pub async fn create_enrolment(
+/// Whether `caller` may link a host for `owner`: a person their own, and a
+/// workspace's with `hosts.manage` there.
+pub(crate) async fn may_link(
     transaction: &mut Transaction<'_, Postgres>,
     caller: Uuid,
     caller_kind: ActorKind,
     owner: Owner,
-    label_text: Option<&str>,
-) -> Result<EnrolmentCode, AppError> {
-    let label_text = label(label_text)?;
+) -> Result<(), AppError> {
     match owner {
         Owner::Account(account) => {
             // A host's owner is a person or a workspace (R19).
@@ -583,6 +584,20 @@ pub async fn create_enrolment(
             }
         }
     }
+    Ok(())
+}
+
+/// Make a one-time code that links a host to `owner`. A person may own a
+/// host; a workspace's host needs `hosts.manage` there.
+pub async fn create_enrolment(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: Uuid,
+    caller_kind: ActorKind,
+    owner: Owner,
+    label_text: Option<&str>,
+) -> Result<EnrolmentCode, AppError> {
+    let label_text = label(label_text)?;
+    may_link(transaction, caller, caller_kind, owner).await?;
     let open = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM host_enrolments
@@ -691,7 +706,21 @@ pub async fn bind(
             message: "Binding that agent needs the agents.manage permission where it is a member.",
         });
     }
-    let lineage = described_lineage(&host.described_agents, &reference);
+    write_binding(transaction, &host, account_id, &reference, caller).await?;
+    let host = bump(transaction, host.id).await?;
+    view(transaction, caller, &host).await
+}
+
+/// The binding itself, once whoever asked may make it: refused when
+/// another agent already has that name on the host.
+pub(crate) async fn write_binding(
+    transaction: &mut Transaction<'_, Postgres>,
+    host: &HostRow,
+    account_id: Uuid,
+    reference: &str,
+    caller: Uuid,
+) -> Result<(), AppError> {
+    let lineage = described_lineage(&host.described_agents, reference);
     let taken = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -701,7 +730,7 @@ pub async fn bind(
         "#,
     )
     .bind(host.id)
-    .bind(&reference)
+    .bind(reference)
     .bind(account_id)
     .fetch_one(&mut **transaction)
     .await?;
@@ -711,7 +740,7 @@ pub async fn bind(
             message: "Another agent is bound to that name on this host. Unbind it first.",
         });
     }
-    let described = described_agent(&host.described_agents, &reference);
+    let described = described_agent(&host.described_agents, reference);
     sqlx::query(
         r#"
         INSERT INTO host_agents (
@@ -731,7 +760,7 @@ pub async fn bind(
     )
     .bind(host.id)
     .bind(account_id)
-    .bind(&reference)
+    .bind(reference)
     .bind(lineage)
     .bind(
         described
@@ -746,8 +775,7 @@ pub async fn bind(
     .bind(caller)
     .execute(&mut **transaction)
     .await?;
-    let host = bump(transaction, host.id).await?;
-    view(transaction, caller, &host).await
+    Ok(())
 }
 
 /// Stop `host` acting for agent `account_id`. Its runs there are
@@ -803,6 +831,14 @@ pub async fn unlink(
     .await?;
     crate::runs::ops::host_lost(transaction, host.id, None, "The host was unlinked").await?;
     crate::requests::cancel_raised_via_host(transaction, host.id).await?;
+    // The accounts it reported are hidden with it (their windows stay).
+    sqlx::query(
+        "UPDATE provider_accounts SET hidden_at = now(), updated_at = now() \
+         WHERE host_id = $1 AND hidden_at IS NULL",
+    )
+    .bind(host.id)
+    .execute(&mut **transaction)
+    .await?;
     view(transaction, caller, &host).await
 }
 

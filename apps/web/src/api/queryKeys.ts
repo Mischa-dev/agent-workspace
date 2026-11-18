@@ -52,6 +52,7 @@ export const queryKeys = {
     ['project', projectId, 'invitations'] as const,
   externalAgents: (projectId: string) =>
     ['project', projectId, 'external-agents'] as const,
+  agentRecipes: () => ['agent-recipes'] as const,
   sponsoredExecutions: (projectId: string) =>
     ['project', projectId, 'sponsored-executions'] as const,
   githubIntegration: (projectId: string) =>

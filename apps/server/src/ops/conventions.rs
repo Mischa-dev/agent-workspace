@@ -65,6 +65,11 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // An agent passes on, or a person stops, a reply request (K2.9).
             "pass",
             "stop",
+            // Something already sent goes out again, unchanged (a webhook delivery).
+            "redeliver",
+            // A harmless signed ping, to check an address answers.
+            "test",
+            "press",
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
@@ -78,6 +83,13 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "prepare",
             "refresh",
             "merge",
+            // An account stops acting and hearing until resumed (A2.10).
+            "pause",
+            "resume",
+            // An account joins a workspace (A2.18).
+            "add",
+            // A host's published action runs (A2.19).
+            "run",
         ],
     ),
     (

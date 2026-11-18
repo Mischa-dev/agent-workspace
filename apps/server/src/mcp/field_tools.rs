@@ -304,6 +304,8 @@ pub(crate) async fn field_write(
                     field_type,
                     config,
                     position: arguments.position,
+                    formula: None,
+                    button: None,
                 },
             )
             .await?;
@@ -345,6 +347,9 @@ pub(crate) async fn field_write(
                         fields::MAX_ACTIVE_FIELDS,
                         fields::MAX_FIELD_ROWS
                     )));
+                }
+                CreateFieldOutcome::InvalidSetting(at, message) => {
+                    return Ok(ToolResult::invalid(at, message));
                 }
             };
             transaction.commit().await?;
@@ -415,6 +420,8 @@ pub(crate) async fn field_write(
                 config,
                 position: arguments.position,
                 archived: arguments.archived,
+                formula: None,
+                button: None,
                 expected_version: arguments.expected_version,
             },
         )
@@ -479,6 +486,9 @@ pub(crate) async fn field_write(
                     "{key} already has {} active task fields. Archive one first.",
                     fields::MAX_ACTIVE_FIELDS
                 )));
+            }
+            ChangeFieldOutcome::InvalidSetting(at, message) => {
+                return Ok(ToolResult::invalid(at, message));
             }
         };
         transaction.commit().await?;

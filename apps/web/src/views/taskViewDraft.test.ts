@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FieldDefinition } from '../fields/fieldModel'
-import { clausesFit, fieldClauses, withClauses } from './fieldFilterModel'
-import { readListState, writeListState } from './listModel'
-import { draftFrom } from './viewDraft'
+import { clausesFit, fieldClauses, withClauses } from '../work-items/fieldFilterModel'
+import { readListState, writeListState } from '../work-items/listModel'
+import { draftFrom } from './taskViewDraft'
 
 const me = '01a1b5c0-0000-7000-8000-000000000001'
 const field = (id: string, type: FieldDefinition['type']): FieldDefinition => ({

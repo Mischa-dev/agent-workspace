@@ -959,20 +959,6 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     .await
     .expect("Wes watches");
     let owner_actor = owner_id(pool).await;
-    sqlx::query(
-        r#"
-        INSERT INTO webhook_subscriptions (
-            id, organization_id, project_id, owner_actor_id, name, url, event_types
-        ) VALUES ($1, $2, $3, $4, 'Moves', 'https://127.0.0.1/hook', '{task.updated}')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(setup.organization_id)
-    .bind(project)
-    .bind(owner_actor)
-    .execute(pool)
-    .await
-    .expect("webhook");
     let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 11).await;
     let (integration, version) = sqlx::query_as::<_, (Uuid, i64)>(
         "SELECT installation.integration_actor_id, pr.version FROM github_pull_requests pr JOIN github_installations installation ON installation.id = pr.github_installation_id WHERE pr.id = $1",
@@ -1030,10 +1016,6 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         }
     };
     pump().await;
-    sqlx::query("DELETE FROM webhook_deliveries")
-        .execute(pool)
-        .await
-        .expect("clear");
 
     apply_pull_request_automation(
         pool,
@@ -1093,13 +1075,19 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         "the watching agent hears of it"
     );
     pump().await;
-    let subjects = sqlx::query_scalar::<_, Value>(
-        "SELECT subject FROM webhook_deliveries WHERE event_type = 'task.updated'",
+    // One event for the move, naming what changed (a webhook is told the
+    // same).
+    let changes = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT changes FROM events WHERE type = 'task.updated' AND thing_id = $1 \
+         AND actor_account_id = $2",
     )
+    .bind(task)
+    .bind(integration)
     .fetch_all(pool)
     .await
-    .expect("deliveries");
-    assert_eq!(subjects.len(), 1, "{subjects:?}");
-    // Routing lists what changed in name order.
-    assert_eq!(subjects[0]["changedFields"], json!(["position", "status"]));
+    .expect("events");
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    let mut changed = changes[0].clone();
+    changed.sort();
+    assert_eq!(changed, vec!["position", "status"]);
 }

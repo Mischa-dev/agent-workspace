@@ -26,7 +26,14 @@ export type PublicForm = {
   intro: string
   thanks: string
   fields: PublicField[]
+  /** Sent back with the answers, to show the page was loaded first. */
+  renderToken: string
+  /** A field people never see; a script that fills it in is ignored. */
+  honeypot: string
 }
+
+/** Answers sent sooner than this after the form loaded are refused, so the page waits it out. */
+export const MIN_RENDER_AGE_MS = 3_000
 
 /** What the person typed or picked, by field ID; the title under "title". */
 export type Answers = Record<string, string | string[] | boolean>
@@ -44,6 +51,8 @@ export function normalizeForm(value: unknown): PublicForm {
     titleName: asString(raw.titleName) || 'Title',
     intro: asString(raw.intro),
     thanks: asString(raw.thanks),
+    renderToken: asString(raw.renderToken),
+    honeypot: asString(raw.honeypot),
     fields: (Array.isArray(raw.fields) ? raw.fields : []).flatMap((entry) => {
       const field = asRecord(entry)
       const type = TYPES.find((candidate) => candidate === field.type)
@@ -88,6 +97,9 @@ export function missing(form: PublicForm, answers: Answers): string | null {
 /** The answers as the report URL takes them: by field ID, blanks left out. */
 export function answerBody(form: PublicForm, answers: Answers): Record<string, string | string[] | boolean | number> {
   const body: Record<string, string | string[] | boolean | number> = { title: String(answers.title ?? '').trim() }
+  if (form.renderToken) body._aw_rendered = form.renderToken
+  const trap = form.honeypot ? answers[form.honeypot] : undefined
+  if (typeof trap === 'string' && trap) body[form.honeypot] = trap
   for (const field of form.fields) {
     const value = answers[field.id]
     if (value === undefined) continue

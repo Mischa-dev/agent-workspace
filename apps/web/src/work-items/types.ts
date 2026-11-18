@@ -292,6 +292,8 @@ export type WorkItemFilters = {
   includeDone?: 'false'
   /** Custom field filters: a JSON array of `FieldClause`s, all of which must match. */
   fieldFilters?: string
+  /** A saved view the list reads as well, when its filters can't be written as these. */
+  viewId?: string
   sort?: WorkItemSort
   groupBy?: WorkItemGroupBy
   cursor?: string
@@ -302,6 +304,10 @@ export type WorkItemListResponse = {
   items: WorkItemCard[]
   nextCursor: string | null
   total: number
+  /** The project's Tasks collection, where views of tasks are saved. */
+  collectionId?: string | null
+  /** What the list shows as a view's settings: what saving it as a view keeps. */
+  config?: unknown
 }
 
 export type WorkItemGroup = { key: string; label: string; count: number; color?: string }

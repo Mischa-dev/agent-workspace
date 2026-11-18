@@ -55,6 +55,35 @@ async fn public(
     .await
 }
 
+/// An answer with the page's render token in it (T1.29), as JSON or a form.
+fn signed(body: &str, rendered: &str) -> String {
+    match serde_json::from_str::<Value>(body) {
+        Ok(Value::Object(mut answer)) => {
+            answer.insert("_aw_rendered".to_owned(), json!(rendered));
+            Value::Object(answer).to_string()
+        }
+        _ => format!("{body}&_aw_rendered={rendered}"),
+    }
+}
+
+/// Reads a form's page and waits until an answer from it may be sent.
+async fn render(setup: &Setup, token: &str) -> String {
+    let (status, page) = public(
+        setup,
+        "GET",
+        &format!("/api/v1/forms/{token}"),
+        "text/plain",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    page["renderToken"]
+        .as_str()
+        .expect("render token")
+        .to_owned()
+}
+
 /// The token in a form's URL.
 fn token_of(url: &Value) -> String {
     url.as_str()
@@ -202,6 +231,8 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     // An answer is one record of the asked fields, whatever else is sent.
     let answer = "finding=Falls+through+the+floor&Severity=High&Score=4&Platforms=PC&Platforms=Deck&Internal+notes=sneaky";
     let report = format!("/api/v1/bug-reports/{token}");
+    let rendered = render(&setup, &token).await;
+    let answer = &signed(answer, &rendered);
     let (status, sent) = public(
         &setup,
         "POST",
@@ -250,7 +281,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         "POST",
         &report,
         "application/json",
-        r#"{"title": "No severity"}"#,
+        &signed(r#"{"title": "No severity"}"#, &rendered),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
@@ -260,7 +291,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         "POST",
         &report,
         "application/json",
-        r#"{"title": "Odd", "Severity": "Catastrophic"}"#,
+        &signed(r#"{"title": "Odd", "Severity": "Catastrophic"}"#, &rendered),
     )
     .await;
     assert!(status.is_client_error(), "{status} {refused}");
@@ -296,7 +327,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         "POST",
         &report,
         "application/json",
-        r#"{"title": "Later", "Severity": "Low"}"#,
+        &signed(r#"{"title": "Later", "Severity": "Low"}"#, &rendered),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -352,6 +383,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{mels}");
+    let mels_rendered = render(&setup, &token_of(&mels["formUrl"])).await;
     sqlx::query(
         "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
     )
@@ -365,7 +397,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         "POST",
         &format!("/api/v1/bug-reports/{}", token_of(&mels["formUrl"])),
         "application/json",
-        r#"{"title": "From Mel's form"}"#,
+        &signed(r#"{"title": "From Mel's form"}"#, &mels_rendered),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -494,4 +526,329 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     )
     .await;
     assert_eq!(form_renamed["outcome"], "ok", "{form_renamed}");
+}
+
+/// T1.29: a public form holds back what isn't a person: an answer sent
+/// sooner after the page loaded than anyone could type, one without the
+/// page at all, one that filled in the field people never see, more than
+/// twenty an hour from one address, and more than its daily limit, which
+/// pauses it and tells its maker.
+#[tokio::test]
+async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
+    let Some(setup) = setup("t1_form_limits").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, created) = write(
+        &setup,
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/collections"),
+        json!({"name": "Signups", "titleName": "Name", "fields": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let collection = created["collection"]["id"].as_str().expect("id").to_owned();
+    let links = format!("/api/v1/projects/{work}/bug-report-links");
+    let make = |name: &'static str, limit: Option<u32>| {
+        let mut form = json!({"fields": []});
+        if let Some(limit) = limit {
+            form["dailyLimit"] = json!(limit);
+        }
+        json!({"name": name, "collectionId": collection, "form": form})
+    };
+    let (status, refused) = write(
+        &setup,
+        &setup.browser,
+        "POST",
+        &links,
+        make("Too many", Some(10_001)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, small) = write(
+        &setup,
+        &setup.browser,
+        "POST",
+        &links,
+        make("Small", Some(3)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{small}");
+    assert_eq!(small["link"]["form"]["dailyLimit"], 3, "{small}");
+    let small_token = token_of(&small["formUrl"]);
+    let small_report = format!("/api/v1/bug-reports/{small_token}");
+    let small_id = small["link"]["id"].as_str().expect("id").to_owned();
+    let records = || async {
+        get(
+            &setup,
+            &setup.browser,
+            &format!("/api/v1/projects/{work}/collections/{collection}/records"),
+        )
+        .await
+        .1["total"]
+            .as_i64()
+            .unwrap_or_default()
+    };
+
+    // No page, a forged page, and a page loaded a moment ago are refused.
+    let (status, page) = public(
+        &setup,
+        "GET",
+        &format!("/api/v1/forms/{small_token}"),
+        "text/plain",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["honeypot"], "_aw_homepage");
+    let fresh = page["renderToken"]
+        .as_str()
+        .expect("render token")
+        .to_owned();
+    let post = |body: String| {
+        let report = small_report.clone();
+        let setup = &setup;
+        async move { public(setup, "POST", &report, "application/json", &body).await }
+    };
+    let (status, refused) = post(json!({"title": "Quick"}).to_string()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, refused) =
+        post(json!({"title": "Quick", "_aw_rendered": "1.00"}).to_string()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, refused) =
+        post(json!({"title": "Quick", "_aw_rendered": fresh}).to_string()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    assert_eq!(records().await, 0);
+
+    // A filled-in hidden field is thanked, and nothing is kept.
+    let rendered = render(&setup, &small_token).await;
+    let answer = |title: &str| json!({"title": title, "_aw_rendered": rendered}).to_string();
+    let (status, thanked) = post(
+        json!({"title": "Bot", "_aw_homepage": "https://spam.example", "_aw_rendered": rendered})
+            .to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{thanked}");
+    assert_eq!(records().await, 0);
+
+    // Three a day: the third pauses the form and tells its maker once; a
+    // repeat doesn't count.
+    for title in ["Ada", "Ada", "Brook", "Cyd"] {
+        let (status, sent) = post(answer(title)).await;
+        assert!(status.is_success(), "{title}: {status} {sent}");
+    }
+    assert_eq!(records().await, 3);
+    let (status, refused) = post(answer("Dee")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let link = small_id.parse::<Uuid>().expect("link");
+    let (state, reason) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, disabled_reason FROM bug_report_links WHERE id = $1",
+    )
+    .bind(link)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("link");
+    assert_eq!(state, "paused");
+    assert!(reason.unwrap_or_default().contains("daily limit"));
+    let told = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE kind = 'form_paused' AND subject_id = $1",
+    )
+    .bind(link)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("notifications");
+    assert_eq!(told, 1);
+
+    // Turned on again, it takes answers again.
+    let (status, resumed) = write(
+        &setup,
+        &setup.browser,
+        "PATCH",
+        &format!("/api/v1/bug-report-links/{small_id}"),
+        json!({"state": "active"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    let (status, sent) = post(answer("Dee")).await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+
+    // Twenty an hour from one address; another address still gets in.
+    let (status, open) = write(&setup, &setup.browser, "POST", &links, make("Open", None)).await;
+    assert_eq!(status, StatusCode::CREATED, "{open}");
+    let open_token = token_of(&open["formUrl"]);
+    let open_rendered = render(&setup, &open_token).await;
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database url");
+    let addressed = super::support::app::test_app_with(
+        setup.pool.clone(),
+        &database_url,
+        &[(
+            "AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER",
+            "x-client-address".to_owned(),
+        )],
+    );
+    let from = |address: &'static str, title: String| {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/bug-reports/{open_token}"))
+            .header("x-client-address", address)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"title": title, "_aw_rendered": open_rendered}).to_string(),
+            ))
+            .expect("request");
+        send(&addressed, request)
+    };
+    for n in 0..20 {
+        let (status, sent) = from("203.0.113.9", format!("Signup {n}")).await;
+        assert_eq!(status, StatusCode::CREATED, "{n}: {sent}");
+    }
+    let (status, refused) = from("203.0.113.9", "One more".to_owned()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    let (status, sent) = from("198.51.100.4", "Someone else".to_owned()).await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+}
+
+/// T1.11: the Tasks collection is edited like any other. A field added on
+/// its collection screen is a task field, an agent writes its records (by
+/// field and option names) as task changes, and a form on it makes tasks.
+#[tokio::test]
+async fn tasks_take_fields_records_and_forms_like_any_collection() {
+    let Some(setup) = setup("t1_11_tasks_like_any").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (status, listed) = get(&setup, &setup.browser, &base).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let tasks_id = listed["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|collection| collection["builtin"] == "tasks")
+        .expect("Tasks")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (status, effort) = write(
+        &setup,
+        &setup.browser,
+        "POST",
+        &format!("{base}/{tasks_id}/fields"),
+        json!({"name": "Effort", "type": "number"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{effort}");
+
+    // An agent writes a record of Tasks by names: it's a task, with the
+    // built-in fields and the new one set.
+    let written = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"title": "Oil the hinges", "fields": {"Priority": "High", "Effort": 3}}],
+            "clientRequestId": "hinges",
+        }),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    assert_eq!(written["value"]["created"], 1, "{written}");
+    let task = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM task_rows WHERE project_id = $1::uuid AND title = 'Oil the hinges' \
+         AND priority = 'high'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the task, high priority");
+    let opened = call("task_open", json!({"taskId": task.to_string()})).await;
+    let fields = opened["value"]["task"]["fields"]
+        .as_array()
+        .or_else(|| opened["value"]["fields"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        fields
+            .iter()
+            .any(|field| field["name"] == "Effort" && field["value"] == 3),
+        "{opened}"
+    );
+    // A second write of the same values changes nothing.
+    let again = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"record": task.to_string(), "fields": {"Effort": 3}}],
+            "clientRequestId": "hinges-again",
+        }),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    // A wrong option is refused with its record's place.
+    let wrong = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"title": "Fine"}, {"title": "Odd", "fields": {"Priority": "Whenever"}}],
+            "clientRequestId": "wrong-priority",
+        }),
+    )
+    .await;
+    assert_eq!(wrong["outcome"], "invalid_request", "{wrong}");
+    let fine = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE project_id = $1::uuid AND title = 'Fine'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(fine, 0, "all or nothing");
+
+    // A form on Tasks makes a task of its answers.
+    let made = call(
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "name": "Chores form", "collection": "Tasks",
+               "form": {"fields": [{"field": "Priority"}, {"field": "Effort", "required": true}]}}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let token = token_of(&made["value"]["formUrl"]);
+    let rendered = render(&setup, &token).await;
+    let (status, sent) = public(
+        &setup,
+        "POST",
+        &format!("/api/v1/bug-reports/{token}"),
+        "application/json",
+        &signed(
+            &json!({"title": "Sweep the deck", "Priority": "Low", "Effort": 2}).to_string(),
+            &rendered,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (priority, values) = sqlx::query_as::<_, (String, Value)>(
+        "SELECT priority, field_values FROM task_rows \
+         WHERE project_id = $1::uuid AND title = 'Sweep the deck'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the answer's task");
+    assert_eq!(priority, "low");
+    let effort_id = effort["field"]["id"]
+        .as_str()
+        .or_else(|| effort["id"].as_str())
+        .expect("Effort's id");
+    assert_eq!(values[effort_id], 2, "{values}");
 }

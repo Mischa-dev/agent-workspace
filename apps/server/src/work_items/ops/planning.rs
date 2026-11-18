@@ -41,9 +41,6 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<FieldList>()
         .add::<FieldCreate>()
         .add::<FieldUpdate>()
-        .add::<ViewList>()
-        .add::<ViewCreate>()
-        .add::<ViewUpdate>()
         .add::<MilestoneList>()
         .add::<MilestoneCreate>()
         .add::<MilestoneUpdate>()
@@ -218,8 +215,6 @@ in_space!(
     labels::LabelWriteArguments,
     field_tools::FieldListArguments,
     field_tools::FieldWriteArguments,
-    views_data::ViewListArguments,
-    views_data::ViewWriteArguments,
     views_data::TemplateListArguments,
     views_data::TemplateWriteArguments,
     views_data::RecurringWriteArguments,
@@ -715,61 +710,6 @@ tool_op!(FieldUpdate {
     run: |call, input| {
         names_existing(input.field.is_some(), false, "field")?;
         tool!(call, None, field_tools::field_write, input)
-    }
-});
-
-// ---------------------------------------------------------------------------
-// Views
-
-tool_op!(ViewList {
-    name: "view_list",
-    kind: Query,
-    permission: Some(Perm::TasksView),
-    idempotency: None,
-    title: "List views",
-    description: "A space's saved views: the built-in My tasks, Ready for agents, Blocked and \
-        Recently changed, plus views people saved (yours and shared ones). Pass a view's name as \
-        `view` to task_list to list its tasks.",
-    emits: [],
-    input: views_data::ViewListArguments,
-    output: views_data::ViewListValue,
-    run: |call, input| { tool!(call, None, views_data::view_list, input) }
-});
-
-tool_op!(ViewCreate {
-    name: "view_create",
-    kind: Create,
-    permission: Some(Perm::TasksView),
-    idempotency: Dispatcher,
-    title: "Save view",
-    description: "Save a view of a space's tasks: a name, the task list's query, list or board, \
-        and columns. Views are yours alone unless shared: true, which needs the right to edit the \
-        space's tasks. pinned: true puts it in your own sidebar.",
-    emits: ["view.created"],
-    input: views_data::ViewWriteArguments,
-    output: views_data::ViewWriteValue,
-    run: |call, input| {
-        names_existing(input.view.is_some(), true, "view")?;
-        tool!(call, None, views_data::view_write, input)
-    }
-});
-
-tool_op!(ViewUpdate {
-    name: "view_update",
-    kind: Change,
-    permission: Some(Perm::TasksView),
-    idempotency: Dispatcher,
-    destructive: true,
-    title: "Update view",
-    description: "Change, pin or delete a saved view (view: its name or ID). Fields you leave out \
-        keep what the view has. Sharing needs the right to edit the space's tasks; pinning only \
-        changes your own sidebar.",
-    emits: ["view.updated"],
-    input: views_data::ViewWriteArguments,
-    output: views_data::ViewWriteValue,
-    run: |call, input| {
-        names_existing(input.view.is_some(), false, "view")?;
-        tool!(call, None, views_data::view_write, input)
     }
 });
 

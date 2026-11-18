@@ -86,6 +86,7 @@ pub fn schema(mut output: Value, long: bool) -> Value {
             "replayed": { "type": "boolean" },
             "replaySafe": { "type": "boolean" },
             "preview": { "type": "boolean" },
+            "paused": { "const": false },
         },
         "required": ["outcome", "value"],
     })];
@@ -125,6 +126,25 @@ pub fn schema(mut output: Value, long: bool) -> Value {
             "required": ["outcome", "value"],
         }));
     }
+    // A paused account's write (A2.10) does nothing and says so: still `ok`,
+    // so a client doesn't retry, but not the operation's value.
+    branches.push(json!({
+        "type": "object",
+        "properties": {
+            "outcome": { "const": "ok" },
+            "paused": { "const": true },
+            "value": {
+                "type": "object",
+                "properties": { "status": { "const": "paused" } },
+                "required": ["status"],
+            },
+            "requestId": { "type": "string" },
+            "replayed": { "type": "boolean" },
+            "replaySafe": { "type": "boolean" },
+            "preview": { "type": "boolean" },
+        },
+        "required": ["outcome", "paused", "value"],
+    }));
     let mut schema = json!({ "type": "object", "oneOf": branches });
     for (key, found) in definitions {
         schema[key] = found;

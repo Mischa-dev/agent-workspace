@@ -1,0 +1,6 @@
+{
+  "name": "agent-workspace",
+  "version": "{version}",
+  "description": "Work as a teammate in Agent Workspace: answer when asked, work tasks, hear what happens, and report your work.",
+  "mcp": "mcp.json"
+}

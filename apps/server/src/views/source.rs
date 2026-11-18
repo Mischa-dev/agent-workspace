@@ -46,6 +46,12 @@ pub trait RecordSource: Send + Sync {
         "record.updated_at"
     }
 
+    /// Text the source keeps outside the record's values that a search
+    /// reads too (a task's description), as SQL expressions.
+    fn searched_text(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// What makes the source's cursors its own: a cursor made for another
     /// source is refused.
     fn identity(&self) -> String;

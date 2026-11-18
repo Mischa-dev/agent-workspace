@@ -1,5 +1,66 @@
 [
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "account_joinable_list",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Agents you could add here"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "project.membership.updated",
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "account_workspace_add",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Add an agent you have to this workspace"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "A host action's reply"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a host's action"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -30,6 +91,100 @@
     "preview": false,
     "proposable": false,
     "title": "Set agent managers"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_list",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Ways to get a new agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_start",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Start a host's offer"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.paused",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_pause",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pause agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_recipe_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Apps an agent can be set up in"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.agent_registered"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_register_decide",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Approve an agent a host made"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.resumed",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_resume",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Resume agent"
   },
   {
     "automation": false,
@@ -212,6 +367,36 @@
     "title": "Update bug report link"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "button_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "See a button"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "record.button_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "button_press",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Press a button"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -297,11 +482,41 @@
     "kind": "query",
     "long": false,
     "module": "agents",
+    "name": "connection_delivery_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List webhook deliveries"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
     "name": "connection_list",
     "permission": null,
     "preview": false,
     "proposable": false,
     "title": "List connections"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_redeliver",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Redeliver webhook event"
   },
   {
     "automation": true,
@@ -334,6 +549,22 @@
     "preview": false,
     "proposable": false,
     "title": "Rotate connection secret"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_test",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Test webhook"
   },
   {
     "automation": true,
@@ -476,6 +707,82 @@
     "preview": false,
     "proposable": false,
     "title": "Retire custom emoji"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_create",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a dashboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_delete",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_get",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Read a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_list",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List dashboards"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_update",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a dashboard"
   },
   {
     "automation": false,
@@ -720,6 +1027,34 @@
     "title": "Update field"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "file_link_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link to a file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "formula_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a formula"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -843,6 +1178,22 @@
     "preview": false,
     "proposable": false,
     "title": "Make a host enrolment code"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.linked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "host_link",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link an A2A agent"
   },
   {
     "automation": false,
@@ -2640,17 +2991,51 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "view.created"
+      "view.changed",
+      "collection.updated"
     ],
     "idempotent": true,
     "kind": "create",
     "long": false,
-    "module": "tasks",
+    "module": "collections",
     "name": "view_create",
-    "permission": "tasks.view",
+    "permission": null,
     "preview": false,
     "proposable": false,
-    "title": "Save view"
+    "title": "Make a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_default_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Choose a default view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a view"
   },
   {
     "automation": false,
@@ -2659,152 +3044,45 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
-    "module": "tasks",
+    "module": "collections",
     "name": "view_list",
-    "permission": "tasks.view",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "List views"
   },
   {
     "automation": true,
-    "destructive": true,
+    "destructive": false,
     "emits": [
-      "view.updated"
+      "view.changed"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
-    "module": "tasks",
+    "module": "collections",
+    "name": "view_pin",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pin a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
     "name": "view_update",
-    "permission": "tasks.view",
-    "preview": false,
-    "proposable": false,
-    "title": "Update view"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "webhook.created"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_create",
     "permission": null,
     "preview": false,
     "proposable": false,
-    "title": "Create webhook"
-  },
-  {
-    "automation": true,
-    "destructive": true,
-    "emits": [
-      "webhook.removed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_delete",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Remove webhook"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_delivery_list",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Webhook deliveries"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "webhook.delivery_queued"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_delivery_retry",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Send delivery again"
-  },
-  {
-    "automation": false,
-    "destructive": false,
-    "emits": [],
-    "idempotent": false,
-    "kind": "query",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_list",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "List webhooks"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "webhook.delivery_queued"
-    ],
-    "idempotent": true,
-    "kind": "create",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_ping_send",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Test webhook"
-  },
-  {
-    "automation": true,
-    "destructive": true,
-    "emits": [
-      "webhook.updated"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_secret_rotate",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Rotate webhook secret"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
-      "webhook.updated"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "automations",
-    "name": "webhook_update",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Update webhook"
+    "title": "Change a view"
   },
   {
     "automation": true,

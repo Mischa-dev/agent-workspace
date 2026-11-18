@@ -19,6 +19,7 @@ export function FormPiece({
   onSubmit,
   pendingLabel = 'Sending…',
   submitLabel,
+  trap,
 }: {
   autoFocus?: boolean
   /** A failed send in words. */
@@ -31,6 +32,8 @@ export function FormPiece({
   onSubmit: (values: FormValues) => Promise<unknown> | unknown
   pendingLabel?: string
   submitLabel: string
+  /** The name of a field people never see (T1.29); only a script fills it in. */
+  trap?: string
 }) {
   const [values, setValues] = useState<FormValues>({})
   const [error, setError] = useState<string | null>(null)
@@ -77,6 +80,21 @@ export function FormPiece({
           value={values[field.id]}
         />
       ))}
+      {trap ? (
+        <div aria-hidden="true" className="aw-piece__trap">
+          <label>
+            Leave this empty
+            <input
+              autoComplete="off"
+              name={trap}
+              onChange={(event) => set(trap, event.target.value)}
+              tabIndex={-1}
+              type="text"
+              value={typeof values[trap] === 'string' ? (values[trap] as string) : ''}
+            />
+          </label>
+        </div>
+      ) : null}
       {error ? (
         <div ref={errorRef} tabIndex={-1}>
           <Banner tone="danger">{error}</Banner>

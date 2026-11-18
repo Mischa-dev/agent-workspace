@@ -90,7 +90,6 @@
     "roles.rs": 2,
     "scheduler.rs": 2,
     "settings.rs": 1,
-    "webhooks.rs": 4,
     "work_item_commands.rs": 1,
     "work_items/comments.rs": 3,
     "work_items/imports.rs": 3,
@@ -181,7 +180,6 @@
     "replies.rs": 2,
     "runs/views.rs": 1,
     "scheduler.rs": 1,
-    "webhooks.rs": 1,
     "workspace_templates.rs": 1
   },
   "custom_role_allows": {
@@ -237,7 +235,7 @@
     "projects.rs": 5,
     "replies.rs": 1,
     "usage/ready.rs": 1,
-    "webhooks.rs": 4,
+    "webhooks.rs": 2,
     "whiteboards.rs": 1,
     "work_item_fields.rs": 1,
     "work_item_move.rs": 4,
