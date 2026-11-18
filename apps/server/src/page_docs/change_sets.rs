@@ -209,7 +209,24 @@ pub fn undo(current: &[Block], inverse: &Inverse) -> Undone {
             continue;
         }
         match edits::apply(&blocks, std::slice::from_ref(&edit)) {
-            Ok(next) => {
+            Ok(mut next) => {
+                // A block put back keeps its id, so the next one that
+                // followed it finds it.
+                if entry.after_hash.is_none() {
+                    let slot = match (&edit.op, &edit.target) {
+                        (EditOp::InsertAfter, Some(Target::Id(previous))) => next
+                            .iter()
+                            .position(|block| block.id.as_deref() == Some(previous.as_str()))
+                            .map(|index| index + 1),
+                        (EditOp::InsertBefore, _) => Some(0),
+                        _ => next.len().checked_sub(1),
+                    };
+                    if let Some(block) = slot.and_then(|index| next.get_mut(index))
+                        && block.id.is_none()
+                    {
+                        block.id = Some(entry.id.clone());
+                    }
+                }
                 blocks = next;
                 applied += 1;
             }
@@ -233,6 +250,17 @@ mod tests {
             block.id = Some(format!("{prefix}{index}"));
         }
         blocks
+    }
+
+    #[test]
+    fn undo_puts_back_several_removed_blocks_in_order() {
+        let before = with_ids(from_markdown("A\n\nB\n\nC\n\nD\n"), "b");
+        let after = vec![before[0].clone(), before[3].clone()];
+        let undone = undo(&after, &diff(&before, &after));
+        assert!(undone.skipped.is_empty());
+        let ids = |blocks: &[Block]| blocks.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&undone.blocks), ids(&before));
+        assert_eq!(strip_ids(&undone.blocks), strip_ids(&before));
     }
 
     #[test]

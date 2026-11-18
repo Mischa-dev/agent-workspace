@@ -133,8 +133,10 @@ impl Operation for PageMake {
         })?;
         let workspace_id = call.ctx.workspace_id;
         let writer = Writer::from(call.ctx);
+        let caller = call.ctx.caller.clone();
         let addresses = Addresses::of(call.state);
         let tx = call.tx().await?;
+        reach_source(tx, &caller, workspace_id, &input).await?;
         let made = if let Some(page_id) = input.page_id {
             from_blocks(tx, writer, page_id.id(), &input.blocks).await?
         } else {
@@ -192,6 +194,53 @@ impl Operation for PageMake {
             source_version,
         })
     }
+}
+
+/// The call is admitted where the page goes; what it is made from is
+/// checked here the same way, with the whole caller (a credential kept to
+/// one space, a delegation's limits), not only whether the account sees it.
+async fn reach_source(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &crate::ops::Caller,
+    workspace_id: Uuid,
+    input: &PageMakeInput,
+) -> Result<(), OpError> {
+    use crate::access::{self, Need};
+    let (source, need, what) = match (input.messages.first(), input.thread_id, input.page_id) {
+        (Some(message), ..) => (
+            Target::thing("message", message.id()),
+            Need::SEE,
+            "That message",
+        ),
+        (None, Some(thread), _) => (
+            Target::thing("conversation", thread.id()),
+            Need::SEE,
+            "That conversation",
+        ),
+        (None, None, Some(page)) => (
+            Target::thing("page", page.id()),
+            // Moving blocks out changes their page.
+            if input.r#move {
+                Need::permission(Perm::PagesEdit).writes()
+            } else {
+                Need::SEE
+            },
+            "That page",
+        ),
+        (None, None, None) => return Ok(()),
+    };
+    let located =
+        crate::ops::target::locate(&mut **tx, &source, caller.account_id, Some(workspace_id))
+            .await?;
+    let scope = match located.space_id {
+        Some(space) => access::Target::Space(space),
+        None => access::Target::Workspace(located.workspace_id),
+    };
+    access::check_locked(tx, caller, need, scope)
+        .await
+        .map_err(AppError::from)?
+        .map(|_| ())
+        .map_err(|_| OpError::not_found(what))
 }
 
 /// What a page is made of: its first title, its Markdown, the thing it
