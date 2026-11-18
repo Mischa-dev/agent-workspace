@@ -4,13 +4,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import slashClaims from 'virtual:modules/slots/slash'
 
-import { createIdempotencyKey } from '../conversations/composerModel'
 import type { ConversationKind, MessageContentV1 } from '../conversations/types'
 import { toastError } from '../app/mutations'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { ownerOf } from '../modules/ownership'
 import { Banner, countLabel, showToast, type MenuEntry } from '../ui'
-import { createWorkItem } from '../work-items/api'
+import { callOp, newRequestId } from '../api/ops'
 import {
   invalidateLater,
   laterKeys,
@@ -76,8 +75,8 @@ export function useConversationTools({
     : null
   const level = useConversationLevel(conversationId)
   const scheduled = useScheduled(conversationId, canPost)
-  // One key per /task: a retry of the same one after a failure reuses it, anything else gets a new one.
-  const taskKey = useRef<{ title: string; key: string } | null>(null)
+  // One request id per command and text: a retry of the same one after a failure reuses it, anything else gets a new one.
+  const commandKey = useRef<{ text: string; id: string } | null>(null)
   const waiting = (scheduled.data ?? []).filter((item) => item.status === 'scheduled')
 
   const viewLater = (view?: string) => ({ label: 'View', onSelect: () => navigate(view ? `/later?view=${view}` : '/later') })
@@ -98,11 +97,34 @@ export function useConversationTools({
     showToast({ tone: 'success', title: `Scheduled to send ${whenPhrase(at)}`, action: viewLater('scheduled') })
   }
 
+  // C2.24: a module's command runs its operation, with the text where its manifest says.
+  const runModuleCommand = async (command: SlashCommand, run: NonNullable<SlashCommand['run']>, args: string): Promise<SlashOutcome> => {
+    if (run.args === 'text' && !args) throw new Error(`Add the ${command.usage || 'text'} after /${command.name}.`)
+    const input: Record<string, unknown> = {}
+    if (run.args === 'text' && run.field) input[run.field] = args.slice(0, 2000)
+    if (run.inSpace) input.projectId = projectId
+    const text = `${command.name} ${args}`
+    if (commandKey.current?.text !== text) commandKey.current = { text, id: newRequestId() }
+    const output = (await callOp(run.operation, input as never, { requestId: commandKey.current.id })) as Record<string, unknown>
+    commandKey.current = null
+    const made = typeof output.key === 'string' && experience.shows('tech.task_keys') ? output.key : null
+    const url = typeof output.url === 'string' ? output.url : null
+    const path = url ? new URL(url, window.location.origin) : null
+    showToast({
+      tone: 'success',
+      title: made ? `Created ${made}` : command.description,
+      description: args || undefined,
+      action: path && path.origin === window.location.origin ? { label: 'Open', onSelect: () => navigate(`${path.pathname}${path.search}${path.hash}`) } : undefined,
+    })
+    return { kind: 'done' }
+  }
+
   const onCommand = async (
     command: SlashCommand,
     args: string,
     build: (text: string) => MessageContentV1 | null,
   ): Promise<SlashOutcome> => {
+    if (command.run) return runModuleCommand(command, command.run, args)
     switch (command.name) {
       case 'remind': {
         const reminder = parseReminder(args)
@@ -152,29 +174,13 @@ export function useConversationTools({
         await changeLevel(next)
         return { kind: 'done' }
       }
-      case 'task': {
-        if (!args) {
-          navigate(`/projects/${encodeURIComponent(projectId)}/work-items?create=task`)
-          return { kind: 'done' }
-        }
-        const title = args.slice(0, 240)
-        if (taskKey.current?.title !== title) taskKey.current = { title, key: createIdempotencyKey() }
-        const item = await createWorkItem({ projectId, title, priority: 'no_priority', idempotencyKey: taskKey.current.key })
-        taskKey.current = null
-        showToast({
-          tone: 'success',
-          title: experience.shows('tech.task_keys') ? `Created ${item.key}` : `${experience.label('task')} created`,
-          description: item.title,
-          action: { label: 'Open', onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`) },
-        })
-        return { kind: 'done' }
-      }
       case 'tag':
         return { kind: 'replace', text: '@' }
       case 'launch':
         navigate(`/projects/${encodeURIComponent(projectId)}/launches`)
         return { kind: 'done' }
     }
+    throw new Error(`/${command.name} isn’t available here.`)
   }
 
   const current = level.data?.level ?? 'mentions'
