@@ -529,6 +529,9 @@ pub(super) struct PageWriteArguments {
     pub note: Option<String>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
+    /// The page's comment thread that asked for this change, if one did:
+    /// the change is linked there (with Undo). Reply in that thread too.
+    pub thread_id: Option<String>,
     /// Makes creating a page safe to retry: send the same one again and you
     /// get the page the first call made, not a second one. Used only when
     /// creating.
@@ -562,6 +565,17 @@ pub(super) async fn page_write(
             None => return ToolResult::invalid("pinToConversationId", "Pass a conversation ID."),
         },
         None => None,
+    };
+    let thread_id = match (arguments.thread_id.as_deref().map(parse_id), page_id) {
+        (None, _) => None,
+        (Some(Some(id)), Some(_)) => Some(id),
+        (Some(Some(_)), None) => {
+            return ToolResult::invalid(
+                "threadId",
+                "A thread asks for changes to its own page: pass pageId with it.",
+            );
+        }
+        (Some(None), _) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
     };
     let retry_key = match arguments.client_request_id.as_deref() {
         Some(value) if page_id.is_none() => match parse_request_id(value) {
@@ -650,6 +664,17 @@ pub(super) async fn page_write(
                 if owner != Some(project_id) {
                     return Ok(ToolResult::not_found("That page"));
                 }
+                if let Some(thread_id) = thread_id
+                    && !crate::change_sets::is_page_thread(
+                        &mut transaction,
+                        page_id,
+                        thread_id,
+                        principal.actor_id,
+                    )
+                    .await?
+                {
+                    return Ok(ToolResult::not_found("That comment thread on this page"));
+                }
                 // Someone who only suggests here (K1.12) has new text kept
                 // as a suggestion; the rest of the page needs edit access.
                 let creator = suggestions::page_creator(&mut transaction, page_id).await?;
@@ -728,6 +753,16 @@ pub(super) async fn page_write(
             serde_json::json!({}),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let mut value = page_get(
             state,
@@ -1277,6 +1312,10 @@ pub(super) struct PageEditArguments {
     /// you may change directly. On a page someone else made, an agent's
     /// edits are always suggestions.
     pub suggest: Option<bool>,
+    /// The page's comment thread that asked for these edits, if one did:
+    /// the change (or suggestion) is linked there, with Undo. Reply in that
+    /// thread too.
+    pub thread_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -1307,6 +1346,11 @@ pub(super) async fn page_edit(
     }
     let Some(page_id) = parse_id(&arguments.page_id) else {
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
+    };
+    let thread_id = match arguments.thread_id.as_deref().map(parse_id) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
     };
     let note = match memory::normalize_note(arguments.note.as_deref()) {
         Ok(note) => note,
@@ -1372,6 +1416,17 @@ pub(super) async fn page_edit(
         if page.project_id != project_id {
             return Ok(ToolResult::not_found("That page"));
         }
+        if let Some(thread_id) = thread_id
+            && !crate::change_sets::is_page_thread(
+                &mut transaction,
+                page_id,
+                thread_id,
+                principal.actor_id,
+            )
+            .await?
+        {
+            return Ok(ToolResult::not_found("That comment thread on this page"));
+        }
         if page.archived {
             return Ok(ToolResult::invalid(
                 "pageId",
@@ -1434,6 +1489,16 @@ pub(super) async fn page_edit(
                 serde_json::json!({ "edits": edits.len(), "fromVersion": page.version, "suggestionId": id }),
             )
             .await?;
+            if let Some(thread_id) = thread_id {
+                crate::change_sets::answer_thread(
+                    &mut transaction,
+                    "page",
+                    page_id,
+                    principal.actor_id,
+                    thread_id,
+                )
+                .await?;
+            }
             transaction.commit().await?;
             let derived = store::derive_markdown(&page.body, &current);
             let now = PageAsBlocks {
@@ -1477,6 +1542,16 @@ pub(super) async fn page_edit(
             serde_json::json!({ "edits": edits.len(), "fromVersion": page.version }),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let after = PageAsBlocks {
             page_id,

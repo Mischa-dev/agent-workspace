@@ -346,3 +346,97 @@ pub async fn undo(
         skipped: undone.skipped,
     }))
 }
+
+/// C1.22: whether `thread_id` is one of the page's comment threads that
+/// `viewer` can see, so a change can say it answers it.
+pub async fn is_page_thread(
+    connection: &mut PgConnection,
+    page_id: Uuid,
+    thread_id: Uuid,
+    viewer: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM conversations thread \
+           JOIN conversations comments ON comments.id = thread.parent_channel_id \
+          WHERE thread.id = $1 AND thread.kind = 'thread' AND comments.kind = 'comments' \
+            AND comments.subject_kind = 'page' AND comments.subject_id = $2 \
+            AND conversation_visible_to(thread.id, $3))",
+    )
+    .bind(thread_id)
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_one(connection)
+    .await?)
+}
+
+/// C1.22: names `thread_id` as the thread that asked for what `actor` did
+/// to the thing in this transaction: the change sets it wrote (or joined)
+/// and any proposal it made. Returns how many it named.
+pub async fn answer_thread(
+    connection: &mut PgConnection,
+    thing_kind: &str,
+    thing_id: Uuid,
+    actor: Uuid,
+    thread_id: Uuid,
+) -> Result<u64, AppError> {
+    // now() is the transaction's start, so it picks out exactly the rows
+    // this transaction wrote.
+    let changes = sqlx::query(
+        "UPDATE document_change_sets SET thread_id = $4 \
+         WHERE thing_kind = $1 AND thing_id = $2 AND actor_id = $3 AND updated_at = now()",
+    )
+    .bind(thing_kind)
+    .bind(thing_id)
+    .bind(actor)
+    .bind(thread_id)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected();
+    let proposals = sqlx::query(
+        "UPDATE proposals SET thread_id = $4 \
+         WHERE thing_kind = $1 AND thing_id = $2 AND author_actor_id = $3 AND created_at = now()",
+    )
+    .bind(thing_kind)
+    .bind(thing_id)
+    .bind(actor)
+    .bind(thread_id)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected();
+    Ok(changes + proposals)
+}
+
+/// A change made because a comment thread asked (C1.22), as the thread
+/// shows it.
+#[derive(Clone, Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadChange {
+    pub thread_id: Uuid,
+    pub change_set_id: Uuid,
+    pub actor: Option<String>,
+    pub created_at: String,
+    pub undone: bool,
+}
+
+/// The changes to a page that answered its comment threads, oldest first.
+/// The caller has checked the reader may read the page.
+pub async fn page_thread_changes(
+    executor: impl sqlx::PgExecutor<'_>,
+    page_id: Uuid,
+) -> Result<Vec<ThreadChange>, AppError> {
+    Ok(sqlx::query_as::<_, ThreadChange>(
+        "SELECT change.thread_id, change.id AS change_set_id, member.display_name AS actor, \
+                to_char(change.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+                  AS created_at, \
+                change.undone_by_change_set_id IS NOT NULL AS undone \
+         FROM document_change_sets change \
+         LEFT JOIN project_memberships member \
+           ON member.project_id = change.space_id AND member.actor_id = change.actor_id \
+         WHERE change.thing_kind = 'page' AND change.thing_id = $1 \
+           AND change.thread_id IS NOT NULL \
+         ORDER BY change.created_at, change.id LIMIT 500",
+    )
+    .bind(page_id)
+    .fetch_all(executor)
+    .await?)
+}

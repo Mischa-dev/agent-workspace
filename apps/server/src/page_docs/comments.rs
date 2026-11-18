@@ -199,6 +199,10 @@ pub struct ThreadView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<String>,
     pub comments: Vec<CommentView>,
+    /// Changes to the page made because this thread asked (C1.22), oldest
+    /// first, each undoable with change_undo.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<crate::change_sets::ThreadChange>,
 }
 
 /// The status a resolved thread has, as the discussion's threads use it.
@@ -278,6 +282,7 @@ pub async fn list(
                 resolved_by: row.resolved_by.clone(),
                 resolved_at: row.resolved_at.clone(),
                 comments: Vec::new(),
+                changes: Vec::new(),
             });
         }
         let thread = threads.last_mut().expect("pushed above");
@@ -301,6 +306,18 @@ pub async fn list(
             .retain(|comment| !comment.deleted || Some(comment.id) == first);
     }
     threads.retain(|thread| thread.comments.iter().any(|comment| !comment.deleted));
+    if !threads.is_empty() {
+        for change in
+            crate::change_sets::page_thread_changes(crate::db::scoped(pool), page_id).await?
+        {
+            if let Some(thread) = threads
+                .iter_mut()
+                .find(|thread| thread.id == change.thread_id)
+            {
+                thread.changes.push(change);
+            }
+        }
+    }
     Ok(threads)
 }
 

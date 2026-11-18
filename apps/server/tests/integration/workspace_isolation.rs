@@ -2054,6 +2054,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "record_query",
     "sheet_list",
     "sheet_read",
+    "sheet_search",
+    "sheet_view_list",
     "host_list",
     "inbox_list",
     "invitation_list",
@@ -2911,6 +2913,18 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        case(
+            "sheet_search",
+            vec![json!({"sheetId": a.sheet, "query": "Rent"})],
+            vec![json!({"sheetId": b.sheet, "query": "Rent"})],
+            vec![],
+        ),
+        case(
+            "sheet_view_list",
+            vec![json!({"sheetId": a.sheet})],
+            vec![json!({"sheetId": b.sheet})],
             vec![],
         ),
     ]

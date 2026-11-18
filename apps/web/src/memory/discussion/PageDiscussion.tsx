@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
+import { callOp } from '../../api/ops'
 import { toastError } from '../../app/toastError'
 import {
   ActorTag,
@@ -390,6 +391,25 @@ function Thread({
             <Comment canComment={canComment} comment={comment} key={comment.id} onChanged={onChanged} own={comment.authorId === viewerId} pageId={pageId} />
           ))}
         </ul>
+        {thread.changes?.length ? (
+          <ul className="aw-discussion__changes">
+            {thread.changes.map((change) => (
+              <li key={change.changeSetId}>
+                {change.actor ?? 'Someone'} edited the page <When at={change.createdAt} />
+                {change.undone ? (
+                  ' · undone'
+                ) : canComment ? (
+                  <>
+                    {' · '}
+                    <Button busy={busy} onClick={() => void run('That change wasn’t undone', callOp('change_undo', { changeSetId: change.changeSetId }))} size="sm" variant="ghost">
+                      Undo
+                    </Button>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {thread.resolved ? (
           <p className="aw-discussion__resolved">
             Resolved{thread.resolvedBy ? ` by ${thread.resolvedBy}` : ''}

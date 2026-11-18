@@ -484,3 +484,126 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// C1.22: a comment asks for a change, and the change answers in its
+/// thread: linked there with Undo, and only to a thread on that page.
+#[tokio::test]
+async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
+    let Some(setup) = setup("c122_ask_in_comment").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let new_page = |title: &'static str| {
+        let work = work.clone();
+        async move {
+            let (status, page) = send(
+                app,
+                setup.browser.request(
+                    "POST",
+                    &format!("/api/v1/projects/{work}/pages"),
+                    None,
+                    json!({"title": title, "body": BODY}),
+                ),
+            )
+            .await;
+            assert!(status.is_success(), "{page}");
+            page["id"].as_str().expect("page").to_owned()
+        }
+    };
+    let page = new_page("Plan").await;
+    let other = new_page("Other").await;
+    let ask = |page: String| async move {
+        let (status, asked) = send(
+            app,
+            setup.browser.request(
+                "POST",
+                &format!("/api/v1/pages/{page}/comments"),
+                None,
+                json!({"body": "Can someone make the risks clearer?"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{asked}");
+    };
+    ask(page.clone()).await;
+    ask(other.clone()).await;
+    let discussion = |page: String| async move {
+        let (status, body) = send(
+            app,
+            setup.browser.request(
+                "GET",
+                &format!("/api/v1/pages/{page}/discussion"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    };
+    let thread = discussion(page.clone()).await["threads"][0]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    let elsewhere = discussion(other.clone()).await["threads"][0]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+
+    let helper = super::agent_interface::connect_app(app, &setup.browser, "Helper", "full").await;
+    let session = initialize(app, &helper).await.expect("Helper MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = helper.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let read = call("page_blocks", json!({"pageId": page})).await;
+    let risk = read["value"]["blocks"][3].clone();
+    let edit = |thread: String| {
+        let page = page.clone();
+        let risk = risk.clone();
+        async move {
+            call(
+                "page_edit",
+                json!({"pageId": page, "threadId": thread, "edits": [{
+                    "op": "replace", "blockId": risk["id"], "hash": risk["hash"],
+                    "markdown": "- slow CI: builds take 40 minutes"
+                }]}),
+            )
+            .await
+        }
+    };
+
+    // A thread on another page isn't this page's.
+    let wrong = edit(elsewhere).await;
+    assert_eq!(wrong["outcome"], "not_found", "{wrong}");
+
+    let edited = edit(thread.clone()).await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let shown = discussion(page.clone()).await;
+    let changes = &shown["threads"][0]["changes"];
+    assert_eq!(changes.as_array().map(Vec::len), Some(1), "{shown}");
+    assert_eq!(changes[0]["undone"], false, "{shown}");
+    let change_set = changes[0]["changeSetId"]
+        .as_str()
+        .expect("change set")
+        .to_owned();
+    assert_eq!(
+        discussion(other.clone()).await["threads"][0].get("changes"),
+        None
+    );
+
+    // Undo from the thread puts the words back.
+    let undone = call("change_undo", json!({"changeSetId": change_set})).await;
+    assert_eq!(undone["outcome"], "ok", "{undone}");
+    let shown = discussion(page.clone()).await;
+    assert_eq!(shown["threads"][0]["changes"][0]["undone"], true, "{shown}");
+    let body =
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("page");
+    assert!(body.contains("- slow CI\n"), "{body}");
+}
