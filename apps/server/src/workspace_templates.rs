@@ -1076,7 +1076,7 @@ async fn starter_project(
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $3
-         AND membership.enabled AND membership.role = 'owner'
+         AND membership.enabled AND membership.role = $5
         WHERE project.organization_id = $1 AND project.project_key = ANY($2)
           AND project.name = $4 AND project.archived_at IS NULL AND project.kind = 'standard'
         ORDER BY array_position($2, project.project_key)
@@ -1087,6 +1087,7 @@ async fn starter_project(
     .bind(&candidates)
     .bind(caller.actor_id)
     .bind(&name)
+    .bind(crate::access::tier::OWNER)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(id) = existing {
@@ -1114,7 +1115,6 @@ async fn starter_project(
             .ok_or(AppError::NotFound("workspace"))?;
     crate::projects::authorize_project_create(
         caller.actor_id,
-        caller.kind,
         organization_id,
         &role,
         role_permissions.as_deref(),
@@ -1357,7 +1357,7 @@ pub(crate) async fn snapshot(
         if role.is_default {
             default_role = Some(role.name.clone());
         }
-        if role.key == "owner" {
+        if crate::access::tier::stored_owner(&role.key) {
             continue;
         }
         let changed_built_in = role.agent_limit.is_some()

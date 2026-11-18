@@ -42,9 +42,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::{
-        Action, ActorKind, Membership, ProjectScope, Resource, RoleGrant, Subject, authorize,
-    },
+    policy::{Action, ActorKind, RoleGrant},
 };
 
 // ---------------------------------------------------------------------------
@@ -1060,43 +1058,25 @@ pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    authorize_workspace_manage_as(
-        executor,
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        organization_id,
-    )
-    .await
+    authorize_workspace_manage_as(executor, principal.actor_id, organization_id).await
 }
 
 /// `authorize_workspace_manage` for an actor, such as a person through MCP.
 pub(crate) async fn authorize_workspace_manage_as<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
-    kind: ActorKind,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
     let (role, permissions) = workspace_role(executor, actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    let subject = Subject::new(
+    if crate::access::workspace_membership_allows(
         actor_id,
-        kind,
+        organization_id,
+        membership_grant(&role, permissions.as_deref())?,
         true,
-        Some(Membership::organization(
-            organization_id,
-            membership_grant(&role, permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    if authorize(
-        &subject,
-        Action::SettingsManage,
-        Resource::Organization { organization_id },
-    )
-    .is_allowed()
-    {
+        Action::SettingsManage.permission(),
+    ) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -1110,43 +1090,25 @@ pub async fn authorize_project_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    authorize_project_manage_as(
-        executor,
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        project_id,
-    )
-    .await
+    authorize_project_manage_as(executor, principal.actor_id, project_id).await
 }
 
 /// `authorize_project_manage` for an actor, such as a person through MCP.
 pub(crate) async fn authorize_project_manage_as<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
     let (organization_id, role, permissions) = project_role(executor, actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    let subject = Subject::new(
+    if crate::access::membership_allows(
         actor_id,
-        kind,
+        project_id,
+        membership_grant(&role, permissions.as_deref())?,
         true,
-        Some(Membership::project(
-            project_id,
-            membership_grant(&role, permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    if authorize(
-        &subject,
-        Action::SettingsManage,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+        Action::SettingsManage.permission(),
+    ) {
         Ok(organization_id)
     } else {
         Err(AppError::Forbidden)
@@ -1339,7 +1301,7 @@ async fn effective(
         capabilities: SettingsCapabilities {
             manage_workspace,
             manage_project,
-            manage_own: principal.actor_kind == "human",
+            manage_own: principal.actor_kind == "human", // kind-check: mechanical (own settings are a signed-in person's web preferences)
         },
     }))
 }
@@ -1408,14 +1370,13 @@ pub(crate) async fn authorize_target_as(
     match scope {
         Scope::Workspace => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_workspace_manage_as(&mut *connection, actor_id, kind, organization_id)
-                .await?;
+            authorize_workspace_manage_as(&mut *connection, actor_id, organization_id).await?;
             Ok(Target::Workspace { organization_id })
         }
         Scope::Project => {
             let project_id = project_id.ok_or(AppError::Validation("projectId"))?;
             let organization_id =
-                authorize_project_manage_as(&mut *connection, actor_id, kind, project_id).await?;
+                authorize_project_manage_as(&mut *connection, actor_id, project_id).await?;
             Ok(Target::Project {
                 organization_id,
                 project_id,

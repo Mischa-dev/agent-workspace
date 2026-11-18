@@ -117,6 +117,8 @@ pub enum Permission {
     ModulesManage,
     // H1.24: deleting the whole workspace.
     WorkspaceDelete,
+    // K1.19: reading the workspace's audit log.
+    SettingsAudit,
     // K1.14b: giving the agents in a group another round.
     ConversationsContinueAgents,
 }
@@ -204,7 +206,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 69] = [
+pub const PERMISSIONS: [PermissionInfo; 70] = [
     on(
         "space",
         Level::See,
@@ -910,6 +912,15 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
         "Manage settings",
         "Change workspace and project settings, keys and layouts.",
         PermissionScope::Both,
+        MANAGERS,
+    ),
+    permission(
+        Permission::SettingsAudit,
+        "settings.audit",
+        "settings",
+        "Read the audit log",
+        "See the workspace's audit log: who changed what, and when.",
+        PermissionScope::Workspace,
         MANAGERS,
     ),
     permission(

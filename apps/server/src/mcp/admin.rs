@@ -23,7 +23,7 @@ use crate::{
     error::AppError,
     layouts::{self, Layout},
     memory,
-    policy::{Action, ActorKind},
+    policy::Action,
     settings::Target,
     work_item_commands::lock_membership,
     work_item_workflow::{
@@ -521,7 +521,7 @@ pub(super) async fn project_members(
             FROM project_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1
-              AND actor.kind IN ('human', 'external_agent')
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
               AND ($2 OR membership.enabled)
             ORDER BY membership.enabled DESC,
                      CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1
@@ -757,7 +757,6 @@ pub(super) async fn project_layout_set(
             crate::settings::authorize_workspace_manage_as(
                 &mut *transaction,
                 principal.actor_id,
-                ActorKind::Human,
                 organization_id,
             )
             .await?;

@@ -52,9 +52,8 @@ use crate::{
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        Action, ActorKind, AgentLimits, Decision, DenyReason, Membership, MembershipRole,
-        MembershipScope, PERMISSION_MODULES, PERMISSIONS, Permission, PermissionSet, ProjectScope,
-        Resource, RoleGrant, Subject, authorize, current_agent_limit,
+        Action, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
+        Permission, PermissionSet, RoleGrant, current_agent_limit,
     },
     work_items::views::BUILTIN_VIEWS,
 };
@@ -238,7 +237,6 @@ pub(crate) async fn agent_union(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Standing {
     pub actor_id: Uuid,
-    pub kind: ActorKind,
     pub role: MembershipRole,
     pub permissions: PermissionSet,
 }
@@ -249,7 +247,7 @@ impl Standing {
     }
 
     fn is_owner(self) -> bool {
-        self.role == MembershipRole::Owner
+        crate::access::tier::owner(self.role)
     }
 }
 
@@ -302,15 +300,15 @@ pub(crate) async fn standing(
     organization_id: Uuid,
     actor_id: Uuid,
 ) -> Result<Standing, AppError> {
-    let (kind, role, role_permissions) =
-        sqlx::query_as::<_, (String, String, Option<Vec<String>>)>(
+    let (role, role_permissions) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>)>(
             r#"
-            SELECT actor.kind, membership.role, workspace_role_permissions(membership.role_id)
+            SELECT membership.role, workspace_role_permissions(membership.role_id)
             FROM organization_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.organization_id = $1 AND membership.actor_id = $2
               AND membership.enabled AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers act through their own paths)
             "#,
         )
         .bind(organization_id)
@@ -318,16 +316,10 @@ pub(crate) async fn standing(
         .fetch_optional(&mut *connection)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    let kind = if kind == "human" {
-        ActorKind::Human
-    } else {
-        ActorKind::ExternalAgent
-    };
     let grant = RoleGrant::stored(&role, role_permissions.as_deref())?;
     let limit = current_agent_limit(actor_id, MembershipScope::Organization(organization_id));
     Ok(Standing {
         actor_id,
-        kind,
         role: grant.role(),
         permissions: effective(grant, limit),
     })
@@ -511,7 +503,7 @@ pub(crate) struct RoleCapabilities {
 
 /// What `caller` may do to a role.
 fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
-    let base_is_high = matches!(row.base_role.as_str(), "owner" | "admin");
+    let base_is_high = crate::access::tier::stored_high(&row.base_role);
     let manage = caller.may(Permission::RolesManage) && (!base_is_high || caller.is_owner());
     let within_caller = row
         .grant()
@@ -524,12 +516,11 @@ fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
             && !row.is_default
             && row.workspace_holders + row.project_holders == 0,
         assign: caller.may(Permission::MembersManage)
-            && row.key != "owner"
+            && !crate::access::tier::stored_owner(&row.key)
             && (!base_is_high || caller.is_owner())
             && within_caller,
-        invite: matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
-            && caller.may(Permission::MembersInvite)
-            && row.key != "owner"
+        invite: caller.may(Permission::MembersInvite)
+            && !crate::access::tier::stored_owner(&row.key)
             && (!base_is_high || caller.is_owner())
             && within_caller,
     }
@@ -571,7 +562,7 @@ const ROLE_SELECT: &str = r#"
            role.updated_at,
            (SELECT count(*) FROM organization_memberships holder
              JOIN actors actor ON actor.id = holder.actor_id AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
              WHERE holder.organization_id = role.organization_id AND holder.enabled
                AND (holder.role_id = role.id
                     OR (role.built_in AND holder.role_id IS NULL AND holder.role = role.key)))
@@ -1025,7 +1016,7 @@ fn may_define(caller: Standing, base: MembershipRole) -> Result<(), AppError> {
     if !caller.may(Permission::RolesManage) {
         return Err(AppError::Forbidden);
     }
-    if matches!(base, MembershipRole::Owner | MembershipRole::Admin) && !caller.is_owner() {
+    if crate::access::tier::high(base) && !caller.is_owner() {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -1146,13 +1137,7 @@ pub(crate) async fn create(
     .await?;
     let key = std::iter::once(base_key.clone())
         .chain((2..).map(|n| format!("{base_key}-{n}")))
-        .find(|candidate| {
-            !taken.contains(candidate)
-                && !matches!(
-                    candidate.as_str(),
-                    "owner" | "admin" | "member" | "viewer" | "guest" | "worker"
-                )
-        })
+        .find(|candidate| !taken.contains(candidate) && !crate::access::tier::reserved(candidate))
         .unwrap_or_else(|| format!("role-{}", Uuid::now_v7().simple()));
     if input.is_default {
         clear_default(transaction, organization_id).await?;
@@ -1297,7 +1282,7 @@ pub(crate) async fn change(
     };
     let agent_limit = match change.agent_limit.as_ref() {
         None => before.agent_limit.clone(),
-        Some(_) if before.key == "owner" => {
+        Some(_) if crate::access::tier::stored_owner(&before.key) => {
             return Err(AppError::Refused {
                 field: "agentLimit",
                 message: "Owners' apps can always do what owners can.",
@@ -1311,7 +1296,7 @@ pub(crate) async fn change(
     };
     let modules_off = match change.modules_off.as_deref() {
         None => before.modules_off.clone(),
-        Some(modules) if before.key == "owner" && !modules.is_empty() => {
+        Some(modules) if crate::access::tier::stored_owner(&before.key) && !modules.is_empty() => {
             return Err(AppError::Refused {
                 field: "modulesOff",
                 message: "Owners always have every module the workspace has on.",
@@ -1324,7 +1309,7 @@ pub(crate) async fn change(
         .act_within_requester
         .unwrap_or(before.act_within_requester);
     if is_default && !before.is_default {
-        if matches!(base, MembershipRole::Owner | MembershipRole::Admin) {
+        if crate::access::tier::high(base) {
             return Err(AppError::Refused {
                 field: "isDefault",
                 message: "New members can't start as an owner or admin.",
@@ -1471,7 +1456,7 @@ async fn lock_target(
                membership.enabled, membership.version, membership.agent_limit
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent')
+         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to manage)
         {held}
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
         FOR UPDATE OF membership
@@ -1564,10 +1549,12 @@ pub(crate) async fn assign(
         }
         _ => {}
     }
-    if target.role == "owner" {
+    if crate::access::tier::stored_owner(&target.role) {
         return Err(AppError::Forbidden);
     }
-    if (target.role == "admin" || base == MembershipRole::Admin) && !caller.is_owner() {
+    if (crate::access::tier::stored_high(&target.role) || crate::access::tier::high(base))
+        && !caller.is_owner()
+    {
         return Err(AppError::Forbidden);
     }
     if !grant.permissions().is_subset_of(caller.permissions) {
@@ -1661,30 +1648,18 @@ fn manage_refusal(
             "You aren't in this project, so you can't manage its members.",
         ));
     };
-    let subject = Subject::new(
-        caller.actor_id,
-        caller.kind,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(role, permissions)?,
-            enabled,
-        )),
-        None,
-    );
-    Ok(
-        match authorize(
-            &subject,
-            Action::MembershipManage,
-            Resource::Project(ProjectScope::project(project_id)),
-        ) {
-            Decision::Allow => None,
-            Decision::Deny(DenyReason::AgentLimit) => {
-                Some("The app you're using may not manage members in this project.")
-            }
-            Decision::Deny(_) => Some("Your role in this project doesn't manage members."),
-        },
-    )
+    let permission = Action::MembershipManage.permission();
+    let grant = RoleGrant::stored(role, permissions)?;
+    if !crate::access::membership_allows(caller.actor_id, project_id, grant, enabled, permission) {
+        return Ok(Some(
+            if crate::access::limit_hides(caller.actor_id, project_id, permission) {
+                "The app you're using may not manage members in this project."
+            } else {
+                "Your role in this project doesn't manage members."
+            },
+        ));
+    }
+    Ok(None)
 }
 
 async fn apply_to_their_projects(
@@ -1825,11 +1800,9 @@ pub(crate) async fn set_agent_limit(
     actor_id: Uuid,
     limit: Option<Vec<String>>,
 ) -> Result<Option<Vec<&'static str>>, AppError> {
-    if caller.kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
     let target = lock_target(transaction, organization_id, actor_id).await?;
-    if target.kind != "human" {
+    let connects_apps = target.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
+    if !connects_apps {
         return Err(AppError::Refused {
             field: "actorId",
             message: "Agents with their own identity follow their role; limits are for people's apps.",
@@ -1837,8 +1810,8 @@ pub(crate) async fn set_agent_limit(
     }
     if actor_id != caller.actor_id
         && (!caller.may(Permission::MembersManage)
-            || (matches!(target.role.as_str(), "owner" | "admin") && !caller.is_owner())
-            || target.role == "owner")
+            || (crate::access::tier::stored_high(&target.role) && !caller.is_owner())
+            || crate::access::tier::stored_owner(&target.role))
     {
         return Err(AppError::Forbidden);
     }
@@ -1974,11 +1947,7 @@ pub(crate) async fn permissions_of(
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("workspace member"))?;
-    let kind = if workspace.kind == "human" {
-        ActorKind::Human
-    } else {
-        ActorKind::ExternalAgent
-    };
+    let connects_apps = workspace.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
     let workspace_limit = stored_limit(workspace.role_limit.as_deref())
         .intersect(stored_limit(workspace.personal_limit.as_deref()))
         .union(PermissionSet::required());
@@ -1990,7 +1959,7 @@ pub(crate) async fn permissions_of(
             role_id: row.role_id,
             role_name: row.role_name.clone().unwrap_or_else(|| row.role.clone()),
             permissions: own.keys(),
-            for_apps: if kind == ActorKind::Human {
+            for_apps: if connects_apps {
                 effective(grant, Some(limit)).keys()
             } else {
                 own.keys()
@@ -2325,7 +2294,6 @@ mod tests {
     fn caller(role: MembershipRole) -> Standing {
         Standing {
             actor_id: Uuid::nil(),
-            kind: ActorKind::Human,
             role,
             permissions: PermissionSet::built_in(role),
         }
@@ -2386,13 +2354,6 @@ mod tests {
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Admin).is_err());
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Member).is_ok());
         assert!(may_define(caller(MembershipRole::Member), MembershipRole::Viewer).is_err());
-        // K1.13: the kind of account changes nothing; the role decides.
-        let agent = Standing {
-            kind: ActorKind::ExternalAgent,
-            ..caller(MembershipRole::Admin)
-        };
-        assert!(may_define(agent, MembershipRole::Member).is_ok());
-        assert!(may_define(agent, MembershipRole::Admin).is_err());
     }
 
     #[test]

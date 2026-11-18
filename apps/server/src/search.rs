@@ -696,7 +696,7 @@ pub async fn projects_allowing(
     .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
-    .filter(|project| !crate::policy::agent_limit_hides(viewer, *project, permission))
+    .filter(|project| !crate::access::limit_hides(viewer, *project, permission))
     .collect())
 }
 

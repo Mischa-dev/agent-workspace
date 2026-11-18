@@ -2004,8 +2004,8 @@ async fn a_space_narrows_its_own_modules_only() {
         "{listed}"
     );
 
-    // A preset is for the whole workspace; the hidden DM space and another
-    // workspace's space can't be narrowed.
+    // A preset is for the whole workspace, and another workspace's space
+    // can't be narrowed (DMs live in no space, K4.17).
     let (status, body) = switch(
         &setup,
         &setup.browser,
@@ -2013,15 +2013,6 @@ async fn a_space_narrows_its_own_modules_only() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    let direct = direct_space(&setup).await;
-    let (status, body) = switch(
-        &setup,
-        &setup.browser,
-        json!({"switches": {"whiteboards": false}, "space": direct}),
-    )
-    .await;
-    // Where DMs live is no space at all (K4.17).
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (status, body) = switch(
         &setup,
         &setup.browser,

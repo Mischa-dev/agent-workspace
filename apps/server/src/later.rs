@@ -346,11 +346,7 @@ pub async fn list(
 /// leaves out "see tasks" there.
 fn hidden_by_limit(viewer: Uuid, row: &SavedRow) -> bool {
     row.work_item_id.is_some()
-        && crate::policy::agent_limit_hides(
-            viewer,
-            row.project_id,
-            crate::policy::Permission::TasksView,
-        )
+        && crate::access::limit_hides(viewer, row.project_id, crate::policy::Permission::TasksView)
 }
 
 pub async fn open_count(
@@ -377,7 +373,7 @@ pub async fn open_count(
     ))
     .bind(viewer)
     .bind(within)
-    .bind(crate::policy::agent_limit_projects_allowing(
+    .bind(crate::access::limited_spaces(
         viewer,
         crate::policy::Permission::TasksView,
     ))
@@ -448,11 +444,14 @@ where
 // ---------------------------------------------------------------------------
 // Changing
 
-/// Who saves: a person, or an agent acting as itself in one project.
+/// Who saves, and where a bare reminder of theirs is filed.
 #[derive(Clone, Copy, Debug)]
 pub struct Saver {
     pub actor_id: Uuid,
-    pub human: bool,
+    /// Signed in across their workspaces (the web, or an app acting as its
+    /// person): a bare reminder files in the workspace's own space rather
+    /// than in the one project a token is bound to.
+    pub workspace_wide: bool,
     /// For a bare reminder: the workspace a person files it in, or the
     /// project an agent files it in.
     pub organization_id: Option<Uuid>,
@@ -596,7 +595,7 @@ pub async fn save(
             let note = note
                 .filter(|note| !note.is_empty())
                 .ok_or(AppError::Validation("note"))?;
-            let (organization_id, project_id) = if saver.human {
+            let (organization_id, project_id) = if saver.workspace_wide {
                 let organization_id = crate::notification_settings::home_workspace(
                     &state.pool,
                     saver.actor_id,
@@ -953,7 +952,7 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
                     SELECT 1 FROM project_memberships sees_task
                     WHERE sees_task.project_id = item.project_id
                       AND sees_task.actor_id = item.actor_id AND sees_task.enabled
-                      AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                      AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
                    AS visible
         FROM saved_items item
         JOIN actors actor ON actor.id = item.actor_id
@@ -978,7 +977,8 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
         return Ok(());
     }
     if row.visible {
-        if row.actor_kind == "human" {
+        let person = row.actor_kind == "human"; // kind-check: mechanical (how a reminder is delivered)
+        if person {
             notify(&mut transaction, &row, at).await?;
         } else {
             tell_agent(&mut transaction, &row).await?;
@@ -1117,14 +1117,11 @@ async fn save_http(
     ApiJson(request): ApiJson<SaveRequest>,
 ) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let item = save(
         &state,
         Saver {
             actor_id: principal.actor_id,
-            human: true,
+            workspace_wide: true,
             organization_id: None,
             project_id: None,
             within: None,

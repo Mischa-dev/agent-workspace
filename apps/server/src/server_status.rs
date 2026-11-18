@@ -25,7 +25,7 @@ use crate::{
     health::BUILD_COMMIT,
     jobs,
     preflight::{self, Level},
-    workspace::{WorkspaceRole, caller_role},
+    workspace::standing_of,
 };
 
 pub const BACKUP_STATUS_FILE: &str = "backup-status.json";
@@ -248,9 +248,11 @@ async fn read_http(
 ) -> Result<Json<ServerView>, AppError> {
     {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        if caller_role(&mut connection, &principal, organization_id, false).await?
-            != WorkspaceRole::Owner
-        {
+        // An owner of the workspace who also runs the server (K1.30 makes
+        // this the server role).
+        let standing =
+            standing_of(&mut connection, principal.actor_id, organization_id, false).await?;
+        if !crate::access::tier::owner(standing.role) {
             return Err(AppError::Forbidden);
         }
     }

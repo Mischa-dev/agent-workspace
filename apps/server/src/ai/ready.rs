@@ -192,7 +192,7 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
                      AND EXISTS (SELECT 1 FROM project_memberships sees_task
                          WHERE sees_task.project_id = other.project_id
                            AND sees_task.actor_id = $2 AND sees_task.enabled
-                           AND custom_role_allows(sees_task.role_id, 'tasks.view')))
+                           AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))
                  AS visible
         FROM work_item_dependencies dependency
         -- The end of the dependency outside this project, if any.
@@ -230,7 +230,7 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
         };
         let visible = visible
             && (other == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     other,
                     crate::policy::Permission::TasksView,
@@ -623,7 +623,7 @@ pub async fn readiness_of(
                AND EXISTS (SELECT 1 FROM project_memberships sees_task
                    WHERE sees_task.project_id = item.project_id
                      AND sees_task.actor_id = $3 AND sees_task.enabled
-                     AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                     AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         "#
         ))
         .bind(project_id)
@@ -640,7 +640,7 @@ pub async fn readiness_of(
         .into_iter()
         .filter(|blocker| {
             blocker.project_id == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     blocker.project_id,
                     crate::policy::Permission::TasksView,

@@ -332,7 +332,7 @@ pub(super) async fn later_save(
         }
         let saver = Saver {
             actor_id: principal.actor_id,
-            human,
+            workspace_wide: human,
             organization_id: None,
             project_id: Some(principal.project_id),
             within: if human {

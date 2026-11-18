@@ -1538,6 +1538,7 @@ pub(crate) async fn run_now(
         work_item_id: request.work_item_id,
         ..Subject::default()
     };
+    let person = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let run_id = queue_fire(
         &mut transaction,
@@ -1548,7 +1549,7 @@ pub(crate) async fn run_now(
         // Through the maker's app or script (MCP or the public API set its
         // agent limit for this call): the run keeps to that limit, inline
         // here and from the job alike, even for a rule made in the browser.
-        caller.actor_kind == ActorKind::Human
+        person
             && crate::policy::current_agent_limit(
                 caller.actor_id,
                 crate::policy::MembershipScope::Project(project_id),
@@ -2105,7 +2106,8 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
             "Turned off because the app it was made through was disconnected.".to_owned(),
         ));
     }
-    if actor_kind == ActorKind::ExternalAgent && row.credential_id.is_none() {
+    let through_connection = actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (an agent acts through its own connection)
+    if through_connection && row.credential_id.is_none() {
         return Ok(Err(format!(
             "Turned off because {who} has no active connection that can make changes."
         )));
@@ -2201,7 +2203,7 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             r#"
             SELECT membership.actor_id FROM project_memberships membership
             WHERE membership.project_id = $1 AND membership.enabled
-              AND membership.role IN ('owner', 'admin')
+              AND role_allows(membership.role, membership.role_id, 'settings.manage')
               AND actor_can_access_project(membership.actor_id, NULL, $1)
             ORDER BY membership.actor_id LIMIT 20
             "#,
@@ -2825,7 +2827,7 @@ async fn run_action(
                 actor_id: acting.actor_id,
                 actor_kind: acting.actor_kind,
                 via_grant_id: acting.via_grant_id,
-                mcp: acting.actor_kind == ActorKind::ExternalAgent,
+                mcp: acting.actor_kind == ActorKind::ExternalAgent, // kind-check: mechanical (an agent acts through its own connection)
                 session_id: None,
                 request_id: Some(format!("automation:{run_id}")),
                 // An agent's rule posts a hand-off to a runner as the agent,
@@ -2906,7 +2908,8 @@ async fn run_action(
             .map_err(database)?;
             // A rule a person's app or script made: its launches start only
             // within that app's limit when the queue drains.
-            if rule.made_through_app && acting.actor_kind == ActorKind::Human {
+            let person = acting.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+            if rule.made_through_app && person {
                 let ids = result
                     .launches
                     .iter()
@@ -3037,7 +3040,8 @@ async fn notify(
             sqlx::query_scalar::<_, Uuid>(
                 r#"
                 SELECT actor_id FROM project_memberships
-                WHERE project_id = $1 AND enabled AND role IN ('owner', 'admin')
+                WHERE project_id = $1 AND enabled
+                  AND role_allows(role, role_id, 'settings.manage')
                 ORDER BY actor_id LIMIT 20
                 "#,
             )
@@ -3196,7 +3200,7 @@ async fn app_limits(
         return Ok(None);
     }
     let mut connection = crate::db::scoped_tx(pool).await?;
-    let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1")
+    let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1") // kind-check: mechanical (apps act for the person who connected them)
         .bind(rule.owner_actor_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -3236,7 +3240,7 @@ async fn with_limits<F: std::future::Future>(limits: Option<AgentLimits>, call: 
 /// Whether a person is making or changing a rule through an app or script
 /// (MCP or the public API), whose agent limit the rule then keeps.
 fn through_app(caller: &Caller) -> bool {
-    caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
+    caller.actor_kind == ActorKind::Human && caller.channel == "mcp" // kind-check: mechanical (a person's app signs in as that person)
 }
 
 #[cfg(test)]

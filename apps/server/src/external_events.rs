@@ -112,7 +112,7 @@ pub async fn enqueue_external_work_item_event(
          AND connection.actor_id = COALESCE($3, item.assignee_actor_id)
          AND connection.status = 'active'
         JOIN actors actor ON actor.id = connection.actor_id
-         AND actor.kind = 'external_agent' AND actor.status = 'active'
+         AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (an agent is told through its connection's event feed)
         JOIN project_memberships membership
           ON membership.project_id = $1
          AND membership.actor_id = connection.actor_id

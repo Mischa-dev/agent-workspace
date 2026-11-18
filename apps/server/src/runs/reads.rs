@@ -237,7 +237,7 @@ pub async fn working_for(
                   SELECT 1 FROM project_memberships sees_task
                   WHERE sees_task.project_id = launch.project_id AND sees_task.actor_id = $1
                     AND sees_task.enabled
-                    AND custom_role_allows(sees_task.role_id, 'tasks.view'))
+                    AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))
             LIMIT 1
         ) item ON true
         LEFT JOIN execution_profiles profile ON profile.id = run.execution_profile_id

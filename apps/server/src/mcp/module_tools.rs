@@ -391,7 +391,7 @@ pub(super) async fn workspace_update(
                     .bind(organization_id)
                     .fetch_one(&mut *transaction)
                     .await?;
-            let (_, metadata) = crate::workspace::rename_workspace_in(
+            let metadata = crate::workspace::rename_workspace_in(
                 &mut transaction,
                 principal.actor_id,
                 organization_id,

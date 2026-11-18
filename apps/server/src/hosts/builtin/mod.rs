@@ -303,7 +303,7 @@ async fn notify_sponsoring_agents(
         FROM agent_runs run
         JOIN conversations conversation ON conversation.id = run.conversation_id
         JOIN actors actor ON actor.id = run.requesting_actor_id
-         AND actor.kind = 'external_agent'
+         AND actor.kind = 'external_agent' -- // kind-check: mechanical (an agent hears back through its own connection)
         JOIN external_agent_connections connection
           ON connection.project_id = conversation.project_id
          AND connection.actor_id = run.requesting_actor_id

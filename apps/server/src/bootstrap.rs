@@ -393,14 +393,15 @@ pub async fn bootstrap_admin(
         INSERT INTO organization_memberships (
             organization_id, actor_id, role, enabled
         )
-        VALUES ($1, $2, 'owner', true)
+        VALUES ($1, $2, $3, true)
         ON CONFLICT (organization_id, actor_id) DO UPDATE
-        SET role = 'owner', enabled = true, version = organization_memberships.version + 1,
+        SET role = $3, enabled = true, version = organization_memberships.version + 1,
             updated_at = now()
         "#,
     )
     .bind(organization_id)
     .bind(actor_id)
+    .bind(crate::access::tier::OWNER)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
@@ -468,7 +469,7 @@ pub async fn bootstrap_development_member(
              AND organization_member.organization_id = $2
              AND organization_member.enabled
             WHERE actor.id = $1
-              AND actor.kind = 'human'
+              AND actor.kind = 'human' -- // kind-check: mechanical (the first administrator signs in through the browser)
               AND actor.status = 'active'
         )
         "#,
@@ -555,9 +556,9 @@ async fn select_actor_and_organization(
                 JOIN project_memberships pm ON pm.actor_id = a.id
                 JOIN projects p ON p.id = pm.project_id
                 WHERE a.id = $1
-                  AND a.kind = 'human'
+                  AND a.kind = 'human' -- // kind-check: mechanical (a browser login is made for a person)
                   AND a.status = 'active'
-                  AND pm.role = 'owner'
+                  AND pm.role = $3
                   AND pm.enabled
                   AND p.organization_id = $2
             )
@@ -566,6 +567,7 @@ async fn select_actor_and_organization(
         )
         .bind(actor_id)
         .bind(organization_id)
+        .bind(crate::access::tier::OWNER)
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(BootstrapError::InvalidAdoption)?;
@@ -578,9 +580,9 @@ async fn select_actor_and_organization(
         FROM project_memberships pm
         JOIN actors a ON a.id = pm.actor_id
         JOIN projects p ON p.id = pm.project_id
-        WHERE pm.role = 'owner'
+        WHERE pm.role = $1
           AND pm.enabled
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a browser login is made for a person)
           AND a.status = 'active'
           AND NOT EXISTS (SELECT 1 FROM users WHERE actor_id = pm.actor_id)
         GROUP BY pm.actor_id, p.organization_id
@@ -588,6 +590,7 @@ async fn select_actor_and_organization(
         LIMIT 2
         "#,
     )
+    .bind(crate::access::tier::OWNER)
     .fetch_all(&mut **transaction)
     .await?;
     match candidates.as_slice() {

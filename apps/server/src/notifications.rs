@@ -633,7 +633,7 @@ async fn message_mentions(
             FROM message
             JOIN project_memberships membership
               ON membership.project_id = message.project_id AND membership.enabled
-            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
+            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
             -- Written in the text itself, so a person whose handle happens
             -- to be "everyone" is still only a mention of them.
             WHERE EXISTS (
@@ -656,8 +656,7 @@ async fn message_mentions(
                      ON author.project_id = message.project_id
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
-                   WHERE author.role IN ('owner', 'admin')
-                     AND custom_role_allows(author.role_id, 'channels.moderate')
+                   WHERE role_allows(author.role, author.role_id, 'channels.moderate')
                ))
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
@@ -730,7 +729,7 @@ async fn followed_messages(
                message.parent_channel_id IS NOT NULL AS in_thread
         FROM message
         JOIN following ON following.actor_id <> message.author_actor_id
-        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human'
+        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
         WHERE conversation_notification_level(following.actor_id, message.conversation_id) = 'all'
           AND (message.project_id = direct_scope_id()
                OR actor_can_access_project(following.actor_id, NULL, message.project_id))
@@ -1633,12 +1632,12 @@ const VISIBLE: &str = r#"
     AND (n.work_item_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_task
         WHERE sees_task.project_id = n.project_id AND sees_task.actor_id = $1
-          AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+          AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
     ))
     AND (n.pull_request_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_code
         WHERE sees_code.project_id = n.project_id AND sees_code.actor_id = $1
-          AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+          AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
     ))
     AND (n.subject_kind <> 'provider_account' OR EXISTS (
         SELECT 1 FROM provider_accounts account
@@ -1943,10 +1942,11 @@ pub async fn list(
 /// A task's or pull request's notification an app acting for `viewer` may
 /// not see: its agent limit leaves out "see tasks", or "see code", there.
 fn hidden_by_limit(viewer: Uuid, row: &NotificationRow) -> bool {
-    use crate::policy::{Permission, agent_limit_hides};
-    (row.work_item_id.is_some() && agent_limit_hides(viewer, row.project_id, Permission::TasksView))
+    use crate::policy::Permission;
+    (row.work_item_id.is_some()
+        && crate::access::limit_hides(viewer, row.project_id, Permission::TasksView))
         || (row.pull_request_number.is_some()
-            && agent_limit_hides(viewer, row.project_id, Permission::CodeView))
+            && crate::access::limit_hides(viewer, row.project_id, Permission::CodeView))
 }
 
 /// The given notifications, if they are the viewer's and still visible.

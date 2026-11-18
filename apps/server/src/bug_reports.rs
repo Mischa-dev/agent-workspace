@@ -235,15 +235,14 @@ fn form_url(state: &AppState, token: &str) -> String {
 /// Whether the caller can add records in the project (and so make a form
 /// there). Not found unless they can see the project.
 async fn can_add_records(pool: &PgPool, caller: &Caller, project_id: Uuid) -> bool {
-    caller.actor_kind == ActorKind::Human
-        && crate::memory::project_access(
-            pool,
-            caller.actor_id,
-            project_id,
-            PolicyAction::CollectionRecordEdit,
-        )
-        .await
-        .is_ok()
+    crate::memory::project_access(
+        pool,
+        caller.actor_id,
+        project_id,
+        PolicyAction::CollectionRecordEdit,
+    )
+    .await
+    .is_ok()
 }
 
 /// The form checked against its collection's current fields, which must be
@@ -336,12 +335,11 @@ async fn project_rights(
             .await
             .is_ok()
     };
-    let human = caller.actor_kind == ActorKind::Human;
     let tasks = allowed(PolicyAction::WorkItemView).await;
     Ok(Rights {
         tasks,
-        can_create: human && tasks && allowed(PolicyAction::WorkItemCreate).await,
-        admin: human && allowed(PolicyAction::ProjectManage).await,
+        can_create: tasks && allowed(PolicyAction::WorkItemCreate).await,
+        admin: allowed(PolicyAction::ProjectManage).await,
     })
 }
 
@@ -418,13 +416,12 @@ pub(crate) async fn list(
     .bind(project_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let human = caller.actor_kind == ActorKind::Human;
     Ok(LinkList {
         links: rows
             .into_iter()
             .filter(|row| tasks || row.collection_id.is_some())
             .map(|row| {
-                let can_manage = human && (admin || row.owner_actor_id == caller.actor_id);
+                let can_manage = admin || row.owner_actor_id == caller.actor_id;
                 view(row, can_manage)
             })
             .collect(),

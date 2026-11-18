@@ -301,12 +301,8 @@ fn check_url(state: &AppState, value: &str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
-fn require_person(caller: &Caller) -> Result<(), AppError> {
-    // Webhooks deliver what a person can see; agents hear events through
-    // their own connection instead.
-    if caller.actor_kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
+fn require_writer(caller: &Caller) -> Result<(), AppError> {
+    // A webhook delivers what its owner (any kind of account) can see.
     if !caller.can_write {
         return Err(AppError::Forbidden);
     }
@@ -464,7 +460,7 @@ pub(crate) async fn create(
     caller: &Caller,
     request: CreateWebhook,
 ) -> Result<CreatedWebhook, AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let name = normalize_name(&request.name)?;
     let url = check_url(state, &request.url)?;
     let event_types = normalize_events(&request.event_types)?;
@@ -570,7 +566,7 @@ pub(crate) async fn update(
     webhook_id: Uuid,
     request: UpdateWebhook,
 ) -> Result<WebhookView, AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let name = request.name.as_deref().map(normalize_name).transpose()?;
     let url = request
         .url
@@ -648,7 +644,7 @@ pub(crate) async fn delete(
     caller: &Caller,
     webhook_id: Uuid,
 ) -> Result<(), AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     sqlx::query("DELETE FROM webhook_subscriptions WHERE id = $1")
@@ -678,7 +674,7 @@ pub(crate) async fn rotate_secret(
     caller: &Caller,
     webhook_id: Uuid,
 ) -> Result<CreatedWebhook, AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     let (secret_id, secret) = store_secret(
@@ -720,7 +716,7 @@ pub(crate) async fn send_test(
     caller: &Caller,
     webhook_id: Uuid,
 ) -> Result<DeliveryView, AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     let id = Uuid::now_v7();
@@ -750,7 +746,7 @@ pub(crate) async fn redeliver(
     webhook_id: Uuid,
     delivery_id: Uuid,
 ) -> Result<DeliveryView, AppError> {
-    require_person(caller)?;
+    require_writer(caller)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     // Through an app, the app's limit decides as well, whatever the webhook
@@ -940,7 +936,8 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
 /// Whether a person is making or changing a webhook through an app or script
 /// (MCP or the public API), whose agent limit its deliveries then keep.
 fn through_app(caller: &Caller) -> bool {
-    caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
+    let person = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (an app acts as the person who connected it)
+    person && caller.channel == "mcp"
 }
 
 /// Whether the agent limit of the app a webhook was made through (or, with
@@ -995,12 +992,12 @@ pub(crate) async fn visible_to(
            AND ($5::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_task
                WHERE sees_task.project_id = $2 AND sees_task.actor_id = $1
-                 AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+                 AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
            ))
            AND ($4::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_code
                WHERE sees_code.project_id = $2 AND sees_code.actor_id = $1
-                 AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+                 AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
            ))
            -- A record's events (AWD-110) while it's in the project, in a
            -- collection that isn't archived.

@@ -28,6 +28,7 @@ pub mod credentials;
 pub mod decide;
 pub mod holding;
 pub mod manage;
+pub mod tier;
 pub mod tokens;
 
 use sqlx::{PgConnection, Postgres, Transaction};
@@ -432,6 +433,26 @@ pub fn membership_allows(
         && !limit_hides(account, space, permission)
 }
 
+/// `membership_allows` for a workspace membership: its role, an enabled
+/// membership, and the delegation limit an app acting for `account` has in
+/// `workspace`.
+pub fn workspace_membership_allows(
+    account: Uuid,
+    workspace: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    permission: Permission,
+) -> bool {
+    enabled
+        && grant.role() != MembershipRole::Worker
+        && grant.permissions().contains(permission)
+        && !crate::policy::current_agent_limit(
+            account,
+            crate::policy::MembershipScope::Organization(workspace),
+        )
+        .is_some_and(|limit| !limit.contains(permission))
+}
+
 /// Whether a grant read for a DM or group (`direct_permissions`, which
 /// already checked the account's roles) allows `permission`, after the
 /// delegation limit of an app acting for `account`.
@@ -450,6 +471,13 @@ pub fn direct_grant_allows(
 /// checks the role itself (`role_allows`) and needs the limit beside it.
 pub fn limit_hides(account: Uuid, space: Uuid, permission: Permission) -> bool {
     crate::policy::agent_limit_hides(account, space, permission)
+}
+
+/// While an app acts for `account`, the spaces its delegation limit leaves
+/// `permission` in; `None` outside such a call. For list SQL that checks
+/// the role itself and binds the limit as a space list.
+pub fn limited_spaces(account: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    crate::policy::agent_limit_projects_allowing(account, permission)
 }
 
 /// A list filter: SQL true for rows whose space (`space_column`) the

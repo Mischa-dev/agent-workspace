@@ -751,7 +751,7 @@ async fn login_two_factor(
         JOIN users user_account ON user_account.id = challenge.user_id
          AND user_account.status = 'active'
         JOIN actors actor ON actor.id = user_account.actor_id
-         AND actor.status = 'active' AND actor.kind = 'human'
+         AND actor.status = 'active' AND actor.kind = 'human' -- // kind-check: mechanical (a person signs in with a password)
         WHERE challenge.token_digest = $1 AND challenge.consumed_at IS NULL
           AND challenge.expires_at > now() AND challenge.failed_attempts < $2
         FOR UPDATE OF challenge
@@ -1259,7 +1259,7 @@ async fn list_api_tokens(
         r#"
         SELECT project.id, project.name, project.project_key AS key,
                -- As issuing checks: a role that may write anything beyond seeing.
-               (membership.role IN ('owner', 'admin', 'member')
+               (membership.role = ANY($2)
                 AND (workspace_role_permissions(membership.role_id) IS NULL OR EXISTS (
                     SELECT 1 FROM unnest(workspace_role_permissions(membership.role_id)) granted
                     WHERE granted NOT LIKE '%.view' AND granted NOT LIKE '%.see'
@@ -1273,11 +1273,31 @@ async fn list_api_tokens(
          AND organization_membership.actor_id = membership.actor_id
          AND organization_membership.enabled
         WHERE membership.actor_id = $1 AND membership.enabled
-          AND membership.role IN ('owner', 'admin', 'member', 'viewer')
+          AND membership.role = ANY($3)
         ORDER BY lower(project.name), project.id
         "#,
     )
     .bind(principal.actor_id)
+    // Tiers that write, and every tier but a run's worker.
+    .bind(
+        [
+            crate::policy::MembershipRole::Owner,
+            crate::policy::MembershipRole::Admin,
+            crate::policy::MembershipRole::Member,
+        ]
+        .map(crate::policy::MembershipRole::key)
+        .to_vec(),
+    )
+    .bind(
+        [
+            crate::policy::MembershipRole::Owner,
+            crate::policy::MembershipRole::Admin,
+            crate::policy::MembershipRole::Member,
+            crate::policy::MembershipRole::Viewer,
+        ]
+        .map(crate::policy::MembershipRole::key)
+        .to_vec(),
+    )
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(TokensResponse { tokens, projects }))

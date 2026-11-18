@@ -8,7 +8,7 @@
   "switchable": false,
   "needs": [],
   "worksWith": [],
-  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "webhooks.manage", "automations.manage", "modules.build", "modules.manage", "workspace.delete"],
+  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "settings.audit", "webhooks.manage", "automations.manage", "modules.build", "modules.manage", "workspace.delete"],
   "tools": {
     "briefing": "query",
     "settings_get": "describe",

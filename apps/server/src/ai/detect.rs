@@ -625,7 +625,7 @@ pub(crate) async fn actor_can_access(
     Ok(crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, bool>(
             r#"
-        SELECT CASE WHEN actor.kind = 'external_agent' THEN EXISTS (
+        SELECT CASE WHEN actor.kind = 'external_agent' THEN EXISTS ( -- // kind-check: mechanical (agents sign in through connections)
                    SELECT 1 FROM external_agent_connections connection
                    WHERE connection.actor_id = actor.id
                      AND agent_connection_can_access(connection.id, $2)

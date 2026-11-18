@@ -2530,7 +2530,7 @@ async fn people_change_the_model_lists_and_agents_never_do() {
 }
 
 #[tokio::test]
-async fn people_make_bug_report_links_and_agents_only_read_them() {
+async fn bug_report_links_follow_the_role_for_any_account() {
     let Some(f) = fixture().await else {
         return;
     };
@@ -2574,27 +2574,32 @@ async fn people_make_bug_report_links_and_agents_only_read_them() {
     .await;
     assert_eq!(both["outcome"], "invalid_request", "{both}");
 
-    // Agents read the links, never their URLs, and change none.
+    // An agent member makes its own link like anyone who can add tasks, and
+    // can't change someone else's; a list never shows a link's URL.
     let listed = f
         .call("bug_report_link_list", json!({"projectId": project}))
         .await;
     assert_eq!(listed["value"]["links"][0]["name"], "Game beta", "{listed}");
-    assert_eq!(listed["value"]["canCreate"], false, "{listed}");
+    assert_eq!(listed["value"]["canCreate"], true, "{listed}");
     assert!(!listed.to_string().contains("awbr_"), "{listed}");
-    for arguments in [
+    let own = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "bug_report_link_write",
         json!({"projectId": project, "name": "Agent link"}),
+    )
+    .await;
+    assert_eq!(own["outcome"], "ok", "{own}");
+    let refused = tool(
+        &f.app,
+        &f.token,
+        &f.session,
+        "bug_report_link_write",
         json!({"projectId": project, "linkId": link, "delete": true}),
-    ] {
-        let refused = tool(
-            &f.app,
-            &f.token,
-            &f.session,
-            "bug_report_link_write",
-            arguments,
-        )
-        .await;
-        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
-    }
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
 
     let deleted = person(
         "bug_report_link_write",
@@ -2614,6 +2619,7 @@ async fn people_make_bug_report_links_and_agents_only_read_them() {
             "bug_report_link.create",
             "bug_report_link.update",
             "bug_report_link.replace",
+            "bug_report_link.create",
             "bug_report_link.delete"
         ]
     );

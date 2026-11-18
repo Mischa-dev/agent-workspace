@@ -147,7 +147,8 @@ pub(super) async fn briefing(
         .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .unwrap_or_else(|| (principal.client_name.clone(), String::new()));
-        let reply_requests = if principal.actor_kind == ActorKind::ExternalAgent {
+        let answers_requests = principal.actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (agents are told about reply requests in their briefing)
+        let reply_requests = if answers_requests {
             match inbox_list(state, principal, InboxListArguments { limit: Some(20) }).await {
                 ReplyToolResult::Ok { value } => value.requests,
                 _ => Vec::new(),
@@ -242,7 +243,7 @@ pub(super) async fn briefing(
                 actor_id: principal.actor_id.to_string(),
                 name,
                 handle,
-                kind: if principal.actor_kind == ActorKind::ExternalAgent {
+                kind: if answers_requests {
                     "agent".to_owned()
                 } else {
                     "person".to_owned()

@@ -9,10 +9,7 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, RoleGrant},
 };
 
 pub fn router() -> Router<AppState> {
@@ -318,7 +315,9 @@ pub(crate) async fn change_member(
         });
     }
 
-    if target.role == "owner" && (next_role != "owner" || !next_enabled) {
+    if crate::access::tier::stored_owner(&target.role)
+        && (!crate::access::tier::stored_owner(next_role) || !next_enabled)
+    {
         lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
             .await?;
     }
@@ -383,9 +382,6 @@ pub(crate) async fn change_member(
         current_version: target.version,
     })?;
 
-    if target.actor_kind == "human" {
-        sync_organization_role(transaction, target.organization_id, actor_id).await?;
-    }
     if target.enabled && !next_enabled {
         revoke_project_credentials(transaction, project_id, actor_id).await?;
     }
@@ -461,7 +457,7 @@ pub(crate) async fn pick_custom_role(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("role"))?;
-    if base == "owner" {
+    if crate::access::tier::stored_owner(&base) {
         return Err(AppError::Validation("project membership role"));
     }
     Ok((base, (!built_in).then_some(role_id)))
@@ -499,28 +495,37 @@ fn authorize_access(
     {
         return Err(AppError::NotFound("project"));
     }
-    let subject = Subject::new(
+    let grant = RoleGrant::stored(
+        &access.project_role,
+        access.project_role_permissions.as_deref(),
+    )?;
+    if crate::access::membership_allows(
         actor_id,
-        ActorKind::Human,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(
-                &access.project_role,
-                access.project_role_permissions.as_deref(),
-            )?,
-            access.project_enabled,
-        )),
-        None,
-    );
-    match authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
+        project_id,
+        grant,
+        access.project_enabled,
+        action.permission(),
     ) {
-        Decision::Allow => Ok(()),
-        Decision::Deny(_) => Err(AppError::NotFound("project")),
+        Ok(())
+    } else {
+        Err(AppError::NotFound("project"))
     }
+}
+
+/// Whether the caller's workspace tier reaches someone: an owner reaches
+/// anyone, an admin those below admin in the workspace and the project.
+fn tier_reaches(caller_role: &str, target_workspace_role: &str, target_roles: &[&str]) -> bool {
+    use crate::access::tier;
+    let below_admin = |role: &str| {
+        matches!(
+            tier::of(role),
+            Some(crate::policy::MembershipRole::Member | crate::policy::MembershipRole::Viewer)
+        )
+    };
+    tier::stored_owner(caller_role)
+        || (tier::stored_high(caller_role)
+            && below_admin(target_workspace_role)
+            && target_roles.iter().all(|role| below_admin(role)))
 }
 
 fn authorize_target(
@@ -528,25 +533,24 @@ fn authorize_target(
     target: &MemberRow,
     next_role: &str,
 ) -> Result<(), AppError> {
-    match access.organization_role.as_str() {
-        "owner" => Ok(()),
-        "admin"
-            if target.organization_role == "member"
-                && matches!(target.role.as_str(), "member" | "viewer")
-                && matches!(next_role, "member" | "viewer") =>
-        {
-            Ok(())
-        }
-        _ => Err(AppError::Forbidden),
+    if tier_reaches(
+        &access.organization_role,
+        &target.organization_role,
+        &[&target.role, next_role],
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 
 fn member_view(row: MemberRow, principal: &AuthenticatedActor, access: &AccessRow) -> MemberView {
     let manageable = row.actor_id != principal.actor_id
-        && (access.organization_role == "owner"
-            || (access.organization_role == "admin"
-                && row.organization_role == "member"
-                && matches!(row.role.as_str(), "member" | "viewer")));
+        && tier_reaches(
+            &access.organization_role,
+            &row.organization_role,
+            &[&row.role],
+        );
     MemberView {
         id: row.id,
         project_id: row.project_id,
@@ -676,7 +680,7 @@ fn member_list_sql() -> &'static str {
         "WHEN EXISTS (SELECT 1 FROM execution_profiles profile WHERE profile.project_id = membership.project_id AND profile.owner_actor_id = membership.actor_id) THEN 'disabled' ",
         "ELSE 'not_configured' END AS profile_readiness ",
         "FROM project_memberships membership JOIN projects project ON project.id = membership.project_id ",
-        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') ",
+        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') ", // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
         "LEFT JOIN users user_account ON user_account.actor_id = actor.id ",
         "JOIN organization_memberships organization_membership ON organization_membership.organization_id = project.organization_id AND organization_membership.actor_id = actor.id ",
         "LEFT JOIN project_memberships inviter ON inviter.project_id = membership.project_id AND inviter.actor_id = membership.invited_by_actor_id ",
@@ -710,7 +714,7 @@ fn member_query_sql() -> &'static str {
            END AS profile_readiness
     FROM project_memberships membership
     JOIN projects project ON project.id = membership.project_id
-    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent')
+    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
     LEFT JOIN users user_account ON user_account.actor_id = actor.id
     JOIN organization_memberships organization_membership
       ON organization_membership.organization_id = project.organization_id
@@ -729,15 +733,17 @@ async fn lock_and_require_other_owners(
     actor_id: Uuid,
 ) -> Result<(), AppError> {
     let organization_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' AND enabled FOR UPDATE",
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = $2 AND enabled FOR UPDATE",
     )
     .bind(organization_id)
+    .bind(crate::access::tier::OWNER)
     .fetch_all(&mut **transaction)
     .await?;
     let project_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = 'owner' AND enabled FOR UPDATE",
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled FOR UPDATE",
     )
     .bind(project_id)
+    .bind(crate::access::tier::OWNER)
     .fetch_all(&mut **transaction)
     .await?;
     if !organization_owners.iter().any(|owner| *owner != actor_id)
@@ -748,62 +754,6 @@ async fn lock_and_require_other_owners(
             "the last enabled owner cannot be changed",
         ));
     }
-    Ok(())
-}
-
-/// Keeps a human's Organization role in step with their Project roles: managing
-/// members requires an Organization admin, so a Project owner or admin anywhere
-/// in the Organization is one, and someone who is neither anywhere is not.
-/// Owners are never changed here, nor a role an owner set on the
-/// workspace's Members page (`role_explicit`), nor a custom workspace role.
-/// Only the built-in project Owner and Admin roles count: a custom role
-/// based on Admin is narrower than workspace Admin, so it never widens into
-/// it.
-async fn sync_organization_role(
-    transaction: &mut Transaction<'_, Postgres>,
-    organization_id: Uuid,
-    actor_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        WITH next AS (
-            SELECT CASE WHEN EXISTS (
-                SELECT 1 FROM project_memberships membership
-                JOIN projects project ON project.id = membership.project_id
-                WHERE project.organization_id = $1 AND project.archived_at IS NULL
-                  -- The workspace's own space follows the workspace role,
-                  -- never the other way round.
-                  AND project.kind <> $3
-                  AND membership.actor_id = $2 AND membership.enabled
-                  AND membership.role IN ('owner', 'admin')
-                  -- Only the starting roles as they come: a custom or edited
-                  -- Admin-based role grants less than workspace Admin, so it
-                  -- never widens into it.
-                  AND NOT EXISTS (
-                      SELECT 1 FROM workspace_roles held
-                      WHERE held.id = membership.role_id
-                        AND (NOT held.built_in OR held.customized)
-                  )
-            ) THEN 'admin' ELSE 'member' END AS role
-        )
-        UPDATE organization_memberships
-        SET role = next.role, version = version + 1, updated_at = now()
-        FROM next
-        WHERE organization_id = $1 AND actor_id = $2
-          AND organization_memberships.role IN ('admin', 'member')
-          AND NOT organization_memberships.role_explicit
-          AND NOT EXISTS (
-              SELECT 1 FROM workspace_roles held
-              WHERE held.id = organization_memberships.role_id AND NOT held.built_in
-          )
-          AND organization_memberships.role <> next.role
-        "#,
-    )
-    .bind(organization_id)
-    .bind(actor_id)
-    .bind(crate::spaces::SpaceKind::Workspace.stored())
-    .execute(&mut **transaction)
-    .await?;
     Ok(())
 }
 
@@ -966,8 +916,8 @@ async fn member_candidates(
         JOIN organization_memberships om ON om.organization_id = profile.organization_id
           AND om.actor_id = profile.actor_id AND om.enabled
         LEFT JOIN users u ON u.actor_id = actor.id
-        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent')
-          AND (actor.kind = 'external_agent' OR u.status = 'active')
+        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in)
+          AND (actor.kind = 'external_agent' OR u.status = 'active') -- // kind-check: mechanical (a person signs in with an active user account)
           AND NOT EXISTS (SELECT 1 FROM project_memberships pm WHERE pm.project_id = $1 AND pm.actor_id = actor.id)
         ORDER BY profile.display_name, actor.id LIMIT 200
     "#).bind(project_id).fetch_all(&state.pool).await?))
@@ -1060,8 +1010,8 @@ pub(crate) async fn add_member(
         FROM projects p
         JOIN organization_actor_profiles profile ON profile.organization_id = p.organization_id AND profile.actor_id = $2
         JOIN organization_memberships om ON om.organization_id = p.organization_id AND om.actor_id = $2 AND om.enabled
-        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent')
-        WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active'))
+        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in)
+        WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active')) -- // kind-check: mechanical (a person signs in with an active user account)
         FOR SHARE OF om, a
     "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;

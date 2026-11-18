@@ -1077,7 +1077,7 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
             r#"
         SELECT plan.committed_by_actor_id, plan.made_through_app
         FROM ai_plan_imports plan
-        JOIN actors actor ON actor.id = plan.committed_by_actor_id AND actor.kind = 'human'
+        JOIN actors actor ON actor.id = plan.committed_by_actor_id AND actor.kind = 'human' -- // kind-check: mechanical (an app acts as the person who connected it)
         WHERE plan.id = $1
         "#,
         )

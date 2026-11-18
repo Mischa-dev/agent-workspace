@@ -253,6 +253,7 @@ pub(super) async fn my_permissions(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
+        let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (a display label)
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let PermissionsView {
             workspace, project, ..
@@ -264,12 +265,7 @@ pub(super) async fn my_permissions(
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(MyPermissionsValue {
-            acting_as: if principal.actor_kind == ActorKind::Human {
-                "person"
-            } else {
-                "agent"
-            }
-            .to_owned(),
+            acting_as: if person { "person" } else { "agent" }.to_owned(),
             workspace: scope_line(workspace),
             project: project.map(scope_line),
         }))

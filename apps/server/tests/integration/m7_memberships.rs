@@ -286,7 +286,17 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .await
         .expect("owner promotion response");
     assert_eq!(promoted.status(), StatusCode::OK);
-    assert_eq!(organization_role(viewer_actor_id).await, "admin");
+    // A project role never changes the workspace role (K1.19): managing
+    // members takes the workspace role too, which is set in the workspace.
+    assert_eq!(organization_role(viewer_actor_id).await, "member");
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin', role_explicit = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(viewer_actor_id)
+    .execute(&pool)
+    .await
+    .expect("make them a workspace admin");
     let (promoted_cookie, _) = login(&application, "m7-viewer").await;
     let candidates = application
         .clone()
@@ -310,7 +320,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .await
         .expect("owner demotion response");
     assert_eq!(demoted.status(), StatusCode::OK);
-    assert_eq!(organization_role(viewer_actor_id).await, "member");
+    assert_eq!(organization_role(viewer_actor_id).await, "admin");
     assert_eq!(organization_role(seed.human_actor_id).await, "owner");
 
     // An Organization owner who is only a Project admin still cannot remove

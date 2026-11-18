@@ -245,10 +245,7 @@ pub(super) async fn webhook_write(
         // or the caller's only one, so Automations must be on there, not
         // only where the call was checked. (One limited to a project was
         // checked in that project.)
-        if project_id.is_none()
-            && caller.token_project_id.is_none()
-            && caller.actor_kind == crate::policy::ActorKind::Human
-        {
+        if project_id.is_none() && caller.token_project_id.is_none() {
             let off = async {
                 Ok::<_, AppError>(
                     match crate::workspace::named_or_only(

@@ -14,10 +14,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, RoleGrant},
     spaces::{SpaceKind, SpaceVisibility, manage},
 };
 
@@ -1253,13 +1250,14 @@ async fn lock_project_membership(
 }
 
 fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
+    // What the role itself lets its holder do here, before any app's limit.
     let role = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
-    let scope = ProjectScope::project(row.id);
-    let subject = subject(Uuid::nil(), ActorKind::Human, row.id, role);
-    let view = authorize(&subject, Action::ProjectView, Resource::Project(scope)).is_allowed();
-    let manage = authorize(&subject, Action::ProjectManage, Resource::Project(scope)).is_allowed();
-    let navigation_write =
-        authorize(&subject, Action::NavigationWrite, Resource::Project(scope)).is_allowed();
+    let holds = |action: Action| {
+        crate::access::membership_allows(Uuid::nil(), row.id, role, true, action.permission())
+    };
+    let view = holds(Action::ProjectView);
+    let manage = holds(Action::ProjectManage);
+    let navigation_write = holds(Action::NavigationWrite);
     let navigation = navigation_view(&row)?;
     Ok(ProjectView {
         id: row.id,
@@ -1421,37 +1419,29 @@ fn authorize_organization_create(
     role: &str,
     role_permissions: Option<&[String]>,
 ) -> Result<(), AppError> {
-    authorize_project_create(
-        principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
-        organization_id,
-        role,
-        role_permissions,
-    )
+    authorize_project_create(principal.actor_id, organization_id, role, role_permissions)
 }
 
 /// Whether this actor, with this role in the workspace, may create Projects
 /// there.
 pub(crate) fn authorize_project_create(
     actor_id: Uuid,
-    kind: ActorKind,
     organization_id: Uuid,
     role: &str,
     role_permissions: Option<&[String]>,
 ) -> Result<(), AppError> {
     let role = RoleGrant::stored(role, role_permissions)?;
-    let subject = Subject::new(
+    if crate::access::workspace_membership_allows(
         actor_id,
-        kind,
+        organization_id,
+        role,
         true,
-        Some(Membership::organization(organization_id, role, true)),
-        None,
-    );
-    allowed(authorize(
-        &subject,
-        Action::OrganizationProjectCreate,
-        Resource::Organization { organization_id },
-    ))
+        Action::OrganizationProjectCreate.permission(),
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 fn authorize_project_action(
@@ -1460,17 +1450,17 @@ fn authorize_project_action(
     action: Action,
 ) -> Result<(), AppError> {
     let role = RoleGrant::stored(project.role(), project.role_permissions())?;
-    let subject = subject(
+    if crate::access::membership_allows(
         principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
         project.project_id(),
         role,
-    );
-    allowed(authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project.project_id())),
-    ))
+        true,
+        action.permission(),
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 trait ProjectMembership {
@@ -1504,24 +1494,6 @@ impl ProjectMembership for ProjectMembershipRow {
 
     fn role_permissions(&self) -> Option<&[String]> {
         self.role_permissions.as_deref()
-    }
-}
-
-fn subject(actor_id: Uuid, actor_kind: ActorKind, project_id: Uuid, role: RoleGrant) -> Subject {
-    Subject::new(
-        actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(project_id, role, true)),
-        None,
-    )
-}
-
-fn allowed(decision: Decision) -> Result<(), AppError> {
-    if decision.is_allowed() {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
     }
 }
 

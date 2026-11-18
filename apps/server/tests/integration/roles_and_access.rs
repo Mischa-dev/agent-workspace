@@ -2489,12 +2489,11 @@ async fn workspace_role(setup: &Setup, actor: Uuid) -> String {
     .expect("workspace role")
 }
 
-/// A custom project role based on Admin never widens into the full
-/// workspace Admin, even when it keeps "manage members": its holder can't
-/// send workspace invitations it leaves out. The built-in project Admin
-/// still makes a workspace admin, as before.
+/// A project role never makes a workspace role (K1.19): neither a custom
+/// Admin-based project role nor the built-in project Admin makes someone a
+/// workspace admin, so neither sends workspace invitations.
 #[tokio::test]
-async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
+async fn a_project_role_never_makes_a_workspace_role() {
     let Some(setup) = setup("awd74_custom_admin").await else {
         return;
     };
@@ -2538,10 +2537,13 @@ async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
     let (status, changed) =
         set_project_role(&setup, &work, cal, "cal-admin", json!({"role": "admin"})).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    assert_eq!(workspace_role(&setup, cal).await, "admin");
-    let (status, invited) =
+    assert_eq!(workspace_role(&setup, cal).await, "member");
+    let (status, refused) =
         send(app, cal_browser.request("POST", &invitations, None, invite)).await;
-    assert_eq!(status, StatusCode::CREATED, "{invited}");
+    assert!(
+        !status.is_success(),
+        "a project admin invited to the workspace: {refused}"
+    );
 }
 
 const OAUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
@@ -3117,6 +3119,45 @@ async fn the_built_in_viewer_cannot_be_the_workspace_default() {
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
     assert_eq!(role(&listed, "viewer")["isDefault"], false, "{listed}");
+}
+
+/// K1.19: the audit log follows "Read the audit log" (`settings.audit`),
+/// not the role's tier: a custom admin-tier role without it can't read the
+/// log, while the built-in Admin, which holds it, can.
+#[tokio::test]
+async fn the_audit_log_follows_read_the_audit_log() {
+    let Some(setup) = setup("k119_audit_log").await else {
+        return;
+    };
+    let (bea, bea_browser) = add_person(&setup, &[], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[], "cal").await;
+    let (status, keeper) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Settings keeper", "baseRole": "admin", "permissions": ["members.view", "settings.manage"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    assert!(!keys(&keeper["permissions"]).contains(&"settings.audit".to_owned()));
+    let (status, assigned) = assign(&setup, &setup.browser, bea, &keeper["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    make_admin(&setup, cal).await;
+    let log = format!(
+        "/api/v1/organizations/{}/audit-events",
+        setup.organization_id
+    );
+    let (status, refused) = send(
+        &setup.app,
+        bea_browser.request("GET", &log, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, read) = send(
+        &setup.app,
+        cal_browser.request("GET", &log, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
 }
 
 /// A write-scope personal token for anyone whose role may write anything

@@ -254,7 +254,7 @@ pub async fn prepare_m3_upgrade(
                OR NOT membership.enabled
                OR membership.role <> 'worker'
                OR actor.status <> 'active'
-               OR actor.kind <> 'execution_worker'
+               OR actor.kind <> 'execution_worker' -- // kind-check: mechanical (a worker row's own account)
            )
         "#,
     )
