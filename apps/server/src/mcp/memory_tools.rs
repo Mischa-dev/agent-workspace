@@ -756,23 +756,6 @@ async fn suggest_text(
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Result<Option<SuggestionMade>, ToolResult<PageValue>>, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
-        return Ok(Err(ToolResult::not_found("That page")));
-    };
-    if let Some(expected) = input.expected_version
-        && expected != page.version
-    {
-        return Err(AppError::VersionConflict {
-            resource: "page",
-            current_version: page.version,
-        });
-    }
-    if page.archived {
-        return Ok(Err(ToolResult::invalid(
-            "pageId",
-            "That page is archived. Bring it back with page_write (archived: false) to edit it.",
-        )));
-    }
     let markdown = match (input.restore_version, input.body.as_deref()) {
         (_, Some(body)) => memory::normalize_body(body, memory::MAX_PAGE_BODY)?,
         (Some(restore), None) => sqlx::query_scalar::<_, String>(
@@ -790,41 +773,56 @@ async fn suggest_text(
             .restore_version
             .map(|restore| format!("Restore version {restore}"))
     });
-    let stored = store::document(transaction, page_id, &page).await?;
-    let current = store::read_blocks(&stored.state)?;
-    let Some(edits) = suggestions::diff(&current, &markdown) else {
-        return Ok(Ok(None));
-    };
-    if edits.len() > edits::MAX_EDITS {
-        return Ok(Err(ToolResult::invalid(
-            "body",
-            format!(
-                "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
-                edits::MAX_EDITS
-            ),
-        )));
-    }
-    let stored_edits = match suggestions::resolve(&current, &edits) {
-        Ok(stored) => stored,
-        Err(error) => return Ok(Err(ToolResult::invalid("body", error.to_string()))),
-    };
-    let id = suggestions::create(
+    let (id, edits_count, from_version) = match suggestions::suggest_text(
         transaction,
         writer(principal),
         page_id,
-        &page,
-        &stored_edits,
+        &markdown,
+        input.expected_version,
         note.as_deref(),
     )
-    .await?;
+    .await
+    {
+        Ok(suggestions::Suggested::Made {
+            id,
+            edits,
+            from_version,
+        }) => (id, edits, from_version),
+        Ok(suggestions::Suggested::Unchanged) => return Ok(Ok(None)),
+        Ok(suggestions::Suggested::Archived) => {
+            return Ok(Err(ToolResult::invalid(
+                "pageId",
+                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+            )));
+        }
+        Ok(suggestions::Suggested::TooBig) => {
+            return Ok(Err(ToolResult::invalid(
+                "body",
+                format!(
+                    "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
+                    edits::MAX_EDITS
+                ),
+            )));
+        }
+        Ok(suggestions::Suggested::Invalid(message)) => {
+            return Ok(Err(ToolResult::invalid("body", message)));
+        }
+        Err(AppError::NotFound(_)) => return Ok(Err(ToolResult::not_found("That page"))),
+        Err(error) => return Err(error),
+    };
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
+            .bind(page_id)
+            .fetch_one(&mut **transaction)
+            .await?;
     insert_audit(
         transaction,
         principal,
-        page.project_id,
+        project_id,
         "page.suggestion_created",
         "page",
         page_id,
-        serde_json::json!({ "edits": stored_edits.len(), "fromVersion": page.version, "suggestionId": id }),
+        serde_json::json!({ "edits": edits_count, "fromVersion": from_version, "suggestionId": id }),
     )
     .await?;
     Ok(Ok(Some(SuggestionMade::pending(id))))

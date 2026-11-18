@@ -441,6 +441,71 @@ pub async fn create(
     Ok(id)
 }
 
+/// What became of new text offered as a suggestion.
+#[derive(Debug)]
+pub enum Suggested {
+    /// Kept as this suggestion, of `edits` block edits to `from_version`.
+    Made {
+        id: Uuid,
+        edits: usize,
+        from_version: i64,
+    },
+    /// The text is what the page already says.
+    Unchanged,
+    /// The page is archived.
+    Archived,
+    /// It changes more blocks than one suggestion holds.
+    TooBig,
+    /// The edits don't fit the page (the message says why).
+    Invalid(String),
+}
+
+/// Keeps `markdown`, offered by `author` as the whole of a page's text, as
+/// a suggestion of the block edits that turn the page into it: the one way
+/// both the web editor's save and `page_write` route a `Propose` grant
+/// (C1.8). Locks the page; `expected_version` refuses a page that moved on.
+pub async fn suggest_text(
+    transaction: &mut Transaction<'_, Postgres>,
+    author: Writer,
+    page_id: Uuid,
+    markdown: &str,
+    expected_version: Option<i64>,
+    note: Option<&str>,
+) -> Result<Suggested, AppError> {
+    let Some(page) = store::lock_page(transaction, page_id).await? else {
+        return Err(AppError::NotFound("page"));
+    };
+    if let Some(expected) = expected_version
+        && expected != page.version
+    {
+        return Err(AppError::VersionConflict {
+            resource: "page",
+            current_version: page.version,
+        });
+    }
+    if page.archived {
+        return Ok(Suggested::Archived);
+    }
+    let stored = store::document(transaction, page_id, &page).await?;
+    let current = store::read_blocks(&stored.state)?;
+    let Some(edits) = diff(&current, markdown) else {
+        return Ok(Suggested::Unchanged);
+    };
+    if edits.len() > edits::MAX_EDITS {
+        return Ok(Suggested::TooBig);
+    }
+    let stored_edits = match resolve(&current, &edits) {
+        Ok(stored) => stored,
+        Err(error) => return Ok(Suggested::Invalid(error.to_string())),
+    };
+    let id = create(transaction, author, page_id, &page, &stored_edits, note).await?;
+    Ok(Suggested::Made {
+        id,
+        edits: stored_edits.len(),
+        from_version: page.version,
+    })
+}
+
 /// Delivers a notification to someone who can still see the page's project.
 pub(crate) async fn notify(
     transaction: &mut Transaction<'_, Postgres>,

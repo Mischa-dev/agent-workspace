@@ -6395,3 +6395,126 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
     .expect("owners");
     assert_eq!(owners, 1);
 }
+
+/// C1.8: whether a save edits or suggests is the role's setting. A role
+/// that only suggests gets a suggestion from the ordinary page save (and
+/// can't change the title or settings); a role that edits saves directly.
+#[tokio::test]
+async fn a_page_save_suggests_or_edits_as_the_role_says() {
+    let Some(setup) = setup("c18_suggest_role").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Plan", "body": "# Plan\n\nFirst we sketch.\n"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, suggester) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Suggester", "baseRole": "member", "permissions": ["pages.suggest"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{suggester}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-suggests",
+        json!({"roleId": suggester["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let body_now = || async {
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("page")
+    };
+
+    let (status, listed) = send(
+        app,
+        bea_browser.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["canEdit"], false, "{listed}");
+    assert_eq!(listed["canSuggest"], true, "{listed}");
+
+    // The editor sends every field; unchanged settings are fine.
+    let edited = "# Plan\n\nFirst we sketch, then we build.\n";
+    let (status, saved) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({"title": "Plan", "body": edited, "isGuide": false, "isTemplate": false,
+                   "skillDescription": "", "expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let suggestion = saved["suggestionId"]
+        .as_str()
+        .expect("a suggestion")
+        .to_owned();
+    assert_eq!(saved["version"], 1, "{saved}");
+    assert!(!body_now().await.contains("then we build"));
+    let (state, author) = sqlx::query_as::<_, (String, uuid::Uuid)>(
+        "SELECT status, author_actor_id FROM proposals WHERE id = $1::uuid",
+    )
+    .bind(&suggestion)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the proposal");
+    assert_eq!((state.as_str(), author), ("pending", bea));
+
+    // A new title needs edit access.
+    let (status, refused) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({"title": "Our plan", "body": edited, "expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status} {refused}");
+
+    // The built-in member role edits: the same save lands directly.
+    let (status, changed) =
+        set_project_role(&setup, &work, bea, "bea-member", json!({"role": "member"})).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let (status, saved) = send(
+        app,
+        bea_browser.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({"title": "Plan", "body": edited, "expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert!(saved.get("suggestionId").is_none(), "{saved}");
+    assert_eq!(saved["version"], 2, "{saved}");
+    assert!(body_now().await.contains("then we build"));
+}

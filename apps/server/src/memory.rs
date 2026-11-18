@@ -1361,6 +1361,9 @@ struct ListQuery {
 struct PagesResponse {
     pages: Vec<PageSummary>,
     can_edit: bool,
+    /// May offer changes to others' pages as suggestions (C1.8): true for
+    /// anyone who may edit, and for roles that only suggest.
+    can_suggest: bool,
 }
 
 #[derive(Serialize)]
@@ -1411,6 +1414,19 @@ async fn list_pages_http(
     )
     .await
     .is_ok();
+    let can_suggest = {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        crate::access::write_mode(
+            &mut connection,
+            &crate::access::Caller::person(principal.actor_id, kind),
+            "page",
+            project_id,
+            false,
+            Some("pages"),
+        )
+        .await?
+        .is_ok()
+    };
     Ok(Json(PagesResponse {
         pages: list_pages(
             &state.pool,
@@ -1419,6 +1435,7 @@ async fn list_pages_http(
         )
         .await?,
         can_edit,
+        can_suggest: can_edit || can_suggest,
     }))
 }
 
@@ -1522,26 +1539,64 @@ async fn get_page_http(
         .ok_or(AppError::NotFound("page"))
 }
 
+/// A page as a save left it; with `suggestionId` when the save was kept
+/// as a suggestion instead (C1.8).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PageSaved {
+    #[serde(flatten)]
+    page: PageView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggestion_id: Option<Uuid>,
+}
+
 async fn update_page_http(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath(page_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PageInput>,
-) -> Result<Json<PageView>, AppError> {
+) -> Result<Json<PageSaved>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let project_id = page_project(&state.pool, page_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    project_access(
-        &mut *transaction,
-        writer.actor_id,
-        writer.actor_kind,
+    // The role decides (C1.8): edit saves; suggest-only keeps new text as
+    // a suggestion for someone who edits; neither is refused.
+    let creator = crate::page_docs::suggestions::page_creator(&mut transaction, page_id).await?;
+    let mode = crate::access::write_mode(
+        &mut transaction,
+        &crate::access::Caller::person(writer.actor_id, writer.actor_kind),
+        "page",
         project_id,
-        Action::PageEdit,
+        creator == Some(writer.actor_id),
+        Some("pages"),
     )
-    .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    .await?
+    .map_err(|_| AppError::NotFound("page"))?
+    .mode;
+    if mode == crate::access::WriteMode::Propose {
+        let suggestion_id = suggest_from_browser(&mut transaction, writer, page_id, &input).await?;
+        if let Some(id) = suggestion_id {
+            audit(
+                &mut transaction,
+                &principal,
+                project_id,
+                "page.suggestion_created",
+                "proposal",
+                id,
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        let page = get_page(&state.pool, page_id, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("page"))?;
+        return Ok(Json(PageSaved {
+            page,
+            suggestion_id,
+        }));
+    }
     update_page(&mut transaction, writer, page_id, &input).await?;
     audit(
         &mut transaction,
@@ -1553,10 +1608,89 @@ async fn update_page_http(
     )
     .await?;
     transaction.commit().await?;
-    get_page(&state.pool, page_id, principal.actor_id)
+    let page = get_page(&state.pool, page_id, principal.actor_id)
         .await?
-        .map(Json)
-        .ok_or(AppError::NotFound("page"))
+        .ok_or(AppError::NotFound("page"))?;
+    Ok(Json(PageSaved {
+        page,
+        suggestion_id: None,
+    }))
+}
+
+/// A suggest-only save from the web: new text becomes a suggestion; the
+/// title and settings need edit access.
+async fn suggest_from_browser(
+    transaction: &mut Transaction<'_, Postgres>,
+    writer: Writer,
+    page_id: Uuid,
+    input: &PageInput,
+) -> Result<Option<Uuid>, AppError> {
+    // The editor sends every field; only a change to one needs edit access.
+    let (title, is_guide, skill_description, archived, is_template) =
+        sqlx::query_as::<_, (String, bool, Option<String>, bool, bool)>(
+            "SELECT title, is_guide, skill_description, archived_at IS NOT NULL, is_template \
+             FROM project_pages WHERE id = $1",
+        )
+        .bind(page_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+    let skill_now = skill_description.as_deref().unwrap_or("");
+    let changed = input
+        .title
+        .as_deref()
+        .is_some_and(|value| value.trim() != title)
+        || input.is_guide.is_some_and(|value| value != is_guide)
+        || input.is_template.is_some_and(|value| value != is_template)
+        || input.archived.is_some_and(|value| value != archived)
+        || input
+            .skill_description
+            .as_deref()
+            .is_some_and(|value| value.trim() != skill_now);
+    if changed {
+        return Err(AppError::Refused {
+            field: "page",
+            message: "You can suggest changes to this page's text, but not its title or settings. Ask someone who edits it.",
+        });
+    }
+    let markdown = match (input.restore_version, input.body.as_deref()) {
+        (_, Some(body)) => normalize_body(body, MAX_PAGE_BODY)?,
+        (Some(restore), None) => sqlx::query_scalar::<_, String>(
+            "SELECT body FROM project_page_revisions WHERE page_id = $1 AND version = $2",
+        )
+        .bind(page_id)
+        .bind(restore)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("page version"))?,
+        (None, None) => return Ok(None),
+    };
+    let note = normalize_note(input.note.as_deref())?;
+    use crate::page_docs::suggestions::{Suggested, suggest_text};
+    match suggest_text(
+        transaction,
+        writer,
+        page_id,
+        &markdown,
+        input.expected_version,
+        note.as_deref(),
+    )
+    .await?
+    {
+        Suggested::Made { id, .. } => Ok(Some(id)),
+        Suggested::Unchanged => Ok(None),
+        Suggested::Archived => Err(AppError::Refused {
+            field: "page",
+            message: "This page is archived. Bring it back to edit it.",
+        }),
+        Suggested::TooBig => Err(AppError::Refused {
+            field: "body",
+            message: "That changes too much of someone else's page at once. Suggest it in parts.",
+        }),
+        Suggested::Invalid(_) => Err(AppError::Refused {
+            field: "body",
+            message: "That text couldn't be kept as a suggestion. Read the page again and retry.",
+        }),
+    }
 }
 
 async fn get_revision_http(
