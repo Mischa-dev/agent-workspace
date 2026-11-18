@@ -2121,10 +2121,16 @@ async fn own_task(
     let unknown = || ErrorData::invalid_params("There is no task with that id.", None);
     let principal = context_principal(context).ok_or_else(unknown)?;
     let id = Uuid::parse_str(task_id).map_err(|_| unknown())?;
+    let caller = crate::ops::mcp::caller_of(state, &principal)
+        .await
+        .map_err(|_| {
+            ErrorData::internal_error("Couldn't read the task just now. Try again.", None)
+        })?;
+    let edge = crate::ops::Edge::of_mcp(&principal);
     let found = if cancel {
-        crate::ops::long::cancel(state, principal.actor_id, id).await
+        crate::ops::long::cancel(state, &caller, &edge, id).await
     } else {
-        crate::ops::long::read(state, principal.actor_id, id).await
+        crate::ops::long::read(state, &caller, &edge, id).await
     };
     match found {
         Ok(Some(task)) => Ok(task),

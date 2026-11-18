@@ -74,12 +74,29 @@ struct KeptCaller {
     delegated: bool,
     requested_by: Option<Uuid>,
     run_id: Option<Uuid>,
-    /// Through a host's run credential (A1.12): `credential_id` names it.
+    /// Through a host's run credential (A1.12); such calls aren't kept.
     #[serde(default)]
     for_run: bool,
     /// The credential the call came through, which must still stand.
     credential_id: Option<Uuid>,
     oauth_grant_id: Option<Uuid>,
+}
+
+/// The credential and OAuth grant a call came through.
+fn credential_of(edge: &Edge) -> (Option<Uuid>, Option<Uuid>) {
+    match edge {
+        Edge::Mcp {
+            credential_id,
+            oauth_grant_id,
+            ..
+        }
+        | Edge::PublicApi {
+            credential_id,
+            oauth_grant_id,
+            ..
+        } => (*credential_id, *oauth_grant_id),
+        _ => (None, None),
+    }
 }
 
 const KINDS: &[(ActorKind, &str)] = &[
@@ -92,19 +109,7 @@ const KINDS: &[(ActorKind, &str)] = &[
 
 impl KeptCaller {
     fn of(caller: &Caller, edge: &Edge) -> Self {
-        let (credential_id, oauth_grant_id) = match edge {
-            Edge::Mcp {
-                credential_id,
-                oauth_grant_id,
-                ..
-            }
-            | Edge::PublicApi {
-                credential_id,
-                oauth_grant_id,
-                ..
-            } => (*credential_id, *oauth_grant_id),
-            _ => (None, None),
-        };
+        let (credential_id, oauth_grant_id) = credential_of(edge);
         Self {
             account_id: caller.account_id,
             kind: KINDS
@@ -136,15 +141,9 @@ impl KeptCaller {
             return Ok(None);
         };
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        // A run credential stands while its run, host binding and space do.
-        let run_credential = match (self.for_run, self.credential_id) {
-            (true, Some(credential_id)) => Some(credential_id),
-            (true, None) => return Ok(None),
-            (false, _) => None,
-        };
-        if let Some(credential_id) = run_credential
-            && !crate::runs::credentials::stands(&mut connection, credential_id).await?
-        {
+        // A run credential's calls are never kept (ops/mcp.rs runs them at
+        // once): one found here doesn't stand.
+        if self.for_run {
             return Ok(None);
         }
         let standing = sqlx::query_scalar::<_, bool>(
@@ -160,7 +159,7 @@ impl KeptCaller {
             "#,
         )
         .bind(self.account_id)
-        .bind(self.credential_id.filter(|_| run_credential.is_none()))
+        .bind(self.credential_id)
         .bind(self.oauth_grant_id)
         .fetch_one(&mut *connection)
         .await?;
@@ -390,7 +389,7 @@ async fn finish(state: &AppState, task_id: Uuid, body: &Value) -> Result<(), App
 // Reading and cancelling
 
 /// One of the caller's tasks.
-#[derive(Clone, Debug, FromRow)]
+#[derive(Clone, Debug)]
 pub struct KeptTask {
     pub id: Uuid,
     pub op: String,
@@ -400,27 +399,95 @@ pub struct KeptTask {
     pub updated_at: DateTime<Utc>,
 }
 
-/// `account`'s task `id`, or `None` for anyone else's or a missing one.
-pub async fn read(state: &AppState, account: Uuid, id: Uuid) -> Result<Option<KeptTask>, AppError> {
-    Ok(sqlx::query_as::<_, KeptTask>(
+#[derive(FromRow)]
+struct TaskRow {
+    id: Uuid,
+    op: String,
+    status: String,
+    result: Option<Value>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    workspace_id: Uuid,
+    space_id: Option<Uuid>,
+    caller: Value,
+}
+
+/// `reader`'s task `id`, or `None` for anyone else's or a missing one. A
+/// task belongs to the credential that started it, held as it was then (its
+/// connection, the space it is held to, an app's delegation, a run), and its
+/// result is shown only while that credential may still run the operation
+/// where it ran: someone who left the space no longer reads its export.
+pub async fn read(
+    state: &AppState,
+    reader: &Caller,
+    edge: &Edge,
+    id: Uuid,
+) -> Result<Option<KeptTask>, AppError> {
+    let Some(row) = sqlx::query_as::<_, TaskRow>(
         r#"
-        SELECT id, op, status, result, created_at, updated_at FROM operation_tasks
+        SELECT id, op, status, result, created_at, updated_at, workspace_id, space_id, caller
+        FROM operation_tasks
         WHERE id = $1 AND account_id = $2
         "#,
     )
     .bind(id)
-    .bind(account)
+    .bind(reader.account_id)
     .fetch_optional(crate::db::scoped(&state.pool))
-    .await?)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Ok(kept) = serde_json::from_value::<KeptCaller>(row.caller) else {
+        return Ok(None);
+    };
+    let (credential_id, oauth_grant_id) = credential_of(edge);
+    let same_credential = kept.credential_id == credential_id
+        && kept.oauth_grant_id == oauth_grant_id
+        && kept.connection_id == reader.connection_id
+        && kept.confined_space == reader.confined_space
+        && kept.via_grant_id == reader.via_grant_id
+        && kept.delegated == reader.limits.is_some()
+        && kept.run_id == reader.run_id
+        && kept.for_run == reader.for_run;
+    if !same_credential {
+        return Ok(None);
+    }
+    let target = match row.space_id {
+        Some(space) => Target::Space(space),
+        None => Target::Workspace(Some(row.workspace_id)),
+    };
+    let result = match row.result {
+        Some(result) => {
+            match super::dispatch::may_run(state, reader, Some(row.workspace_id), &row.op, &target)
+                .await
+            {
+                Ok(()) => Some(result),
+                Err(_) => return Ok(None),
+            }
+        }
+        None => None,
+    };
+    Ok(Some(KeptTask {
+        id: row.id,
+        op: row.op,
+        status: row.status,
+        result,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
 }
 
-/// Cancel `account`'s task `id` if it hasn't started. `None` for anyone
+/// Cancel `reader`'s task `id` if it hasn't started. `None` for anyone
 /// else's or a missing one; a task already running finishes.
 pub async fn cancel(
     state: &AppState,
-    account: Uuid,
+    reader: &Caller,
+    edge: &Edge,
     id: Uuid,
 ) -> Result<Option<KeptTask>, AppError> {
+    if read(state, reader, edge, id).await?.is_none() {
+        return Ok(None);
+    }
     sqlx::query(
         r#"
         UPDATE operation_tasks
@@ -429,10 +496,10 @@ pub async fn cancel(
         "#,
     )
     .bind(id)
-    .bind(account)
+    .bind(reader.account_id)
     .execute(crate::db::scoped(&state.pool))
     .await?;
-    read(state, account, id).await
+    read(state, reader, edge, id).await
 }
 
 impl KeptTask {
@@ -533,7 +600,7 @@ impl Operation for JobGet {
 
     async fn run(call: &mut OpCall<'_>, input: JobGetInput) -> Result<JobValue, OpError> {
         let id = parse_id(&input.job_id).ok_or(OpError::not_found("That job"))?;
-        let task = read(call.state, call.ctx.caller.account_id, id)
+        let task = read(call.state, &call.ctx.caller, &call.ctx.edge, id)
             .await
             .map_err(|error| OpError::logged(Self::NAME, &error))?
             .ok_or(OpError::not_found("That job"))?;

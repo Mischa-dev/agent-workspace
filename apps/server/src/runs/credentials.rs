@@ -101,36 +101,6 @@ pub async fn revoke_for_run(
     .rows_affected())
 }
 
-/// Whether a run credential still works, by its id: what [`resolve`] checks
-/// of a token, for a call kept to run later (a long call's job).
-pub async fn stands(
-    connection: &mut sqlx::PgConnection,
-    credential_id: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM run_credentials credential
-            JOIN runs run ON run.id = credential.run_id
-            JOIN hosts host ON host.id = credential.host_id
-            JOIN host_agents binding
-              ON binding.host_id = credential.host_id AND binding.account_id = credential.account_id
-            JOIN projects space ON space.id = credential.space_id
-            JOIN project_memberships membership
-              ON membership.project_id = credential.space_id AND membership.actor_id = credential.account_id
-            WHERE credential.id = $1
-              AND credential.revoked_at IS NULL AND credential.expires_at > now()
-              AND run.finished_at IS NULL
-              AND host.status <> 'revoked' AND binding.status <> 'gone'
-              AND space.archived_at IS NULL AND membership.enabled)
-        "#,
-    )
-    .bind(credential_id)
-    .fetch_one(connection)
-    .await?)
-}
-
 /// Who a run credential speaks for.
 #[derive(Clone, Debug, FromRow)]
 pub struct Holder {

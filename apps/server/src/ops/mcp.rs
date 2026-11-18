@@ -284,8 +284,10 @@ async fn request(
         }
     };
     let preview = matches!(arguments.remove("preview"), Some(Value::Bool(true)));
-    let defer_long = matches!(edge, Edge::Mcp { .. });
     let caller = caller_of(state, principal).await?;
+    // A host's run credential lives only as long as its run, so a long call
+    // through it runs at once rather than as a task that could outlive it.
+    let defer_long = matches!(edge, Edge::Mcp { .. }) && !caller.for_run;
     Ok((
         DispatchRequest {
             caller,

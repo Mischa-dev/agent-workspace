@@ -1131,8 +1131,12 @@ pub(crate) async fn list(
     })
 }
 
+/// Make a rule in the operation's transaction, so the rule and the call's
+/// request id commit together (a retry finds the first answer, never a
+/// second rule).
 pub(crate) async fn create(
     state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     project_id: Uuid,
     request: CreateRule,
@@ -1142,20 +1146,11 @@ pub(crate) async fn create(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_one(crate::db::scoped(&state.pool))
+            .fetch_one(&mut **transaction)
             .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = insert(
-        &mut transaction,
-        caller,
-        organization_id,
-        project_id,
-        &prepared,
-    )
-    .await?;
-    transaction.commit().await?;
+    let id = insert(transaction, caller, organization_id, project_id, &prepared).await?;
     Ok(view(
-        fetch(&state.pool, project_id, id).await?,
+        fetch(&mut **transaction, project_id, id).await?,
         caller,
         admin,
     ))
@@ -3274,10 +3269,10 @@ async fn create_route(
 ) -> Result<(StatusCode, Json<RuleView>), AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(create(&state, &caller, project_id, request).await?),
-    ))
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let made = create(&state, &mut transaction, &caller, project_id, request).await?;
+    transaction.commit().await?;
+    Ok((StatusCode::CREATED, Json(made)))
 }
 
 async fn update_route(
