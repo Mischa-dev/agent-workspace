@@ -332,6 +332,8 @@ async fn serve(
         return;
     }
     let mut stale_until: Option<tokio::time::Instant> = None;
+    // When it went stale, in unix milliseconds.
+    let mut stale_since: Option<i64> = None;
     loop {
         let expires = tokio::time::Instant::now()
             + Duration::from_secs(u64::try_from(ticket.expires - now()).unwrap_or(0));
@@ -343,12 +345,23 @@ async fn serve(
                         continue;
                     };
                     match ticket::verify(&token, keys, now()) {
+                        // While stale, only a ticket cut after access changed
+                        // counts: the old one (or any earlier) still verifies
+                        // but may name what this account can no longer see.
+                        Some(fresh)
+                            if fresh.account == ticket.account
+                                && fresh.session == ticket.session
+                                && stale_since.is_some_and(|since| fresh.issued_ms <= since) =>
+                        {
+                            continue;
+                        }
                         Some(fresh)
                             if fresh.account == ticket.account && fresh.session == ticket.session =>
                         {
                             last = last.max(fresh.from);
                             ticket = fresh;
                             stale_until = None;
+                            stale_since = None;
                             let accepted = json!({"type": "ticket.accepted", "position": last.to_string()});
                             if !send(&mut socket, accepted.to_string()).await {
                                 return;
@@ -395,6 +408,7 @@ async fn serve(
                     Publish::Stale { audiences } => {
                         if hears(&ticket, audiences) && stale_until.is_none() {
                             stale_until = Some(tokio::time::Instant::now() + STALE_GRACE);
+                            stale_since = Some(chrono::Utc::now().timestamp_millis());
                             if !send(&mut socket, json!({"type": "ticket.stale"}).to_string()).await {
                                 return;
                             }

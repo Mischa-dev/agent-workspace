@@ -12,6 +12,7 @@ use agent_workspace_server::{
         transfer,
     },
     files::store::FileStore,
+    jobs,
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -206,6 +207,55 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
         .await
         .expect("error")
     };
+    // Its job, run while another worker's lease on the transfer still
+    // holds (one that stopped without letting go), tries again later
+    // rather than finishing and leaving the workspace importing.
+    import::enqueue(state, target, resumed.transfer.id)
+        .await
+        .expect("enqueue");
+    sqlx::query(
+        "UPDATE workspace_transfers SET state = 'running', \
+         lease_until = now() + interval '10 minutes' WHERE id = $1",
+    )
+    .bind(resumed.transfer.id)
+    .execute(pool)
+    .await
+    .expect("held");
+    let mut registry = jobs::JobRegistry::new();
+    import::register_jobs(&mut registry);
+    let options = jobs::WorkerOptions {
+        concurrency: 1,
+        poll_interval: std::time::Duration::from_millis(20),
+        lease: std::time::Duration::from_secs(30),
+        worker_id: "test".to_owned(),
+    };
+    jobs::run_due(state, &registry, &options)
+        .await
+        .expect("run");
+    let job = sqlx::query_as::<_, (String, i32)>(
+        "SELECT state, attempts FROM background_jobs WHERE kind = $1 AND unique_key = $2",
+    )
+    .bind(import::IMPORT_KIND)
+    .bind(format!("{}:{}", import::IMPORT_KIND, resumed.transfer.id))
+    .fetch_one(pool)
+    .await
+    .expect("job");
+    assert_eq!(job, ("queued".to_owned(), 1), "tried again later");
+    assert_eq!(lifecycle(target).await, "importing");
+    // The rest of this test drives the import by hand.
+    let canceled = jobs::cancel_queued(
+        pool,
+        &format!("{}:{}", import::IMPORT_KIND, resumed.transfer.id),
+    )
+    .await
+    .expect("cancel");
+    assert!(canceled);
+    sqlx::query("UPDATE workspace_transfers SET lease_until = NULL WHERE id = $1")
+        .bind(resumed.transfer.id)
+        .execute(pool)
+        .await
+        .expect("let go");
+
     let finished = match import::run_import(
         state,
         resumed.transfer.id,

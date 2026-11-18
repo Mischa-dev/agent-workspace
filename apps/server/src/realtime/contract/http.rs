@@ -163,6 +163,7 @@ fn issue(
         audiences: named,
         from,
         expires,
+        issued_ms: chrono::Utc::now().timestamp_millis(),
     });
     Ok(TicketResponse {
         ticket,
