@@ -497,7 +497,7 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
 
 /// The built-in host's `start` command for a claimed run: its input and
 /// cause, as a host elsewhere would get them (`hosts::dispatch`).
-async fn issue_start(
+pub async fn issue_start(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
     prompt: &str,

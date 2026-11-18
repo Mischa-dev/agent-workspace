@@ -2360,10 +2360,7 @@ pub(crate) async fn lock_message_conversation(
               ($4::uuid = conversation.project_id AND actor.kind = 'external_agent')
               OR
               -- A run's agent, in the run's space (`runs::say`).
-              ($4::uuid IS NULL AND EXISTS (
-                  SELECT 1 FROM runs run
-                  WHERE run.id = $5 AND run.account_id = $2
-                    AND run.space_id = conversation.project_id))
+              ($4::uuid IS NULL AND $5::uuid = conversation.project_id)
           )
         FOR UPDATE OF conversation
         FOR SHARE OF project, actor, organization_membership, membership
@@ -2381,12 +2378,18 @@ pub(crate) async fn lock_message_conversation(
     } else {
         access_sql.to_owned()
     };
+    let run_space = match actor.run_id {
+        Some(run_id) => {
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
+        }
+        None => None,
+    };
     let row = sqlx::query_as::<_, ConversationAccessRow>(&access_sql)
         .bind(conversation_id)
         .bind(actor.actor_id)
         .bind(&actor.actor_kind)
         .bind(mcp_project_id)
-        .bind(actor.run_id)
+        .bind(run_space)
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("conversation"))?;

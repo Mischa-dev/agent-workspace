@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use std::sync::Arc;
+
 use agent_workspace_host_protocol::{Ack, AckOutcome, Command, CommandKind, HostClient};
 use serde_json::json;
 use sqlx::{FromRow, Postgres, Transaction};
@@ -18,8 +20,10 @@ use crate::{
     git_runtime::{
         self, RegisteredRepository, expected_repository_mirror_path, managed_worktree_path,
     },
-    outbox, provider,
+    provider,
 };
+
+use super::report::RunReports;
 
 const WORKTREE_START_FAILURE_REASON: &str =
     "Worktree creation failed; inspect the retained repository workspace.";
@@ -83,11 +87,12 @@ pub async fn pump_with(state: &AppState, client: &HostClient) -> Result<usize, A
     }
 }
 
-async fn carry_out(state: &AppState, _client: &HostClient, command: &Command) -> Option<Ack> {
+async fn carry_out(state: &AppState, client: &HostClient, command: &Command) -> Option<Ack> {
     match command.kind {
-        CommandKind::Start => Some(start(state, command).await),
+        CommandKind::Start => Some(start(state, client, command).await),
         CommandKind::Inspect => Some(inspect(state, command).await),
-        CommandKind::Cancel | CommandKind::Answer => Some(Ack::new(AckOutcome::Done)),
+        CommandKind::Answer => Some(answered(state, command).await),
+        CommandKind::Cancel => Some(Ack::new(AckOutcome::Done)),
         CommandKind::Steer => Some(refused(
             "unsupported",
             "The built-in host takes a new message as a new run.",
@@ -116,6 +121,117 @@ async fn detail_state(state: &AppState, run_id: Uuid) -> Option<String> {
         .flatten()
 }
 
+/// An answer to what a run asked. The harness waiting on it reads it
+/// itself; here the host moves its own state along, so the run goes on (or
+/// stops) even with no turn waiting: an approval denied, or a request nobody
+/// answered, stops it; one that lets it go on but finds it can no longer be
+/// admitted (its account or space changed) fails it with the reason.
+async fn answered(state: &AppState, command: &Command) -> Ack {
+    let (Some(run_id), Some(answer)) = (command.run_id, command.detail.get("answer")) else {
+        return Ack::new(AckOutcome::Accepted);
+    };
+    let approval = answer["kind"] == "approval";
+    let view =
+        json!({"kind": answer["kind"], "status": answer["status"], "answer": answer["answer"]});
+    let goes_on = super::requests::outcome_of(&view) != super::requests::Outcome::Deny;
+    if goes_on && detail_state(state, run_id).await.as_deref() != Some("blocked") {
+        return Ack::new(AckOutcome::Accepted);
+    }
+    let reports = match RunReports::open(state, run_id).await {
+        Ok(reports) => reports,
+        Err(error) => {
+            tracing::warn!(%run_id, error_category = error.log_category(), "a run's answer wasn't heard");
+            return Ack::new(AckOutcome::Uncertain);
+        }
+    };
+    let moved = if goes_on {
+        go_on(state, &reports, run_id).await
+    } else {
+        stop_unanswered(state, &reports, run_id, approval).await
+    };
+    if let Err(error) = moved {
+        tracing::warn!(%run_id, error_category = error.log_category(), "a run's answer wasn't carried out");
+        return Ack::new(AckOutcome::Uncertain);
+    }
+    Ack::new(AckOutcome::Accepted)
+}
+
+/// A run whose answer lets it go on is working again, unless it can no
+/// longer be admitted: then it fails, saying why.
+pub(crate) async fn go_on(
+    state: &AppState,
+    reports: &RunReports,
+    run_id: Uuid,
+) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let moved = super::move_detail(&mut transaction, run_id, RunState::Working, None)
+        .await
+        .map_err(crate::domain::refuse_unadmitted_run);
+    match moved {
+        Ok(_) => {
+            transaction.commit().await?;
+            Ok(())
+        }
+        Err(AppError::RunNotAdmitted { reason }) => {
+            drop(transaction);
+            provider::fail_run(state, reports, run_id, reason).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Stop a run whose approval was denied, or whose request went unanswered:
+/// its record finishes as cancelled (which withdraws what else it asked),
+/// and the host keeps its worktree. Safe to call twice.
+pub(crate) async fn stop_unanswered(
+    state: &AppState,
+    reports: &RunReports,
+    run_id: Uuid,
+    approval: bool,
+) -> Result<(), AppError> {
+    let done = detail_state(state, run_id).await.is_none_or(|current| {
+        matches!(
+            current.as_str(),
+            "completed" | "failed" | "canceled" | "interrupted"
+        )
+    });
+    if done {
+        return Ok(());
+    }
+    let (reason, summary) = if approval {
+        (
+            "The requested approval was denied.",
+            "The run was interrupted after the approval was denied.",
+        )
+    } else {
+        (
+            "The question went unanswered.",
+            "The run was interrupted after its question went unanswered.",
+        )
+    };
+    reports
+        .step(
+            &format!("run_interrupted:{run_id}"),
+            "run_interrupted",
+            summary,
+            json!({}),
+            true,
+        )
+        .await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    super::move_detail(
+        &mut transaction,
+        run_id,
+        RunState::Interrupted,
+        Some(reason),
+    )
+    .await?;
+    super::http::retain_run_workspace(&mut transaction, run_id).await?;
+    provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Whether the built-in host knows the run.
 async fn inspect(state: &AppState, command: &Command) -> Ack {
     let known = match command.run_id {
@@ -133,12 +249,29 @@ async fn inspect(state: &AppState, command: &Command) -> Ack {
 /// A start: the run the scheduler claimed for it gets its worktree and its
 /// harness turn. A start offered again for a run already going is
 /// accepted again; one for a run no longer waiting to start is refused.
-async fn start(state: &AppState, command: &Command) -> Ack {
+async fn start(state: &AppState, client: &HostClient, command: &Command) -> Ack {
     let Some(run_id) = command.run_id else {
         return refused("invalid", "A start needs its run.");
     };
     let Ok(claimed) = claimed(state, run_id).await else {
         return Ack::new(AckOutcome::Uncertain);
+    };
+    // The run's reports carry the credential its start brought; the start
+    // is kept so a later turn (or a restart) can fetch a fresh one.
+    let reports = match claimed {
+        Some(_) => {
+            if remember_start(state, run_id, command.command_id)
+                .await
+                .is_err()
+            {
+                return Ack::new(AckOutcome::Uncertain);
+            }
+            match RunReports::for_start(client.clone(), run_id, command.command_id).await {
+                Ok(reports) => Some(Arc::new(reports)),
+                Err(_) => return Ack::new(AckOutcome::Uncertain),
+            }
+        }
+        None => None,
     };
     let Some(run) = claimed else {
         let going = detail_state(state, run_id)
@@ -150,7 +283,10 @@ async fn start(state: &AppState, command: &Command) -> Ack {
             refused("not_waiting", "That run isn't waiting to start.")
         };
     };
-    match admit(state, run).await {
+    let Some(reports) = reports else {
+        return Ack::new(AckOutcome::Uncertain);
+    };
+    match admit(state, &reports, run).await {
         Ok(()) => Ack::new(AckOutcome::Accepted),
         Err(error) => {
             tracing::error!(
@@ -161,6 +297,16 @@ async fn start(state: &AppState, command: &Command) -> Ack {
             refused("start_failed", "The run couldn't start; its log says why.")
         }
     }
+}
+
+/// Keep the start a run's credential comes from.
+async fn remember_start(state: &AppState, run_id: Uuid, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE agent_runs SET start_command_id = $2 WHERE id = $1")
+        .bind(run_id)
+        .bind(command_id)
+        .execute(crate::db::scoped(&state.pool))
+        .await?;
+    Ok(())
 }
 
 /// The run a start is for, as the scheduler claimed it.
@@ -187,7 +333,11 @@ async fn claimed(state: &AppState, run_id: Uuid) -> Result<Option<ClaimedRun>, A
     .await?)
 }
 
-async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
+async fn admit(
+    state: &AppState,
+    reports: &Arc<RunReports>,
+    run: ClaimedRun,
+) -> Result<(), AppError> {
     let admission_root = state.config.data_root.clone();
     let admission_quota = state.config.data_quota_bytes;
     let admission_free = state.config.minimum_free_bytes;
@@ -199,6 +349,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     {
         fail_admission(
             state,
+            reports,
             &run,
             "Run admission stopped because the host storage watermark blocks new work.",
             None,
@@ -208,7 +359,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     }
     let mirror = expected_repository_mirror_path(&state.config.data_root, run.repository_id)?;
     if Path::new(&run.mirror_path) != mirror {
-        fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
+        fail_admission(state, reports, &run, PROVIDER_START_FAILURE_REASON, None).await?;
         return Err(AppError::Conflict(
             "repository",
             "stored mirror path does not match the runtime root",
@@ -229,7 +380,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
+            fail_admission(state, reports, &run, PROVIDER_START_FAILURE_REASON, None).await?;
             return Err(error.into());
         }
     };
@@ -281,7 +432,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
                         == 1;
                 if !claimed {
                     transaction.rollback().await?;
-                    fail_admission(state, &run, CLEANED_RETRY_REASON, None).await?;
+                    fail_admission(state, reports, &run, CLEANED_RETRY_REASON, None).await?;
                     return Err(AppError::Conflict(
                         "git_worktree",
                         "previous worktree was cleaned up before the retry claimed it",
@@ -296,13 +447,13 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
                 .await?;
                 transaction.commit().await?;
 
-                start_admitted_run(state, &run, worktree).await?;
+                start_admitted_run(state, reports, &run, worktree).await?;
                 clear_claim(state, run.run_id, run.claim_id).await?;
                 return Ok(());
             }
             RetryWorkspace::FreshAllocation => {}
             RetryWorkspace::Unsafe => {
-                fail_admission(state, &run, UNSAFE_RETRY_REASON, None).await?;
+                fail_admission(state, reports, &run, UNSAFE_RETRY_REASON, None).await?;
                 return Err(AppError::Conflict(
                     "git_worktree",
                     "previous worktree is not safe to reuse",
@@ -318,7 +469,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
         .manifest(&run.adapter_kind)
         .map(|manifest| manifest.branch_prefix.clone())
     else {
-        fail_admission(state, &run, UNKNOWN_HARNESS_REASON, None).await?;
+        fail_admission(state, reports, &run, UNKNOWN_HARNESS_REASON, None).await?;
         return Err(AppError::Conflict("agent_run", "harness is not installed"));
     };
     let branch = git_runtime::unique_run_branch(&branch_prefix, &run.project_key)?;
@@ -392,6 +543,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     if !matches!(creation, Ok(Ok(()))) {
         fail_admission(
             state,
+            reports,
             &run,
             WORKTREE_START_FAILURE_REASON,
             Some(worktree_id),
@@ -413,18 +565,20 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     .execute(crate::db::scoped(&state.pool))
     .await?;
 
-    start_admitted_run(state, &run, worktree).await?;
+    start_admitted_run(state, reports, &run, worktree).await?;
     clear_claim(state, run.run_id, run.claim_id).await?;
     Ok(())
 }
 
 async fn start_admitted_run(
     state: &AppState,
+    reports: &Arc<RunReports>,
     run: &ClaimedRun,
     worktree: std::path::PathBuf,
 ) -> Result<(), AppError> {
     if let Err(error) = provider::start_run(
         state,
+        Arc::clone(reports),
         run.project_id,
         run.run_id,
         run.conversation_id,
@@ -434,7 +588,7 @@ async fn start_admitted_run(
     )
     .await
     {
-        fail_admission(state, run, PROVIDER_START_FAILURE_REASON, None).await?;
+        fail_admission(state, reports, run, PROVIDER_START_FAILURE_REASON, None).await?;
         return Err(error);
     }
     Ok(())
@@ -526,25 +680,34 @@ async fn reusable_retry_workspace(
 
 async fn fail_admission(
     state: &AppState,
+    reports: &RunReports,
     run: &ClaimedRun,
     reason: &'static str,
     failed_worktree_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let current =
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-            .bind(run.run_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if matches!(
-        current.as_str(),
-        "completed" | "failed" | "canceled" | "interrupted"
-    ) {
-        transaction.commit().await?;
+    if detail_state(state, run.run_id)
+        .await
+        .is_some_and(|current| {
+            matches!(
+                current.as_str(),
+                "completed" | "failed" | "canceled" | "interrupted"
+            )
+        })
+    {
         return Ok(());
     }
-    crate::hosts::builtin::transition(&mut transaction, run.run_id, RunState::Failed, Some(reason))
+    // The run's record hears it through the protocol, like any host's.
+    reports
+        .note(
+            &format!("run_failed:{}", run.run_id),
+            "run_failed",
+            reason,
+            true,
+        )
         .await?;
+    reports.moved("failed", Some(reason)).await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    super::move_detail(&mut transaction, run.run_id, RunState::Failed, Some(reason)).await?;
     provider::idle_provider_session_for_terminal_run(&mut transaction, run.run_id).await?;
     if let Some(worktree_id) = failed_worktree_id {
         sqlx::query("UPDATE git_worktrees SET state = 'failed', updated_at = now() WHERE id = $1")
@@ -564,22 +727,6 @@ async fn fail_admission(
     .execute(&mut *transaction)
     .await?;
     clear_claim_in_transaction(&mut transaction, run.run_id, run.claim_id).await?;
-    let event_id = crate::runs::steps::record_new(
-        &mut transaction,
-        run.run_id,
-        "run_failed",
-        reason,
-        json!({}),
-    )
-    .await?;
-    crate::runs::steps::show_in_thread(&mut transaction, run.conversation_id, event_id).await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        run.project_id,
-        run.conversation_id,
-        run.run_id,
-    )
-    .await?;
     transaction.commit().await?;
     Ok(())
 }

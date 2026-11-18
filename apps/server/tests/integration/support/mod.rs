@@ -52,7 +52,7 @@ pub(crate) const NOTICES: &str = "(SELECT id AS event_id, legacy_type AS event_t
 /// `agent_runs` row, whose id references it; `state` is the built-in state
 /// the test gives that row.
 pub(crate) async fn builtin_run_record(
-    executor: impl sqlx::PgExecutor<'_>,
+    executor: impl sqlx::Acquire<'_, Database = sqlx::Postgres>,
     run_id: uuid::Uuid,
     conversation_id: uuid::Uuid,
     execution_worker_id: uuid::Uuid,
@@ -62,17 +62,19 @@ pub(crate) async fn builtin_run_record(
         .parse::<agent_workspace_server::domain::RunState>()
         .expect("a built-in run state");
     let state = agent_workspace_server::runs::state::RunState::from_legacy(built_in, None);
+    let mut connection = executor.acquire().await.expect("connection");
     sqlx::query(
         r#"
         INSERT INTO runs (
             id, workspace_id, space_id, account_id, title, cause_kind, conversation_id,
-            state, finished_at
+            state, finished_at, host_id
         )
         SELECT $1, project.organization_id, project.id, worker.actor_id, 'Run', 'thread',
-               conversation.id, $4, CASE WHEN $5 THEN now() END
+               conversation.id, $4, CASE WHEN $5 THEN now() END, host.id
           FROM conversations conversation
           JOIN projects project ON project.id = conversation.project_id
           JOIN execution_workers worker ON worker.id = $3
+          LEFT JOIN hosts host ON host.owner_workspace_id = project.organization_id AND host.builtin
          WHERE conversation.id = $2
         "#,
     )
@@ -81,9 +83,47 @@ pub(crate) async fn builtin_run_record(
     .bind(execution_worker_id)
     .bind(state.as_str())
     .bind(state.is_terminal())
-    .execute(executor)
+    .execute(&mut *connection)
     .await
     .expect("built-in run record");
+    // As `runs::builtin::open` does: the run's agent joins a members-only
+    // channel it works in.
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        SELECT root.project_id, root.id, worker.actor_id, worker.actor_id
+          FROM conversations conversation
+          JOIN conversations root ON root.id = COALESCE(conversation.parent_channel_id, conversation.id)
+          JOIN execution_workers worker ON worker.id = $2
+         WHERE conversation.id = $1 AND root.kind = 'channel' AND root.visibility = 'members'
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(execution_worker_id)
+    .execute(&mut *connection)
+    .await
+    .expect("the run's agent joins its channel");
+}
+
+/// Give a built-in run the start the built-in host carried out for it, as
+/// the scheduler and its driver do, so the host can report on it with the
+/// credential the start brings.
+pub(crate) async fn builtin_run_started(pool: &sqlx::PgPool, run_id: uuid::Uuid) {
+    let mut transaction = agent_workspace_server::db::scoped_tx(pool)
+        .await
+        .expect("transaction");
+    agent_workspace_server::scheduler::issue_start(&mut transaction, run_id, "test")
+        .await
+        .expect("start");
+    transaction.commit().await.expect("commit");
+    sqlx::query(
+        "UPDATE agent_runs SET start_command_id = (SELECT id FROM host_commands WHERE run_id = $1 AND kind = 'start') WHERE id = $1",
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .expect("keep the start");
 }
 
 /// Move a built-in run's record to the built-in state a test set by hand on

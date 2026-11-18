@@ -344,6 +344,7 @@ done
     .execute(&pool)
     .await
     .expect("insert exact completed-turn recovery run");
+    super::support::builtin_run_started(&pool, completed_recovery_run_id).await;
 
     assert_eq!(
         recovery::reconcile_non_terminal_runs(&state)

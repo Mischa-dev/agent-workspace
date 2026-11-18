@@ -231,7 +231,8 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     assert_eq!(state, "answered");
     assert_eq!(responder, Some(dana));
     assert_eq!(answer, Some(json!({"optionId": "approve"})));
-    let run_state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+    // The run's record goes on; the built-in host hears the answer.
+    let run_state = sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
         .bind(blocked)
         .fetch_one(pool)
         .await

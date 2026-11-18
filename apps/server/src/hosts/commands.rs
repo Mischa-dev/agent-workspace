@@ -433,6 +433,7 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
             command.insert(
                 "answer".into(),
                 json!({
+                    "kind": request.kind,
                     "status": request.status,
                     "answer": crate::requests::answer_of(request.answer.as_ref(), &options),
                     "answeredBy": request.answered_by_account_id,
