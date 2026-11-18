@@ -321,6 +321,13 @@ pub async fn deliver(
     if notification.actor_id == Some(notification.recipient_actor_id) {
         return Ok(false);
     }
+    // C2.39: nothing from someone the recipient blocked.
+    if let Some(actor) = notification.actor_id
+        && crate::direct_rules::has_blocked(transaction, notification.recipient_actor_id, actor)
+            .await?
+    {
+        return Ok(false);
+    }
     let first = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT NOT EXISTS (

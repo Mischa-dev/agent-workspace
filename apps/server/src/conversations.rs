@@ -1924,6 +1924,15 @@ pub(crate) async fn append_message_command_with(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    // C2.39: blocks, a shared workspace, and message requests (after the
+    // replay, so a retried first message isn't refused as waiting).
+    crate::direct_rules::check_send(
+        &mut transaction,
+        conversation.id,
+        &conversation.kind,
+        actor.actor_id,
+    )
+    .await?;
 
     let ResolvedContent {
         content_json,

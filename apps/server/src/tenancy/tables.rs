@@ -233,6 +233,10 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
     (
+        "account_blocks",
+        "whom an account blocked: accounts are server-wide (R19), and a block holds in every workspace",
+    ),
+    (
         "account_managers",
         "who manages an agent or app account: accounts and their naming are server-wide (R19)",
     ),
@@ -259,6 +263,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "deleted_workspaces",
         "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
+    ),
+    (
+        "dm_requests",
+        "a message request between two accounts in a DM: DMs belong to their participants, not a workspace (R20)",
     ),
     (
         "event_consumer_failures",

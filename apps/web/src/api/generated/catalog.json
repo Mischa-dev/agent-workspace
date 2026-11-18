@@ -6,6 +6,36 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
+    "module": "messages",
+    "name": "account_block_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List blocked accounts"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "account_block_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Block or unblock"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
     "module": "agents",
     "name": "account_joinable_list",
     "permission": "members.invite",
@@ -687,6 +717,36 @@
     "preview": false,
     "proposable": false,
     "title": "Record decision"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "dm_request_respond",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a message request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "messages",
+    "name": "dm_standing_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get DM standing"
   },
   {
     "automation": false,

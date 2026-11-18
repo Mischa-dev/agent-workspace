@@ -62,6 +62,10 @@ pub struct ProfileView {
     pub shared_spaces: Vec<SharedSpace>,
     /// Whether you may change it: your own, or an agent's you manage.
     pub can_edit: bool,
+    /// Who may start a DM with them (C2.39): `anyone` they share a workspace
+    /// with, or `ask` (a first message is a request). Only when you may edit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dm_policy: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -73,6 +77,7 @@ struct ProfileRow {
     pronouns: Option<String>,
     time_zone: Option<String>,
     avatar_version: Option<i32>,
+    dm_policy: Option<String>,
 }
 
 /// The account if it's an enabled member of `workspace`; not found
@@ -126,7 +131,8 @@ async fn profile(call: &mut OpCall<'_>, account: Uuid) -> Result<ProfileView, Op
                 WHERE membership.actor_id = actor.id AND project.organization_id = $2) AS handle,
                profile.title, profile.pronouns, profile.time_zone,
                CASE WHEN profile.avatar IS NOT NULL THEN profile.avatar_version END
-                   AS avatar_version
+                   AS avatar_version,
+               profile.dm_policy
         FROM actors actor
         LEFT JOIN account_profiles profile ON profile.account_id = actor.id
         WHERE actor.id = $1
@@ -186,6 +192,7 @@ async fn profile(call: &mut OpCall<'_>, account: Uuid) -> Result<ProfileView, Op
         statuses,
         shared_spaces,
         can_edit,
+        dm_policy: can_edit.then(|| row.dm_policy.unwrap_or_else(|| "anyone".to_owned())),
     })
 }
 
@@ -251,6 +258,10 @@ pub struct ProfileUpdateInput {
     /// true takes the avatar away (initials show again).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remove_avatar: bool,
+    /// Who may start a DM with you: `anyone` you share a workspace with, or
+    /// `ask` (their first message is a request you accept or decline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dm_policy: Option<String>,
     /// An agent you manage. Left out, your own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<IdRef>,
@@ -290,8 +301,8 @@ impl Operation for ProfileUpdate {
     const TITLE: &'static str = "Update profile";
     const DESCRIPTION: &'static str = "Change your profile (or an agent's you manage): title, \
         pronouns, timeZone, a new avatar (avatarBase64: PNG, JPEG, GIF or WebP, at most \
-        256 KB) or removeAvatar. Fields left out stay; \"\" clears one. It shows in every \
-        workspace you're in.";
+        256 KB) or removeAvatar, and dmPolicy (anyone, or ask: a first message is a request). \
+        Fields left out stay; \"\" clears one. It shows in every workspace you're in.";
     const EMITS: &'static [&'static str] = &["account.profile_changed"];
 
     type Input = ProfileUpdateInput;
@@ -353,6 +364,11 @@ impl Operation for ProfileUpdate {
                 Some((bytes, kind))
             }
         };
+        if let Some(policy) = input.dm_policy.as_deref()
+            && !crate::direct_rules::DM_POLICIES.contains(&policy)
+        {
+            return Err(OpError::invalid("dmPolicy", "Use anyone or ask."));
+        }
         let own = call.account_id();
         let account = input.account.map_or(own, IdRef::id);
         let workspace = call.ctx.workspace_id;
@@ -374,11 +390,13 @@ impl Operation for ProfileUpdate {
         sqlx::query(
             r#"
             INSERT INTO account_profiles AS profile
-                (account_id, title, pronouns, time_zone, avatar, avatar_type, avatar_version)
+                (account_id, title, pronouns, time_zone, avatar, avatar_type, avatar_version,
+                 dm_policy)
             VALUES ($1, $3, $5, $7,
                     CASE WHEN $10 THEN NULL ELSE $8 END,
                     CASE WHEN $10 THEN NULL ELSE $9 END,
-                    CASE WHEN $8::bytea IS NULL THEN 0 ELSE 1 END)
+                    CASE WHEN $8::bytea IS NULL THEN 0 ELSE 1 END,
+                    COALESCE($11, 'anyone'))
             ON CONFLICT (account_id) DO UPDATE SET
                 title = CASE WHEN $2 THEN $3 ELSE profile.title END,
                 pronouns = CASE WHEN $4 THEN $5 ELSE profile.pronouns END,
@@ -389,6 +407,7 @@ impl Operation for ProfileUpdate {
                                    ELSE profile.avatar_type END,
                 avatar_version = profile.avatar_version
                     + CASE WHEN $8::bytea IS NOT NULL THEN 1 ELSE 0 END,
+                dm_policy = COALESCE($11, profile.dm_policy),
                 updated_at = now()
             "#,
         )
@@ -402,6 +421,7 @@ impl Operation for ProfileUpdate {
         .bind(avatar_bytes)
         .bind(avatar_kind)
         .bind(input.remove_avatar)
+        .bind(input.dm_policy.as_deref())
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;

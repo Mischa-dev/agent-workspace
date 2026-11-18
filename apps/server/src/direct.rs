@@ -214,6 +214,7 @@ async fn direct_overview(
           AND me.actor_id = $2
           AND conversation.kind IN ('dm', 'group')
           AND conversation.archived_at IS NULL
+          AND NOT direct_hidden_for(conversation.id, me.actor_id)
         ORDER BY COALESCE(last_entry.created_at, conversation.created_at) DESC, conversation.id
         LIMIT $3
         "#,

@@ -585,6 +585,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sidebar_section_set",
     "saved_search_set",
     "profile_update",
+    "account_block_set",
+    "dm_request_respond",
     "status_delete",
     "status_set",
     "task_claim",
@@ -6269,6 +6271,22 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"name": "Net search", "query": "net"}),
             vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
         ),
+        // C2.39: only someone in the workspace called can be blocked, and a
+        // request in B's DM is never A's to answer.
+        mcp_case(
+            "account_block_set",
+            json!({"account": a.agent, "blocked": false}),
+            vec![
+                json!({"account": b.agent, "blocked": true}),
+                json!({"workspace": b.organization, "account": b.agent, "blocked": true}),
+            ],
+        ),
+        mcp_case(
+            "dm_request_respond",
+            json!({"conversationId": a.dm, "accept": true}),
+            vec![json!({"conversationId": b.dm, "accept": true})],
+        )
+        .without_own("A's DM holds no request; dm_requests_and_blocks.rs answers one"),
         // C2.17: an agent's profile is set by those who manage it; B's
         // agent isn't A's to change.
         mcp_case(

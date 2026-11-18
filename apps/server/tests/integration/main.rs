@@ -50,6 +50,7 @@ mod conversation_privacy;
 mod delivery;
 mod direct_conversations;
 mod discussion;
+mod dm_requests_and_blocks;
 mod domain_events;
 mod drafts;
 mod emoji;

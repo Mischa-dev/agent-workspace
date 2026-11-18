@@ -2632,6 +2632,13 @@ async fn channel_writes_keep_to_private_channels() {
             "sidebar_item_move",
             json!({"conversationId": secret, "starred": true}),
         ),
+        // C2.39: a conversation Omar can't read has no standing for him,
+        // and no request of his to answer.
+        ("dm_standing_get", json!({"conversationId": secret})),
+        (
+            "dm_request_respond",
+            json!({"conversationId": secret, "accept": true}),
+        ),
     ] {
         let (status, body) = op(&omar.browser, name, input).await;
         assert!(!status.is_success(), "{name}: {body}");

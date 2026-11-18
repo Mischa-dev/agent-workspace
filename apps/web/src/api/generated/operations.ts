@@ -30,6 +30,8 @@ export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
 export type AvatarLine = { accountId: string; url: string }
 
+export type BlockedAccount = { accountId: string; blockedAt: string; name?: string | null }
+
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
@@ -75,6 +77,8 @@ export type DecisionView = { createdAt: string; decidedBy: string; detail: strin
 export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
 
 export type Direction = "asc" | "desc"
+
+export type DmRequestView = { direction: string; state: string }
 
 export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
 
@@ -256,6 +260,14 @@ export type WhiteboardLine = { createdAt: string; createdBy?: string | null; del
 
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
 
+export type AccountBlockListInput = Record<string, never>
+
+export type AccountBlockListOutput = { blocked: BlockedAccount[] }
+
+export type AccountBlockSetInput = { account: string; blocked: boolean }
+
+export type AccountBlockSetOutput = { blocked: BlockedAccount[] }
+
 export type AccountJoinableListInput = Record<string, never>
 
 export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
@@ -435,6 +447,14 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type DmRequestRespondInput = { accept: boolean; conversationId: string }
+
+export type DmRequestRespondOutput = { canSend: boolean; otherAccountId?: string | null; reason?: string | null; request?: DmRequestView | null; youBlocked: boolean }
+
+export type DmStandingGetInput = { conversationId: string }
+
+export type DmStandingGetOutput = { canSend: boolean; otherAccountId?: string | null; reason?: string | null; request?: DmRequestView | null; youBlocked: boolean }
 
 export type EventKindListInput = Record<string, never>
 
@@ -622,11 +642,11 @@ export type ProfileAvatarListOutput = { avatars: AvatarLine[] }
 
 export type ProfileGetInput = { account?: string | null }
 
-export type ProfileGetOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
+export type ProfileGetOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; dmPolicy?: string | null; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
 
-export type ProfileUpdateInput = { account?: string | null; avatarBase64?: string | null; pronouns?: string | null; removeAvatar?: boolean; timeZone?: string | null; title?: string | null }
+export type ProfileUpdateInput = { account?: string | null; avatarBase64?: string | null; dmPolicy?: string | null; pronouns?: string | null; removeAvatar?: boolean; timeZone?: string | null; title?: string | null }
 
-export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
+export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; dmPolicy?: string | null; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
 
 export type RequestCancelInput = { requestId: string }
 
@@ -825,6 +845,8 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
 export type Operations = {
+  account_block_list: { input: AccountBlockListInput; output: AccountBlockListOutput }
+  account_block_set: { input: AccountBlockSetInput; output: AccountBlockSetOutput }
   account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
   account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
@@ -870,6 +892,8 @@ export type Operations = {
   dashboard_update: { input: DashboardUpdateInput; output: DashboardUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  dm_request_respond: { input: DmRequestRespondInput; output: DmRequestRespondOutput }
+  dm_standing_get: { input: DmStandingGetInput; output: DmStandingGetOutput }
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }

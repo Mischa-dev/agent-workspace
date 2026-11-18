@@ -2091,6 +2091,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "group_list",
     "saved_search_list",
     "place_search",
+    "dm_standing_get",
+    "account_block_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2740,6 +2742,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "place_search",
             vec![json!({"q": "a"})],
             vec![json!({"workspace": b.organization, "q": "a"})],
+            vec![],
+        ),
+        // C2.39: B's DMs have no standing to read from A, and blocks list
+        // only in the workspace called.
+        case(
+            "dm_standing_get",
+            vec![json!({"conversationId": a.dm})],
+            vec![json!({"conversationId": b.dm})],
+            vec![],
+        ),
+        case(
+            "account_block_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
             vec![],
         ),
         // C2.9: sidebar sections are kept per workspace; B's never list in A.

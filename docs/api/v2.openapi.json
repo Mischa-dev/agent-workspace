@@ -193,6 +193,28 @@
         ],
         "type": "object"
       },
+      "BlockedAccount": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "blockedAt": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Their name in this workspace, when they are in it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "accountId",
+          "blockedAt"
+        ],
+        "type": "object"
+      },
       "BrowsedChannel": {
         "description": "A channel as `channel_list` lists it.",
         "properties": {
@@ -1035,6 +1057,22 @@
           "desc"
         ],
         "type": "string"
+      },
+      "DmRequestView": {
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "state": {
+            "description": "pending, accepted or declined.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "state"
+        ],
+        "type": "object"
       },
       "DraftView": {
         "description": "A draft as its writer sees it.",
@@ -4794,6 +4832,647 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v2/w/{workspace}/ops/account_block_list": {
+      "post": {
+        "description": "Everyone you blocked, newest first, with their name here when they are in this workspace. Blocks are your own and hold in every workspace.",
+        "operationId": "account_block_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "AccountBlockListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Accounts you blocked.",
+                          "properties": {
+                            "blocked": {
+                              "items": {
+                                "$ref": "#/components/schemas/BlockedAccount"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "blocked"
+                          ],
+                          "title": "AccountBlocks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Accounts you blocked.",
+                          "properties": {
+                            "blocked": {
+                              "items": {
+                                "$ref": "#/components/schemas/BlockedAccount"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "blocked"
+                          ],
+                          "title": "AccountBlocks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List blocked accounts",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/account_block_set": {
+      "post": {
+        "description": "Block someone in this workspace (blocked: true), or unblock them (false). A block takes your DM with them out of your list, stops new messages between you both ways, and keeps their mentions and other notifications out of your inbox. They aren't told. Returns everyone you blocked.",
+        "operationId": "account_block_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "The account (a person's or an agent's): its id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "blocked": {
+                    "description": "true blocks them; false unblocks them.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "account",
+                  "blocked"
+                ],
+                "title": "AccountBlockSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Accounts you blocked.",
+                          "properties": {
+                            "blocked": {
+                              "items": {
+                                "$ref": "#/components/schemas/BlockedAccount"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "blocked"
+                          ],
+                          "title": "AccountBlocks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Accounts you blocked.",
+                          "properties": {
+                            "blocked": {
+                              "items": {
+                                "$ref": "#/components/schemas/BlockedAccount"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "blocked"
+                          ],
+                          "title": "AccountBlocks",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Block or unblock",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/account_joinable_list": {
       "post": {
         "description": "Agents and apps you manage that aren't here yet. Needs \"Invite people\" where it acts.",
@@ -21276,6 +21955,769 @@
           "pages"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dm_request_respond": {
+      "post": {
+        "description": "Accept or decline a message request: the first message from someone, to you while you ask people first (dmPolicy ask). Accepting lets their messages reach you; declining takes the DM out of your list and stops their messages. They aren't told you declined.",
+        "operationId": "dm_request_respond",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "accept": {
+                    "description": "true accepts it: their messages reach you from now on. false declines\nit: the DM leaves your list, and they can't send more. Writing back\naccepts it too.",
+                    "type": "boolean"
+                  },
+                  "conversationId": {
+                    "description": "The DM holding the request: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId",
+                  "accept"
+                ],
+                "title": "DmRequestRespondInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Whether you can send in a DM, and why not.",
+                          "properties": {
+                            "canSend": {
+                              "description": "Whether a message you send now goes through.",
+                              "type": "boolean"
+                            },
+                            "otherAccountId": {
+                              "description": "The other person, for a DM between two.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't: `blocked` (you blocked them), `closed`,\n`not_shared` (you no longer share a workspace) or `waiting` (they\nhaven't accepted your request).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "request": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/DmRequestView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A message request in this DM: `incoming` (to you, to accept or\ndecline) or `outgoing` (yours, waiting), with its state."
+                            },
+                            "youBlocked": {
+                              "description": "You blocked them.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "canSend",
+                            "youBlocked"
+                          ],
+                          "title": "DmStanding",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Whether you can send in a DM, and why not.",
+                          "properties": {
+                            "canSend": {
+                              "description": "Whether a message you send now goes through.",
+                              "type": "boolean"
+                            },
+                            "otherAccountId": {
+                              "description": "The other person, for a DM between two.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't: `blocked` (you blocked them), `closed`,\n`not_shared` (you no longer share a workspace) or `waiting` (they\nhaven't accepted your request).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "request": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/DmRequestView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A message request in this DM: `incoming` (to you, to accept or\ndecline) or `outgoing` (yours, waiting), with its state."
+                            },
+                            "youBlocked": {
+                              "description": "You blocked them.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "canSend",
+                            "youBlocked"
+                          ],
+                          "title": "DmStanding",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Answer a message request",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dm_standing_get": {
+      "post": {
+        "description": "Whether you can send in a DM now, and why not: you blocked them, you no longer share a workspace, or your message request is waiting. Also says when the DM holds a message request to you, to accept or decline with dm_request_respond.",
+        "operationId": "dm_standing_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The DM: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "DmStandingGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Whether you can send in a DM, and why not.",
+                          "properties": {
+                            "canSend": {
+                              "description": "Whether a message you send now goes through.",
+                              "type": "boolean"
+                            },
+                            "otherAccountId": {
+                              "description": "The other person, for a DM between two.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't: `blocked` (you blocked them), `closed`,\n`not_shared` (you no longer share a workspace) or `waiting` (they\nhaven't accepted your request).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "request": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/DmRequestView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A message request in this DM: `incoming` (to you, to accept or\ndecline) or `outgoing` (yours, waiting), with its state."
+                            },
+                            "youBlocked": {
+                              "description": "You blocked them.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "canSend",
+                            "youBlocked"
+                          ],
+                          "title": "DmStanding",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Whether you can send in a DM, and why not.",
+                          "properties": {
+                            "canSend": {
+                              "description": "Whether a message you send now goes through.",
+                              "type": "boolean"
+                            },
+                            "otherAccountId": {
+                              "description": "The other person, for a DM between two.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't: `blocked` (you blocked them), `closed`,\n`not_shared` (you no longer share a workspace) or `waiting` (they\nhaven't accepted your request).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "request": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/DmRequestView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A message request in this DM: `incoming` (to you, to accept or\ndecline) or `outgoing` (yours, waiting), with its state."
+                            },
+                            "youBlocked": {
+                              "description": "You blocked them.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "canSend",
+                            "youBlocked"
+                          ],
+                          "title": "DmStanding",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Get DM standing",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "describe"
       }
     },
     "/api/v2/w/{workspace}/ops/event_kind_list": {
@@ -39247,6 +40689,13 @@
                               "description": "Whether you may change it: your own, or an agent's you manage.",
                               "type": "boolean"
                             },
+                            "dmPolicy": {
+                              "description": "Who may start a DM with them (C2.39): `anyone` they share a workspace\nwith, or `ask` (a first message is a request). Only when you may edit it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
                             "handle": {
                               "type": "string"
                             },
@@ -39438,6 +40887,13 @@
                             "canEdit": {
                               "description": "Whether you may change it: your own, or an agent's you manage.",
                               "type": "boolean"
+                            },
+                            "dmPolicy": {
+                              "description": "Who may start a DM with them (C2.39): `anyone` they share a workspace\nwith, or `ask` (a first message is a request). Only when you may edit it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "handle": {
                               "type": "string"
@@ -39600,7 +41056,7 @@
     },
     "/api/v2/w/{workspace}/ops/profile_update": {
       "post": {
-        "description": "Change your profile (or an agent's you manage): title, pronouns, timeZone, a new avatar (avatarBase64: PNG, JPEG, GIF or WebP, at most 256 KB) or removeAvatar. Fields left out stay; \"\" clears one. It shows in every workspace you're in.",
+        "description": "Change your profile (or an agent's you manage): title, pronouns, timeZone, a new avatar (avatarBase64: PNG, JPEG, GIF or WebP, at most 256 KB) or removeAvatar, and dmPolicy (anyone, or ask: a first message is a request). Fields left out stay; \"\" clears one. It shows in every workspace you're in.",
         "operationId": "profile_update",
         "parameters": [
           {
@@ -39639,6 +41095,13 @@
                   },
                   "avatarBase64": {
                     "description": "A new avatar: a PNG, JPEG, GIF or WebP of at most 256 KB, base64.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dmPolicy": {
+                    "description": "Who may start a DM with you: `anyone` you share a workspace with, or\n`ask` (their first message is a request you accept or decline).",
                     "type": [
                       "string",
                       "null"
@@ -39718,6 +41181,13 @@
                             "canEdit": {
                               "description": "Whether you may change it: your own, or an agent's you manage.",
                               "type": "boolean"
+                            },
+                            "dmPolicy": {
+                              "description": "Who may start a DM with them (C2.39): `anyone` they share a workspace\nwith, or `ask` (a first message is a request). Only when you may edit it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "handle": {
                               "type": "string"
@@ -39910,6 +41380,13 @@
                             "canEdit": {
                               "description": "Whether you may change it: your own, or an agent's you manage.",
                               "type": "boolean"
+                            },
+                            "dmPolicy": {
+                              "description": "Who may start a DM with them (C2.39): `anyone` they share a workspace\nwith, or `ask` (a first message is a request). Only when you may edit it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "handle": {
                               "type": "string"

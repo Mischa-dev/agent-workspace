@@ -32,6 +32,7 @@ pub mod dashboards;
 pub mod db;
 pub mod delivery;
 pub mod direct;
+pub mod direct_rules;
 pub mod discussion;
 pub mod domain;
 pub mod drafts;

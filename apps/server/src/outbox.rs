@@ -404,6 +404,15 @@ pub struct SavedSearchesChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Who may message someone changed for them (C2.39): a block, or a message
+/// request answered. Their id only, delivered to them alone; their screens
+/// read the DM's standing again. A blocked account is never told.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DmRulesChangedPayload {
+    pub actor_id: Uuid,
+}
+
 /// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
 /// scheduled or kept. Ids and the state only; open screens refetch the
 /// session. Delivered in the workspace's own space.
@@ -448,6 +457,7 @@ pub enum OutboxEventPayload {
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
+    DmRulesChanged(DmRulesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
@@ -483,6 +493,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
+            Self::DmRulesChanged(_) => "dm_rules.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
@@ -521,6 +532,7 @@ impl OutboxEventPayload {
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
+            | Self::DmRulesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
@@ -538,6 +550,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
+            Self::DmRulesChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -561,6 +574,7 @@ impl OutboxEventPayload {
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
             Self::SavedSearchesChanged(_) => OutboxResourceKind::Account,
+            Self::DmRulesChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
             | Self::AccountProfileChanged(_) => OutboxResourceKind::Account,
@@ -612,6 +626,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
+            Self::DmRulesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
@@ -749,6 +764,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
+            Self::DmRulesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -844,6 +860,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "saved_searches.changed" => Self::SavedSearchesChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "dm_rules.changed" => Self::DmRulesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(

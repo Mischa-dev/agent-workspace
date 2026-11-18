@@ -226,6 +226,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     None,
     "Someone's saved searches changed",
 );
+pub static DM_RULES_CHANGED: EventType = signal(
+    "dm_rules.changed",
+    "messages",
+    None,
+    "Who may message someone changed for them",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -635,6 +641,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
