@@ -318,7 +318,11 @@ impl Operation for RepositoryCreate {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = MODULE;
     const PERMISSION: Option<Perm> = Some(Perm::CodeManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Not the dispatcher's: adding from an installation asks GitHub, and its
+    // transaction would be held across those calls. A space holds a
+    // repository once (by owner and name, and by GitHub's ID), so a retry
+    // can't add a second one; it says the repository is there.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Add repository";
     const DESCRIPTION: &'static str = "Add a GitHub repository to a space: owner, name, \
         githubRepositoryId and defaultBranch, or installationId and githubRepositoryId for one \
@@ -691,7 +695,9 @@ impl Operation for PullRequestMerge {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = MODULE;
     const PERMISSION: Option<Perm> = Some(Perm::CodeManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Not the dispatcher's: merging asks GitHub, and its transaction would
+    // be held across the call. Merging again finds it merged.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const DESTRUCTIVE: bool = true;
     const TITLE: &'static str = "Merge pull request";
     const DESCRIPTION: &'static str = "Merge an open pull request on GitHub through the space's \
