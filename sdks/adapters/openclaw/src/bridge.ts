@@ -67,6 +67,8 @@ function clientId(): string {
 export class WorkspaceBridge {
   private readonly options: BridgeOptions
   private readonly held = new Map<string, Held>()
+  /** Requests being claimed now: the stream and the pick-up can name the same one. */
+  private readonly claiming = new Set<string>()
 
   constructor(options: BridgeOptions) {
     this.options = options
@@ -108,7 +110,16 @@ export class WorkspaceBridge {
   }
 
   private async take(requestId: string): Promise<void> {
-    if (this.held.has(requestId)) return
+    if (this.held.has(requestId) || this.claiming.has(requestId)) return
+    this.claiming.add(requestId)
+    try {
+      await this.claimAndRun(requestId)
+    } finally {
+      this.claiming.delete(requestId)
+    }
+  }
+
+  private async claimAndRun(requestId: string): Promise<void> {
     let claim: Claim
     try {
       claim = await this.call<Claim>('reply_claim', { requestId })

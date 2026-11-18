@@ -93,6 +93,18 @@ test('a request becomes one turn from the person who asked', async () => {
   assert.equal(bridge.answering(CONVERSATION), 'r1')
 })
 
+test('a request heard twice at once (the stream and the pick-up) is claimed once', async () => {
+  const turns: Turn[] = []
+  const { workspace, bridge } = bridgeWith(async (turn) => {
+    turns.push(turn)
+    await new Promise(() => {}) // still running
+  })
+  await Promise.all([bridge.hear(replyEvent('reply.requested', 'r9')), bridge.hear(replyEvent('reply.requested', 'r9'))])
+
+  assert.equal(workspace.named('reply_claim').length, 1)
+  assert.equal(turns.length, 1)
+})
+
 test('blocks go out as they come, the final closes the request, tools show as status', async () => {
   const { workspace, bridge } = bridgeWith(async (_turn, handle) => {
     await handle.typing()

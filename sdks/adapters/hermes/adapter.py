@@ -100,6 +100,8 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         # By request id, and the request each conversation is answering.
         self._held: Dict[str, Held] = {}
         self._answering: Dict[str, str] = {}
+        # Requests being claimed now: the stream and the pick-up can name one twice.
+        self._claiming: set = set()
 
     @property
     def name(self) -> str:
@@ -178,9 +180,16 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         asyncio.run_coroutine_threadsafe(coroutine, self._loop)
 
     async def _take(self, request_id: str) -> None:
-        """Claims one request and hands it to Hermes as a message."""
-        if request_id in self._held:
+        """Claims one request and hands it to Hermes as a message, once."""
+        if request_id in self._held or request_id in self._claiming:
             return
+        self._claiming.add(request_id)
+        try:
+            await self._claim_and_hand_over(request_id)
+        finally:
+            self._claiming.discard(request_id)
+
+    async def _claim_and_hand_over(self, request_id: str) -> None:
         try:
             claim = await asyncio.to_thread(self._call, "reply_claim", {"requestId": request_id})
         except Exception as error:  # noqa: BLE001  (someone else took it, or it was withdrawn)

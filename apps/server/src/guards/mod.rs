@@ -298,6 +298,8 @@ async fn review(
         FROM guard_holds hold
         JOIN requests request ON request.id = hold.request_id
         WHERE hold.account_id = $1 AND hold.operation = $2 AND hold.input_hash = $3
+          AND hold.workspace_id = $4 AND hold.guard_id = $5
+          AND hold.space_id IS NOT DISTINCT FROM $6
           AND hold.state = 'pending'
         FOR UPDATE OF hold
         "#,
@@ -305,6 +307,9 @@ async fn review(
     .bind(caller.account_id)
     .bind(operation)
     .bind(&hash)
+    .bind(located.workspace_id)
+    .bind(guard.id)
+    .bind(located.space_id)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| logged(error.into()))?;

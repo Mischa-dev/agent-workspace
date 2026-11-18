@@ -253,6 +253,10 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.source.user_name, "Ada")
         self.assertTrue(event.source.role_authorized)
 
+    async def test_a_request_named_twice_at_once_is_claimed_once(self):
+        await asyncio.gather(self.adapter._take("r9"), self.adapter._take("r9"))
+        self.assertEqual(len(self.workspace.named("reply_claim")), 1)
+
     async def test_the_last_message_of_the_turn_is_the_answer(self):
         await self.hear(reply_event("reply.requested", "r1", "e1"))
         await self.adapter.send_typing(CONVERSATION)

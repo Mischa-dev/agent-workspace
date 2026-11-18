@@ -47,9 +47,11 @@ CREATE TABLE guard_holds (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- One open hold per call: a retry finds the review already asked.
+-- One open hold per call, guard and place: a retry finds the review
+-- already asked, and the same call elsewhere is reviewed there.
 CREATE UNIQUE INDEX guard_holds_open
-    ON guard_holds (account_id, operation, input_hash)
+    ON guard_holds (workspace_id, guard_id, account_id, operation, input_hash,
+                    COALESCE(space_id, '00000000-0000-0000-0000-000000000000'::uuid))
     WHERE state IN ('pending', 'allowed');
 CREATE INDEX guard_holds_request ON guard_holds (request_id);
 SELECT tenancy_protect('guard_holds', 'workspace_id');
