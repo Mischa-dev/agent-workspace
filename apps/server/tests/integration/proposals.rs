@@ -420,3 +420,80 @@ async fn a_suggest_only_role_proposes_drawing_and_accepting_keeps_newer_work() {
     .await;
     assert_eq!(listed["value"]["proposals"], json!([]), "{listed}");
 }
+
+/// Listing one's own proposals keeps to what the credential reaches: one
+/// kept to a space doesn't see the account's proposals elsewhere.
+#[tokio::test]
+async fn own_proposals_keep_to_the_credentials_reach() {
+    let Some(setup) = setup("c1_proposals_reach").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    // One proposal of the owner's on a page in each space.
+    for (space, key) in [(&work, "WORK"), (&elsewhere, "ELSE")] {
+        let page = tool(
+            app,
+            &codex,
+            &session,
+            "page_write",
+            json!({"projectId": key, "title": format!("Plan {key}"), "body": "One.\n"}),
+        )
+        .await;
+        assert_eq!(page["outcome"], "ok", "{page}");
+        sqlx::query(
+            "INSERT INTO proposals (id, workspace_id, space_id, thing_kind, thing_id, operation, \
+               author_actor_id, base_version, change) \
+             VALUES ($1, $2, $3::uuid, 'page', $4::uuid, 'page_edit', $5, 1, '{\"edits\": []}')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(setup.organization_id)
+        .bind(space)
+        .bind(page["value"]["id"].as_str().expect("page id"))
+        .bind(owner)
+        .execute(&setup.pool)
+        .await
+        .expect("proposal");
+    }
+    let mine = tool(app, &codex, &session, "proposal_list", json!({})).await;
+    assert_eq!(
+        mine["value"]["proposals"].as_array().map(Vec::len),
+        Some(2),
+        "{mine}"
+    );
+    let confined = agent_workspace_server::mcp::issue_credential(
+        &setup.pool,
+        agent_workspace_server::mcp::IssueCredentialCommand {
+            actor_id: owner,
+            project_id: work.parse().expect("work"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let confined_session = initialize(app, &confined.token).await.expect("session");
+    let kept = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "proposal_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "ok", "{kept}");
+    let proposals = kept["value"]["proposals"].as_array().expect("proposals");
+    assert_eq!(proposals.len(), 1, "{kept}");
+    assert_eq!(proposals[0]["spaceId"], work.as_str(), "{kept}");
+}

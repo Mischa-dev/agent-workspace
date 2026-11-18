@@ -308,7 +308,9 @@ pub(super) struct TabLine {
     /// Its conditional formats, in order (the first that applies wins).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<sheets::conditional::ConditionalRule>,
+    /// Its validation rules, as sheet_write's validations takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "Vec<serde_json::Value>")]
     pub validations: Vec<sheets::validation::ValidationRule>,
 }
 

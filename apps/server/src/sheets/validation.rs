@@ -61,18 +61,17 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-/// One rule: the cells it covers and what they may hold.
+/// One rule: `range` (such as C2:C200), what it allows, `strict` (true
+/// by default: refuse what breaks it; false: keep it and mark the cell)
+/// and a `hint` shown with the cell.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationRule {
-    /// The cells it covers, such as `C2:C200`.
     pub range: String,
     #[serde(flatten)]
     pub allowed: Allowed,
-    /// Refuse what breaks it (the default); false keeps it and marks the cell.
     #[serde(default = "strict_by_default", skip_serializing_if = "is_true")]
     pub strict: bool,
-    /// Words shown with the cell, such as "Pick a status".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
 }

@@ -925,7 +925,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
 
     let maybe = call(
         "sheet_write",
-        json!({"sheetId": sheet, "cells": [{"tab": "Work", "cell": "B2", "input": "Maybe"}], "clientRequestId": "maybe"}),
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B2", "input": "Maybe"}], "clientRequestId": "maybe"}),
     )
     .await;
     assert_eq!(maybe["outcome"], "invalid_request", "{maybe}");
@@ -936,7 +936,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
     );
     let by_row = call(
         "sheet_write",
-        json!({"sheetId": sheet, "rows": [{"tab": "Work", "keyColumn": "Task", "values": {"Task": "Paint", "Done": "Later"}}],
+        json!({"projectId": "VAL", "sheet": sheet, "rows": [{"tab": "Work", "keyColumn": "Task", "values": {"Task": "Paint", "Done": "Later"}}],
                "clientRequestId": "later"}),
     )
     .await;
@@ -944,7 +944,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
 
     let fine = call(
         "sheet_write",
-        json!({"sheetId": sheet, "cells": [
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [
             {"tab": "Work", "cell": "B2", "input": "yes"},
             {"tab": "Work", "cell": "C2", "input": "9"},
         ], "clientRequestId": "fine"}),
@@ -957,11 +957,15 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
 
     let inserted = call(
         "sheet_write",
-        json!({"sheetId": sheet, "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 2}], "clientRequestId": "insert"}),
+        json!({"projectId": "VAL", "sheet": sheet, "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 2}], "clientRequestId": "insert"}),
     )
     .await;
     assert_eq!(inserted["outcome"], "ok", "{inserted}");
-    let read = call("sheet_read", json!({"sheetId": sheet, "tab": "Work"})).await;
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
+    )
+    .await;
     assert_eq!(read["outcome"], "ok", "{read}");
     let tab = read["value"]["tabs"]
         .as_array()
@@ -974,7 +978,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
     assert_eq!(tab["validations"][1]["range"], "C4:C52", "{tab}");
     let moved = call(
         "sheet_write",
-        json!({"sheetId": sheet, "cells": [{"tab": "Work", "cell": "B4", "input": "Maybe"}], "clientRequestId": "maybe-2"}),
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B4", "input": "Maybe"}], "clientRequestId": "maybe-2"}),
     )
     .await;
     assert_eq!(

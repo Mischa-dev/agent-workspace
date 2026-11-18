@@ -75,7 +75,9 @@ pub struct ProposalListOutput {
 impl Operation for ProposalList {
     const NAME: &'static str = "proposal_list";
     const KIND: OpKind = OpKind::Query;
-    const MODULE: &'static str = "pages";
+    // Proposals come from several modules: each row and decision is
+    // checked against the module of the thing it changes.
+    const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List proposals";
@@ -109,9 +111,42 @@ impl Operation for ProposalList {
             }
         };
         let viewer = call.account_id();
+        let caller = call.ctx.caller.clone();
         let limit = i64::from(input.limit.unwrap_or(50).clamp(1, 200));
         let tx = call.tx().await?;
-        let proposals = super::list(tx, viewer, listing, !input.include_decided, limit).await?;
+        let listed = super::list(tx, viewer, listing, !input.include_decided, limit).await?;
+        // Each row is shown only where the whole caller (a credential kept
+        // to one space, a delegation's limits) reaches its thing's space
+        // with the thing's module on.
+        let mut reached = std::collections::HashMap::new();
+        let mut proposals = Vec::with_capacity(listed.len());
+        for proposal in listed {
+            let module = crate::things::spec(&proposal.thing_kind).map(|spec| spec.module);
+            let key = (proposal.space_id, module);
+            let allowed = match reached.get(&key) {
+                Some(allowed) => *allowed,
+                None => {
+                    let need = match module {
+                        Some(module) => crate::access::Need::SEE.in_module(module),
+                        None => crate::access::Need::SEE,
+                    };
+                    let allowed = crate::access::check(
+                        &mut **tx,
+                        &caller,
+                        need,
+                        crate::access::Target::Space(proposal.space_id),
+                    )
+                    .await
+                    .map_err(|error| OpError::logged(Self::NAME, &error))?
+                    .is_ok();
+                    reached.insert(key, allowed);
+                    allowed
+                }
+            };
+            if allowed {
+                proposals.push(proposal);
+            }
+        }
         Ok(ProposalListOutput { proposals })
     }
 }
@@ -194,7 +229,9 @@ impl Targeted for ProposalDecideInput {
 impl Operation for ProposalDecide {
     const NAME: &'static str = "proposal_decide";
     const KIND: OpKind = OpKind::Change;
-    const MODULE: &'static str = "pages";
+    // Proposals come from several modules: each row and decision is
+    // checked against the module of the thing it changes.
+    const MODULE: &'static str = "workspace";
     // Accepting and rejecting need edit on the thing it changes, and only
     // the author withdraws: `proposals::decide` asks `access::write_mode`
     // for the thing, since no one permission covers every kind.
