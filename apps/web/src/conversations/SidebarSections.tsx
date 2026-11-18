@@ -98,7 +98,7 @@ export default function SidebarSections({ onNavigate }: { onNavigate: () => void
           onToggle={(open) => change(section, { collapsed: !open })}
           open={!section.collapsed}
         >
-          {section.items.filter((item) => section.show !== 'unread' || item.unread).map((item) => {
+          {section.items.filter((item) => !item.hidden && (section.show !== 'unread' || item.unread)).map((item) => {
             const mark = drag?.over?.id === item.conversationId && drag.id !== item.conversationId ? (drag.over.after ? 'is-drop-after' : 'is-drop-before') : undefined
             const movable = section.sort === 'manual'
             return (

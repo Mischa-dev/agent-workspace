@@ -86,6 +86,9 @@ pub struct SidebarItem {
     pub space_id: Uuid,
     pub private: bool,
     pub unread: bool,
+    /// A DM you blocked the other person in, or declined a request in: it
+    /// keeps its place but isn't shown (C2.39).
+    pub hidden: bool,
     pub position: i32,
     /// When its newest message came, if it has one.
     pub last_message_at: Option<String>,
@@ -170,6 +173,7 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
                conversation.visibility = 'members' AND conversation.kind = 'channel' AS private,
                conversation.last_message_sequence
                    > COALESCE(read_state.highest_seen_sequence, 0) AS unread,
+               direct_hidden_for(conversation.id, $1) AS hidden,
                item.position,
                (SELECT to_char(max(message.created_at) AT TIME ZONE 'UTC',
                                'YYYY-MM-DD"T"HH24:MI:SS"Z"')
@@ -275,7 +279,8 @@ impl Operation for SidebarList {
     const DESCRIPTION: &'static str = "Your own sidebar sections in this workspace (Starred, and \
         any you named) with the channels, DMs and groups you placed in each, whether each is \
         unread, in each section's order. A section whose show is unread still lists \
-        every item; display only the unread ones. Arrange them with sidebar_section_set and \
+        every item, and so are hidden ones (DMs you blocked or declined); display only the \
+        unread and unhidden ones. Arrange them with sidebar_section_set and \
         sidebar_item_move.";
 
     type Input = SidebarListInput;

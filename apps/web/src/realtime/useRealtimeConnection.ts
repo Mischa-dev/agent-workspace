@@ -380,7 +380,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             // standings, blocks and the DM list again.
             void queryClient.invalidateQueries({
               predicate: (query) =>
-                query.queryKey[0] === 'op' && (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list'),
+                query.queryKey[0] === 'op' &&
+                (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list' || query.queryKey[2] === 'sidebar_list'),
             })
             void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
             return

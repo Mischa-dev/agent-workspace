@@ -226,7 +226,7 @@ export type SectionSort = "manual" | "alpha" | "recent"
 
 export type SharedSpace = { id: string; name: string }
 
-export type SidebarItem = { conversationId: string; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
+export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
 export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
 
