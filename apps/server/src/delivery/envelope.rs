@@ -70,8 +70,16 @@ impl Lookups {
     }
 }
 
-/// The envelope of one delivered event.
-pub fn envelope(item: &Delivered, delivery: &Connection, lookups: &Lookups) -> Value {
+/// The envelope of one delivered event. `held` is where events held for a
+/// paused recipient start, if any were held before this one: the event's
+/// own cursor keeps it, so a reader that goes on from any event still gets
+/// them once it is resumed.
+pub fn envelope(
+    item: &Delivered,
+    delivery: &Connection,
+    lookups: &Lookups,
+    held: Option<cursor::Held>,
+) -> Value {
     let event = &item.event;
     let account = |id: Uuid| {
         json!({
@@ -84,7 +92,14 @@ pub fn envelope(item: &Delivered, delivery: &Connection, lookups: &Lookups) -> V
         "type": event.event_type,
         "timestamp": event.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "id": event_id(event.id),
-        "cursor": cursor::encode(&delivery.cursor_key, delivery.id, event.position),
+        "cursor": cursor::encode_place(
+            &delivery.cursor_key,
+            delivery.id,
+            cursor::Place {
+                after: event.position,
+                held,
+            },
+        ),
         "workspace": {
             "id": event.workspace_id,
             "slug": lookups.workspaces.get(&event.workspace_id),

@@ -38,10 +38,10 @@ use super::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
         RunOptionSupport, VersionRange,
     },
-    registry::ShutdownSignal,
     run_config::RunConfig,
+    shutdown::ShutdownSignal,
 };
-use crate::{config::AppConfig, git_runtime::absolute_runtime_path};
+use crate::{config::HarnessConfig, git::absolute_runtime_path};
 
 pub const CODEX_CLOUD_KIND: &str = "codex_cloud";
 
@@ -422,7 +422,7 @@ pub struct CodexCloudAdapter {
 
 impl CodexCloudAdapter {
     pub fn new(
-        config: &AppConfig,
+        config: &HarnessConfig,
         shutdown: Arc<ShutdownSignal>,
         codex: Arc<dyn HarnessAdapter>,
     ) -> Result<Self, HarnessError> {
@@ -688,7 +688,7 @@ async fn bring_back(
     let task_id = task_id.to_owned();
     let subject = status.title.clone();
     tokio::task::spawn_blocking(move || {
-        crate::git_runtime::apply_result_and_commit(&cwd, &diff, &task_id, &subject)
+        crate::git::apply_result_and_commit(&cwd, &diff, &task_id, &subject)
     })
     .await
     .map_err(|_| HarnessError::InvalidResponse)?
@@ -919,19 +919,19 @@ fn task_url(task_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, sync::Arc, time::Duration};
+    use std::{fs, sync::Arc, time::Duration};
 
     use uuid::Uuid;
 
     use super::{CodexCloudAdapter, TaskState, finished_message, parse_status, task_id_from_url};
     use crate::{
-        config::AppConfig,
-        provider::{
+        config::HarnessConfig,
+        harness::{
             adapter::{AccountHandle, HarnessAdapter, HarnessEvent},
             codex_app_server::CodexAdapter,
             contract_tests::adapter_contract_with,
-            registry::ShutdownSignal,
             run_config::RunConfig,
+            shutdown::ShutdownSignal,
         },
     };
 
@@ -987,7 +987,7 @@ mod tests {
         data_root: std::path::PathBuf,
         worktree: std::path::PathBuf,
         log: std::path::PathBuf,
-        config: AppConfig,
+        config: HarnessConfig,
     }
 
     /// A stand-in `codex` whose `cloud` commands behave like codex-cli
@@ -1046,25 +1046,12 @@ esac
         );
         fs::write(&binary, script).expect("write fake codex");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("chmod");
-        let config = AppConfig::from_values(&BTreeMap::from([
-            (
-                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-                "postgres://example.invalid/database".to_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
-                data_root.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
-                binary.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_CLOUD_POLL_MILLISECONDS".to_owned(),
-                "20".to_owned(),
-            ),
-        ]))
-        .expect("config");
+        let config = HarnessConfig {
+            data_root: data_root.clone(),
+            codex_binary: binary.clone(),
+            codex_cloud_poll_interval: std::time::Duration::from_millis(20),
+            ..HarnessConfig::default()
+        };
         FakeCloud {
             _temporary: temporary,
             data_root,

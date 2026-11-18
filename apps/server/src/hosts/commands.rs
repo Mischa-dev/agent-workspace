@@ -275,20 +275,36 @@ pub async fn cancel_run(
 /// The commands due for `host` after its cursor `after`: new ones, and
 /// uncertain starts due to be offered again. Reading counts as a heartbeat.
 pub async fn due(pool: &PgPool, host: &HostRow, after: i64) -> Result<CommandList, AppError> {
+    due_for(pool, Some(host), after).await
+}
+
+/// [`due`] for the built-in host (A1.16): the commands of every
+/// workspace's built-in row, in one list (`seq` is global).
+pub async fn due_builtin(pool: &PgPool, after: i64) -> Result<CommandList, AppError> {
+    due_for(pool, None, after).await
+}
+
+async fn due_for(
+    pool: &PgPool,
+    host: Option<&HostRow>,
+    after: i64,
+) -> Result<CommandList, AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
-    sqlx::query(
-        r#"
+    if let Some(host) = host {
+        sqlx::query(
+            r#"
         UPDATE hosts
            SET last_seen_at = now(),
                status = CASE WHEN status = 'offline' THEN 'active' ELSE status END,
                last_command_seq_fetched = GREATEST(last_command_seq_fetched, $2)
          WHERE id = $1
         "#,
-    )
-    .bind(host.id)
-    .bind(after)
-    .execute(&mut *transaction)
-    .await?;
+        )
+        .bind(host.id)
+        .bind(after)
+        .execute(&mut *transaction)
+        .await?;
+    }
     let rows = sqlx::query_as::<_, CommandRow>(&format!(
         r#"
         UPDATE host_commands command
@@ -300,7 +316,9 @@ pub async fn due(pool: &PgPool, host: &HostRow, after: i64) -> Result<CommandLis
                updated_at = now()
          WHERE command.id IN (
                SELECT due.id FROM host_commands due
-               WHERE due.host_id = $1 AND due.expires_at > now()
+               WHERE (due.host_id = $1
+                      OR ($1 IS NULL AND due.host_id IN (SELECT id FROM hosts WHERE builtin)))
+                 AND due.expires_at > now()
                  AND ((due.state = 'pending' AND due.seq > $2)
                       OR (due.state = 'uncertain' AND due.next_offer_at <= now()))
                ORDER BY due.seq
@@ -309,7 +327,7 @@ pub async fn due(pool: &PgPool, host: &HostRow, after: i64) -> Result<CommandLis
         RETURNING {COMMAND_COLUMNS}
         "#
     ))
-    .bind(host.id)
+    .bind(host.map(|host| host.id))
     .bind(after)
     .bind(MAX_LIST)
     // The next re-offer of a start offered again now; each row's own
@@ -377,7 +395,14 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(HostError::CommandUnknown)?;
-    if matches!(row.state.as_str(), "expired" | "superseded") || row.expires_at <= Utc::now() {
+    // A command's lifetime bounds how long it waits to be carried out. A
+    // start the host accepted stays fetchable past it while its run is
+    // live, since fetching it is how the host gets a fresh credential for
+    // a run that outlasts a day (no credential is minted once it ends).
+    let accepted_start = row.kind == "start" && row.state == "acked";
+    if matches!(row.state.as_str(), "expired" | "superseded")
+        || (row.expires_at <= Utc::now() && !accepted_start)
+    {
         return Err(HostError::CommandClosed);
     }
     if row.state == "pending" {
@@ -415,6 +440,7 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
             command.insert(
                 "answer".into(),
                 json!({
+                    "kind": request.kind,
                     "status": request.status,
                     "answer": crate::requests::answer_of(request.answer.as_ref(), &options),
                     "answeredBy": request.answered_by_account_id,
@@ -845,6 +871,27 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
     })
     .await
     .map_err(|_: sqlx::Error| JobError::retry("database"))?;
+    Ok(())
+}
+
+/// A1.16: a start written for a run its host already runs (one the
+/// built-in host started before its runs went through the protocol):
+/// accepted at once, so fetching it gives the run a credential.
+pub async fn adopted(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE host_commands
+           SET state = 'acked', ack = '{"outcome": "accepted"}'::jsonb, acked_at = now(),
+               ack_due_at = NULL, updated_at = now()
+         WHERE id = $1 AND kind = 'start'
+        "#,
+    )
+    .bind(command_id)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

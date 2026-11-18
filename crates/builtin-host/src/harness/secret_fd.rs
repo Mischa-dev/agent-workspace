@@ -59,7 +59,9 @@ pub fn attach(command: &mut tokio::process::Command, fd: OwnedFd) -> Result<(), 
 }
 
 /// A JSON object of secret names to values, for a command-line harness.
-pub fn secrets_json(secrets: &[(String, crate::secrets::SecretValue)]) -> Zeroizing<Vec<u8>> {
+pub fn secrets_json(
+    secrets: &[(String, agent_workspace_redaction::SecretValue)],
+) -> Zeroizing<Vec<u8>> {
     let map = secrets
         .iter()
         .map(|(name, value)| {
