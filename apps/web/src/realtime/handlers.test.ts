@@ -12,7 +12,8 @@ import { laterKeys } from '../later/keys'
 import { memoryKeys } from '../memory/keys'
 import { runKeys } from '../runs/keys'
 import { sheetKeys } from '../sheets/keys'
-import { cacheContext, HANDLERS, RECONNECT, SELF_HANDLED, touchesFor } from './handlers'
+import { cacheContext, RECONNECT, SELF_HANDLED } from './handlers'
+import { HANDLERS, touchesFor } from './handlers/table'
 import type { RealtimeEnvelope } from './realtimeModel'
 
 // W1.3: one event of each type into a seeded cache, and exactly which cached
