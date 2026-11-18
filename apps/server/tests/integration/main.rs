@@ -145,6 +145,7 @@ mod search_kinds;
 mod server_operators;
 mod settings_accounts;
 mod spaces;
+mod startup_lease;
 mod statuses;
 mod support;
 mod t1_buttons;

@@ -221,6 +221,16 @@ pub struct AppConfig {
     /// sockets and stops taking requests, so the balancer moves off it
     /// first: `AGENT_WORKSPACE_DRAIN_SECONDS`, default 5.
     pub drain: Duration,
+    /// How long a starting server waits for another to finish the startup
+    /// work (H1.15) before it exits so it is started again:
+    /// `AGENT_WORKSPACE_STARTUP_WAIT_SECONDS`, default 600.
+    pub startup_wait: Duration,
+    /// Where the newest release is announced (H1.15): a JSON document
+    /// `{"latest": "0.2.0", "notesUrl": "https://…"}` read once a day,
+    /// sending nothing but the running version in the user agent.
+    /// `AGENT_WORKSPACE_UPDATE_CHECK_URL`; none checks nothing, and
+    /// `AGENT_WORKSPACE_UPDATE_CHECK=off` turns it off with one set.
+    pub update_check_url: Option<url::Url>,
     /// Where an instance without `api` answers health checks:
     /// `AGENT_WORKSPACE_HEALTH_ADDR`, default the application address.
     pub health_addr: Option<SocketAddr>,
@@ -764,6 +774,34 @@ impl AppConfig {
                 reason: "must be between 0 and 120".into(),
             });
         }
+        let startup_wait_seconds = parse::<u64>(values, "STARTUP_WAIT_SECONDS", "600")?;
+        if !(10..=86_400).contains(&startup_wait_seconds) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}STARTUP_WAIT_SECONDS"),
+                reason: "must be between 10 and 86400".into(),
+            });
+        }
+        let update_check_url = match (
+            optional(values, "UPDATE_CHECK", "on").trim(),
+            optional(values, "UPDATE_CHECK_URL", "").trim(),
+        ) {
+            ("off", _) | (_, "") => None,
+            ("on", url) => Some(
+                url::Url::parse(url)
+                    .ok()
+                    .filter(|url| url.scheme() == "https" && url.username().is_empty())
+                    .ok_or_else(|| ConfigError::Invalid {
+                        key: format!("{PREFIX}UPDATE_CHECK_URL"),
+                        reason: "expected an https address without credentials".into(),
+                    })?,
+            ),
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}UPDATE_CHECK"),
+                    reason: "expected on or off".into(),
+                });
+            }
+        };
         let health_addr = match optional(values, "HEALTH_ADDR", "").trim() {
             "" => None,
             address => Some(address.parse().map_err(|_| ConfigError::Invalid {
@@ -830,6 +868,8 @@ impl AppConfig {
             roles,
             builtin_host,
             drain: Duration::from_secs(drain_seconds),
+            startup_wait: Duration::from_secs(startup_wait_seconds),
+            update_check_url,
             health_addr,
             work_loop,
             work_tick_secret_path,

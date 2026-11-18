@@ -101,6 +101,7 @@ pub mod reactions;
 pub mod read_state;
 pub mod realtime;
 pub mod recovery;
+pub mod releases;
 pub mod replies;
 pub mod repositories;
 pub mod requests;
@@ -120,6 +121,7 @@ pub mod settings;
 pub mod setup;
 pub mod sheets;
 pub mod spaces;
+pub mod startup;
 pub mod statuses;
 pub mod storage_admission;
 #[cfg(test)]

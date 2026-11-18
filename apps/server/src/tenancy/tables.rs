@@ -353,6 +353,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server's first-run setup code, before any account or workspace exists (H1.14)",
     ),
     (
+        "server_release_checks",
+        "the newest release the operator's release feed names, for the Server page (H1.15)",
+    ),
+    (
         "oidc_login_attempts",
         "an OpenID Connect sign-in on its way through the issuer, before there is an account (H1.18)",
     ),

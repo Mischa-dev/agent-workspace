@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, future::IntoFuture, sync::Arc};
 
 use agent_workspace_server::{
     bootstrap, config::AppConfig, mcp, migration_preflight, retention, seed, server::Server,
-    shutdown_signal, telemetry::init_tracing, work_items,
+    shutdown_signal, startup, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use tokio::{net::TcpListener, sync::watch};
@@ -144,7 +144,18 @@ async fn main() -> anyhow::Result<()> {
     // Every command migrates first; `migrate` does nothing else.
     let serving = std::env::args().nth(1).is_none();
     if !serving || config.roles.work {
-        while_starting(&mut starting, migrate).await?;
+        // Under the `server.startup` lease (H1.15): one process at a time.
+        let step = starting.as_ref().map(|starting| starting.step.clone());
+        let waiting = move || {
+            if let Some(step) = step {
+                let _ = step.send("waiting");
+            }
+        };
+        while_starting(
+            &mut starting,
+            startup::under_lease(&pool, config.startup_wait, waiting, migrate),
+        )
+        .await?;
     } else {
         drop(migrate);
     }
