@@ -308,10 +308,18 @@ struct TabBody {
 struct CellBody {
     row: i32,
     column: i32,
+    /// Empty for a cell that only has a look.
     input: String,
     kind: String,
     value: Json_,
     revision: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<Json_>,
+    /// The value as its number format shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
 }
 
 impl From<StoredCell> for CellBody {
@@ -323,6 +331,9 @@ impl From<StoredCell> for CellBody {
             kind: cell.kind,
             value: cell.value,
             revision: cell.revision,
+            format: cell.format,
+            style: cell.style,
+            display: cell.display,
         }
     }
 }
@@ -349,7 +360,8 @@ async fn sheet_body(
     let chosen = pick_tab(&tabs, tab).ok_or(AppError::NotFound("tab"))?;
     let chosen_id = chosen.id;
     let extents = sqlx::query_as::<_, (Uuid, i32, i32, i64)>(
-        "SELECT tab_id, max(row_number), max(column_number), count(*) \
+        "SELECT tab_id, max(row_number), max(column_number), \
+                count(*) FILTER (WHERE input <> '') \
          FROM sheet_cells WHERE sheet_id = $1 GROUP BY tab_id",
     )
     .bind(sheet.id)
@@ -362,6 +374,7 @@ async fn sheet_body(
         (1, super::MAX_ROWS),
         (1, super::MAX_COLUMNS),
         super::MAX_CELLS as i64,
+        false,
     )
     .await?;
     Ok(SheetBody {
@@ -687,11 +700,21 @@ enum ChangeRequest {
         /// Pixels; null puts the column back to the default.
         width: Option<i32>,
     },
+    /// Number format and style for a block, `[first, last]` rows and
+    /// columns.
+    #[serde(rename_all = "camelCase")]
+    Format {
+        tab: String,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        look: super::LookInput,
+    },
 }
 
 impl ChangeRequest {
-    fn into_change(self) -> Change {
-        match self {
+    /// The change, or the look field that's wrong and why.
+    fn into_change(self) -> Result<Change, (&'static str, String)> {
+        Ok(match self {
             Self::Cell {
                 tab,
                 row,
@@ -744,7 +767,18 @@ impl ChangeRequest {
                 column,
                 width,
             },
-        }
+            Self::Format {
+                tab,
+                rows,
+                columns,
+                look,
+            } => Change::Format {
+                tab: Some(tab),
+                rows,
+                columns,
+                patch: look.patch()?,
+            },
+        })
     }
 }
 
@@ -763,6 +797,12 @@ struct ChangedCellBody {
     input: Option<String>,
     kind: &'static str,
     value: Json_,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<super::CellStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -774,6 +814,8 @@ struct ChangeSheetBody {
     previous_revision: i64,
     inputs_changed: usize,
     values_changed: usize,
+    /// Cells whose number format or style changed.
+    looks_changed: usize,
     /// Tabs were added, removed, renamed, moved or resized, or rows and
     /// columns moved: read the sheet again rather than patching cells.
     tabs_changed: bool,
@@ -820,12 +862,20 @@ async fn change_sheet(
             Json_::Null,
         ));
     }
-    let changes = request
-        .changes
-        .iter()
-        .cloned()
-        .map(ChangeRequest::into_change)
-        .collect::<Vec<_>>();
+    let mut changes = Vec::with_capacity(request.changes.len());
+    for (index, change) in request.changes.iter().cloned().enumerate() {
+        match change.into_change() {
+            Ok(change) => changes.push(change),
+            Err((field, message)) => {
+                return Ok(refusal(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "validation_failed",
+                    format!("Nothing was saved. {message}"),
+                    json!({ "field": format!("changes[{index}].look.{field}"), "index": index }),
+                ));
+            }
+        }
+    }
     let applied = match super::apply(
         &mut write.transaction,
         &sheet,
@@ -874,8 +924,10 @@ async fn change_sheet(
         previous_revision: sheet.revision,
         inputs_changed: applied.inputs_changed,
         values_changed: applied.values_changed,
+        looks_changed: applied.looks_changed,
         tabs_changed: applied.tabs_changed,
-        truncated: applied.changed.len() < applied.inputs_changed + applied.values_changed,
+        truncated: applied.changed.len()
+            < applied.inputs_changed + applied.values_changed + applied.looks_changed,
         changed: applied
             .changed
             .into_iter()
@@ -886,6 +938,9 @@ async fn change_sheet(
                 input: cell.input,
                 kind: cell.value.kind(),
                 value: cell.value.to_json(),
+                format: cell.look.format,
+                style: (!cell.look.style.is_plain()).then_some(cell.look.style),
+                display: cell.display,
             })
             .collect(),
     };
@@ -1166,7 +1221,7 @@ mod tests {
         }))
         .expect("changes parse");
         assert!(matches!(
-            request.changes[0].clone().into_change(),
+            request.changes[0].clone().into_change().expect("cell"),
             Change::Cell {
                 row: 2,
                 column: 3,
@@ -1175,9 +1230,34 @@ mod tests {
             }
         ));
         assert!(matches!(
-            request.changes[2].clone().into_change(),
+            request.changes[2].clone().into_change().expect("width"),
             Change::ColumnWidth { width: None, .. }
         ));
+        let format: ChangeSheetRequest = serde_json::from_value(json!({
+            "changes": [
+                {"type": "format", "tab": "Sheet1", "rows": [2, 40], "columns": [2, 2],
+                 "look": {"numberFormat": "0.0%", "bold": true, "fill": "#ffeeaa"}},
+                {"type": "format", "tab": "Sheet1", "rows": [1, 1], "columns": [1, 1],
+                 "look": {"fill": "yellow"}},
+            ]
+        }))
+        .expect("formats parse");
+        let Change::Format { rows, patch, .. } =
+            format.changes[0].clone().into_change().expect("format")
+        else {
+            panic!("a format change");
+        };
+        assert_eq!(rows, (2, 40));
+        assert_eq!(patch.format, Some(Some("0.0%".to_owned())));
+        assert_eq!(patch.fill, Some(Some("#FFEEAA".to_owned())));
+        assert_eq!(
+            format.changes[1]
+                .clone()
+                .into_change()
+                .err()
+                .map(|(field, _)| field),
+            Some("fill")
+        );
         let unknown = serde_json::from_value::<ChangeSheetRequest>(json!({
             "changes": [{"type": "cell", "tab": "Sheet1", "row": 1, "column": 1, "input": "", "extra": 1}]
         }));

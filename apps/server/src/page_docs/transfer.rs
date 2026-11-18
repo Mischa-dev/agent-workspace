@@ -537,6 +537,7 @@ async fn sheet_picture(
         rows,
         columns,
         i64::from(MAX_PDF_SHEET_ROWS * MAX_PDF_SHEET_COLUMNS),
+        true,
     )
     .await?;
     let width = usize::try_from(columns.1 - columns.0 + 1).unwrap_or(0);
@@ -550,7 +551,10 @@ async fn sheet_picture(
             continue;
         };
         if let Some(slot) = grid.get_mut(row).and_then(|line| line.get_mut(column)) {
-            *slot = sheets::text_of(&cell.value());
+            *slot = cell
+                .display
+                .clone()
+                .unwrap_or_else(|| sheets::text_of(&cell.value()));
         }
     }
     Ok(Some(pdf::EmbedPicture::Table(grid)))

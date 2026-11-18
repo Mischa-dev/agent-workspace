@@ -36,14 +36,45 @@ export type SheetTab = {
 
 export type CellKind = 'empty' | 'number' | 'text' | 'boolean' | 'error'
 
+/** How a cell's text is drawn; colors are `#RRGGBB`. */
+export type CellStyle = {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  color?: string
+  fill?: string
+  align?: 'left' | 'center' | 'right'
+  wrap?: boolean
+}
+
 export type SheetCell = {
   row: number
   column: number
-  /** What was typed, such as `12` or `=SUM(B2:B9)`. */
+  /** What was typed, such as `12` or `=SUM(B2:B9)`; empty for a cell that only has a format or style. */
   input: string
   kind: CellKind
   value: string | number | boolean | null
   revision: number
+  /** Its number format, an Excel code such as `0.0%`. */
+  format?: string
+  style?: CellStyle
+  /** The value as its number format shows it, such as `10%`. */
+  display?: string
+}
+
+/** A change to how cells look; text fields take '' to go back to plain. */
+export type LookChange = {
+  numberFormat?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  color?: string
+  fill?: string
+  align?: '' | 'left' | 'center' | 'right'
+  wrap?: boolean
+  clear?: boolean
 }
 
 export type SheetBody = {
@@ -83,6 +114,7 @@ export type SheetChange =
   | { type: 'moveTab'; tab: string; position: number }
   | { type: 'freezeRows'; tab: string; rows: number }
   | { type: 'columnWidth'; tab: string; column: number; width: number | null }
+  | { type: 'format'; tab: string; rows: [number, number]; columns: [number, number]; look: LookChange }
 
 export type ChangedCell = {
   tab: string
@@ -91,6 +123,9 @@ export type ChangedCell = {
   input: string | null
   kind: CellKind
   value: SheetCell['value']
+  format?: string
+  style?: CellStyle
+  display?: string
 }
 
 export type ChangeResult = {
@@ -112,6 +147,22 @@ const asNumber = (value: unknown, fallback = 0) => (typeof value === 'number' &&
 const asArray = (value: unknown) => (Array.isArray(value) ? value : [])
 const KINDS: readonly CellKind[] = ['empty', 'number', 'text', 'boolean', 'error']
 const asKind = (value: unknown): CellKind => (KINDS.includes(value as CellKind) ? (value as CellKind) : 'empty')
+const COLOR = /^#[0-9A-Fa-f]{6}$/
+const ALIGNS = ['left', 'center', 'right'] as const
+/** Only the style fields the grid knows, in the shapes it expects. */
+export function asStyle(value: unknown): CellStyle | undefined {
+  const raw = asRecord(value)
+  const style: CellStyle = {}
+  for (const flag of ['bold', 'italic', 'underline', 'strike', 'wrap'] as const) if (raw[flag] === true) style[flag] = true
+  for (const paint of ['color', 'fill'] as const) if (typeof raw[paint] === 'string' && COLOR.test(raw[paint] as string)) style[paint] = raw[paint] as string
+  if (ALIGNS.includes(raw.align as (typeof ALIGNS)[number])) style.align = raw.align as CellStyle['align']
+  return Object.keys(style).length ? style : undefined
+}
+const asLook = (raw: Wire) => ({
+  ...(typeof raw.format === 'string' && raw.format ? { format: raw.format } : {}),
+  ...(asStyle(raw.style) ? { style: asStyle(raw.style) } : {}),
+  ...(typeof raw.display === 'string' ? { display: raw.display } : {}),
+})
 const asValue = (value: unknown): SheetCell['value'] =>
   typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ? value : null
 
@@ -157,6 +208,7 @@ function normalizeCell(value: unknown): SheetCell {
     kind: asKind(raw.kind),
     value: asValue(raw.value),
     revision: asNumber(raw.revision, 1),
+    ...asLook(raw),
   }
 }
 
@@ -187,6 +239,7 @@ function normalizeResult(value: unknown): ChangeResult {
         input: typeof cell.input === 'string' ? cell.input : null,
         kind: asKind(cell.kind),
         value: asValue(cell.value),
+        ...asLook(cell),
       }
     }),
   }

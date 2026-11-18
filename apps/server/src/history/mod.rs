@@ -224,6 +224,9 @@ fn list_sql(kind: &str) -> Option<String> {
                    CASE WHEN summary ? 'restoredRevision'
                         THEN 'Restored revision ' || (summary->>'restoredRevision')
                         WHEN summary ? 'created' THEN 'Created'
+                        WHEN summary->>'cells' = '0' AND jsonb_typeof(summary->'formats') = 'number'
+                             AND summary->>'formats' <> '0'
+                        THEN 'Formatted ' || (summary->>'formats') || ' cells'
                         WHEN jsonb_typeof(summary->'cells') = 'number'
                         THEN 'Edited ' || (summary->>'cells') || ' cells'
                         ELSE 'Edited' END AS summary,

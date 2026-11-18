@@ -195,3 +195,173 @@ async fn sheets_go_out_to_excel_and_csv_and_come_back() {
         .expect("count");
     assert_eq!(count, 0);
 }
+
+/// A cell's line in a sheet's body, by row and column.
+fn cell_in(body: &Value, row: i64, column: i64) -> Value {
+    body["cells"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|cell| cell["row"] == row && cell["column"] == column)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// C1.14: `10%` keeps showing as 10% and computes as 0.1; formatting a
+/// block doesn't make an edit read before it stale; a styled `.xlsx` goes
+/// out and comes back with its formats; a revision's formats come back
+/// with it.
+#[tokio::test]
+async fn formats_and_styles_stay_through_writes_files_and_history() {
+    let Some(setup) = setup("awd54_sheet_formats").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "LOOK", "Looks").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "LOOK",
+            "name": "Rates",
+            "cells": [
+                {"cell": "A1", "input": "Rate"},
+                {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "10%"},
+                {"cell": "B2", "input": "=A2*200"},
+            ],
+            "clientRequestId": "look-0",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let read_at = made["value"]["revision"].as_i64().expect("revision");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "LOOK", "sheet": "Rates", "range": "A2:B2"}),
+    )
+    .await;
+    assert_eq!(read["value"]["cells"][0]["value"], json!(0.1), "{read}");
+    assert_eq!(read["value"]["cells"][0]["display"], "10%", "{read}");
+    assert_eq!(read["value"]["cells"][1]["value"], json!(20.0), "{read}");
+
+    // Formats on a block, empty cells included; nothing typed changes.
+    let formatted = call(
+        "sheet_write",
+        json!({
+            "projectId": "LOOK",
+            "sheet": "Rates",
+            "formats": [
+                {"range": "A1:C1", "bold": true, "fill": "#ffeeaa", "align": "center"},
+                {"range": "B2:B5", "numberFormat": "$#,##0.00"},
+            ],
+            "clientRequestId": "look-1",
+        }),
+    )
+    .await;
+    assert_eq!(formatted["outcome"], "ok", "{formatted}");
+    assert_eq!(formatted["value"]["cellsChanged"], 0, "{formatted}");
+    assert_eq!(formatted["value"]["formatsChanged"], 7, "{formatted}");
+    let styled_at = formatted["value"]["revision"].as_i64().expect("revision");
+    assert_eq!(styled_at, read_at + 1);
+    let bad = call(
+        "sheet_write",
+        json!({
+            "projectId": "LOOK",
+            "sheet": "Rates",
+            "formats": [{"range": "A1", "fill": "yellow"}],
+            "clientRequestId": "look-bad",
+        }),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    assert_eq!(bad["field"], "formats[0].fill", "{bad}");
+    // An edit read before the formats still lands.
+    let typed = call(
+        "sheet_write",
+        json!({
+            "projectId": "LOOK",
+            "sheet": "Rates",
+            "cells": [{"cell": "A2", "input": "0.25", "ifRevision": read_at}, {"cell": "B4", "input": "7"}],
+            "clientRequestId": "look-2",
+        }),
+    )
+    .await;
+    assert_eq!(typed["outcome"], "ok", "{typed}");
+    let now = typed["value"]["revision"].as_i64().expect("revision");
+    let read = call("sheet_read", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
+    let cells = read["value"]["cells"].as_array().expect("cells");
+    let line = |address: &str| {
+        cells
+            .iter()
+            .find(|cell| cell["cell"] == address)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(line("A2")["display"], "25%", "{read}");
+    assert_eq!(line("B2")["display"], "$50.00", "{read}");
+    assert_eq!(line("B2")["numberFormat"], "$#,##0.00", "{read}");
+    assert_eq!(line("B4")["display"], "$7.00", "{read}");
+    assert_eq!(line("A1")["style"]["bold"], true, "{read}");
+    assert_eq!(line("A1")["style"]["fill"], "#FFEEAA", "{read}");
+    // Cells with only a look aren't filled cells.
+    assert!(line("C1").is_null(), "{read}");
+    assert_eq!(read["value"]["sheet"]["cells"], 5, "{read}");
+
+    // Out to Excel and back: formats and styles come too.
+    let (status, _, xlsx) = download(
+        &setup,
+        &setup.browser,
+        &format!("/api/v1/projects/{work}/sheets/{sheet}/export?format=xlsx"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let uri = format!("/api/v1/projects/{work}/sheets/import?name=Rates%20copy&format=xlsx");
+    let (status, copy) = import(&setup, &uri, "look-import", &xlsx).await;
+    assert_eq!(status, StatusCode::CREATED, "{copy}");
+    assert_eq!(cell_in(&copy, 2, 1)["display"], "25%", "{copy}");
+    assert_eq!(cell_in(&copy, 2, 2)["display"], "$50.00", "{copy}");
+    assert_eq!(cell_in(&copy, 2, 2)["value"], json!(50.0), "{copy}");
+    assert_eq!(cell_in(&copy, 1, 1)["style"]["bold"], true, "{copy}");
+    assert_eq!(cell_in(&copy, 1, 3)["input"], "", "{copy}");
+    assert_eq!(cell_in(&copy, 1, 3)["style"]["fill"], "#FFEEAA", "{copy}");
+
+    // History: the formats revision says so and shows them, and the
+    // revision before it comes back plain.
+    let listed = call("history_list", json!({"thing": sheet})).await;
+    assert!(listed.to_string().contains("Formatted 7 cells"), "{listed}");
+    let shown = call(
+        "history_show",
+        json!({"thing": sheet, "version": styled_at}),
+    )
+    .await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    assert_eq!(
+        shown["value"]["content"]["tabs"][0]["formats"]["A1"]["style"]["bold"], true,
+        "{shown}"
+    );
+    let restored = call(
+        "history_restore",
+        json!({"thing": sheet, "version": read_at, "expectedVersion": now, "clientRequestId": "look-restore"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let read = call("sheet_read", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
+    let cells = read["value"]["cells"].as_array().expect("cells");
+    let a1 = cells.iter().find(|cell| cell["cell"] == "A1").expect("A1");
+    assert!(a1.get("style").is_none(), "{read}");
+    let a2 = cells.iter().find(|cell| cell["cell"] == "A2").expect("A2");
+    assert_eq!(a2["display"], "10%", "{read}");
+    let b2 = cells.iter().find(|cell| cell["cell"] == "B2").expect("B2");
+    assert!(b2.get("display").is_none(), "{read}");
+    assert_eq!(b2["value"], json!(20.0), "{read}");
+    assert!(!cells.iter().any(|cell| cell["cell"] == "B4"), "{read}");
+}

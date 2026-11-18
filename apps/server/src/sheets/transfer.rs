@@ -15,7 +15,8 @@ use std::{
 };
 
 use super::{
-    Change, MAX_CELLS, MAX_COLUMNS, MAX_INPUT_CHARACTERS, MAX_ROWS, MAX_TABS, StoredCell,
+    Change, LookPatch, MAX_CELLS, MAX_COLUMNS, MAX_INPUT_CHARACTERS, MAX_ROWS, MAX_TABS,
+    StoredCell,
     engine::{FormulaEngine, TabInput},
     normalize_tab_name, text_of,
 };
@@ -147,6 +148,7 @@ fn read_csv(text: &str, tab_name: &str) -> Result<TabInput, String> {
     Ok(TabInput {
         name: tab_name.to_owned(),
         cells,
+        looks: Vec::new(),
     })
 }
 
@@ -205,7 +207,22 @@ fn checked(mut tabs: Vec<TabInput>) -> Result<Vec<TabInput>, String> {
                 ));
             }
         }
-        total += tab.cells.len();
+        if tab.looks.iter().any(|(row, column, _)| {
+            !(1..=MAX_ROWS).contains(row) || !(1..=MAX_COLUMNS).contains(column)
+        }) {
+            return Err(rows_message());
+        }
+        let filled = tab
+            .cells
+            .iter()
+            .map(|(row, column, _)| (*row, *column))
+            .collect::<HashSet<_>>();
+        total += filled.len()
+            + tab
+                .looks
+                .iter()
+                .filter(|(row, column, _)| !filled.contains(&(*row, *column)))
+                .count();
     }
     if total > MAX_CELLS {
         return Err(cells_message());
@@ -242,23 +259,44 @@ pub fn changes_for(first_tab: &str, tabs: &[TabInput]) -> Vec<Change> {
                 if_revision: None,
             });
         }
+        // Looks after inputs, so the file's format wins over one a typed
+        // input would take.
+        for (row, column, look) in &tab.looks {
+            changes.push(Change::Format {
+                tab: Some(tab.name.clone()),
+                rows: (*row, *row),
+                columns: (*column, *column),
+                patch: LookPatch::exactly(look),
+            });
+        }
     }
     changes
 }
 
-/// A tab's stored cells as inputs, for an .xlsx export.
+/// A tab's stored cells as inputs and looks, for an .xlsx export.
 pub fn input_of(name: &str, cells: &[&StoredCell]) -> TabInput {
     TabInput {
         name: name.to_owned(),
         cells: cells
             .iter()
+            .filter(|cell| cell.filled())
             .map(|cell| (cell.row_number, cell.column_number, cell.input.clone()))
+            .collect(),
+        looks: cells
+            .iter()
+            .map(|cell| (cell.row_number, cell.column_number, cell.look()))
+            .filter(|(_, _, look)| !look.is_plain())
             .collect(),
     }
 }
 
 /// One tab's values as CSV, from A1 to its last filled row and column.
 pub fn csv_of(cells: &[&StoredCell]) -> Result<Vec<u8>, String> {
+    let cells = cells
+        .iter()
+        .copied()
+        .filter(|cell| cell.filled())
+        .collect::<Vec<_>>();
     let rows = cells.iter().map(|cell| cell.row_number).max().unwrap_or(0);
     let columns = cells
         .iter()
@@ -266,7 +304,7 @@ pub fn csv_of(cells: &[&StoredCell]) -> Result<Vec<u8>, String> {
         .max()
         .unwrap_or(0);
     let mut grid = vec![vec![String::new(); columns as usize]; rows as usize];
-    for cell in cells {
+    for cell in &cells {
         grid[(cell.row_number - 1) as usize][(cell.column_number - 1) as usize] =
             text_of(&cell.value());
     }
@@ -293,14 +331,17 @@ mod tests {
                 TabInput {
                     name: "Q1  Sales".to_owned(),
                     cells: vec![(1, 1, "5".to_owned())],
+                    looks: Vec::new(),
                 },
                 TabInput {
                     name: "Total".to_owned(),
                     cells: vec![(1, 1, "='Q1  Sales'!A1*2".to_owned())],
+                    looks: Vec::new(),
                 },
                 TabInput {
                     name: "~import 0".to_owned(),
                     cells: vec![(1, 1, "x".to_owned())],
+                    looks: Vec::new(),
                 },
             ])
             .expect("written");
@@ -345,14 +386,17 @@ mod tests {
             TabInput {
                 name: "Plan".to_owned(),
                 cells: vec![],
+                looks: Vec::new(),
             },
             TabInput {
                 name: "plan".to_owned(),
                 cells: vec![],
+                looks: Vec::new(),
             },
             TabInput {
                 name: "   ".to_owned(),
                 cells: vec![],
+                looks: Vec::new(),
             },
         ])
         .expect("named");
@@ -366,7 +410,8 @@ mod tests {
         assert!(
             checked(vec![TabInput {
                 name: "T".to_owned(),
-                cells: vec![(1, 201, "x".to_owned())]
+                cells: vec![(1, 201, "x".to_owned())],
+                looks: Vec::new(),
             }])
             .is_err()
         );
@@ -402,6 +447,9 @@ mod tests {
             kind: kind.to_owned(),
             value,
             revision: 1,
+            format: None,
+            style: None,
+            display: None,
         };
         let cells = [
             cell(1, 1, "Name", "text", serde_json::json!("Name")),

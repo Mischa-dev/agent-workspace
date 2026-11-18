@@ -42,6 +42,7 @@ fn tab(cells: usize) -> TabInput {
     TabInput {
         name: "Sheet1".to_owned(),
         cells: filled,
+        looks: Vec::new(),
     }
 }
 

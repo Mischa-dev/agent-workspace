@@ -4,7 +4,7 @@
 //! - `sheet_read`: a range of one tab's cells (values, and formulas where
 //!   there are any), or its rows as objects by header, filtered.
 //! - `sheet_write`: create a sheet, rename, describe, archive or restore
-//!   it, and change its cells, rows and tabs, all or nothing
+//!   it, and change its cells, rows, tabs and formats, all or nothing
 //!   (`sheets.edit`).
 //!
 //! The rules are `crate::sheets`, the same the web app will use. A sheet is
@@ -314,6 +314,17 @@ pub(super) struct CellLine {
     /// "error" when the value is an error code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The value as the cell shows it, for a cell with a number format
+    /// (such as "10%" for 0.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// Its number format, such as "0.0%", when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// Its style (bold, italic, underline, strike, color, fill, align,
+    /// wrap), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<sheets::CellStyle>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -372,11 +383,15 @@ fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
 
 fn cell_line(cell: &StoredCell) -> CellLine {
     let value = cell.value();
+    let look = cell.look();
     CellLine {
         cell: format!("{}{}", column_name(cell.column_number), cell.row_number),
         formula: cell.input.starts_with('=').then(|| cell.input.clone()),
         kind: matches!(value, CellValue::Error(_)).then(|| "error".to_owned()),
         value: json_of(&value),
+        display: cell.display.clone(),
+        number_format: look.format,
+        style: (!look.style.is_plain()).then_some(look.style),
     }
 }
 
@@ -448,11 +463,12 @@ pub(super) async fn sheet_read(
             }
             tab_lines.push(tab_line(each, extent));
         }
-        let cells_total =
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sheet_cells WHERE sheet_id = $1")
-                .bind(sheet.id)
-                .fetch_one(&mut *connection)
-                .await?;
+        let cells_total = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM sheet_cells WHERE sheet_id = $1 AND input <> ''",
+        )
+        .bind(sheet.id)
+        .fetch_one(&mut *connection)
+        .await?;
         let summary = SheetSummary {
             id: sheet.id.to_string(),
             name: sheet.name.clone(),
@@ -496,6 +512,7 @@ pub(super) async fn sheet_read(
                 (1, used.0),
                 (1, used.1),
                 i64::try_from(sheets::MAX_CELLS).unwrap_or(i64::MAX),
+                true,
             )
             .await?;
             let headers: BTreeMap<i32, String> = all
@@ -611,6 +628,7 @@ pub(super) async fn sheet_read(
             range.rows,
             range.columns,
             MAX_READ_CELLS + 1,
+            true,
         )
         .await?;
         let truncated = found.len() as i64 > MAX_READ_CELLS;
@@ -708,6 +726,52 @@ pub(super) struct TabWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FormatWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// The cells, in A1 form: "B2:B40", "C4", "B:D" (whole columns) or
+    /// "1:1" (whole rows); up to 50,000 cells. Empty cells keep the format
+    /// for what's typed in them later.
+    pub range: String,
+    /// A number format, as an Excel format code: "0.00", "#,##0", "0.0%",
+    /// "$#,##0.00", "yyyy-mm-dd" or "@" (text). "" goes back to automatic.
+    /// Typing "10%" or "$5" sets one by itself.
+    pub number_format: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strike: Option<bool>,
+    /// Text color as "#RRGGBB"; "" goes back to the default.
+    pub color: Option<String>,
+    /// Background as "#RRGGBB"; "" removes it.
+    pub fill: Option<String>,
+    /// "left", "center" or "right"; "" goes back to automatic.
+    pub align: Option<String>,
+    /// Wrap long text onto more lines.
+    pub wrap: Option<bool>,
+    /// true puts every format and style back to plain first.
+    pub clear: Option<bool>,
+}
+
+impl FormatWrite {
+    fn look(&self) -> sheets::LookInput {
+        sheets::LookInput {
+            number_format: self.number_format.clone(),
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            strike: self.strike,
+            color: self.color.clone(),
+            fill: self.fill.clone(),
+            align: self.align.clone(),
+            wrap: self.wrap,
+            clear: self.clear,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SheetWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
@@ -729,6 +793,10 @@ pub(super) struct SheetWriteArguments {
     /// Rows to add or change by header, after the cells.
     #[serde(default)]
     pub rows: Vec<RowWrite>,
+    /// Number formats and styles to set on blocks of cells, last. They
+    /// don't change what's typed, values, or the cells' revisions.
+    #[serde(default)]
+    pub formats: Vec<FormatWrite>,
     /// Fill a new sheet from a file instead of tabs, cells and rows: its
     /// tabs and what was typed in them, formulas included.
     pub import: Option<SheetImport>,
@@ -758,6 +826,9 @@ pub(super) struct ChangedCellLine {
     /// The formula, for cells that have one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    /// The value as its number format shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     /// true when the cell was cleared or moved away.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cleared: bool,
@@ -777,6 +848,9 @@ pub(super) struct SheetWriteValue {
     pub cells_changed: usize,
     /// Cells whose computed value changed because of it.
     pub values_changed: usize,
+    /// Cells whose number format or style changed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub formats_changed: usize,
     /// Up to 200 cells that changed, the ones written first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<ChangedCellLine>,
@@ -785,7 +859,12 @@ pub(super) struct SheetWriteValue {
     pub idempotent_replay: bool,
 }
 
-/// The changes a call asks for, in order: tabs, then cells, then rows.
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+/// The changes a call asks for, in order: tabs, then cells, then rows,
+/// then formats.
 fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, String)> {
     let mut changes = Vec::new();
     for (index, tab) in arguments.tabs.iter().enumerate() {
@@ -933,6 +1012,25 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
                 .collect(),
         });
     }
+    for (index, format) in arguments.formats.iter().enumerate() {
+        let Some(range) = address::range(&format.range, sheets::MAX_ROWS, sheets::MAX_COLUMNS)
+        else {
+            return Err((
+                format!("formats[{index}].range"),
+                "Name cells in A1 form: \"B2:B40\", \"C4\", \"B:D\" or \"1:1\".".to_owned(),
+            ));
+        };
+        let patch = format
+            .look()
+            .patch()
+            .map_err(|(field, message)| (format!("formats[{index}].{field}"), message))?;
+        changes.push(Change::Format {
+            tab: format.tab.clone(),
+            rows: range.rows,
+            columns: range.columns,
+            patch,
+        });
+    }
     Ok(changes)
 }
 
@@ -940,7 +1038,12 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
 fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change]) -> String {
     let cells_start = changes
         .iter()
-        .position(|change| matches!(change, Change::Cell { .. } | Change::Row { .. }))
+        .position(|change| {
+            matches!(
+                change,
+                Change::Cell { .. } | Change::Row { .. } | Change::Format { .. }
+            )
+        })
         .unwrap_or(changes.len());
     if index < cells_start {
         return "tabs".to_owned();
@@ -948,8 +1051,13 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
     let at = index - cells_start;
     if at < arguments.cells.len() {
         format!("cells[{at}]")
-    } else {
+    } else if at < arguments.cells.len() + arguments.rows.len() {
         format!("rows[{}]", at - arguments.cells.len())
+    } else {
+        format!(
+            "formats[{}]",
+            at - arguments.cells.len() - arguments.rows.len()
+        )
     }
 }
 
@@ -966,6 +1074,7 @@ fn changed_lines(applied: &Applied) -> Vec<ChangedCellLine> {
                 .as_ref()
                 .filter(|input| input.starts_with('='))
                 .cloned(),
+            display: cell.display.clone(),
             cleared: cell.input.is_none(),
         })
         .collect()
@@ -1255,6 +1364,10 @@ pub(super) async fn sheet_write(
             values_changed: applied
                 .as_ref()
                 .map(|applied| applied.values_changed)
+                .unwrap_or(0),
+            formats_changed: applied
+                .as_ref()
+                .map(|applied| applied.looks_changed)
                 .unwrap_or(0),
             changed: applied.as_ref().map(changed_lines).unwrap_or_default(),
             url: sheet_url(state, project_id, sheet.id),

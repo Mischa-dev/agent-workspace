@@ -31,7 +31,7 @@ import {
   type MenuEntry,
 } from '../ui'
 import { usePhoneWidth } from '../ui/useCoarsePointer'
-import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
+import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type LookChange, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit } from './SheetGrid'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
@@ -57,6 +57,16 @@ const START: Selection = {
   anchor: { row: 1, column: 1 },
   focus: { row: 1, column: 1 },
 }
+
+/** Fills offered in the format menu: soft colors that read in light and dark themes. */
+const FILLS: [string, string][] = [
+  ['No fill', ''],
+  ['Yellow', '#FFF3B0'],
+  ['Green', '#D3F2D8'],
+  ['Blue', '#D6E8FF'],
+  ['Red', '#FFD8D6'],
+  ['Gray', '#E6E6E6'],
+]
 
 /** One sheet: a grid you edit in place (cards on a phone), its tabs under it. */
 export function SheetPage() {
@@ -393,6 +403,52 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
         },
       ]
     : []
+  // Formats and styles reach the whole selection; toggles follow the focused cell.
+  const look = (change: LookChange) => {
+    if (!tab) return
+    void send([{ type: 'format', tab: tab.id, rows: [box.top, box.bottom], columns: [box.left, box.right], look: change }])
+  }
+  const focusStyle = focusCell?.style ?? {}
+  const NUMBER_FORMATS: [string, string][] = [
+    ['Automatic', ''],
+    ['Number', '#,##0.00'],
+    ['Percent', '0.0%'],
+    ['Currency', '$#,##0.00'],
+    ['Date', 'yyyy-mm-dd'],
+    ['Plain text', '@'],
+  ]
+  const formatItems: MenuEntry[] = tab
+    ? [
+        { label: 'Bold', shortcut: 'Ctrl B', checked: focusStyle.bold === true, onSelect: () => look({ bold: !focusStyle.bold }) },
+        { label: 'Italic', shortcut: 'Ctrl I', checked: focusStyle.italic === true, onSelect: () => look({ italic: !focusStyle.italic }) },
+        { label: 'Underline', shortcut: 'Ctrl U', checked: focusStyle.underline === true, onSelect: () => look({ underline: !focusStyle.underline }) },
+        { label: 'Strikethrough', checked: focusStyle.strike === true, onSelect: () => look({ strike: !focusStyle.strike }) },
+        { label: 'Wrap text', checked: focusStyle.wrap === true, onSelect: () => look({ wrap: !focusStyle.wrap }) },
+        { separator: true },
+        { heading: 'Number format' },
+        ...NUMBER_FORMATS.map(([label, code]): MenuEntry => ({
+          label,
+          checked: (focusCell?.format ?? '') === code,
+          onSelect: () => look({ numberFormat: code }),
+        })),
+        { separator: true },
+        { heading: 'Align' },
+        ...(['left', 'center', 'right'] as const).map((align): MenuEntry => ({
+          label: align[0].toUpperCase() + align.slice(1),
+          checked: focusStyle.align === align,
+          onSelect: () => look({ align: focusStyle.align === align ? '' : align }),
+        })),
+        { separator: true },
+        { heading: 'Fill' },
+        ...FILLS.map(([label, fill]): MenuEntry => ({
+          label,
+          checked: (focusStyle.fill ?? '') === fill,
+          onSelect: () => look({ fill }),
+        })),
+        { separator: true },
+        { label: 'Clear formatting', onSelect: () => look({ clear: true }) },
+      ]
+    : []
   const download = (format: 'xlsx' | 'csv') => {
     const link = document.createElement('a')
     link.href = sheetExportHref(projectId, sheetId, format, body.tab)
@@ -509,6 +565,18 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                   {focusThread ? 'Comments' : 'Comment'}
                 </Button>
               ) : null}
+              {writable && formatItems.length ? (
+                <Menu
+                  items={formatItems}
+                  label="Format"
+                  placement="bottom-end"
+                  trigger={
+                    <Button disabled={busy} size="sm" variant="ghost">
+                      Format
+                    </Button>
+                  }
+                />
+              ) : null}
               {writable && gridItems.length ? (
                 <Menu
                   items={gridItems}
@@ -531,6 +599,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                 onEdits={edit}
                 onResize={(column, width) => void send([{ type: 'columnWidth', tab: tab.id, column, width }])}
                 onSelect={setSelection}
+                onStyle={(style) => look({ [style]: !focusStyle[style] })}
                 pending={tabPending}
                 revision={body.sheet.revision}
                 selection={selection}

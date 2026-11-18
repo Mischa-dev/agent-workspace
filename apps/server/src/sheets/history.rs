@@ -1,8 +1,9 @@
 //! A sheet's history (C1.13): any revision can be shown and put back.
 //!
-//! Each revision keeps the inputs it changed (`sheet_revisions.cells`, by
-//! tab id and position, a cleared cell as null). A snapshot of every tab and
-//! input (`sheet_snapshots`) is kept when the sheet is made, whenever its
+//! Each revision keeps the cells it changed (`sheet_revisions.cells`, by
+//! tab id and position: the input, null when there's none, and the cell's
+//! number format and style when it has one). A snapshot of every tab, input
+//! and look (`sheet_snapshots`) is kept when the sheet is made, whenever its
 //! tabs change (added, removed, renamed, moved, frozen rows, widths), when
 //! one write changes too many cells to keep, and every 25 revisions. A
 //! revision is the latest snapshot at or before it with the inputs of the
@@ -17,12 +18,60 @@ use serde_json::{Value as Json, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use super::{Applied, Change, Problem, Sheet, address::column_name};
+use super::{Applied, Change, Look, LookPatch, Problem, Sheet, address::column_name};
 use crate::error::AppError;
 
-/// One input a revision changed: tab id, row, column, and the new input
-/// (None when cleared).
-pub type Delta = (Uuid, i32, i32, Option<String>);
+/// One cell a revision changed, as it is after it: its input (None when
+/// nothing is typed in it) and its look.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Delta {
+    pub tab: Uuid,
+    pub row: i32,
+    pub column: i32,
+    pub input: Option<String>,
+    pub look: Look,
+}
+
+impl Delta {
+    /// `[tab, row, column, input]`, with `format` and `style` after it
+    /// when the cell isn't plain.
+    fn to_json(&self) -> Json {
+        let mut entry = vec![
+            json!(self.tab),
+            json!(self.row),
+            json!(self.column),
+            json!(self.input),
+        ];
+        if !self.look.is_plain() {
+            entry.push(json!(self.look.format));
+            entry.push(if self.look.style.is_plain() {
+                Json::Null
+            } else {
+                json!(self.look.style)
+            });
+        }
+        Json::Array(entry)
+    }
+
+    fn from_json(value: &Json) -> Option<Self> {
+        let entry = value.as_array()?;
+        let look = Look {
+            format: entry.get(4).and_then(Json::as_str).map(str::to_owned),
+            style: entry
+                .get(5)
+                .filter(|style| !style.is_null())
+                .and_then(|style| serde_json::from_value(style.clone()).ok())
+                .unwrap_or_default(),
+        };
+        Some(Self {
+            tab: entry.first()?.as_str()?.parse().ok()?,
+            row: i32::try_from(entry.get(1)?.as_i64()?).ok()?,
+            column: i32::try_from(entry.get(2)?.as_i64()?).ok()?,
+            input: entry.get(3)?.as_str().map(str::to_owned),
+            look,
+        })
+    }
+}
 
 /// How many revisions may pass between snapshots.
 const SNAPSHOT_EVERY: i64 = 25;
@@ -40,10 +89,7 @@ pub async fn record(
 ) -> Result<(), AppError> {
     let kept = !tabs_changed && delta.len() <= MAX_DELTA;
     if kept {
-        let cells = delta
-            .iter()
-            .map(|(tab, row, column, input)| json!([tab, row, column, input]))
-            .collect::<Vec<_>>();
+        let cells = delta.iter().map(Delta::to_json).collect::<Vec<_>>();
         sqlx::query("UPDATE sheet_revisions SET cells = $3 WHERE sheet_id = $1 AND revision = $2")
             .bind(sheet_id)
             .bind(revision)
@@ -80,7 +126,17 @@ pub async fn snapshot(
                        'cells', COALESCE((
                            SELECT jsonb_agg(jsonb_build_array(cell.row_number, cell.column_number, cell.input)
                                             ORDER BY cell.row_number, cell.column_number)
-                           FROM sheet_cells cell WHERE cell.tab_id = tab.id), '[]'::jsonb)
+                           FROM sheet_cells cell WHERE cell.tab_id = tab.id AND cell.input <> ''),
+                           '[]'::jsonb),
+                       'looks', COALESCE((
+                           SELECT jsonb_agg(jsonb_build_array(cell.row_number, cell.column_number,
+                                                              jsonb_strip_nulls(jsonb_build_object(
+                                                                  'format', cell.format,
+                                                                  'style', cell.style)))
+                                            ORDER BY cell.row_number, cell.column_number)
+                           FROM sheet_cells cell WHERE cell.tab_id = tab.id
+                             AND (cell.format IS NOT NULL OR cell.style IS NOT NULL)),
+                           '[]'::jsonb)
                    ) ORDER BY tab.position, tab.id)
                    FROM sheet_tabs tab WHERE tab.sheet_id = sheet.id), '[]'::jsonb))
         FROM sheets sheet JOIN projects project ON project.id = sheet.project_id
@@ -111,15 +167,18 @@ pub struct TabState {
     pub column_widths: Json,
     /// (row, column, input), in order.
     pub cells: Vec<(i32, i32, String)>,
+    /// (row, column, look) of the cells that aren't plain, in order.
+    #[serde(default)]
+    pub looks: Vec<(i32, i32, Look)>,
 }
 
 impl State {
-    /// Lays one revision's inputs over the state.
-    fn apply(&mut self, delta: &[(Uuid, i32, i32, Option<String>)]) {
+    /// Lays one revision's cells over the state.
+    fn apply(&mut self, delta: &[Delta]) {
         for tab in &mut self.tabs {
             let changes = delta
                 .iter()
-                .filter(|(id, ..)| *id == tab.id)
+                .filter(|change| change.tab == tab.id)
                 .collect::<Vec<_>>();
             if changes.is_empty() {
                 continue;
@@ -129,15 +188,30 @@ impl State {
                 .drain(..)
                 .map(|(row, column, input)| ((row, column), input))
                 .collect();
-            for (_, row, column, input) in changes {
-                match input {
-                    Some(input) => cells.insert((*row, *column), input.clone()),
-                    None => cells.remove(&(*row, *column)),
+            let mut looks: BTreeMap<(i32, i32), Look> = tab
+                .looks
+                .drain(..)
+                .map(|(row, column, look)| ((row, column), look))
+                .collect();
+            for change in changes {
+                let at = (change.row, change.column);
+                match &change.input {
+                    Some(input) => cells.insert(at, input.clone()),
+                    None => cells.remove(&at),
                 };
+                if change.look.is_plain() {
+                    looks.remove(&at);
+                } else {
+                    looks.insert(at, change.look.clone());
+                }
             }
             tab.cells = cells
                 .into_iter()
                 .map(|((row, column), input)| (row, column, input))
+                .collect();
+            tab.looks = looks
+                .into_iter()
+                .map(|((row, column), look)| (row, column, look))
                 .collect();
         }
     }
@@ -154,7 +228,18 @@ impl State {
                         (format!("{}{row}", column_name(*column)), Json::String(input.clone()))
                     })
                     .collect::<serde_json::Map<_, _>>();
-                json!({ "name": tab.name, "cells": cells })
+                let looks = tab
+                    .looks
+                    .iter()
+                    .map(|(row, column, look)| {
+                        (format!("{}{row}", column_name(*column)), json!(look))
+                    })
+                    .collect::<serde_json::Map<_, _>>();
+                if looks.is_empty() {
+                    json!({ "name": tab.name, "cells": cells })
+                } else {
+                    json!({ "name": tab.name, "cells": cells, "formats": looks })
+                }
             }).collect::<Vec<_>>(),
         })
     }
@@ -179,7 +264,7 @@ pub async fn state_at(
     else {
         return Ok(None);
     };
-    let later = sqlx::query_as::<_, (i64, Option<sqlx::types::Json<Vec<Delta>>>)>(
+    let later = sqlx::query_as::<_, (i64, Option<Json>)>(
         "SELECT revision, cells FROM sheet_revisions \
          WHERE sheet_id = $1 AND revision > $2 AND revision <= $3 ORDER BY revision",
     )
@@ -192,7 +277,14 @@ pub async fn state_at(
         return Ok(None);
     }
     for (_, cells) in later {
-        let Some(sqlx::types::Json(delta)) = cells else {
+        let Some(Json::Array(entries)) = cells else {
+            return Ok(None);
+        };
+        let Some(delta) = entries
+            .iter()
+            .map(Delta::from_json)
+            .collect::<Option<Vec<_>>>()
+        else {
             return Ok(None);
         };
         state.apply(&delta);
@@ -320,6 +412,44 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
                 });
             }
         }
+        // Looks after inputs, since typing some inputs (10%) sets one.
+        let had_looks: BTreeMap<(i32, i32), &Look> = current
+            .map(|current| {
+                current
+                    .looks
+                    .iter()
+                    .map(|(row, column, look)| ((*row, *column), look))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let wanted_looks: BTreeMap<(i32, i32), &Look> = tab
+            .looks
+            .iter()
+            .map(|(row, column, look)| ((*row, *column), look))
+            .collect();
+        let plain = Look::default();
+        let mut places = had_looks
+            .keys()
+            .chain(wanted_looks.keys())
+            .collect::<Vec<_>>();
+        places.sort();
+        places.dedup();
+        for &(row, column) in places {
+            let wanted = wanted_looks.get(&(row, column)).copied().unwrap_or(&plain);
+            let typed = wanted_cells
+                .get(&(row, column))
+                .is_some_and(|input| had_cells.get(&(row, column)) != Some(input));
+            // A cell typed again may take a look from its input (10%), so
+            // its look is always set; others only when it differs.
+            if typed || had_looks.get(&(row, column)).copied().unwrap_or(&plain) != wanted {
+                changes.push(Change::Format {
+                    tab: reference.clone(),
+                    rows: (row, row),
+                    columns: (column, column),
+                    patch: LookPatch::exactly(wanted),
+                });
+            }
+        }
     }
     changes
 }
@@ -335,8 +465,14 @@ async fn current(connection: &mut PgConnection, sheet_id: Uuid) -> Result<State,
                 id: tab.id,
                 cells: cells
                     .iter()
-                    .filter(|cell| cell.tab_id == tab.id)
+                    .filter(|cell| cell.tab_id == tab.id && cell.filled())
                     .map(|cell| (cell.row_number, cell.column_number, cell.input.clone()))
+                    .collect(),
+                looks: cells
+                    .iter()
+                    .filter(|cell| cell.tab_id == tab.id)
+                    .map(|cell| (cell.row_number, cell.column_number, cell.look()))
+                    .filter(|(_, _, look)| !look.is_plain())
                     .collect(),
                 name: tab.name,
                 frozen_rows: tab.frozen_rows,
@@ -395,6 +531,17 @@ mod tests {
                 .iter()
                 .map(|(row, column, input)| (*row, *column, (*input).to_owned()))
                 .collect(),
+            looks: Vec::new(),
+        }
+    }
+
+    fn delta(tab: u128, row: i32, column: i32, input: Option<&str>) -> Delta {
+        Delta {
+            tab: Uuid::from_u128(tab),
+            row,
+            column,
+            input: input.map(str::to_owned),
+            look: Look::default(),
         }
     }
 
@@ -403,16 +550,37 @@ mod tests {
         let mut state = State {
             tabs: vec![tab(1, "Budget", &[(1, 1, "Item"), (2, 1, "Rent")])],
         };
-        state.apply(&[
-            (Uuid::from_u128(1), 2, 1, None),
-            (Uuid::from_u128(1), 2, 2, Some("1200".into())),
-        ]);
+        let percent = Look {
+            format: Some("0%".to_owned()),
+            ..Look::default()
+        };
+        let entries = [
+            delta(1, 2, 1, None),
+            delta(1, 2, 2, Some("1200")),
+            Delta {
+                look: percent.clone(),
+                ..delta(1, 3, 2, Some("0.1"))
+            },
+        ];
+        // Through the stored form, as a revision keeps it.
+        let stored = entries
+            .iter()
+            .map(|entry| Delta::from_json(&entry.to_json()).expect("reads back"))
+            .collect::<Vec<_>>();
+        assert_eq!(stored, entries);
+        state.apply(&stored);
         assert_eq!(
             state.tabs[0].cells,
-            vec![(1, 1, "Item".into()), (2, 2, "1200".into())]
+            vec![
+                (1, 1, "Item".into()),
+                (2, 2, "1200".into()),
+                (3, 2, "0.1".into())
+            ]
         );
+        assert_eq!(state.tabs[0].looks, vec![(3, 2, percent)]);
         let shown = state.to_json(3);
         assert_eq!(shown["tabs"][0]["cells"]["B2"], "1200");
+        assert_eq!(shown["tabs"][0]["formats"]["B3"]["format"], "0%");
     }
 
     #[test]

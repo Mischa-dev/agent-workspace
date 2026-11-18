@@ -29,13 +29,14 @@ pub mod transfer;
 use std::collections::{BTreeMap, HashMap};
 
 use rmcp::schemars;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use crate::error::AppError;
 use address::column_name;
+pub use engine::{Align, CellStyle, Look, LookPatch};
 use engine::{FormulaEngine, IronCalc, Operation, TabInput, Value};
 
 /// Active sheets one project can have.
@@ -53,6 +54,11 @@ pub const MAX_TAB_NAME_CHARACTERS: usize = 31;
 pub const MAX_DESCRIPTION_CHARACTERS: usize = 500;
 /// Changes one write can carry.
 pub const MAX_CHANGES: usize = 2_000;
+/// The most cells one format change reaches (whole columns of a full tab
+/// are 10,000 each).
+pub const MAX_FORMAT_CELLS: i64 = 50_000;
+/// The longest number format code.
+pub const MAX_FORMAT_CHARACTERS: usize = 100;
 pub const MAX_FROZEN_ROWS: i32 = 20;
 pub const MIN_COLUMN_WIDTH: i32 = 40;
 pub const MAX_COLUMN_WIDTH: i32 = 800;
@@ -143,17 +149,42 @@ pub struct StoredCell {
     pub tab_id: Uuid,
     pub row_number: i32,
     pub column_number: i32,
+    /// Empty for a cell that only has a look (a format or style).
     pub input: String,
     pub kind: String,
     pub value: Json,
     pub revision: i64,
+    pub format: Option<String>,
+    pub style: Option<Json>,
+    /// The value as its number format shows it.
+    pub display: Option<String>,
 }
 
 impl StoredCell {
     pub fn value(&self) -> Value {
         Value::from_stored(&self.kind, &self.value)
     }
+
+    pub fn look(&self) -> Look {
+        Look {
+            format: self.format.clone(),
+            style: self
+                .style
+                .clone()
+                .and_then(|style| serde_json::from_value(style).ok())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Whether something is typed in it (not just a look).
+    pub fn filled(&self) -> bool {
+        !self.input.is_empty()
+    }
 }
+
+/// The columns a [`StoredCell`] reads.
+const CELL_COLUMNS: &str = "tab_id, row_number, column_number, input, kind, value, revision, \
+     format, style, display";
 
 /// A sheet as the web app and agents see it in a list.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -208,7 +239,8 @@ pub async fn list(
         "SELECT {COLUMNS}, \
            ARRAY(SELECT tab.name FROM sheet_tabs tab WHERE tab.sheet_id = sheet.id \
                  ORDER BY tab.position, tab.id) AS tabs, \
-           (SELECT count(*) FROM sheet_cells cell WHERE cell.sheet_id = sheet.id) AS cells \
+           (SELECT count(*) FROM sheet_cells cell \
+            WHERE cell.sheet_id = sheet.id AND cell.input <> '') AS cells \
          FROM sheets sheet \
          WHERE sheet.project_id = $1 AND ($2 OR sheet.archived_at IS NULL) \
          ORDER BY sheet.archived_at IS NOT NULL, sheet.updated_at DESC, sheet.id \
@@ -301,37 +333,39 @@ pub async fn cells(
     executor: impl sqlx::PgExecutor<'_>,
     sheet_id: Uuid,
 ) -> Result<Vec<StoredCell>, AppError> {
-    Ok(sqlx::query_as::<_, StoredCell>(
-        "SELECT tab_id, row_number, column_number, input, kind, value, revision \
-         FROM sheet_cells WHERE sheet_id = $1 \
-         ORDER BY tab_id, row_number, column_number",
-    )
+    Ok(sqlx::query_as::<_, StoredCell>(&format!(
+        "SELECT {CELL_COLUMNS} FROM sheet_cells WHERE sheet_id = $1 \
+         ORDER BY tab_id, row_number, column_number"
+    ))
     .bind(sheet_id)
     .fetch_all(executor)
     .await?)
 }
 
-/// One tab's cells in a block of rows and columns (both inclusive).
+/// One tab's cells in a block of rows and columns (both inclusive); with
+/// `filled_only`, only cells something is typed in (not ones that only
+/// have a look).
 pub async fn cells_in(
     executor: impl sqlx::PgExecutor<'_>,
     tab_id: Uuid,
     rows: (i32, i32),
     columns: (i32, i32),
     limit: i64,
+    filled_only: bool,
 ) -> Result<Vec<StoredCell>, AppError> {
-    Ok(sqlx::query_as::<_, StoredCell>(
-        "SELECT tab_id, row_number, column_number, input, kind, value, revision \
-         FROM sheet_cells \
+    Ok(sqlx::query_as::<_, StoredCell>(&format!(
+        "SELECT {CELL_COLUMNS} FROM sheet_cells \
          WHERE tab_id = $1 AND row_number BETWEEN $2 AND $3 \
-           AND column_number BETWEEN $4 AND $5 \
-         ORDER BY row_number, column_number LIMIT $6",
-    )
+           AND column_number BETWEEN $4 AND $5 AND (NOT $7 OR input <> '') \
+         ORDER BY row_number, column_number LIMIT $6"
+    ))
     .bind(tab_id)
     .bind(rows.0)
     .bind(rows.1)
     .bind(columns.0)
     .bind(columns.1)
     .bind(limit)
+    .bind(filled_only)
     .fetch_all(executor)
     .await?)
 }
@@ -342,7 +376,8 @@ pub async fn used_extent(
     tab_id: Uuid,
 ) -> Result<(i32, i32), AppError> {
     let (rows, columns) = sqlx::query_as::<_, (Option<i32>, Option<i32>)>(
-        "SELECT max(row_number), max(column_number) FROM sheet_cells WHERE tab_id = $1",
+        "SELECT max(row_number), max(column_number) FROM sheet_cells \
+         WHERE tab_id = $1 AND input <> ''",
     )
     .bind(tab_id)
     .fetch_one(executor)
@@ -615,6 +650,15 @@ pub enum Change {
         column: i32,
         width: Option<i32>,
     },
+    /// Change how a block of cells looks (rows and columns inclusive): a
+    /// number format, a style. Inputs, values and the cells' revisions stay
+    /// as they are.
+    Format {
+        tab: TabRef,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        patch: LookPatch,
+    },
 }
 
 impl Change {
@@ -632,7 +676,100 @@ impl Change {
             Self::MoveTab { .. } => "moveTab",
             Self::FreezeRows { .. } => "freezeRows",
             Self::ColumnWidth { .. } => "columnWidth",
+            Self::Format { .. } => "format",
         }
+    }
+}
+
+/// How a write asks to change cells' looks. Text fields take "" to put
+/// that part back to plain; fields left out stay as they are.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookInput {
+    /// A number format, as an Excel format code: "0.00", "#,##0", "0.0%",
+    /// "$#,##0.00", "yyyy-mm-dd" or "@" (text). "" goes back to automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<bool>,
+    /// Text color as "#RRGGBB"; "" goes back to the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Background as "#RRGGBB"; "" removes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    /// "left", "center" or "right"; "" goes back to automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    /// Wrap long text onto more lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
+    /// true puts every format and style back to plain first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear: Option<bool>,
+}
+
+impl LookInput {
+    /// The change it asks for, or the field that's wrong and why.
+    pub fn patch(&self) -> Result<LookPatch, (&'static str, String)> {
+        let format = match self.number_format.as_deref().map(str::trim) {
+            None => None,
+            Some("") => Some(None),
+            Some(code) => {
+                if code.chars().count() > MAX_FORMAT_CHARACTERS
+                    || code.chars().any(char::is_control)
+                {
+                    return Err((
+                        "numberFormat",
+                        format!(
+                            "A number format is one line of up to {MAX_FORMAT_CHARACTERS} characters, such as \"0.0%\"."
+                        ),
+                    ));
+                }
+                Some(Some(code.to_owned()))
+            }
+        };
+        let paint = |field: &'static str, value: &Option<String>| match value.as_deref() {
+            None => Ok(None),
+            Some(value) if value.trim().is_empty() => Ok(Some(None)),
+            Some(value) => engine::color(value).map(|color| Some(Some(color))).ok_or((
+                field,
+                "Give a color as \"#RRGGBB\", or \"\" to remove it.".to_owned(),
+            )),
+        };
+        let align = match self.align.as_deref().map(str::trim) {
+            None => None,
+            Some("") => Some(None),
+            Some(value) => Some(Some(match value.to_ascii_lowercase().as_str() {
+                "left" => Align::Left,
+                "center" | "centre" => Align::Center,
+                "right" => Align::Right,
+                _ => {
+                    return Err((
+                        "align",
+                        "Align is \"left\", \"center\", \"right\" or \"\".".to_owned(),
+                    ));
+                }
+            })),
+        };
+        Ok(LookPatch {
+            clear: self.clear == Some(true),
+            format,
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            strike: self.strike,
+            color: paint("color", &self.color)?,
+            fill: paint("fill", &self.fill)?,
+            align,
+            wrap: self.wrap,
+        })
     }
 }
 
@@ -669,6 +806,8 @@ pub struct ChangedCell {
     pub column: i32,
     pub input: Option<String>,
     pub value: Value,
+    pub look: Look,
+    pub display: Option<String>,
 }
 
 impl ChangedCell {
@@ -685,6 +824,8 @@ pub struct Applied {
     pub inputs_changed: usize,
     /// Cells whose value changed because something they use changed.
     pub values_changed: usize,
+    /// Cells whose look (format or style) changed.
+    pub looks_changed: usize,
     pub tabs_changed: bool,
     /// Up to `limit` of the cells that changed, inputs first.
     pub changed: Vec<ChangedCell>,
@@ -1091,11 +1232,17 @@ async fn apply_unbounded(
                         ),
                     )));
                 }
+                // Cells something is typed in; ones that only have a look
+                // don't make a row.
                 let tab_cells = working_tab
                     .id
                     .and_then(|id| by_tab.get(&id))
                     .map(Vec::as_slice)
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .filter(|cell| cell.filled())
+                    .collect::<Vec<_>>();
                 // Headers: row 1's values, as text, by column. Headers this
                 // write already added count too.
                 let mut headers: BTreeMap<i32, String> = tab_cells
@@ -1467,6 +1614,49 @@ async fn apply_unbounded(
                     }
                 }
             }
+            Change::Format {
+                tab,
+                rows,
+                columns,
+                patch,
+            } => {
+                let tab = tab!(tab);
+                check!(check_row(index, rows.0));
+                check!(check_row(index, rows.1));
+                check!(check_column(index, columns.0));
+                check!(check_column(index, columns.1));
+                if rows.0 > rows.1 || columns.0 > columns.1 {
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        "Name the block from its top-left cell to its bottom-right one.",
+                    )));
+                }
+                let reach = i64::from(rows.1 - rows.0 + 1) * i64::from(columns.1 - columns.0 + 1);
+                if reach > MAX_FORMAT_CELLS {
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        format!("Format up to {MAX_FORMAT_CELLS} cells at a time."),
+                    )));
+                }
+                if patch.is_empty() {
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        "Say what to change: a number format or a style.",
+                    )));
+                }
+                operations.push((
+                    index,
+                    Operation::Format {
+                        tab,
+                        rows: *rows,
+                        columns: *columns,
+                        patch: patch.clone(),
+                    },
+                ));
+            }
         }
     }
 
@@ -1480,7 +1670,18 @@ async fn apply_unbounded(
                 .map(|cells| {
                     cells
                         .iter()
+                        .filter(|cell| cell.filled())
                         .map(|cell| (cell.row_number, cell.column_number, cell.input.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            looks: by_tab
+                .get(&tab.id)
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| (cell.row_number, cell.column_number, cell.look()))
+                        .filter(|(_, _, look)| !look.is_plain())
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -1513,10 +1714,11 @@ async fn apply_unbounded(
     let revision = sheet.revision + 1;
     let mut inputs_changed = 0;
     let mut values_changed = 0;
+    let mut looks_changed = 0;
     let mut changed = Vec::new();
     let mut tabs_changed = false;
-    // Inputs this write changed, by tab id, for the sheet's history (C1.13):
-    // the new input, or None for a cleared cell.
+    // Cells whose input or look this write changed, as they are now, for
+    // the sheet's history (C1.13).
     let mut delta: Vec<history::Delta> = Vec::new();
 
     // New tabs get IDs; every tab gets its position.
@@ -1680,23 +1882,30 @@ async fn apply_unbounded(
         let mut upsert_kinds = Vec::new();
         let mut upsert_values = Vec::new();
         let mut upsert_revisions = Vec::new();
+        let mut upsert_formats: Vec<Option<String>> = Vec::new();
+        let mut upsert_styles: Vec<Option<String>> = Vec::new();
+        let mut upsert_displays: Vec<Option<String>> = Vec::new();
         let mut seen: std::collections::HashSet<(Uuid, i32, i32)> =
             std::collections::HashSet::new();
         let mut input_cells = Vec::new();
+        let mut look_cells = Vec::new();
         let mut value_cells = Vec::new();
         for (tab, output) in outputs.iter().enumerate() {
             let id = ids[tab];
             for cell in &output.cells {
                 seen.insert((id, cell.row, cell.column));
                 let stored = stored_at.get(&(id, cell.row, cell.column));
-                let (input_changed, value_changed) = match stored {
+                let (input_changed, look_changed, value_changed) = match stored {
                     Some(stored) => (
                         stored.input != cell.input,
-                        stored.value() != cell.value || stored.kind != cell.value.kind(),
+                        stored.look() != cell.look,
+                        stored.value() != cell.value
+                            || stored.kind != cell.value.kind()
+                            || stored.display != cell.display,
                     ),
-                    None => (true, true),
+                    None => (!cell.input.is_empty(), !cell.look.is_plain(), true),
                 };
-                if !input_changed && !value_changed {
+                if !input_changed && !look_changed && !value_changed {
                     continue;
                 }
                 upsert_tabs.push(id);
@@ -1710,17 +1919,35 @@ async fn apply_unbounded(
                 } else {
                     stored.map(|stored| stored.revision).unwrap_or(revision)
                 });
+                upsert_formats.push(cell.look.format.clone());
+                upsert_styles.push(
+                    (!cell.look.style.is_plain()).then(|| json!(cell.look.style).to_string()),
+                );
+                upsert_displays.push(cell.display.clone());
                 let line = ChangedCell {
                     tab: output.name.clone(),
                     row: cell.row,
                     column: cell.column,
-                    input: Some(cell.input.clone()),
+                    input: (!cell.input.is_empty()).then(|| cell.input.clone()),
                     value: cell.value.clone(),
+                    look: cell.look.clone(),
+                    display: cell.display.clone(),
                 };
+                if input_changed || look_changed {
+                    delta.push(history::Delta {
+                        tab: id,
+                        row: cell.row,
+                        column: cell.column,
+                        input: (!cell.input.is_empty()).then(|| cell.input.clone()),
+                        look: cell.look.clone(),
+                    });
+                }
                 if input_changed {
                     inputs_changed += 1;
-                    delta.push((id, cell.row, cell.column, Some(cell.input.clone())));
                     input_cells.push(line);
+                } else if look_changed {
+                    looks_changed += 1;
+                    look_cells.push(line);
                 } else {
                     values_changed += 1;
                     value_cells.push(line);
@@ -1740,8 +1967,18 @@ async fn apply_unbounded(
                 delete_tabs.push(cell.tab_id);
                 delete_rows.push(cell.row_number);
                 delete_columns.push(cell.column_number);
-                inputs_changed += 1;
-                delta.push((cell.tab_id, cell.row_number, cell.column_number, None));
+                if cell.filled() {
+                    inputs_changed += 1;
+                } else {
+                    looks_changed += 1;
+                }
+                delta.push(history::Delta {
+                    tab: cell.tab_id,
+                    row: cell.row_number,
+                    column: cell.column_number,
+                    input: None,
+                    look: Look::default(),
+                });
                 let tab_name = working
                     .iter()
                     .zip(&ids)
@@ -1754,6 +1991,8 @@ async fn apply_unbounded(
                     column: cell.column_number,
                     input: None,
                     value: Value::Empty,
+                    look: Look::default(),
+                    display: None,
                 });
             }
         }
@@ -1775,15 +2014,18 @@ async fn apply_unbounded(
             sqlx::query(
                 "INSERT INTO sheet_cells \
                    (project_id, sheet_id, tab_id, row_number, column_number, input, kind, value, \
-                    revision, updated_by_actor_id) \
+                    revision, updated_by_actor_id, format, style, display) \
                  SELECT $1, $2, cell.tab_id, cell.row_number, cell.column_number, cell.input, \
-                        cell.kind, cell.value::jsonb, cell.revision, $3 \
+                        cell.kind, cell.value::jsonb, cell.revision, $3, cell.format, \
+                        cell.style::jsonb, cell.display \
                  FROM UNNEST($4::uuid[], $5::int[], $6::int[], $7::text[], $8::text[], \
-                             $9::text[], $10::bigint[]) \
-                      AS cell(tab_id, row_number, column_number, input, kind, value, revision) \
+                             $9::text[], $10::bigint[], $11::text[], $12::text[], $13::text[]) \
+                      AS cell(tab_id, row_number, column_number, input, kind, value, revision, \
+                              format, style, display) \
                  ON CONFLICT (tab_id, row_number, column_number) DO UPDATE SET \
                    input = EXCLUDED.input, kind = EXCLUDED.kind, value = EXCLUDED.value, \
-                   revision = EXCLUDED.revision, \
+                   revision = EXCLUDED.revision, format = EXCLUDED.format, \
+                   style = EXCLUDED.style, display = EXCLUDED.display, \
                    updated_by_actor_id = CASE WHEN sheet_cells.input IS DISTINCT FROM EXCLUDED.input \
                      THEN EXCLUDED.updated_by_actor_id ELSE sheet_cells.updated_by_actor_id END, \
                    updated_at = CASE WHEN sheet_cells.input IS DISTINCT FROM EXCLUDED.input \
@@ -1799,6 +2041,9 @@ async fn apply_unbounded(
             .bind(&upsert_kinds)
             .bind(&upsert_values)
             .bind(&upsert_revisions)
+            .bind(&upsert_formats)
+            .bind(&upsert_styles)
+            .bind(&upsert_displays)
             .execute(&mut *connection)
             .await?;
         }
@@ -1855,26 +2100,19 @@ async fn apply_unbounded(
             .await?;
         }
         changed = input_cells;
+        changed.extend(look_cells);
         changed.extend(value_cells);
         changed.truncate(limit);
     }
 
-    if inputs_changed == 0 && values_changed == 0 && !tabs_changed {
-        return Ok(Ok(Applied {
-            revision: sheet.revision,
-            inputs_changed,
-            values_changed,
-            tabs_changed,
-            changed,
-        }));
-    }
     // A value can change with no input changing (NOW(), RAND()); that isn't
     // a new revision unless something else changed.
-    if inputs_changed == 0 && !tabs_changed {
+    if inputs_changed == 0 && looks_changed == 0 && !tabs_changed {
         return Ok(Ok(Applied {
             revision: sheet.revision,
             inputs_changed,
             values_changed,
+            looks_changed,
             tabs_changed,
             changed,
         }));
@@ -1902,6 +2140,7 @@ async fn apply_unbounded(
         json!({
             "cells": inputs_changed,
             "values": values_changed,
+            "formats": looks_changed,
             "tabs": tabs_changed,
             "operations": kinds,
         }),
@@ -1912,6 +2151,7 @@ async fn apply_unbounded(
         revision,
         inputs_changed,
         values_changed,
+        looks_changed,
         tabs_changed,
         changed,
     }))

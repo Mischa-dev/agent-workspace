@@ -17,13 +17,226 @@
 
 use std::collections::BTreeMap;
 
-use ironcalc_base::{Model, cell::CellValue, types::CellType};
+use ironcalc_base::{
+    Model,
+    cell::CellValue,
+    expressions::types::Area,
+    formatter::lexer::is_likely_date_number_format,
+    number_format::to_excel_precision_str,
+    types::{Alignment, CellType, Color, HorizontalAlignment, Style},
+};
+use rmcp::schemars::{self, JsonSchema};
+use serde::{Deserialize, Serialize};
 
 /// One tab's cells as they're stored: (row, column) from 1, and the input.
+/// `looks` are the cells that aren't plain (a number format or a style),
+/// which can include cells with nothing typed in them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabInput {
     pub name: String,
     pub cells: Vec<(i32, i32, String)>,
+    pub looks: Vec<(i32, i32, Look)>,
+}
+
+/// Horizontal alignment of a cell's text.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// How a cell's text is drawn. Colors are `#RRGGBB`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CellStyle {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strike: bool,
+    /// The text's color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// The cell's background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
+    /// Long text wraps onto more lines instead of running over.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap: bool,
+}
+
+impl CellStyle {
+    pub fn is_plain(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A cell's number format (an Excel format code such as `0.0%`, `$#,##0`
+/// or `yyyy-mm-dd`; None is automatic) and style.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Look {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "CellStyle::is_plain")]
+    pub style: CellStyle,
+}
+
+impl Look {
+    pub fn is_plain(&self) -> bool {
+        self.format.is_none() && self.style.is_plain()
+    }
+}
+
+/// A change to how cells look: each `Some` field is set (an inner `None`
+/// puts it back to plain); with `clear`, everything else goes back first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LookPatch {
+    pub clear: bool,
+    pub format: Option<Option<String>>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strike: Option<bool>,
+    pub color: Option<Option<String>>,
+    pub fill: Option<Option<String>>,
+    pub align: Option<Option<Align>>,
+    pub wrap: Option<bool>,
+}
+
+impl LookPatch {
+    /// The patch that makes a cell look exactly like `look`.
+    pub fn exactly(look: &Look) -> Self {
+        let style = &look.style;
+        Self {
+            clear: true,
+            format: Some(look.format.clone()),
+            bold: Some(style.bold),
+            italic: Some(style.italic),
+            underline: Some(style.underline),
+            strike: Some(style.strike),
+            color: Some(style.color.clone()),
+            fill: Some(style.fill.clone()),
+            align: Some(style.align),
+            wrap: Some(style.wrap),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn apply(&self, look: &Look) -> Look {
+        let mut next = if self.clear {
+            Look::default()
+        } else {
+            look.clone()
+        };
+        if let Some(format) = &self.format {
+            next.format = format.clone();
+        }
+        let style = &mut next.style;
+        for (field, value) in [
+            (&mut style.bold, self.bold),
+            (&mut style.italic, self.italic),
+            (&mut style.underline, self.underline),
+            (&mut style.strike, self.strike),
+            (&mut style.wrap, self.wrap),
+        ] {
+            if let Some(value) = value {
+                *field = value;
+            }
+        }
+        if let Some(color) = &self.color {
+            style.color = color.clone();
+        }
+        if let Some(fill) = &self.fill {
+            style.fill = fill.clone();
+        }
+        if let Some(align) = self.align {
+            style.align = align;
+        }
+        next
+    }
+}
+
+/// `#RRGGBB` in capitals, or None for anything else.
+pub fn color(value: &str) -> Option<String> {
+    let value = value.trim();
+    let hex = value.strip_prefix('#')?;
+    (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_uppercase()))
+}
+
+fn color_of(value: &Color, plain: &str) -> Option<String> {
+    match value {
+        Color::Rgb(rgb) => color(rgb).filter(|rgb| rgb != plain),
+        _ => None,
+    }
+}
+
+/// How IronCalc's style for a cell reads here.
+fn look_of(style: &Style) -> Look {
+    let format = (!style.num_fmt.eq_ignore_ascii_case("general")).then(|| style.num_fmt.clone());
+    let align = style
+        .alignment
+        .as_ref()
+        .and_then(|alignment| match alignment.horizontal {
+            HorizontalAlignment::Left => Some(Align::Left),
+            HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => {
+                Some(Align::Center)
+            }
+            HorizontalAlignment::Right => Some(Align::Right),
+            _ => None,
+        });
+    Look {
+        format,
+        style: CellStyle {
+            bold: style.font.b,
+            italic: style.font.i,
+            underline: style.font.u,
+            strike: style.font.strike,
+            // Black text and white fill are what a cell shows anyway; kept
+            // as plain they follow the app's theme.
+            color: color_of(&style.font.color, "#000000"),
+            fill: color_of(&style.fill.color, "#FFFFFF"),
+            align,
+            wrap: style
+                .alignment
+                .as_ref()
+                .is_some_and(|alignment| alignment.wrap_text),
+        },
+    }
+}
+
+/// `style` with `look` laid on it (its quote prefix and font kept).
+fn styled(mut style: Style, look: &Look) -> Style {
+    style.num_fmt = look.format.clone().unwrap_or_else(|| "general".to_owned());
+    let cell = &look.style;
+    style.font.b = cell.bold;
+    style.font.i = cell.italic;
+    style.font.u = cell.underline;
+    style.font.strike = cell.strike;
+    style.font.color = cell.color.clone().map(Color::Rgb).unwrap_or(Color::None);
+    style.fill.color = cell.fill.clone().map(Color::Rgb).unwrap_or(Color::None);
+    let horizontal = match cell.align {
+        Some(Align::Left) => HorizontalAlignment::Left,
+        Some(Align::Center) => HorizontalAlignment::Center,
+        Some(Align::Right) => HorizontalAlignment::Right,
+        None => HorizontalAlignment::General,
+    };
+    let mut alignment = style.alignment.take().unwrap_or_default();
+    alignment.horizontal = horizontal;
+    alignment.wrap_text = cell.wrap;
+    style.alignment = (alignment != Alignment::default()).then_some(alignment);
+    style
 }
 
 /// One change, applied in order. `tab` is the tab's index in the workbook
@@ -69,6 +282,14 @@ pub enum Operation {
     /// Remove a tab and its cells; formulas that pointed at it show #REF!.
     RemoveTab {
         tab: usize,
+    },
+    /// Change how a block of cells looks (rows and columns inclusive);
+    /// inputs and values stay as they are.
+    Format {
+        tab: usize,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        patch: LookPatch,
     },
 }
 
@@ -123,8 +344,12 @@ impl Value {
 pub struct CellOutput {
     pub row: i32,
     pub column: i32,
+    /// Empty for a cell that only has a look.
     pub input: String,
     pub value: Value,
+    pub look: Look,
+    /// The value as its number format shows it, for a cell with a format.
+    pub display: Option<String>,
 }
 
 /// One tab after the operations, its cells in row then column order.
@@ -203,7 +428,30 @@ fn apply_one(model: &mut Model<'_>, operation: &Operation) -> Result<(), String>
             row,
             column,
             input,
-        } => model.set_user_input(index(*tab, count)?, *row, *column, input.clone()),
+        } => {
+            let tab = index(*tab, count)?;
+            if input.is_empty() {
+                clear(model, tab, *row, *column)
+            } else {
+                model.set_user_input(tab, *row, *column, input.clone())
+            }
+        }
+        Operation::Format {
+            tab,
+            rows,
+            columns,
+            patch,
+        } => {
+            let tab = index(*tab, count)?;
+            for row in rows.0..=rows.1 {
+                for column in columns.0..=columns.1 {
+                    let style = model.get_style_for_cell(tab, row, column)?;
+                    let look = patch.apply(&look_of(&style));
+                    model.set_cell_style(tab, row, column, &styled(style, &look))?;
+                }
+            }
+            Ok(())
+        }
         Operation::InsertRows { tab, row, count: n } => {
             model.insert_rows(index(*tab, count)?, *row, *n)
         }
@@ -238,6 +486,54 @@ fn apply_one(model: &mut Model<'_>, operation: &Operation) -> Result<(), String>
     }
 }
 
+/// Empties a cell and keeps its look, the way a spreadsheet's Delete does.
+fn clear(model: &mut Model<'_>, tab: u32, row: i32, column: i32) -> Result<(), String> {
+    model.range_clear_contents(&Area {
+        sheet: tab,
+        row,
+        column,
+        width: 1,
+        height: 1,
+    })?;
+    let style = model.get_style_for_cell(tab, row, column)?;
+    if style.quote_prefix {
+        let mut style = style;
+        style.quote_prefix = false;
+        model.set_cell_style(tab, row, column, &style)?;
+    }
+    Ok(())
+}
+
+/// What a cell holds as it would be typed. A plain number under a date
+/// format reads as the date, as long as typing that date back gives the
+/// same number; otherwise as the number.
+fn input_of(
+    model: &Model<'_>,
+    scratch: &mut Model<'_>,
+    tab: u32,
+    row: i32,
+    column: i32,
+) -> Result<String, String> {
+    let input = model.get_localized_cell_content(tab, row, column)?;
+    let style = model.get_style_for_cell(tab, row, column)?;
+    if input.starts_with('=') || !is_likely_date_number_format(&style.num_fmt) {
+        return Ok(input);
+    }
+    let Ok(CellValue::Number(number)) = model.get_cell_value_by_index(tab, row, column) else {
+        return Ok(input);
+    };
+    let probe = Style {
+        num_fmt: style.num_fmt.clone(),
+        ..Style::default()
+    };
+    scratch.set_cell_style(0, 1, 1, &probe)?;
+    scratch.set_user_input(0, 1, 1, input.clone())?;
+    match scratch.get_cell_value_by_index(0, 1, 1) {
+        Ok(CellValue::Number(back)) if back == number => Ok(input),
+        _ => Ok(to_excel_precision_str(number)),
+    }
+}
+
 fn value_of(model: &Model<'_>, tab: u32, row: i32, column: i32) -> Result<Value, String> {
     let kind = model.get_cell_type(tab, row, column)?;
     let value = model.get_cell_value_by_index(tab, row, column)?;
@@ -262,6 +558,15 @@ fn build(tabs: &[TabInput]) -> Result<Model<'static>, EngineError> {
     }
     for (tab_index, tab) in tabs.iter().enumerate() {
         let tab_index = u32::try_from(tab_index).map_err(|_| whole("Too many tabs."))?;
+        // Looks first, so an input under a date format reads as that date.
+        for (row, column, look) in &tab.looks {
+            let style = model
+                .get_style_for_cell(tab_index, *row, *column)
+                .map_err(whole)?;
+            model
+                .set_cell_style(tab_index, *row, *column, &styled(style, look))
+                .map_err(whole)?;
+        }
         for (row, column, input) in &tab.cells {
             model
                 .set_user_input(tab_index, *row, *column, input.clone())
@@ -292,19 +597,35 @@ impl FormulaEngine for IronCalc {
             .map(|properties| properties.name)
             .collect::<Vec<_>>();
         let mut cells: BTreeMap<u32, Vec<CellOutput>> = BTreeMap::new();
+        let mut scratch = Model::new_empty("scratch", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
         for cell in model.get_all_cells() {
-            let input = model
-                .get_localized_cell_content(cell.index, cell.row, cell.column)
-                .map_err(whole)?;
-            if input.is_empty() {
+            let (tab, row, column) = (cell.index, cell.row, cell.column);
+            let style = model.get_style_for_cell(tab, row, column).map_err(whole)?;
+            let look = look_of(&style);
+            let input = input_of(&model, &mut scratch, tab, row, column).map_err(whole)?;
+            if input.is_empty() && look.is_plain() {
                 continue;
             }
-            let value = value_of(&model, cell.index, cell.row, cell.column).map_err(whole)?;
-            cells.entry(cell.index).or_default().push(CellOutput {
-                row: cell.row,
-                column: cell.column,
+            let value = if input.is_empty() {
+                Value::Empty
+            } else {
+                value_of(&model, tab, row, column).map_err(whole)?
+            };
+            let display = match (&look.format, &value) {
+                (Some(_), Value::Number(_)) => Some(
+                    model
+                        .get_formatted_cell_value(tab, row, column)
+                        .map_err(whole)?,
+                ),
+                _ => None,
+            };
+            cells.entry(tab).or_default().push(CellOutput {
+                row,
+                column,
                 input,
                 value,
+                look,
+                display,
             });
         }
         Ok(names
@@ -377,14 +698,24 @@ impl FormulaEngine for IronCalc {
             .into_iter()
             .map(|name| TabInput {
                 name,
-                cells: Vec::new(),
+                ..TabInput::default()
             })
             .collect::<Vec<_>>();
         let mut scratch = Model::new_empty("scratch", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
+        let mut dates = Model::new_empty("dates", LOCALE, TIMEZONE, LANGUAGE).map_err(whole)?;
         for cell in model.get_all_cells() {
-            let mut input = model
-                .get_localized_cell_content(cell.index, cell.row, cell.column)
-                .map_err(whole)?;
+            let look = look_of(
+                &model
+                    .get_style_for_cell(cell.index, cell.row, cell.column)
+                    .map_err(whole)?,
+            );
+            if !look.is_plain()
+                && let Some(tab) = tabs.get_mut(cell.index as usize)
+            {
+                tab.looks.push((cell.row, cell.column, look));
+            }
+            let mut input =
+                input_of(&model, &mut dates, cell.index, cell.row, cell.column).map_err(whole)?;
             if input.is_empty() {
                 continue;
             }
@@ -407,6 +738,7 @@ impl FormulaEngine for IronCalc {
         }
         for tab in &mut tabs {
             tab.cells.sort_by_key(|(row, column, _)| (*row, *column));
+            tab.looks.sort_by_key(|(row, column, _)| (*row, *column));
         }
         Ok(tabs)
     }
@@ -432,6 +764,7 @@ mod tests {
                 .iter()
                 .map(|(row, column, input)| (*row, *column, (*input).to_owned()))
                 .collect(),
+            looks: Vec::new(),
         }
     }
 
@@ -620,5 +953,162 @@ mod tests {
             cell(&output, 0, 1, 1).expect("ok").value,
             Value::Error(_)
         ));
+    }
+
+    fn format(tab: usize, rows: (i32, i32), columns: (i32, i32), patch: LookPatch) -> Operation {
+        Operation::Format {
+            tab,
+            rows,
+            columns,
+            patch,
+        }
+    }
+
+    #[test]
+    fn a_typed_percent_keeps_its_format_and_computes_as_a_fraction() {
+        let output = IronCalc
+            .apply(&[tab("Rates", &[(1, 1, "10%"), (2, 1, "=A1*200")])], &[])
+            .expect("ok");
+        let rate = cell(&output, 0, 1, 1).expect("rate");
+        assert_eq!(rate.value, Value::Number(0.1));
+        assert_eq!(rate.look.format.as_deref(), Some("#,##0%"));
+        assert_eq!(rate.display.as_deref(), Some("10%"));
+        assert_eq!(
+            cell(&output, 0, 2, 1).expect("total").value,
+            Value::Number(20.0)
+        );
+        // Stored and built again, it reads the same.
+        let stored = TabInput {
+            name: "Rates".to_owned(),
+            cells: vec![(1, 1, rate.input.clone())],
+            looks: vec![(1, 1, rate.look.clone())],
+        };
+        let again = IronCalc.apply(&[stored], &[]).expect("ok");
+        assert_eq!(again[0].cells[0], *rate);
+    }
+
+    #[test]
+    fn formatting_a_block_reaches_empty_cells_and_survives_a_clear() {
+        let output = IronCalc
+            .apply(
+                &[tab("Data", &[(1, 1, "Name"), (2, 2, "0.25")])],
+                &[
+                    format(
+                        0,
+                        (1, 1),
+                        (1, 2),
+                        LookPatch {
+                            bold: Some(true),
+                            fill: Some(Some("#FFEEAA".to_owned())),
+                            align: Some(Some(Align::Center)),
+                            ..LookPatch::default()
+                        },
+                    ),
+                    format(
+                        0,
+                        (2, 3),
+                        (2, 2),
+                        LookPatch {
+                            format: Some(Some("0.0%".to_owned())),
+                            ..LookPatch::default()
+                        },
+                    ),
+                    Operation::Set {
+                        tab: 0,
+                        row: 1,
+                        column: 1,
+                        input: String::new(),
+                    },
+                ],
+            )
+            .expect("ok");
+        let header = cell(&output, 0, 1, 1).expect("cleared but styled");
+        assert_eq!(header.input, "");
+        assert_eq!(header.value, Value::Empty);
+        assert!(header.look.style.bold);
+        assert_eq!(header.look.style.fill.as_deref(), Some("#FFEEAA"));
+        assert_eq!(header.look.style.align, Some(Align::Center));
+        assert!(
+            cell(&output, 0, 1, 2)
+                .expect("empty, styled")
+                .look
+                .style
+                .bold
+        );
+        let share = cell(&output, 0, 2, 2).expect("share");
+        assert_eq!(share.display.as_deref(), Some("25.0%"));
+        assert_eq!(share.input, "0.25");
+        assert!(cell(&output, 0, 3, 2).is_some_and(|cell| cell.input.is_empty()));
+        // Clearing the look leaves nothing.
+        let plain = IronCalc
+            .apply(
+                &[TabInput {
+                    name: "Data".to_owned(),
+                    cells: vec![],
+                    looks: vec![(1, 1, header.look.clone())],
+                }],
+                &[format(
+                    0,
+                    (1, 1),
+                    (1, 1),
+                    LookPatch {
+                        clear: true,
+                        ..LookPatch::default()
+                    },
+                )],
+            )
+            .expect("ok");
+        assert!(plain[0].cells.is_empty());
+    }
+
+    #[test]
+    fn dates_read_back_as_typed() {
+        let output = IronCalc
+            .apply(&[tab("Due", &[(1, 1, "2026-11-18")])], &[])
+            .expect("ok");
+        let due = cell(&output, 0, 1, 1).expect("due");
+        assert!(matches!(due.value, Value::Number(_)));
+        assert!(due.look.format.is_some());
+        let again = IronCalc
+            .apply(
+                &[TabInput {
+                    name: "Due".to_owned(),
+                    cells: vec![(1, 1, due.input.clone())],
+                    looks: vec![(1, 1, due.look.clone())],
+                }],
+                &[],
+            )
+            .expect("ok");
+        assert_eq!(again[0].cells[0], *due);
+    }
+
+    #[test]
+    fn an_excel_file_keeps_formats_and_styles() {
+        let look = Look {
+            format: Some("$#,##0.00".to_owned()),
+            style: CellStyle {
+                bold: true,
+                italic: true,
+                color: Some("#AA0000".to_owned()),
+                fill: Some("#EEFFEE".to_owned()),
+                align: Some(Align::Right),
+                wrap: true,
+                ..CellStyle::default()
+            },
+        };
+        let tabs = vec![TabInput {
+            name: "Costs".to_owned(),
+            cells: vec![(1, 1, "1200".to_owned()), (2, 1, "10%".to_owned())],
+            looks: vec![(1, 1, look.clone())],
+        }];
+        let bytes = IronCalc.to_xlsx(&tabs).expect("written");
+        let back = IronCalc
+            .read_xlsx(&bytes, &|names| names.to_vec())
+            .expect("read");
+        assert_eq!(back[0].looks[0], (1, 1, look));
+        assert_eq!(back[0].looks[1].2.format.as_deref(), Some("#,##0%"));
+        let computed = IronCalc.apply(&back, &[]).expect("computed");
+        assert_eq!(computed[0].cells[0].display.as_deref(), Some("$1,200.00"));
+        assert_eq!(computed[0].cells[1].display.as_deref(), Some("10%"));
     }
 }

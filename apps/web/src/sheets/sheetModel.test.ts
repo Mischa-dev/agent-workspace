@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SheetBody } from './api'
-import { cards, columnName, display, formatTable, parseRange, parseTable, patched, rangeName } from './sheetModel'
+import { cards, cellLook, columnName, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName } from './sheetModel'
 
 const body = (): SheetBody => ({
   sheet: {
@@ -88,6 +88,30 @@ describe('sheet model', () => {
         revision: 1,
       }),
     ).toBe('TRUE')
+  })
+
+  it('shows a formatted value as its format writes it, and draws a style', () => {
+    const rate = { row: 2, column: 1, input: '0.1', kind: 'number' as const, value: 0.1, revision: 1, format: '0%', display: '10%' }
+    expect(display(rate)).toBe('10%')
+    expect(cellLook({ ...rate, style: { bold: true, fill: '#FFF3B0', align: 'center' } })).toEqual({
+      fontWeight: '600',
+      textAlign: 'center',
+      '--aw-cell-fill': '#FFF3B0',
+      '--aw-cell-ink': '#1A1A1A',
+    })
+    expect(inkOn('#202020')).toBe('#FFFFFF')
+    expect(cellLook(rate)).toBeUndefined()
+    // A cleared cell that keeps its fill stays in the grid, empty.
+    const next = patched(body(), {
+      revision: 5,
+      previousRevision: 4,
+      tabsChanged: false,
+      truncated: false,
+      changed: [{ tab: 'Sheet1', row: 1, column: 1, input: null, kind: 'empty', value: null, style: { fill: '#FFF3B0' } }],
+    })
+    const kept = next?.cells.find((cell) => cell.row === 1 && cell.column === 1)
+    expect(kept?.input).toBe('')
+    expect(kept?.style?.fill).toBe('#FFF3B0')
   })
 
   it('puts a write’s cells in place, and asks for a refetch when rows moved', () => {

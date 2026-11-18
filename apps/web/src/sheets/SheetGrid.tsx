@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 
 import type { SheetCell, SheetTab } from './api'
 import {
@@ -8,6 +8,7 @@ import {
   ROW_HEIGHT,
   bounds,
   cellKey,
+  cellLook,
   cellName,
   clamp,
   columnName,
@@ -25,6 +26,8 @@ const OVERSCAN = 12
 /** A cell's new input; `revision` is the sheet revision the editor opened at. */
 export type GridEdit = { row: number; column: number; input: string; revision?: number }
 
+const STYLE_KEYS: Record<string, 'bold' | 'italic' | 'underline'> = { b: 'bold', i: 'italic', u: 'underline' }
+
 /**
  * One tab as a grid: a header of column letters and row numbers that stay
  * put, the frozen rows under it, and only the rows in view drawn. Typing
@@ -38,6 +41,7 @@ export function SheetGrid({
   onEdits,
   onResize,
   onSelect,
+  onStyle,
   pending,
   revision,
   selection,
@@ -51,6 +55,8 @@ export function SheetGrid({
   onEdits: (edits: GridEdit[]) => void
   onResize: (column: number, width: number | null) => void
   onSelect: (selection: Selection) => void
+  /** Ctrl or Cmd with B, I or U: toggle that style on the selection. */
+  onStyle?: (style: 'bold' | 'italic' | 'underline') => void
   /** Inputs sent and not saved yet, shown as typed. */
   pending: Map<string, string>
   /** The sheet's revision as shown: an edit holds the one it opened at. */
@@ -193,6 +199,9 @@ export function SheetGrid({
       clearSelection()
     } else if (event.key === 'Escape') {
       onSelect({ anchor: focus, focus })
+    } else if ((event.metaKey || event.ctrlKey) && !event.altKey && editable && onStyle && STYLE_KEYS[event.key.toLowerCase()]) {
+      event.preventDefault()
+      onStyle(STYLE_KEYS[event.key.toLowerCase()])
     } else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey && editable) {
       event.preventDefault()
       startEdit(event.key)
@@ -288,6 +297,7 @@ export function SheetGrid({
           selected ? 'is-selected' : '',
           focused ? 'is-focused' : '',
           commented?.has(cellKey(row, column)) ? 'has-comment' : '',
+          cell?.style?.fill ? 'has-fill' : '',
         ]
           .filter(Boolean)
           .join(' ')
@@ -312,6 +322,7 @@ export function SheetGrid({
             onPointerEnter={() => {
               if (dragging) onSelect({ anchor: selection.anchor, focus: { row, column } })
             }}
+            style={cellLook(cell) as CSSProperties | undefined}
             title={cell?.input.startsWith('=') ? cell.input : undefined}
           >
             {isEditing ? (

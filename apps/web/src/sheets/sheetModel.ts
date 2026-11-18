@@ -35,6 +35,7 @@ const numberFormat = new Intl.NumberFormat(undefined, {
 /** What a cell shows: its value, written for people. */
 export function display(cell: SheetCell | undefined) {
   if (!cell) return ''
+  if (cell.display !== undefined) return cell.display
   switch (cell.kind) {
     case 'number':
       return typeof cell.value === 'number' ? numberFormat.format(cell.value) : ''
@@ -46,6 +47,36 @@ export function display(cell: SheetCell | undefined) {
     default:
       return ''
   }
+}
+
+/** Text that reads on a fill: dark on light colors, light on dark ones. */
+export function inkOn(fill: string) {
+  const channel = (start: number) => {
+    const value = parseInt(fill.slice(start, start + 2), 16) / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+  return luminance > 0.4 ? '#1A1A1A' : '#FFFFFF'
+}
+
+/** A cell's style as the grid draws it: inline properties and the custom properties its class reads. */
+export function cellLook(cell: SheetCell | undefined): Record<string, string> | undefined {
+  const style = cell?.style
+  if (!style) return undefined
+  const look: Record<string, string> = {}
+  if (style.bold) look.fontWeight = '600'
+  if (style.italic) look.fontStyle = 'italic'
+  const lines = [style.underline ? 'underline' : '', style.strike ? 'line-through' : ''].filter(Boolean)
+  if (lines.length) look.textDecoration = lines.join(' ')
+  if (style.align) look.textAlign = style.align
+  if (style.wrap) look.whiteSpace = 'normal'
+  if (style.fill) {
+    look['--aw-cell-fill'] = style.fill
+    look['--aw-cell-ink'] = style.color ?? inkOn(style.fill)
+  } else if (style.color) {
+    look.color = style.color
+  }
+  return look
 }
 
 /** How many rows and columns the grid draws: what's used, and room to grow. */
@@ -148,9 +179,9 @@ export function patched(body: SheetBody, result: ChangeResult): SheetBody | null
     if (change.tab !== tab.name) continue
     const key = cellKey(change.row, change.column)
     const previous = cells.get(key)
-    // A cleared cell comes back with no input; one whose value alone changed keeps its own.
+    // A cleared cell comes back with no input (keeping any format or style); one whose value alone changed keeps its own.
     const input = change.input ?? ''
-    if (!input) {
+    if (!input && !change.format && !change.style) {
       cells.delete(key)
       continue
     }
@@ -161,7 +192,11 @@ export function patched(body: SheetBody, result: ChangeResult): SheetBody | null
       kind: change.kind,
       value: change.value,
       revision: previous && previous.input === input ? previous.revision : result.revision,
+      ...(change.format ? { format: change.format } : {}),
+      ...(change.style ? { style: change.style } : {}),
+      ...(change.display !== undefined ? { display: change.display } : {}),
     })
+    if (!input) continue
     rows = Math.max(rows, change.row)
     columns = Math.max(columns, change.column)
   }

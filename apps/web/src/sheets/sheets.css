@@ -155,6 +155,12 @@
   color: var(--content-fg-muted);
 }
 
+/* A fill a person chose, with text that reads on it; the selection still shows over it. */
+.aw-grid__cell.has-fill {
+  color: var(--aw-cell-ink);
+  background: var(--aw-cell-fill);
+}
+
 .aw-grid__cell.is-selected {
   background: var(--accent-soft);
 }
