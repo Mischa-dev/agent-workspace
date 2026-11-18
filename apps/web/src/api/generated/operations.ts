@@ -132,7 +132,7 @@ export type InitiativeField = { name: string; type: string; value: unknown }
 
 export type InitiativeMilestone = { archived: boolean; completed: number; id: string; name: string; scope: number; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null }
 
-export type InitiativeSpace = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null; version: number }
+export type InitiativeSpace = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null; version: number }
 
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
@@ -276,7 +276,7 @@ export type Snapshot = { completed: number; completedPoints?: number | null; onD
 
 export type SortWrite = { direction?: Direction; field: string }
 
-export type SpaceStatus = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+export type SpaceStatus = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
@@ -746,11 +746,11 @@ export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null
 
 export type ProjectStatusGetInput = { spaceId: string }
 
-export type ProjectStatusGetOutput = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+export type ProjectStatusGetOutput = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
 
 export type ProjectStatusSetInput = { expectedVersion?: number | null; health?: string | null; lead?: string | null; spaceId: string; targetDate?: string | null }
 
-export type ProjectStatusSetOutput = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+export type ProjectStatusSetOutput = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
 
 export type ProjectUpdateCreateInput = { channelId?: string | null; health: string; spaceId: string; text: string; title?: string | null }
 

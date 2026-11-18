@@ -191,7 +191,8 @@
       "task.criteria",
       "tech.task_keys",
       "workspace.my_work",
-      "workspace.initiatives"
+      "workspace.initiatives",
+      "workspace.project_updates"
     ],
     "sidebar": [],
     "home": ["tasks"],

@@ -397,6 +397,13 @@
       "default": true
     },
     {
+      "id": "workspace.project_updates",
+      "group": "workspace",
+      "label": "Project status and updates",
+      "description": "Each project's health, target date and lead, and its latest update, on its home, in My work and in initiatives.",
+      "default": true
+    },
+    {
       "id": "workspace.threads",
       "group": "workspace",
       "label": "Threads",

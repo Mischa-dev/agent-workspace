@@ -1587,8 +1587,19 @@ impl Operation for ProjectStatusGet {
     ) -> Result<super::project_status::SpaceStatus, OpError> {
         let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let reader = call.account_id();
+        let caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
-        Ok(super::project_status::status_of(tx, reader, space).await?)
+        let can_update = crate::access::check(
+            tx,
+            &caller,
+            crate::access::Need::permission(Perm::TasksEdit),
+            crate::access::Target::Space(space),
+        )
+        .await?
+        .is_ok();
+        let mut status = super::project_status::status_of(tx, reader, space).await?;
+        status.can_update = Some(can_update && caller.can_write);
+        Ok(status)
     }
 }
 

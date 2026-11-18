@@ -96,6 +96,10 @@ pub struct SpaceStatus {
     /// Pass it back as expectedVersion to project_status_set; 0 before
     /// anything was set.
     pub version: i64,
+    /// Whether you may post an update or change the status (said by
+    /// project_status_get).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_update: Option<bool>,
 }
 
 impl SpaceStatus {
@@ -108,6 +112,7 @@ impl SpaceStatus {
             lead: None,
             latest_update: None,
             version: 0,
+            can_update: None,
         }
     }
 }
@@ -201,6 +206,7 @@ pub async fn statuses_of(
                 }),
                 latest_update,
                 version: row.version,
+                can_update: None,
             },
         );
     }

@@ -161,3 +161,19 @@
   color: var(--content-fg-muted);
   font: var(--t-small);
 }
+
+/* T1.43: the latest update of each project the initiative spans. */
+.aw-initiative__updates {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-initiative__updates li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}

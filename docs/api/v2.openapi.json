@@ -2187,6 +2187,13 @@
       "InitiativeSpace": {
         "description": "A space's status.",
         "properties": {
+          "canUpdate": {
+            "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "health": {
             "description": "on_track, at_risk or off_track; none until someone sets it.",
             "type": [
@@ -4877,6 +4884,13 @@
       "SpaceStatus": {
         "description": "A space's status.",
         "properties": {
+          "canUpdate": {
+            "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "health": {
             "description": "on_track, at_risk or off_track; none until someone sets it.",
             "type": [
@@ -46306,6 +46320,13 @@
                         "value": {
                           "description": "A space's status.",
                           "properties": {
+                            "canUpdate": {
+                              "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
                             "health": {
                               "description": "on_track, at_risk or off_track; none until someone sets it.",
                               "type": [
@@ -46486,6 +46507,13 @@
                         "value": {
                           "description": "A space's status.",
                           "properties": {
+                            "canUpdate": {
+                              "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
                             "health": {
                               "description": "on_track, at_risk or off_track; none until someone sets it.",
                               "type": [
@@ -46751,6 +46779,13 @@
                         "value": {
                           "description": "A space's status.",
                           "properties": {
+                            "canUpdate": {
+                              "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
                             "health": {
                               "description": "on_track, at_risk or off_track; none until someone sets it.",
                               "type": [
@@ -46931,6 +46966,13 @@
                         "value": {
                           "description": "A space's status.",
                           "properties": {
+                            "canUpdate": {
+                              "description": "Whether you may post an update or change the status (said by\nproject_status_get).",
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
                             "health": {
                               "description": "on_track, at_risk or off_track; none until someone sets it.",
                               "type": [

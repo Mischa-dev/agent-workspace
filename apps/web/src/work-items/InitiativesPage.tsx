@@ -5,11 +5,13 @@ import { Link } from 'react-router-dom'
 import { opQuery, useOp } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import { projectAreaHref, projectLocationHref } from '../projects/locations'
+import { useHomeExperience } from '../experience/layout'
 import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, StatusChip, TextField, describeError, type ChipTone } from '../ui'
 import { formatDateLabel } from '../ui/dateModel'
 import { fieldText, initiativeProgress, share, timeline, type Initiative, type InitiativeMilestone } from './initiativeModel'
 import './initiatives.css'
+import { UpdateLine } from './UpdateLine'
 
 /** How a Health or Status value reads as a chip. */
 function toneOf(value: string): ChipTone {
@@ -82,6 +84,8 @@ export function InitiativesPage() {
 
 function InitiativeCard({ href, initiative }: { href: string | null; initiative: Initiative }) {
   const headingId = `initiative-${initiative.id}`
+  const showsUpdates = useHomeExperience().shows('workspace.project_updates')
+  const updates = showsUpdates ? initiative.spaces.filter((space) => space.latestUpdate) : []
   const progress = share(initiative)
   return (
     <li aria-labelledby={headingId} className={`aw-initiative${initiative.archived ? ' is-archived' : ''}`}>
@@ -116,6 +120,18 @@ function InitiativeCard({ href, initiative }: { href: string | null; initiative:
         <progress aria-label={`${initiative.title} progress`} className="aw-progress__bar" max={100} value={Math.round(progress * 100)} />
         <span className="aw-progress__text">{initiativeProgress(initiative)}</span>
       </span>
+      {updates.length ? (
+        <ul aria-label={`${initiative.title} project updates`} className="aw-initiative__updates">
+          {updates.map((space) =>
+            space.latestUpdate ? (
+              <li key={space.spaceId}>
+                <span className="aw-initiative__space">{space.spaceName}</span>
+                <UpdateLine spaceId={space.spaceId} update={space.latestUpdate} />
+              </li>
+            ) : null,
+          )}
+        </ul>
+      ) : null}
       {initiative.milestones.length === 0 ? (
         <p className="aw-initiative__empty">No milestones yet. Add one from a project’s milestones, under Edit.</p>
       ) : (

@@ -56,6 +56,7 @@ export const PART_IDS = [
   'home.capacity',
   'workspace.my_work',
   'workspace.initiatives',
+  'workspace.project_updates',
   'workspace.threads',
   'workspace.later',
   'workspace.inbox_triage',
