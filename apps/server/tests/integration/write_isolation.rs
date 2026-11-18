@@ -376,6 +376,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (tests/integration/a1_host_protocol.rs)",
     ),
     (
+        "POST /api/v1/host/windows",
+        "a host's own call with its own token, about the accounts it described; another \
+         host's account refs are refused (tests/integration/host_windows.rs)",
+    ),
+    (
         "POST /api/v1/host/agents/register",
         "a host's own call with its own token, proposing an agent for a workspace that \
          owns it or that its owner is in; any other is refused \

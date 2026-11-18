@@ -1010,6 +1010,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/windows",
+            Plumbing("a host reporting its own accounts' plan windows, with its own credential"),
+        ),
+        (
+            Post,
             "/api/v1/host/notices",
             Plumbing("a host's notice about its agents, with its own credential"),
         ),

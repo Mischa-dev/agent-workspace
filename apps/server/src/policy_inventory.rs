@@ -1307,6 +1307,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/heartbeat",
         HostCredential
     ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/windows", HostCredential),
     boundary_route!("hosts/routes", Post, "/api/v1/host/notices", HostCredential),
     boundary_route!(
         "hosts/routes",

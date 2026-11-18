@@ -129,6 +129,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                     actions: Vec::new(),
                 })
                 .collect(),
+            accounts: Vec::new(),
         }
     }
 

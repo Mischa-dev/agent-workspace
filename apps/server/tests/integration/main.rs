@@ -58,6 +58,7 @@ mod followed_threads;
 mod github_task_keys;
 mod harness_support;
 mod history_seam;
+mod host_windows;
 mod hosting_limits;
 mod journey;
 mod keywords;

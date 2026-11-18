@@ -36,6 +36,7 @@ pub mod ops;
 pub mod protocol;
 pub mod register;
 pub mod routes;
+pub mod windows;
 
 /// The protocol version this server speaks, and every one it still serves.
 pub const PROTOCOL: &str = "2026-11";
@@ -817,6 +818,14 @@ pub async fn unlink(
     .await?;
     crate::runs::ops::host_lost(transaction, host.id, None, "The host was unlinked").await?;
     crate::requests::cancel_raised_via_host(transaction, host.id).await?;
+    // The accounts it reported are hidden with it (their windows stay).
+    sqlx::query(
+        "UPDATE provider_accounts SET hidden_at = now(), updated_at = now() \
+         WHERE host_id = $1 AND hidden_at IS NULL",
+    )
+    .bind(host.id)
+    .execute(&mut **transaction)
+    .await?;
     view(transaction, caller, &host).await
 }
 

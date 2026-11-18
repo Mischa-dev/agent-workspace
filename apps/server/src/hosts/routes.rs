@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/hosts/enrol", post(enrol_route))
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
+        .route("/api/v1/host/windows", post(windows_route))
         .route("/api/v1/host/notices", post(notice_route))
         .route("/api/v1/host/agents/register", post(register_route))
         .route("/api/v1/host/commands", get(commands_route))
@@ -161,6 +162,16 @@ async fn heartbeat_route(
     Ok(Json(
         protocol::heartbeat(&state.pool, &host, request).await?,
     ))
+}
+
+/// A1.24: the plan windows of the accounts the host described.
+async fn windows_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<super::windows::WindowsReport>,
+) -> Result<Json<super::windows::WindowsStored>, HostError> {
+    let host = host_caller(&state, &headers).await?;
+    Ok(Json(super::windows::report(&state, &host, request).await?))
 }
 
 async fn notice_route(
