@@ -76,12 +76,12 @@ pub enum RuleTest {
     /// The `rank` largest values (or the top `rank` percent).
     Top {
         rank: u32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         percent: bool,
     },
     Bottom {
         rank: u32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         percent: bool,
     },
     AboveAverage {},
@@ -118,6 +118,13 @@ pub struct RuleStyle {
     pub fill: Option<String>,
 }
 
+impl RuleStyle {
+    /// Changes nothing (a colour scale's rule has no style of its own).
+    pub fn is_plain(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// One conditional format: the cells it covers, when it applies, and how
 /// they look then.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -127,7 +134,7 @@ pub struct ConditionalRule {
     pub range: String,
     #[serde(flatten)]
     pub test: RuleTest,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "RuleStyle::is_plain")]
     pub style: RuleStyle,
 }
 

@@ -10382,6 +10382,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -10456,6 +10459,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -10476,6 +10518,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -10550,6 +10595,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -10626,6 +10710,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -10711,6 +10798,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -10731,6 +10857,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -10816,6 +10945,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -36547,6 +36715,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -36704,6 +36875,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -36724,6 +36934,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -36881,6 +37094,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -36968,6 +37220,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -37042,6 +37297,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -37062,6 +37356,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -37136,6 +37433,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45160,6 +45496,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45244,6 +45583,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45264,6 +45642,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45348,6 +45729,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45460,6 +45880,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45583,6 +46006,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45603,6 +46065,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45726,6 +46191,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45802,6 +46306,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45872,6 +46379,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -45892,6 +46438,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -45962,6 +46511,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -46035,6 +46623,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -46109,6 +46700,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -46129,6 +46759,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -46203,6 +46836,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -46323,6 +46995,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -46446,6 +47121,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }
@@ -46466,6 +47180,9 @@
                         "outcome": {
                           "const": "ok"
                         },
+                        "paused": {
+                          "const": false
+                        },
                         "preview": {
                           "type": "boolean"
                         },
@@ -46589,6 +47306,45 @@
                         "outcome",
                         "message",
                         "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
                       ],
                       "type": "object"
                     }

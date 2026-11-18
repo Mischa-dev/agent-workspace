@@ -493,13 +493,14 @@ async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
         return;
     };
     let app = &setup.app;
+    let browser = &setup.browser;
     let work = create_project(&setup, "WORK", "Work").await;
     let new_page = |title: &'static str| {
         let work = work.clone();
         async move {
             let (status, page) = send(
                 app,
-                setup.browser.request(
+                browser.request(
                     "POST",
                     &format!("/api/v1/projects/{work}/pages"),
                     None,
@@ -516,7 +517,7 @@ async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
     let ask = |page: String| async move {
         let (status, asked) = send(
             app,
-            setup.browser.request(
+            browser.request(
                 "POST",
                 &format!("/api/v1/pages/{page}/comments"),
                 None,
@@ -531,7 +532,7 @@ async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
     let discussion = |page: String| async move {
         let (status, body) = send(
             app,
-            setup.browser.request(
+            browser.request(
                 "GET",
                 &format!("/api/v1/pages/{page}/discussion"),
                 None,

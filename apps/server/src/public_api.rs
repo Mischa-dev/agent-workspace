@@ -453,6 +453,55 @@ Operations that change things take a `clientRequestId` so a retry never applies 
 changes to a task take the `expectedVersion` you last read.";
 
 /// The OpenAPI 3.1 document for every operation.
+/// Drops what a schema says twice, to keep the document small: a schema's
+/// `title` (the operation's id or the component's name says it) and the
+/// unsigned integer formats the schema generator adds, which aren't
+/// OpenAPI's (`minimum: 0` already says it, and the type's own maximum
+/// adds nothing).
+fn slim(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get("title").is_some_and(Value::is_string) {
+                map.remove("title");
+            }
+            if map
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(|format| format.starts_with("uint"))
+            {
+                map.remove("format");
+                if map
+                    .get("maximum")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|maximum| {
+                        [
+                            u64::from(u8::MAX),
+                            u64::from(u16::MAX),
+                            u64::from(u32::MAX),
+                            u64::MAX,
+                        ]
+                        .contains(&maximum)
+                    })
+                {
+                    map.remove("maximum");
+                }
+            }
+            for (key, child) in map.iter_mut() {
+                // Property names are names, not keywords.
+                if key == "properties"
+                    && let Value::Object(properties) = child
+                {
+                    properties.values_mut().for_each(slim);
+                } else {
+                    slim(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(slim),
+        _ => {}
+    }
+}
+
 pub(crate) fn document() -> Value {
     let mut tools = mcp::tool_catalog();
     tools.sort_by(|left, right| left.name.cmp(&right.name));
@@ -525,7 +574,7 @@ pub(crate) fn document() -> Value {
         responses.insert(
             "200".to_owned(),
             json!({
-                "description": "The result. Its `outcome` says whether it worked.",
+                "description": "The result; see `outcome`.",
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
@@ -537,7 +586,7 @@ pub(crate) fn document() -> Value {
         refusals.insert(
             refused.clone(),
             json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
+                "description": "Refused; see `outcome`.",
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
@@ -577,6 +626,12 @@ pub(crate) fn document() -> Value {
                 }
             }),
         );
+    }
+    for path in paths.values_mut() {
+        slim(path);
+    }
+    for schema in components.values_mut() {
+        slim(schema);
     }
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({

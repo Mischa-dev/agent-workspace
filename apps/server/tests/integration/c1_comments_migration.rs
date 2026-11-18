@@ -17,7 +17,7 @@ use super::support::db::schema_pool;
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// The migration that moves the comments.
-const FIRST_NEW: i64 = 20261117210000;
+const FIRST_NEW: i64 = 20261117210100;
 
 fn id(n: u32) -> Uuid {
     Uuid::parse_str(&format!("00000000-0000-7000-8000-{n:012}")).expect("id")

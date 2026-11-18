@@ -2,7 +2,7 @@
 //! (C1.3), posted through the one send pipeline (`discussion::post`) and
 //! edited and removed through the message commands (`message_edits`). The
 //! task's timeline lists each one in the order it came (an entry a trigger
-//! on messages writes, migration `20261117210000_comments_are_conversations`).
+//! on messages writes, migration `20261117210100_comments_are_conversations`).
 //! A comment's id is its message's.
 //!
 //! Its author edits a comment; the author, or someone whose role moderates
