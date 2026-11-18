@@ -164,9 +164,14 @@ class FakeWorkspace:
     def __init__(self, waiting=()):
         self.calls = []
         self.waiting = list(waiting)
+        # Calls to fail before answering, by tool name: a network failure.
+        self.failing = {}
 
     def call_tool(self, name, arguments):
         self.calls.append((name, dict(arguments)))
+        if self.failing.get(name, 0) > 0:
+            self.failing[name] -= 1
+            raise ConnectionError("the server went away")
         if name == "inbox_list":
             return ok({"requests": self.waiting})
         if name == "reply_claim":
@@ -274,6 +279,17 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         # With nothing held, a send is an ordinary message.
         await self.adapter.send(CONVERSATION, "Daily summary")
         self.assertEqual(self.workspace.named("message_send")[0]["text"], "Daily summary")
+
+    async def test_an_answer_whose_send_fails_is_sent_again_unchanged(self):
+        await self.hear(reply_event("reply.requested", "r1", "e1"))
+        await self.adapter.send(CONVERSATION, "Two tasks are left.")
+        self.workspace.failing["reply_send"] = 1
+        await self.adapter.on_processing_complete(self.adapter.handled[0], Outcome.SUCCESS)
+
+        sends = self.workspace.named("reply_send")
+        self.assertEqual([(s["text"], s["final"]) for s in sends], [("Two tasks are left.", True)] * 2)
+        self.assertEqual(sends[0]["clientRequestId"], sends[1]["clientRequestId"])
+        self.assertEqual(self.workspace.named("reply_release"), [])
 
     async def test_a_turn_with_no_answer_or_an_error_gives_the_request_back(self):
         await self.hear(reply_event("reply.requested", "r1", "e1"))

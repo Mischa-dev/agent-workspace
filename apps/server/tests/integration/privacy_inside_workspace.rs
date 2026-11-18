@@ -3095,6 +3095,32 @@ async fn a_private_channels_memory_stays_with_its_members() {
     )
     .await;
     assert!(!status.is_success(), "{status} {read}");
+    // Nor its live document, its discussion or an export of it.
+    for path in ["document", "discussion", "export?format=markdown"] {
+        let (status, read) = send(
+            &world.app,
+            lena.request(
+                "GET",
+                &format!("/api/v1/pages/{page}/{path}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert!(!status.is_success(), "{path}: {status} {read}");
+        assert!(!read.to_string().contains(&word), "{path}: {read}");
+    }
+    let (status, read) = send(
+        &world.app,
+        owner.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/document"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {read}");
     // Nor any of its versions.
     let (status, read) = send(
         &world.app,

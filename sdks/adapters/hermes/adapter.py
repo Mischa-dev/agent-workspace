@@ -297,12 +297,14 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
                 return
             outcome_name = getattr(outcome, "value", str(outcome))
             if outcome_name == "success" and held.pending is not None:
-                await self._flush(held, final=True)
-                held.finished = True
+                if await self._flush_retrying(held, final=True):
+                    held.finished = True
+                else:
+                    await self._finish(held, release="The agent's answer couldn't be sent.")
             elif outcome_name == "success":
                 await self._finish(held, release="The agent finished without an answer.")
             else:
-                await self._flush(held, final=False)
+                await self._flush_retrying(held, final=False)
                 await self._finish(held, release="The agent hit an error and stopped.")
         self._forget(held)
 
@@ -318,22 +320,36 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
     # -- Helpers ----------------------------------------------------------
 
     async def _flush(self, held: Held, final: bool) -> None:
+        """Sends the buffered text. It stays buffered, with the same
+        clientRequestId, until the send succeeds, so a send that fails (or
+        whose answer is lost) can be made again without saying it twice."""
         if held.pending is None:
             return
-        text, client_id = held.pending, held.pending_id
-        held.pending = held.pending_id = None
         await asyncio.to_thread(
             self._call,
             "reply_send",
             {
                 "requestId": held.request_id,
                 "generation": held.generation,
-                "text": text,
+                "text": held.pending,
                 "final": final,
-                "clientRequestId": client_id,
+                "clientRequestId": held.pending_id,
             },
         )
+        held.pending = held.pending_id = None
         held.sent += 1
+
+    async def _flush_retrying(self, held: Held, final: bool, attempts: int = 3) -> bool:
+        """`_flush`, tried again a few times; whether the text went out."""
+        for attempt in range(attempts):
+            try:
+                await self._flush(held, final=final)
+                return True
+            except Exception as error:  # noqa: BLE001  (a network or server failure)
+                logger.warning("Agent Workspace: reply_send failed (try %d): %r", attempt + 1, error)
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        return False
 
     async def _finish(self, held: Held, release: str) -> None:
         held.finished = True

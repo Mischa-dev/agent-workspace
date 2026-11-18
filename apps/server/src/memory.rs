@@ -1489,12 +1489,24 @@ pub(crate) async fn free_page_title(
         .unwrap_or(base))
 }
 
-pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
-        .bind(page_id)
-        .fetch_optional(crate::db::scoped(pool))
-        .await?
-        .ok_or(AppError::NotFound("page"))
+/// The page's project, for a viewer who may see the page at all: a
+/// conversation's memory page is found only by those who can read the
+/// conversation. Every page route starts here, so its live document,
+/// discussion, versions and exports follow the same rule.
+pub(crate) async fn page_project(
+    pool: &PgPool,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT project_id FROM project_pages WHERE id = $1 \
+         AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))",
+    )
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .ok_or(AppError::NotFound("page"))
 }
 
 async fn get_page_http(
@@ -1502,7 +1514,7 @@ async fn get_page_http(
     principal: AuthenticatedActor,
     ApiPath(page_id): ApiPath<Uuid>,
 ) -> Result<Json<PageView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,
@@ -1527,7 +1539,7 @@ async fn update_page_http(
 ) -> Result<Json<PageView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     project_access(
         &mut *transaction,
@@ -1560,7 +1572,7 @@ async fn get_revision_http(
     principal: AuthenticatedActor,
     ApiPath((page_id, version)): ApiPath<(Uuid, i64)>,
 ) -> Result<Json<RevisionView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,

@@ -63,7 +63,7 @@ async fn page_access(
     page_id: Uuid,
     action: Action,
 ) -> Result<Uuid, AppError> {
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     memory::project_access(
         &state.pool,
         principal.actor_id,
@@ -131,7 +131,7 @@ async fn locked_for_comment(
     page_id: Uuid,
 ) -> Result<(memory::Writer, store::LockedPage), AppError> {
     let writer = memory::browser_writer(principal)?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     memory::project_access(
         &mut **transaction,
         writer.actor_id,
@@ -290,7 +290,7 @@ pub async fn decide_suggestion(
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let writer = memory::browser_writer(&principal)?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     // Anyone who may at least suggest here may withdraw their own;
     // accepting and rejecting need edit access to the page (K1.12).
     let caller = crate::access::Caller::person(writer.actor_id, writer.actor_kind);
