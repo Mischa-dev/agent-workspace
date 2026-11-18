@@ -19,6 +19,7 @@
 
 pub mod http;
 pub mod image;
+pub mod link;
 pub mod links;
 pub mod migrate;
 pub mod object;

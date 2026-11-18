@@ -231,7 +231,7 @@ async fn create_connection(
     let setup_app = request.setup_app.clone();
     if setup_app
         .as_deref()
-        .is_some_and(|app| !crate::agent_setup_links::APPS.contains(&app))
+        .is_some_and(|app| crate::agent_plugin::recipe(app).is_none())
     {
         return Err(AppError::Validation("app"));
     }
@@ -907,7 +907,7 @@ async fn mutate_connection(
     remove: bool,
     setup_app: Option<&str>,
 ) -> Result<ConnectionMutationResponse, AppError> {
-    if setup_app.is_some_and(|app| !crate::agent_setup_links::APPS.contains(&app)) {
+    if setup_app.is_some_and(|app| crate::agent_plugin::recipe(app).is_none()) {
         return Err(AppError::Validation("app"));
     }
     if expected_version < 1 {

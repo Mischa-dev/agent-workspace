@@ -328,13 +328,16 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
     )
     .await;
     assert_eq!(rule["outcome"], "ok", "{rule}");
+    // A person's webhook: a connection with an address (A2.6).
     let hook = call(
-        "webhook_write",
+        "connection_create",
         json!({
-            "operation": "create",
             "name": "Records",
-            "url": format!("{origin}/hook"),
-            "eventTypes": ["record.created", "record.updated"],
+            "webhookUrl": format!("{origin}/hook"),
+            "reachesAll": false,
+            "subscriptions": [{"kinds": ["record.created", "record.updated"],
+                               "echoes": true, "minReason": "visible"}],
+            "clientRequestId": "awd110-hook",
         }),
     )
     .await;
@@ -375,14 +378,15 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
         "{fired:?}"
     );
 
-    // The webhook heard both collections, once each, and the change.
+    // The webhook heard both collections, once each, and the change, by id
+    // and field name only.
     let bodies = received.lock().expect("receiver lock").clone();
     let mut seen = bodies
         .iter()
         .map(|body| {
             (
                 body["type"].as_str().unwrap_or_default().to_owned(),
-                body["data"]["record"]["title"]
+                body["data"]["thing"]["id"]
                     .as_str()
                     .unwrap_or_default()
                     .to_owned(),
@@ -390,32 +394,29 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
         })
         .collect::<Vec<_>>();
     seen.sort();
-    assert_eq!(
-        seen,
-        vec![
-            ("record.created".to_owned(), "Dark mode".to_owned()),
-            ("record.created".to_owned(), "Not a request".to_owned()),
-            ("record.updated".to_owned(), "Dark mode".to_owned()),
-        ],
-        "{bodies:#?}"
-    );
+    let dark_mode = record["id"].as_str().expect("record id").to_owned();
+    let not_a_request = elsewhere["value"]["records"][0]["id"]
+        .as_str()
+        .expect("record id")
+        .to_owned();
+    let mut expected = vec![
+        ("record.created".to_owned(), dark_mode.clone()),
+        ("record.created".to_owned(), not_a_request),
+        ("record.updated".to_owned(), dark_mode),
+    ];
+    expected.sort();
+    assert_eq!(seen, expected, "{bodies:#?}");
     let update = bodies
         .iter()
         .find(|body| body["type"] == "record.updated")
         .expect("update");
-    assert_eq!(
-        update["data"]["record"]["fields"]["Notes"], "please, soon",
-        "{update}"
-    );
-    assert_eq!(
-        update["data"]["record"]["changedFields"],
-        json!(["Notes"]),
-        "{update}"
-    );
-    assert_eq!(
-        update["data"]["record"]["collection"]["id"],
-        requests.as_str()
-    );
+    assert_eq!(update["data"]["changes"], json!(["Notes"]), "{update}");
+    assert_eq!(update["data"]["collectionId"], requests.as_str());
+    for body in &bodies {
+        let text = body.to_string();
+        assert!(!text.contains("please"), "{text}");
+        assert!(!text.contains("Dark mode"), "{text}");
+    }
 
     // A firing queued before its collection is archived does nothing after.
     let late = call(

@@ -436,16 +436,6 @@ const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
          -- visibility: the space only, to refuse a write; the handler checks access\n \
          WHERE id = $1",
     ),
-    (
-        "/api/v1/webhooks/{",
-        "SELECT COALESCE(webhook.project_id, ( \
-             SELECT space.id FROM projects space \
-             WHERE space.organization_id = webhook.organization_id \
-             ORDER BY space.created_at LIMIT 1)) \
-         FROM webhook_subscriptions webhook \
-         -- visibility: the space only, to refuse a write; the handler checks access\n \
-         WHERE webhook.id = $1",
-    ),
 ];
 
 /// The space of a conversation (channel, thread), message, scheduled

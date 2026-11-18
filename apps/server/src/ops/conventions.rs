@@ -61,12 +61,23 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            // Something already sent goes out again, unchanged (a webhook delivery).
+            "redeliver",
+            // A harmless signed ping, to check an address answers.
+            "test",
             "press",
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
             // A secret is replaced; the old one keeps working for a while.
             "rotate",
+            // An account stops acting and hearing until resumed (A2.10).
+            "pause",
+            "resume",
+            // An account joins a workspace (A2.18).
+            "add",
+            // A host's published action runs (A2.19).
+            "run",
         ],
     ),
     (

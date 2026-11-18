@@ -46,7 +46,7 @@ export type ColumnWrite = { field: string; hidden?: boolean; width?: number | nu
 
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
 
-export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
@@ -68,7 +68,7 @@ export type DateBucket = "day" | "week" | "month"
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
-export type DeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
+export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
 
 export type Direction = "asc" | "desc"
 
@@ -96,7 +96,9 @@ export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; show
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
 
-export type HookView = { createdAt: string; id: string; lastDeliveryAt?: string | null; name: string; recent: DeliveryView[]; spaceId: string; url: string }
+export type HookDeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
+
+export type HookView = { createdAt: string; id: string; lastDeliveryAt?: string | null; name: string; recent: HookDeliveryView[]; spaceId: string; url: string }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -119,6 +121,10 @@ export type InstallView = { id: string; installedAt: string; name: string; objec
 export type InstalledObject = { action: string; id: string; key: string; kind: string }
 
 export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
+export type JoinableAccount = { accountId: string; displayName: string; handle: string; handleTaken: boolean; kind: string }
+
+export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
@@ -143,6 +149,8 @@ export type NavEntry = { icon?: string | null; label: string; target: unknown }
 export type NavView = { icon?: string | null; id: string; label: string; target: unknown }
 
 export type NewSpace = { key: string; name: string }
+
+export type Offer = { hostId: string; hostName: string; offer: Record<string, unknown> }
 
 export type Operation = { arrowheads?: string | null; axis?: string | null; backgroundColor?: string | null; dataBase64?: string | null; direction?: string | null; dx?: number | null; dy?: number | null; edge?: string | null; fileId?: string | null; fillStyle?: string | null; fontSize?: number | null; frameId?: string | null; from?: string | null; gap?: number | null; height?: number | null; id?: string | null; ids?: string[] | null; link?: string | null; locked?: boolean | null; mimeType?: string | null; name?: string | null; op: string; opacity?: number | null; points?: number[][] | null; position?: string | null; roughness?: number | null; rounded?: boolean | null; strokeColor?: string | null; strokeStyle?: string | null; strokeWidth?: number | null; text?: string | null; textAlign?: string | null; to?: string | null; type?: string | null; width?: number | null; x?: number | null; y?: number | null }
 
@@ -175,6 +183,8 @@ export type PullRequest = { baseRef: string; checksState: string; draft: boolean
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
+
+export type RecipeView = { id: string; title: string }
 
 export type RemoveParts = "archive" | "keep"
 
@@ -240,9 +250,25 @@ export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName
 
 export type WorkspaceStoreView = { bucket: string; endpoint: string; pathStyle: boolean; prefix: string; region: string; storeId: string; verifiedAt: string }
 
+export type AccountJoinableListInput = Record<string, never>
+
+export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
+
+export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
+
+export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
+
 export type ActivityListInput = { before?: number | null; limit?: number | null; thing: string }
 
 export type ActivityListOutput = { entries: ActivityEntry[]; kind: string }
+
+export type AgentActionGetInput = { commandId: string }
+
+export type AgentActionGetOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+
+export type AgentActionRunInput = { account?: string | null; actionId: string; host?: string | null; input?: Record<string, unknown> | null }
+
+export type AgentActionRunOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
 
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
@@ -251,6 +277,30 @@ export type AgentCreateOutput = { accountId: string; connectionId: string; crede
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentOfferListInput = Record<string, never>
+
+export type AgentOfferListOutput = { offers: Offer[] }
+
+export type AgentOfferStartInput = { host: string; offerId: string }
+
+export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+
+export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentRecipeListInput = Record<string, never>
+
+export type AgentRecipeListOutput = { recipes: RecipeView[] }
+
+export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
+
+export type AgentRegisterDecideOutput = { accountId?: string | null; proposalId: string; status: string }
+
+export type AgentResumeInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
 export type AgentTemplateListInput = { spaceId?: string | null }
 
@@ -284,17 +334,29 @@ export type ConnectionCreateInput = { account?: string | null; name?: string | n
 
 export type ConnectionCreateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConnectionDeliveryListInput = { before?: number | null; connectionId: string; limit?: number | null }
+
+export type ConnectionDeliveryListOutput = { deliveries: DeliveryView[]; nextBefore?: number | null }
+
 export type ConnectionListInput = { account?: string | null }
 
 export type ConnectionListOutput = { connections: ConnectionView[] }
 
+export type ConnectionRedeliverInput = { connectionId: string; eventPosition: number }
+
+export type ConnectionRedeliverOutput = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
+
 export type ConnectionRemoveInput = { connectionId: string }
 
-export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type ConnectionSecretRotateInput = { connectionId: string }
 
 export type ConnectionSecretRotateOutput = { connection: ConnectionView; webhookSecret?: string | null }
+
+export type ConnectionTestInput = { connectionId: string }
+
+export type ConnectionTestOutput = { queued: boolean }
 
 export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: number | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -356,6 +418,10 @@ export type EventListInput = { connectionId?: string | null; cursor?: string | n
 
 export type EventListOutput = { connectionId: string; events: Array<Record<string, unknown>>; hasMore: boolean; nextCursor: string }
 
+export type FileLinkGetInput = { fileId: string }
+
+export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
 export type FileUploadFinishInput = { uploadId: string }
 
 export type FileUploadFinishOutput = { commentId?: string | null; contentType: string; createdAt: string; height?: number | null; id: string; name: string; size: number; uploadedBy: string; width?: number | null }
@@ -391,6 +457,10 @@ export type HostAgentUnbindOutput = { actions: unknown[]; agents: HostAgentView[
 export type HostEnrolmentCreateInput = { label?: string | null; owner: HostOwnerChoice }
 
 export type HostEnrolmentCreateOutput = { code: string; enrolmentId: string; expiresAt: string; owner: OwnerView }
+
+export type HostLinkInput = { accountId?: string | null; cardUrl: string; owner: HostOwnerChoice; token?: string | null }
+
+export type HostLinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
 export type HostListInput = { mineOnly?: boolean }
 
@@ -745,9 +815,19 @@ export type WorkspaceUsageGetInput = Record<string, never>
 export type WorkspaceUsageGetOutput = { meters: MeterUsage[]; planId: string; planName: string; status: string }
 
 export type Operations = {
+  account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
+  agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
+  agent_action_run: { input: AgentActionRunInput; output: AgentActionRunOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
+  agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
+  agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
+  agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
+  agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   button_get: { input: ButtonGetInput; output: ButtonGetOutput }
@@ -756,9 +836,12 @@ export type Operations = {
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
+  connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }
+  connection_redeliver: { input: ConnectionRedeliverInput; output: ConnectionRedeliverOutput }
   connection_remove: { input: ConnectionRemoveInput; output: ConnectionRemoveOutput }
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
+  connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
@@ -774,6 +857,7 @@ export type Operations = {
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
+  file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
   file_upload_finish: { input: FileUploadFinishInput; output: FileUploadFinishOutput }
   file_upload_start: { input: FileUploadStartInput; output: FileUploadStartOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
@@ -783,6 +867,7 @@ export type Operations = {
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
+  host_link: { input: HostLinkInput; output: HostLinkOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   incoming_hook_create: { input: IncomingHookCreateInput; output: IncomingHookCreateOutput }

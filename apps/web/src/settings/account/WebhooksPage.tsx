@@ -1,21 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 
 import { describeError, toastError } from '../../app/mutations'
-import {
-  automationKeys,
-  createWebhook,
-  deleteWebhook,
-  listDeliveries,
-  listWebhooks,
-  redeliver,
-  rotateWebhookSecret,
-  testWebhook,
-  updateWebhook,
-  type Webhook,
-  type WebhookDelivery,
-  type WebhookList,
-} from '../../automations/api'
+import { useWorkspaceId } from '../../app/workspace'
+import { opQuery, useOp } from '../../api/ops'
+import type { ConnectionView, DeliveryView, Entry } from '../../api/generated/operations'
+import { useProjects } from '../../projects/hooks'
 import {
   Banner,
   Button,
@@ -44,73 +34,78 @@ import {
 import '../../automations/automations.css'
 import { OneTimeValue } from '../OneTimeValue'
 
-const STATE: Record<Webhook['state'], { label: string; tone: ChipTone }> = {
-  active: { label: 'On', tone: 'success' },
-  paused: { label: 'Paused', tone: 'muted' },
-  disabled: { label: 'Turned off', tone: 'danger' },
-}
-
-const DELIVERY: Record<WebhookDelivery['state'], { label: string; tone: ChipTone }> = {
+const DELIVERY: Record<string, { label: string; tone: ChipTone }> = {
   pending: { label: 'Sending', tone: 'muted' },
   delivered: { label: 'Delivered', tone: 'success' },
   failed: { label: 'Failed', tone: 'danger' },
   skipped: { label: 'Skipped', tone: 'muted' },
 }
 
-/** Account › Webhooks: signed POSTs to your own services when tasks, runs, pull requests or messages change. */
-export default function WebhooksPage() {
-  const queryClient = useQueryClient()
-  const list = useQuery({
-    queryKey: automationKeys.webhooks,
-    queryFn: listWebhooks,
-  })
-  const [secret, setSecret] = useState<{ name: string; value: string } | null>(null)
-  const [editing, setEditing] = useState<Webhook | 'new' | null>(null)
-  const [deleting, setDeleting] = useState<Webhook | null>(null)
-  const [replacing, setReplacing] = useState<Webhook | null>(null)
-  const [log, setLog] = useState<Webhook | null>(null)
-  const refresh = () => queryClient.invalidateQueries({ queryKey: automationKeys.webhooks })
+const SIGNING =
+  'Each delivery is a POST of JSON carrying event ids, never content: fetch what changed with your own access. ' +
+  'It is signed the Standard Webhooks way: check the webhook-signature header, an HMAC-SHA256 of ' +
+  '"webhook-id.webhook-timestamp.body" keyed with the base64-decoded part of your signing secret after whsec_, and refuse old timestamps. ' +
+  'A delivery sent again keeps its webhook-id, so the receiver can tell.'
 
-  const toggle = useMutation({
-    mutationFn: (webhook: Webhook) =>
-      updateWebhook(webhook, {
-        state: webhook.state === 'active' ? 'paused' : 'active',
-      }),
-    onSuccess: (webhook): void => {
-      showToast({
-        title: webhook.state === 'active' ? `${webhook.name} is on` : `${webhook.name} paused`,
-        onUndo: () => toggle.mutate(webhook),
-      })
-    },
-    onError: (error) => toastError('The webhook didn’t change', error),
-    onSettled: refresh,
+/** A webhook of yours is a connection with an address: the events it hears are its subscription. */
+function isWebhook(connection: ConnectionView) {
+  return Boolean(connection.webhookUrl)
+}
+
+function kindsOf(connection: ConnectionView) {
+  return [...new Set(connection.subscriptions.flatMap((subscription) => subscription.kinds))]
+}
+
+function spaceOf(connection: ConnectionView) {
+  return connection.subscriptions[0]?.spaceIds?.[0] ?? ''
+}
+
+/** Account › Webhooks: signed POSTs to your own services when things you can see change. */
+export default function WebhooksPage() {
+  const workspaceId = useWorkspaceId() ?? undefined
+  const list = useQuery(opQuery('connection_list', {}, { workspaceId }))
+  const kinds = useQuery({ ...opQuery('event_kind_list', {}, { workspaceId }), staleTime: 5 * 60_000 })
+  const projects = useProjects()
+  const [secret, setSecret] = useState<{ name: string; value: string } | null>(null)
+  const [editing, setEditing] = useState<ConnectionView | 'new' | null>(null)
+  const [deleting, setDeleting] = useState<ConnectionView | null>(null)
+  const [replacing, setReplacing] = useState<ConnectionView | null>(null)
+  const [log, setLog] = useState<ConnectionView | null>(null)
+  const invalidates = ['connection_list' as const]
+
+  const turnOn = useOp('connection_update', {
+    workspaceId,
+    invalidates,
+    onSuccess: ({ connection }) => showToast({ title: `${connection.name} is on` }),
   })
-  const rotate = useMutation({
-    mutationFn: (webhook: Webhook) => rotateWebhookSecret(webhook.id),
-    onSuccess: (result) => {
+  const rotate = useOp('connection_secret_rotate', {
+    workspaceId,
+    invalidates,
+    onSuccess: ({ connection, webhookSecret }) => {
       setReplacing(null)
-      setSecret({ name: result.webhook.name, value: result.secret })
+      if (webhookSecret) setSecret({ name: connection.name, value: webhookSecret })
     },
-    onSettled: refresh,
   })
-  const ping = useMutation({
-    mutationFn: (webhook: Webhook) => testWebhook(webhook.id),
+  const ping = useOp('connection_test', {
+    workspaceId,
+    invalidates,
     onSuccess: () =>
       showToast({
         tone: 'success',
         title: 'Test sent',
-        description: 'Open its deliveries to see how it went.',
+        description: 'How it went shows on the webhook in a moment.',
       }),
-    onError: (error) => toastError('The test wasn’t sent', error),
   })
-  const remove = useMutation({
-    mutationFn: (webhook: Webhook) => deleteWebhook(webhook.id),
-    onSuccess: (_, webhook) => {
+  const remove = useOp('connection_remove', {
+    workspaceId,
+    invalidates,
+    onSuccess: (connection) => {
       setDeleting(null)
-      showToast({ title: `${webhook.name} deleted` })
+      showToast({ title: `${connection.name} deleted` })
     },
-    onSettled: refresh,
   })
+  const webhooks = list.data?.connections.filter(isWebhook) ?? []
+  const projectName = (id: string) => projects.data?.projects.find((project) => project.id === id)?.name ?? 'One project'
 
   return (
     <>
@@ -125,7 +120,7 @@ export default function WebhooksPage() {
         icon="send"
         title="Webhooks"
       >
-        Send events to your own services as signed JSON. A webhook hears only what you can see, and turns itself off if you lose access.
+        Send events to your own services as signed JSON. A webhook hears only what you can see, and stops hearing what you lose access to.
       </PageHeader>
       {secret && (
         <OneTimeValue onDone={() => setSecret(null)} title={`Signing secret for ${secret.name}`} value={secret.value}>
@@ -139,77 +134,91 @@ export default function WebhooksPage() {
       ) : (
         <>
           <Section id="webhooks-heading" title="Your webhooks">
-            {list.data.webhooks.length ? (
+            {webhooks.length ? (
               <RowList label="Webhooks">
-                {list.data.webhooks.map((webhook) => (
-                  <Row
-                    actions={
-                      <>
-                        <Button onClick={() => setLog(webhook)} size="sm" variant="ghost">
-                          Deliveries
-                        </Button>
-                        <Menu
-                          items={[
-                            {
-                              label: 'Edit',
-                              icon: 'pencil',
-                              onSelect: () => setEditing(webhook),
-                            },
-                            {
-                              label: 'Send a test',
-                              icon: 'send',
-                              disabled: webhook.state !== 'active',
-                              onSelect: () => ping.mutate(webhook),
-                            },
-                            {
-                              label: webhook.state === 'active' ? 'Pause' : 'Turn on',
-                              icon: webhook.state === 'active' ? 'stop' : 'play',
-                              onSelect: () => toggle.mutate(webhook),
-                            },
-                            {
-                              label: 'Replace the secret',
-                              icon: 'key',
-                              onSelect: () => setReplacing(webhook),
-                            },
-                            { separator: true },
-                            {
-                              label: 'Delete',
-                              icon: 'trash',
-                              danger: true,
-                              onSelect: () => setDeleting(webhook),
-                            },
-                          ]}
-                          label={`${webhook.name} actions`}
-                          trigger={<IconButton icon="more" label={`${webhook.name} actions`} size="sm" />}
-                        />
-                      </>
-                    }
-                    className={webhook.state === 'active' ? undefined : 'is-disabled'}
-                    key={webhook.id}
-                    leading={
-                      <span className="aw-row__tile">
-                        <Icon name="send" size={16} />
-                      </span>
-                    }
-                    meta={
-                      <span className="aw-row__metaline aw-wrap">
-                        <code className="aw-inline-code">{webhook.url}</code>
-                        <span>{webhook.projectName ?? 'Every project you can see'}</span>
-                        <span>{webhook.eventTypes.join(', ')}</span>
-                        <span title={webhook.lastDeliveryAt ? formatFullDate(webhook.lastDeliveryAt) : undefined}>
-                          {webhook.lastDeliveryAt ? `Last sent ${formatRelative(webhook.lastDeliveryAt)}` : 'Nothing sent yet'}
+                {webhooks.map((webhook) => {
+                  const on = webhook.state === 'active'
+                  const space = spaceOf(webhook)
+                  return (
+                    <Row
+                      actions={
+                        <>
+                          <Button onClick={() => setLog(webhook)} size="sm" variant="ghost">
+                            Deliveries
+                          </Button>
+                          <Menu
+                            items={[
+                              { label: 'Edit', icon: 'pencil', onSelect: () => setEditing(webhook) },
+                              {
+                                label: 'Send a test',
+                                icon: 'send',
+                                onSelect: () =>
+                                  ping.mutate(
+                                    { connectionId: webhook.id },
+                                    { onError: (error) => toastError('The test wasn’t sent', error) },
+                                  ),
+                              },
+                              ...(on
+                                ? []
+                                : [
+                                    {
+                                      label: 'Turn back on',
+                                      icon: 'play' as const,
+                                      onSelect: () =>
+                                        turnOn.mutate(
+                                          {
+                                            connectionId: webhook.id,
+                                            webhookUrl: webhook.webhookUrl,
+                                            expectedVersion: webhook.version,
+                                          },
+                                          { onError: (error) => toastError('The webhook didn’t turn on', error) },
+                                        ),
+                                    },
+                                  ]),
+                              { label: 'Replace the secret', icon: 'key', onSelect: () => setReplacing(webhook) },
+                              { separator: true },
+                              { label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(webhook) },
+                            ]}
+                            label={`${webhook.name} actions`}
+                            trigger={<IconButton icon="more" label={`${webhook.name} actions`} size="sm" />}
+                          />
+                        </>
+                      }
+                      className={on ? undefined : 'is-disabled'}
+                      key={webhook.id}
+                      leading={
+                        <span className="aw-row__tile">
+                          <Icon name="send" size={16} />
                         </span>
-                        {webhook.disabledReason && <span>{webhook.disabledReason}</span>}
-                      </span>
-                    }
-                    title={
-                      <span className="aw-row__titleline">
-                        {webhook.name}
-                        <StatusChip tone={STATE[webhook.state].tone}>{STATE[webhook.state].label}</StatusChip>
-                      </span>
-                    }
-                  />
-                ))}
+                      }
+                      meta={
+                        <span className="aw-row__metaline aw-wrap">
+                          <code className="aw-inline-code">{webhook.webhookUrl}</code>
+                          <span>{space ? projectName(space) : 'Everything you can see here'}</span>
+                          <span>{kindsOf(webhook).join(', ') || 'Every event'}</span>
+                          <span title={webhook.lastDeliveredAt ? formatFullDate(webhook.lastDeliveredAt) : undefined}>
+                            {webhook.lastDeliveredAt ? `Last sent ${formatRelative(webhook.lastDeliveredAt)}` : 'Nothing sent yet'}
+                          </span>
+                          {webhook.lastTest && (
+                            <span title={formatFullDate(webhook.lastTest.at)}>
+                              {webhook.lastTest.ok
+                                ? `Test answered ${webhook.lastTest.status ?? 'OK'}`
+                                : `Test failed${webhook.lastTest.status ? ` (HTTP ${webhook.lastTest.status})` : ''}${webhook.lastTest.error ? `: ${webhook.lastTest.error}` : ''}`}
+                            </span>
+                          )}
+                          {webhook.madeThroughApp && <span>Set up by an app</span>}
+                          {webhook.disabledReason && <span>{webhook.disabledReason}</span>}
+                        </span>
+                      }
+                      title={
+                        <span className="aw-row__titleline">
+                          {webhook.name}
+                          <StatusChip tone={on ? 'success' : 'danger'}>{on ? 'On' : 'Stopped'}</StatusChip>
+                        </span>
+                      }
+                    />
+                  )
+                })}
               </RowList>
             ) : (
               <EmptyState
@@ -226,23 +235,26 @@ export default function WebhooksPage() {
             )}
           </Section>
           <Section id="webhook-signing-heading" title="Checking a delivery">
-            <p className="aw-quiet">{list.data.signing}</p>
+            <p className="aw-quiet">{SIGNING}</p>
           </Section>
         </>
       )}
-      {editing && list.data && (
+      {editing && (
         <WebhookDialog
-          list={list.data}
+          kinds={(kinds.data?.events ?? []).filter((entry) => !entry.addressed)}
           onClose={() => setEditing(null)}
           onSaved={(result) => {
             setEditing(null)
             if (result.secret) setSecret({ name: result.name, value: result.secret })
-            void refresh()
           }}
+          projects={(projects.data?.projects ?? []).filter(
+            (project) => !project.archivedAt && project.organizationId === workspaceId && project.kind !== 'workspace',
+          )}
           webhook={editing === 'new' ? null : editing}
+          workspaceId={workspaceId}
         />
       )}
-      {log && <DeliveriesDialog onClose={() => setLog(null)} webhook={log} />}
+      {log && <DeliveriesDialog onClose={() => setLog(null)} webhook={log} workspaceId={workspaceId} />}
       <ConfirmDialog
         busy={remove.isPending}
         confirmLabel="Delete webhook"
@@ -251,7 +263,7 @@ export default function WebhooksPage() {
           setDeleting(null)
           remove.reset()
         }}
-        onConfirm={() => deleting && remove.mutate(deleting)}
+        onConfirm={() => deleting && remove.mutate({ connectionId: deleting.id })}
         open={deleting !== null}
         title={`Delete ${deleting?.name ?? 'this webhook'}?`}
       >
@@ -265,7 +277,7 @@ export default function WebhooksPage() {
           setReplacing(null)
           rotate.reset()
         }}
-        onConfirm={() => replacing && rotate.mutate(replacing)}
+        onConfirm={() => replacing && rotate.mutate({ connectionId: replacing.id })}
         open={replacing !== null}
         title={`Replace the secret for ${replacing?.name ?? 'this webhook'}?`}
       >
@@ -276,59 +288,87 @@ export default function WebhooksPage() {
 }
 
 function WebhookDialog({
-  list,
+  kinds,
   onClose,
   onSaved,
+  projects,
   webhook,
+  workspaceId,
 }: {
-  list: WebhookList
+  kinds: Entry[]
   onClose: () => void
   onSaved: (result: { name: string; secret: string | null }) => void
-  webhook: Webhook | null
+  projects: { id: string; name: string }[]
+  webhook: ConnectionView | null
+  workspaceId?: string
 }) {
+  const initialEvents = webhook ? kindsOf(webhook) : ['run.finished']
+  const initialSpace = webhook ? spaceOf(webhook) : ''
   const [name, setName] = useState(webhook?.name ?? '')
-  const [url, setUrl] = useState(webhook?.url ?? 'https://')
-  const [projectId, setProjectId] = useState(webhook?.projectId ?? '')
-  const [events, setEvents] = useState<string[]>(webhook?.eventTypes ?? ['run.finished'])
+  const [url, setUrl] = useState(webhook?.webhookUrl ?? 'https://')
+  const [spaceId, setSpaceId] = useState(initialSpace)
+  const [events, setEvents] = useState<string[]>(initialEvents)
   const [error, setError] = useState<string | null>(null)
-  const save = useMutation({
-    mutationFn: async () => {
-      if (webhook) {
-        const saved = await updateWebhook(webhook, {
-          name: name.trim(),
-          url: url.trim(),
-          eventTypes: events,
-        })
-        return { name: saved.name, secret: null }
-      }
-      const created = await createWebhook({
-        name: name.trim(),
-        url: url.trim(),
-        eventTypes: events,
-        projectId: projectId || null,
-      })
-      return { name: created.webhook.name, secret: created.secret }
+  const onError = (reason: unknown) => setError(`The webhook wasn’t saved. ${describeError(reason).message}`)
+  const done = ({ connection, webhookSecret }: { connection: ConnectionView; webhookSecret?: string | null }) =>
+    onSaved({ name: connection.name, secret: webhookSecret ?? null })
+  const create = useOp('connection_create', { workspaceId, invalidates: ['connection_list'], onSuccess: done })
+  const update = useOp('connection_update', { workspaceId, invalidates: ['connection_list'], onSuccess: done })
+  const subscriptions = () => [
+    {
+      kinds: events,
+      workspaceIds: workspaceId ? [workspaceId] : null,
+      spaceIds: spaceId ? [spaceId] : null,
+      includesDms: true,
+      echoes: true,
+      minReason: 'visible',
     },
-    onSuccess: onSaved,
-    onError: (reason) => setError(`The webhook wasn’t saved. ${describeError(reason).message}`),
-  })
+  ]
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim() || !url.trim() || !events.length) return
-    save.mutate()
+    setError(null)
+    if (webhook) {
+      update.mutate(
+        {
+          connectionId: webhook.id,
+          name: name.trim(),
+          webhookUrl: url.trim(),
+          subscriptions: subscriptions(),
+          expectedVersion: webhook.version,
+        },
+        { onError },
+      )
+    } else {
+      create.mutate(
+        {
+          name: name.trim(),
+          webhookUrl: url.trim(),
+          webhookFormat: 'standard',
+          reachesAll: false,
+          subscriptions: subscriptions(),
+        },
+        { onError },
+      )
+    }
   }
   const dirty =
     name !== (webhook?.name ?? '') ||
-    url !== (webhook?.url ?? 'https://') ||
-    projectId !== (webhook?.projectId ?? '') ||
-    events.join() !== (webhook?.eventTypes ?? ['run.finished']).join()
+    url !== (webhook?.webhookUrl ?? 'https://') ||
+    spaceId !== initialSpace ||
+    events.join() !== initialEvents.join()
 
   return (
     <Dialog
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button busy={save.isPending} disabled={!name.trim() || !events.length} type="submit" variant="primary">
+          <Button
+            busy={create.isPending || update.isPending}
+            disabled={!name.trim() || !events.length}
+            type="submit"
+            variant="primary"
+          >
             {webhook ? 'Save changes' : 'Create webhook'}
           </Button>
         </>
@@ -351,26 +391,24 @@ function WebhookDialog({
           type="url"
           value={url}
         />
-        {!webhook && (
-          <SelectField id="webhook-project" label="Hear from" onChange={(event) => setProjectId(event.target.value)} value={projectId}>
-            <option value="">Every project you can see</option>
-            {list.projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </SelectField>
-        )}
+        <SelectField id="webhook-project" label="Hear from" onChange={(event) => setSpaceId(event.target.value)} value={spaceId}>
+          <option value="">Everything you can see in this workspace</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </SelectField>
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">Events</legend>
-          {list.eventTypes.map((type) => (
+          {kinds.map((kind) => (
             <Checkbox
-              checked={events.includes(type.name)}
-              description={type.description}
-              key={type.name}
-              label={<code className="aw-inline-code">{type.name}</code>}
+              checked={events.includes(kind.kind)}
+              description={kind.summary}
+              key={kind.kind}
+              label={<code className="aw-inline-code">{kind.kind}</code>}
               onChange={(checked) =>
-                setEvents((current) => (checked ? [...current, type.name] : current.filter((name) => name !== type.name)))
+                setEvents((current) => (checked ? [...current, kind.kind] : current.filter((name) => name !== kind.kind)))
               }
             />
           ))}
@@ -381,23 +419,23 @@ function WebhookDialog({
   )
 }
 
-function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: Webhook }) {
-  const queryClient = useQueryClient()
-  const deliveries = useQuery({
-    queryKey: automationKeys.deliveries(webhook.id),
-    queryFn: () => listDeliveries(webhook.id),
-  })
-  const again = useMutation({
-    mutationFn: (delivery: WebhookDelivery) => redeliver(webhook.id, delivery.id),
+function DeliveriesDialog({
+  onClose,
+  webhook,
+  workspaceId,
+}: {
+  onClose: () => void
+  webhook: ConnectionView
+  workspaceId?: string
+}) {
+  const deliveries = useQuery(opQuery('connection_delivery_list', { connectionId: webhook.id }, { workspaceId }))
+  const again = useOp('connection_redeliver', {
+    workspaceId,
+    invalidates: ['connection_delivery_list'],
     onSuccess: () =>
       showToast({
         title: 'Sending it again',
         description: 'It keeps its delivery id, so the receiver can tell.',
-      }),
-    onError: (error) => toastError('It wasn’t sent again', error),
-    onSettled: () =>
-      queryClient.invalidateQueries({
-        queryKey: automationKeys.deliveries(webhook.id),
       }),
   })
   return (
@@ -408,35 +446,48 @@ function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: 
         <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} title="Deliveries didn’t load" />
       ) : deliveries.data.deliveries.length ? (
         <RowList label="Deliveries">
-          {deliveries.data.deliveries.map((delivery) => (
-            <Row
-              actions={
-                delivery.state === 'pending' ? null : (
-                  <Button disabled={again.isPending} onClick={() => again.mutate(delivery)} size="sm" variant="ghost">
-                    Send again
-                  </Button>
-                )
-              }
-              key={delivery.id}
-              meta={
-                <span className="aw-row__metaline aw-wrap">
-                  <span>
-                    Delivery <code className="aw-inline-code">{delivery.id}</code>
+          {deliveries.data.deliveries.map((delivery: DeliveryView) => {
+            const shown = DELIVERY[delivery.state] ?? { label: delivery.state, tone: 'muted' as const }
+            return (
+              <Row
+                actions={
+                  delivery.state === 'pending' ? null : (
+                    <Button
+                      disabled={again.isPending}
+                      onClick={() =>
+                        again.mutate(
+                          { connectionId: webhook.id, eventPosition: delivery.eventPosition },
+                          { onError: (error) => toastError('It wasn’t sent again', error) },
+                        )
+                      }
+                      size="sm"
+                      variant="ghost"
+                    >
+                      Send again
+                    </Button>
+                  )
+                }
+                key={delivery.eventId}
+                meta={
+                  <span className="aw-row__metaline aw-wrap">
+                    <span>
+                      Delivery <code className="aw-inline-code">{delivery.eventId}</code>
+                    </span>
+                    <span title={formatFullDate(delivery.createdAt)}>{formatRelative(delivery.createdAt)}</span>
+                    <span>{countLabel(delivery.attempts, 'attempt')}</span>
+                    {delivery.lastStatus != null && <span>HTTP {delivery.lastStatus}</span>}
+                    {delivery.lastError && <span>{delivery.lastError}</span>}
                   </span>
-                  <span title={formatFullDate(delivery.createdAt)}>{formatRelative(delivery.createdAt)}</span>
-                  <span>{countLabel(delivery.attempts, 'attempt')}</span>
-                  {delivery.lastStatusCode !== null && <span>HTTP {delivery.lastStatusCode}</span>}
-                  {delivery.lastError && <span>{delivery.lastError}</span>}
-                </span>
-              }
-              title={
-                <span className="aw-row__titleline">
-                  <code className="aw-inline-code">{delivery.eventType}</code>
-                  <StatusChip tone={DELIVERY[delivery.state].tone}>{DELIVERY[delivery.state].label}</StatusChip>
-                </span>
-              }
-            />
-          ))}
+                }
+                title={
+                  <span className="aw-row__titleline">
+                    <code className="aw-inline-code">{delivery.eventType}</code>
+                    <StatusChip tone={shown.tone}>{shown.label}</StatusChip>
+                  </span>
+                }
+              />
+            )
+          })}
         </RowList>
       ) : (
         <p className="aw-quiet">Nothing sent yet. Send a test to try it.</p>

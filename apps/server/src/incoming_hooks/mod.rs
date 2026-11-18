@@ -75,13 +75,13 @@ pub struct HookView {
     pub created_at: DateTime<Utc>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     /// The latest deliveries, accepted or refused, newest first.
-    pub recent: Vec<DeliveryView>,
+    pub recent: Vec<HookDeliveryView>,
 }
 
 /// One delivery: when, its id, and whether it was taken. Never its body.
 #[derive(Clone, Debug, Serialize, JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub struct DeliveryView {
+pub struct HookDeliveryView {
     #[serde(skip)]
     #[schemars(skip)]
     pub hook_id: Uuid,
@@ -216,7 +216,7 @@ pub(crate) async fn list(
     .fetch_all(&mut *connection)
     .await?;
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
-    let deliveries = sqlx::query_as::<_, DeliveryView>(
+    let deliveries = sqlx::query_as::<_, HookDeliveryView>(
         r#"
         SELECT recent.hook_id, recent.delivery_key, recent.outcome, recent.reason,
                recent.received_at
@@ -320,36 +320,6 @@ pub(crate) async fn delivery_for_rule(
             .chars()
             .take(TEXT_CHARACTERS)
             .collect(),
-    }))
-}
-
-/// What an outgoing webhook says about a delivery: the hook and the
-/// delivery's ids and time, never its body.
-pub(crate) async fn webhook_data(
-    pool: &PgPool,
-    space: Uuid,
-    hook: Uuid,
-    delivery: Uuid,
-) -> Result<Option<Value>, AppError> {
-    let row = sqlx::query_as::<_, (String, String, DateTime<Utc>)>(
-        r#"
-        SELECT hook.name, delivery.delivery_key, delivery.received_at
-        FROM incoming_hook_deliveries delivery
-        JOIN incoming_hooks hook ON hook.id = delivery.hook_id
-        WHERE delivery.id = $3 AND delivery.hook_id = $2 AND delivery.space_id = $1
-          AND hook.space_id = $1 AND delivery.outcome = 'accepted'
-        "#,
-    )
-    .bind(space)
-    .bind(hook)
-    .bind(delivery)
-    .fetch_optional(crate::db::scoped(pool))
-    .await?;
-    Ok(row.map(|(name, key, received_at)| {
-        json!({
-            "hook": { "id": hook, "name": name },
-            "delivery": { "id": delivery, "deliveryId": key, "receivedAt": received_at },
-        })
     }))
 }
 

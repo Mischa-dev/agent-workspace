@@ -589,6 +589,7 @@ async fn register_personal_execution_profile(
                 r#"
                 SELECT id FROM provider_accounts
                 WHERE organization_id = $1 AND owner_actor_id = $2 AND adapter_kind = $3
+                  AND home_path IS NOT NULL
                   AND status <> 'disabled'
                 ORDER BY (account_state = 'authenticated') DESC, created_at, id
                 LIMIT 1
@@ -856,7 +857,7 @@ pub(crate) async fn refresh_in(
         LEFT JOIN execution_profiles profile
           ON profile.provider_account_id = account.id AND profile.project_id = $4
         WHERE account.organization_id = $1 AND account.owner_actor_id = $2
-          AND account.adapter_kind = $3
+          AND account.adapter_kind = $3 AND account.home_path IS NOT NULL
           AND account.status = 'available' AND account.account_state = 'authenticated'
         ORDER BY profile.preferred DESC NULLS LAST, account.created_at, account.id
         LIMIT 1

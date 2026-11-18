@@ -93,7 +93,11 @@ pub(crate) struct UsageAccount {
     pub(crate) owner_actor_id: Uuid,
     pub(crate) adapter_kind: String,
     pub(crate) name: String,
-    home_path: String,
+    /// The built-in host's own accounts only; one another host reports
+    /// (A1.24) has none, and its windows come from the host.
+    home_path: Option<String>,
+    /// The host that reports this account's windows, for one it reports.
+    host_id: Option<Uuid>,
     max_concurrent_runs: i16,
     status: String,
     account_state: String,
@@ -103,21 +107,24 @@ impl UsageAccount {
     fn handle(&self) -> AccountHandle {
         AccountHandle {
             id: self.id,
-            home: PathBuf::from(&self.home_path),
+            home: PathBuf::from(self.home_path.as_deref().unwrap_or_default()),
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
         }
     }
 
-    /// Signed in and not switched off: its harness can be asked.
+    /// Signed in and not switched off: its harness can be asked. An
+    /// account another host reports is never read from here.
     fn readable(&self) -> bool {
-        self.account_state == "authenticated" && self.status != "disabled"
+        self.home_path.is_some()
+            && self.account_state == "authenticated"
+            && self.status != "disabled"
     }
 }
 
 const ACCOUNT_COLUMNS: &str = r#"
     account.id, account.organization_id, account.owner_actor_id, account.adapter_kind,
-    account.name, account.home_path, account.max_concurrent_runs, account.status,
-    account.account_state
+    account.name, account.home_path, account.host_id, account.max_concurrent_runs,
+    account.status, account.account_state
 "#;
 
 pub(crate) async fn load_account<'e, E: PgExecutor<'e>>(
@@ -215,7 +222,7 @@ fn failure_category(error: &HarnessError) -> &'static str {
     }
 }
 
-fn valid_window_key(key: &str) -> bool {
+pub(crate) fn valid_window_key(key: &str) -> bool {
     (1..=64).contains(&key.len())
         && key
             .chars()
@@ -358,15 +365,7 @@ pub async fn record_run_report(state: &AppState, account_id: Uuid, report: Usage
         };
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         store_report(&mut transaction, &account, &report, false).await?;
-        jobs::enqueue(
-            &mut *transaction,
-            NewJob::new(EVALUATE_KIND)
-                .workspace(account.organization_id)
-                .payload(AccountJob { account_id })
-                .unique(format!("{EVALUATE_KIND}:{account_id}"))
-                .delay(StdDuration::from_secs(30)),
-        )
-        .await?;
+        evaluate_soon(&mut transaction, &account).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(())
     }
@@ -374,6 +373,26 @@ pub async fn record_run_report(state: &AppState, account_id: Uuid, report: Usage
     if let Err(error) = result {
         tracing::warn!(%account_id, category = error.log_category(), "run usage not recorded");
     }
+}
+
+/// Run the account's alert rules shortly (one evaluation per account at a
+/// time, however many reports arrive).
+pub(crate) async fn evaluate_soon(
+    transaction: &mut Transaction<'_, Postgres>,
+    account: &UsageAccount,
+) -> Result<(), AppError> {
+    jobs::enqueue(
+        &mut **transaction,
+        NewJob::new(EVALUATE_KIND)
+            .workspace(account.organization_id)
+            .payload(AccountJob {
+                account_id: account.id,
+            })
+            .unique(format!("{EVALUATE_KIND}:{}", account.id))
+            .delay(StdDuration::from_secs(30)),
+    )
+    .await?;
+    Ok(())
 }
 
 /// One account's background read, then its alert rules.
@@ -396,11 +415,12 @@ pub async fn enqueue_due(pool: &PgPool) -> Result<usize, AppError> {
         r#"
         SELECT account.id, account.organization_id,
                account.account_state = 'authenticated' AND account.status <> 'disabled'
-                   AS readable
+                   AND account.home_path IS NOT NULL AS readable
         FROM provider_accounts account
         LEFT JOIN usage_accounts usage ON usage.account_id = account.id
         WHERE (
             account.account_state = 'authenticated' AND account.status <> 'disabled'
+            AND account.home_path IS NOT NULL
             AND (usage.polled_at IS NULL OR usage.polled_at < now() - CASE
                 WHEN EXISTS (
                     SELECT 1 FROM usage_windows window_row
@@ -722,13 +742,33 @@ async fn account_view(
     })
     .collect();
     let rules = alerts::rules(&state.pool, account.id).await?;
-    let harness_name = state
-        .supervisors
-        .manifest(&account.adapter_kind)
-        .map_or_else(
-            || account.adapter_kind.clone(),
-            |manifest| manifest.display_name.clone(),
-        );
+    // An account another host reports is named by that host, and is
+    // connected while the host is.
+    let reporting_host = match account.host_id {
+        Some(host_id) => {
+            sqlx::query_as::<_, (String, bool)>(
+                "SELECT name, status = 'active' FROM hosts WHERE id = $1",
+            )
+            .bind(host_id)
+            .fetch_optional(crate::db::scoped(&state.pool))
+            .await?
+        }
+        None => None,
+    };
+    let harness_name = match &reporting_host {
+        Some((name, _)) => name.clone(),
+        None => state
+            .supervisors
+            .manifest(&account.adapter_kind)
+            .map_or_else(
+                || account.adapter_kind.clone(),
+                |manifest| manifest.display_name.clone(),
+            ),
+    };
+    let connected = match &reporting_host {
+        Some((_, active)) => *active,
+        None => account.readable(),
+    };
     let reset_credits = usage.as_ref().and_then(|usage| {
         usage
             .reset_credits_available
@@ -743,7 +783,7 @@ async fn account_view(
         name: account.name.clone(),
         harness: account.adapter_kind.clone(),
         harness_name,
-        connected: account.readable(),
+        connected,
         plan: usage.as_ref().and_then(|usage| usage.plan.clone()),
         polled_at: usage.as_ref().and_then(|usage| usage.polled_at),
         poll_failed_at: usage.as_ref().and_then(|usage| usage.poll_failed_at),

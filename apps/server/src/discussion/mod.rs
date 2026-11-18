@@ -212,8 +212,8 @@ pub(crate) async fn post(
         attachments,
         None,
         AppendExtras {
-            forwarded_message_id: None,
             reply_to_message_id,
+            ..AppendExtras::default()
         },
     )
     .await?;

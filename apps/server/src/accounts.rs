@@ -12,6 +12,7 @@
 
 mod agents;
 pub mod claims;
+pub mod join;
 pub mod ops;
 mod people;
 

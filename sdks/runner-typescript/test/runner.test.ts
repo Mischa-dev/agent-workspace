@@ -1,47 +1,83 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 import {
-  DeliveryDeduper,
+  Deduper,
   McpClient,
+  PushError,
   Runner,
   ToolError,
-  WakeupError,
+  WorkspaceChannel,
   parseSettings,
-  signWakeup,
+  signStandard,
   stripLeadingMentions,
-  verifyWakeup,
+  verifyPush,
   type RequestContext,
+  type WorkspaceEvent,
 } from '../src/index.ts'
 
-const secret = 'test-webhook-secret'
+const secret = `whsec_${Buffer.from('test-webhook-secret').toString('base64')}`
 
-function signed(body: object, timestamp = Math.floor(Date.now() / 1000)) {
-  const text = JSON.stringify(body)
+function fixture(name: string) {
+  return readFileSync(new URL(`../../fixtures/delivery/${name}`, import.meta.url), 'utf8')
+}
+
+let sequence = 0
+
+/** A `reply.*` event, as the server sends it. */
+function replyEvent(type: string, requestId: string, data: Record<string, unknown> = {}): WorkspaceEvent {
+  sequence++
   return {
-    body: text,
+    type,
+    timestamp: new Date().toISOString(),
+    id: `evt_${type}_${requestId}_${sequence}`,
+    cursor: `c${sequence}`,
+    reason: 'reply_required',
+    data: { thing: { kind: 'reply_request', id: requestId }, conversationId: 'c', generation: 3, ...data },
+  }
+}
+
+/** Signed the Standard Webhooks way, as a push to a `standard` connection. */
+function signed(event: object, timestamp = Math.floor(Date.now() / 1000)) {
+  const body = JSON.stringify(event)
+  const id = (event as { id: string }).id
+  return {
+    body,
     headers: {
-      'x-workspace-timestamp': String(timestamp),
-      'x-workspace-signature': signWakeup(secret, String(timestamp), text),
-      'x-workspace-delivery': (body as { deliveryId: string }).deliveryId,
+      'webhook-id': id,
+      'webhook-timestamp': String(timestamp),
+      'webhook-signature': signStandard(secret, id, String(timestamp), body),
     },
   }
 }
 
-test('a genuine wakeup verifies; a tampered, stale or unsigned one does not', () => {
-  const wakeup = { event: 'reply.requested', deliveryId: 'd1', agentId: 'a', replyRequestId: 'r1' }
-  const { body, headers } = signed(wakeup)
-  assert.equal(verifyWakeup({ secret, headers, body }).replyRequestId, 'r1')
-  assert.throws(() => verifyWakeup({ secret, headers, body: body.replace('r1', 'r2') }), WakeupError)
-  assert.throws(() => verifyWakeup({ secret: 'other', headers, body }), WakeupError)
-  const old = signed(wakeup, Math.floor(Date.now() / 1000) - 301)
-  assert.throws(() => verifyWakeup({ secret, ...old }), /stale/)
-  assert.throws(() => verifyWakeup({ secret, headers: {}, body }), /missing/)
+test('a genuine push verifies; a tampered, stale, unsigned or wrongly keyed one does not', () => {
+  const event = replyEvent('reply.requested', 'r1')
+  const { body, headers } = signed(event)
+  assert.equal(verifyPush({ secret, headers, body }).id, event.id)
+  assert.throws(() => verifyPush({ secret, headers, body: body.replace('r1', 'r2') }), PushError)
+  assert.throws(() => verifyPush({ secret: `whsec_${Buffer.from('other').toString('base64')}`, headers, body }), PushError)
+  assert.equal(verifyPush({ secret: ['whsec_b2xk', secret], headers, body }).id, event.id, 'an old and a new secret during a rotation')
+  const old = signed(event, Math.floor(Date.now() / 1000) - 301)
+  assert.throws(() => verifyPush({ secret, ...old }), /stale/)
+  assert.throws(() => verifyPush({ secret, headers: {}, body }), /missing/)
   // The Fetch API's Headers work too.
-  assert.equal(verifyWakeup({ secret, headers: new Headers(headers), body }).event, 'reply.requested')
+  assert.equal(verifyPush({ secret, headers: new Headers(headers), body }).type, 'reply.requested')
 })
 
-test('a test wakeup is answered and claims nothing', () => {
+test('the published fixtures verify: a standard push and an older typed one', () => {
+  const standard = JSON.parse(fixture('webhook-standard.json')) as { secret: string; headers: Record<string, string>; body: string }
+  const now = Number(standard.headers['webhook-timestamp'])
+  const event = verifyPush({ secret: standard.secret, headers: standard.headers, body: standard.body, now })
+  assert.equal(event.type, 'message.mentioned')
+  const typed = JSON.parse(fixture('webhook-typed_v1.json')) as typeof standard
+  const legacy = verifyPush({ secret: typed.secret, headers: typed.headers, body: typed.body, now })
+  assert.equal(legacy.type, 'reply.requested')
+  assert.deepEqual(legacy.data.thing, { kind: 'reply_request', id: '01a2b3c4-0000-7000-8000-0000000000f1' })
+})
+
+test('a test push is answered and claims nothing', () => {
   const runner = new Runner({
     mcpUrl: 'https://example.test/mcp',
     token: 'test-token',
@@ -50,12 +86,12 @@ test('a test wakeup is answered and claims nothing', () => {
     onRequest: () => assert.fail('a ping is not a request'),
     fetch: () => assert.fail('a ping makes no MCP call'),
   })
-  const ping = signed({ event: 'ping', deliveryId: 'd1', agentId: 'a', projectId: 'p' })
+  const ping = signed({ type: 'ping', id: 'evt_ping', timestamp: 'now', cursor: null, data: {} })
   assert.equal(runner.receive(ping.headers, ping.body).status, 204)
 })
 
-test('deliveries are handled once', () => {
-  const deduper = new DeliveryDeduper(2)
+test('events are handled once', () => {
+  const deduper = new Deduper(2)
   assert.equal(deduper.first('a'), true)
   assert.equal(deduper.first('a'), false)
   deduper.first('b')
@@ -142,7 +178,7 @@ function claimFor(requestId: string, text: string, followsRequestId: string | nu
   }
 }
 
-test('a wakeup is claimed, worked and answered; Stop aborts it; follow-ups join it', async () => {
+test('a pushed request is claimed, worked and answered; Stop aborts it; follow-ups join it', async () => {
   const { fetchImpl, calls } = fakeMcp({
     reply_claim: (args) =>
       args.requestId === 'r1' ? claimFor('r1', '@bot fix it\nSettings: model=m1') : claimFor(String(args.requestId), 'also this', 'r1'),
@@ -170,18 +206,18 @@ test('a wakeup is claimed, worked and answered; Stop aborts it; follow-ups join 
       release()
     },
   })
-  const first = signed({ event: 'reply.requested', deliveryId: 'd1', agentId: 'a', replyRequestId: 'r1' })
+  const first = signed(replyEvent('reply.requested', 'r1'))
   assert.equal(runner.receive(first.headers, first.body).status, 204)
   assert.equal(runner.receive(first.headers, first.body).status, 204, 'a retry is accepted and ignored')
   assert.equal(runner.receive({}, first.body).status, 401)
   while (!seen) await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(seen.prompt, 'fix it')
   assert.deepEqual(seen.settings, { model: 'm1' })
-  const more = signed({ event: 'reply.followup', deliveryId: 'd2', agentId: 'a', replyRequestId: 'r2', followsRequestId: 'r1' })
+  const more = signed(replyEvent('reply.followup', 'r2', { followsRequestId: 'r1' }))
   runner.receive(more.headers, more.body)
   while (!followup) await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(followup.prompt, 'also this')
-  const stop = signed({ event: 'reply.cancelled', deliveryId: 'd3', agentId: 'a', replyRequestId: 'r1' })
+  const stop = signed(replyEvent('reply.cancelled', 'r1'))
   runner.receive(stop.headers, stop.body)
   await finished
   assert.equal(followup.signal.aborted, true, 'Stop reaches the follow-ups too')
@@ -217,8 +253,8 @@ test('a launched request reports steps and results on its run; one without a run
       await context.reply('done')
     },
   })
-  await runner.dispatch({ event: 'reply.requested', deliveryId: 'd1', agentId: 'a', replyRequestId: 'r1' })
-  await runner.dispatch({ event: 'reply.requested', deliveryId: 'd2', agentId: 'a', replyRequestId: 'r2' })
+  await runner.dispatch({ requestId: 'r1' })
+  await runner.dispatch({ requestId: 'r2' })
   assert.deepEqual(seen, { r1: 'run-1', r2: null })
   const runCalls = calls.filter((call) => call.name.startsWith('run_'))
   assert.deepEqual(
@@ -228,4 +264,107 @@ test('a launched request reports steps and results on its run; one without a run
   const [activity] = (runCalls[0].arguments as { activities: { kind: string; summary: string }[] }).activities
   assert.deepEqual([activity.kind, activity.summary], ['step_started', 'Reading the code'])
   assert.deepEqual(runCalls[1].arguments, { runId: 'run-1', results: [{ kind: 'pull_request', url: 'https://aw.example/pr/1', title: 'Fix it' }] })
+})
+
+/** A fake server: the events address (stream or page) and the agent tools. */
+function fakeServer(options: { stream?: boolean; tools?: Record<string, (args: Record<string, unknown>) => unknown> }) {
+  const mcp = fakeMcp(options.tools ?? {})
+  const reads: { accept: string; lastEventId: string | null; cursor: string | null }[] = []
+  const fetchImpl = (async (input: string, init: RequestInit = {}) => {
+    const url = new URL(input)
+    if (url.pathname === '/api/v1/mcp') return mcp.fetchImpl(input, init)
+    if (url.pathname === '/files/f1') return new Response('hello', { headers: { 'content-type': 'text/plain' } })
+    const headers = init.headers as Record<string, string>
+    assert.equal(headers.authorization, 'Bearer token-1')
+    reads.push({ accept: headers.accept, lastEventId: headers['last-event-id'] ?? null, cursor: url.searchParams.get('cursor') })
+    if (reads.length > 1) {
+      // Nothing more: answer an empty page (or end the stream) after the first read.
+      return headers.accept === 'text/event-stream' && options.stream
+        ? new Response(': stream open\n\n', { headers: { 'content-type': 'text/event-stream' } })
+        : Response.json({ events: [], nextCursor: url.searchParams.get('cursor') ?? 'c-none', hasMore: false })
+    }
+    if (headers.accept === 'text/event-stream' && options.stream) {
+      return new Response(fixture('stream.txt'), { headers: { 'content-type': 'text/event-stream' } })
+    }
+    return new Response(fixture('poll-page.json'), { headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  return { fetchImpl, reads, calls: mcp.calls }
+}
+
+for (const stream of [true, false]) {
+  test(`the channel reads events from ${stream ? 'a stream' : 'long-polls where nothing streams'}, once each, and keeps its place`, async () => {
+    const server = fakeServer({ stream })
+    let saved: string | null = null
+    const heard: WorkspaceEvent[] = []
+    const states: string[] = []
+    const controller = new AbortController()
+    const channel = new WorkspaceChannel({
+      origin: 'https://aw.example',
+      token: 'token-1',
+      tools: new McpClient({ url: 'https://aw.example/api/v1/mcp', token: 'token-1', fetch: server.fetchImpl }),
+      cursor: { load: () => null, save: (cursor) => (saved = cursor) },
+      fetch: server.fetchImpl,
+      onState: (state) => states.push(state),
+    })
+    channel.on('message.*', (event) => {
+      heard.push(event)
+    })
+    const done = channel.connect({ signal: controller.signal })
+    while (server.reads.length < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+    controller.abort()
+    await done
+    assert.deepEqual(
+      heard.map((event) => event.type),
+      ['message.mentioned'],
+    )
+    const cursor = 'c1.AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAq.example'
+    assert.equal(saved, cursor)
+    assert.equal(stream ? server.reads[1].lastEventId : server.reads[1].cursor, cursor, 'the next read starts after it')
+    assert.ok(states.includes(stream ? 'streaming' : 'polling'), states.join())
+    assert.equal(states.at(-1), 'closed')
+  })
+}
+
+test('the channel replies through reply_send, posts through message_send, and fetches files by link', async () => {
+  const server = fakeServer({
+    tools: {
+      reply_send: () => ({ outcome: 'ok', value: { requestId: 'r1', status: 'answered', messageId: 'm1' } }),
+      message_send: () => ({ outcome: 'ok', value: { messageId: 'm2' } }),
+      message_edit: () => ({ outcome: 'ok', value: {} }),
+      message_react: () => ({ outcome: 'ok', value: {} }),
+      reply_progress: () => ({ outcome: 'ok', value: {} }),
+      file_link_get: () => ({
+        outcome: 'ok',
+        value: { url: 'https://aw.example/files/f1', name: 'note.txt', contentType: 'text/plain', size: 5, expiresAt: 'soon' },
+      }),
+    },
+  })
+  const channel = new WorkspaceChannel({
+    origin: 'https://aw.example',
+    token: 'token-1',
+    tools: new McpClient({ url: 'https://aw.example/api/v1/mcp', token: 'token-1', fetch: server.fetchImpl }),
+    fetch: server.fetchImpl,
+  })
+  assert.equal(
+    await channel.send('c', 'done', { reply: { requestId: 'r1', generation: 2 }, clientMessageId: 'mine-1', attachmentIds: ['f9'] }),
+    'm1',
+  )
+  assert.equal(await channel.send('c', 'hello', { clientMessageId: 'mine-2' }), 'm2')
+  await channel.edit('m2', 'hello again')
+  await channel.react('m2', '👀')
+  await channel.typing('r1', 2, 'Reading')
+  const file = await channel.download('f1')
+  assert.equal(new TextDecoder().decode(file.bytes), 'hello')
+  assert.deepEqual(
+    server.calls.map((call) => [call.name, call.arguments]),
+    [
+      ['reply_send', { requestId: 'r1', generation: 2, text: 'done', clientRequestId: 'mine-1', attachmentIds: ['f9'] }],
+      ['message_send', { conversationId: 'c', text: 'hello', clientRequestId: 'mine-2' }],
+      ['message_edit', { messageId: 'm2', text: 'hello again' }],
+      ['message_react', { messageId: 'm2', emoji: '👀', reacted: true }],
+      ['reply_progress', { requestId: 'r1', generation: 2, status: 'Reading' }],
+      ['file_link_get', { fileId: 'f1' }],
+    ],
+  )
+  await assert.rejects(channel.delete('m2'), (error: unknown) => error instanceof ToolError && error.outcome === 'not_found')
 })
