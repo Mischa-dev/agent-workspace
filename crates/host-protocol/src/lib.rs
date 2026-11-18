@@ -458,6 +458,7 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
 mod client;
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,
+    TransportFuture,
 };
 
 #[cfg(test)]

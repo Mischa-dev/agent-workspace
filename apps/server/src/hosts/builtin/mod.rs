@@ -16,8 +16,10 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
+pub mod driver;
 pub mod http;
 pub mod requests;
+pub mod transport;
 
 use crate::{
     AppState,

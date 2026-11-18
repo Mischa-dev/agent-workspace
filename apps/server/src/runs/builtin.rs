@@ -64,12 +64,14 @@ pub async fn open(
         INSERT INTO runs (
             id, workspace_id, space_id, account_id, title, cause_kind, conversation_id,
             requested_by_account_id, sponsored_by_account_id, predecessor_run_id, state,
-            settings, last_report_at
+            settings, last_report_at, host_id
         )
         SELECT $1, project.organization_id, project.id, worker.actor_id, $4, $5, $6,
-               $7, $8, $9, 'queued', $10, now()
+               $7, $8, $9, 'queued', $10, now(), host.id
           FROM projects project
           JOIN execution_workers worker ON worker.id = $3
+          -- A1.16: the workspace's built-in host runs it, as a host does.
+          JOIN hosts host ON host.owner_workspace_id = project.organization_id AND host.builtin
          WHERE project.id = $2
         "#,
     )
