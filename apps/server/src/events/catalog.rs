@@ -214,6 +214,24 @@ pub static NOTIFICATION_KEYWORDS_CHANGED: EventType = signal(
     None,
     "Someone's keyword alerts changed",
 );
+pub static SIDEBAR_CHANGED: EventType = signal(
+    "sidebar.changed",
+    "messages",
+    None,
+    "Someone's sidebar sections changed",
+);
+pub static SAVED_SEARCHES_CHANGED: EventType = signal(
+    "saved_searches.changed",
+    "workspace",
+    None,
+    "Someone's saved searches changed",
+);
+pub static DM_RULES_CHANGED: EventType = signal(
+    "dm_rules.changed",
+    "messages",
+    None,
+    "Who may message someone changed for them",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -571,6 +589,12 @@ pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
     "Someone's status changed",
 )
 .legacy(&["account.status.changed"]);
+pub static ACCOUNT_PROFILE_CHANGED: EventType = signal(
+    "account.profile_changed",
+    "workspace",
+    None,
+    "Someone's profile or avatar changed",
+);
 pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     "custom_emoji.changed",
     "workspace",
@@ -651,6 +675,9 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_PINS_CHANGED,
         &MESSAGE_DRAFT_CHANGED,
         &NOTIFICATION_KEYWORDS_CHANGED,
+        &SIDEBAR_CHANGED,
+        &SAVED_SEARCHES_CHANGED,
+        &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
@@ -704,6 +731,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &ACCOUNT_STATUS_CHANGED,
+        &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,

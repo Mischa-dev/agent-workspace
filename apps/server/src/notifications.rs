@@ -103,6 +103,55 @@ pub mod kind {
     pub const THING_UPDATE: &str = "thing_update";
     /// T1.29: a public form you made reached its daily limit and paused.
     pub const FORM_PAUSED: &str = "form_paused";
+
+    /// Kinds that ask something of you (C2.4): someone mentioned or
+    /// messaged you, gave you a task or a review, a request or a waiting run
+    /// is yours to answer, or something of yours failed. Everything else is
+    /// for your information.
+    pub const NEEDS_YOU: &[&str] = &[
+        MENTION,
+        COMMENT_MENTION,
+        CONVERSATION_MESSAGE,
+        DIRECT_MESSAGE,
+        ASSIGNED,
+        REQUEST_RAISED,
+        REVIEW_REQUESTED,
+        RUN_WAITING,
+        RUN_FAILED,
+        CHECKS_FAILED,
+        SCHEDULED_SEND_FAILED,
+        REMINDER,
+        CONNECTION_PROBLEM,
+        BUDGET_WARNING,
+    ];
+}
+
+/// Whether a notification needs you or is for your information (C2.4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Attention {
+    NeedsYou,
+    Fyi,
+}
+
+impl Attention {
+    /// A request someone already answered no longer needs you.
+    pub fn of(kind: &str, request_status: Option<&str>) -> Self {
+        if kind::NEEDS_YOU.contains(&kind) && request_status.is_none_or(|status| status == "open") {
+            Self::NeedsYou
+        } else {
+            Self::Fyi
+        }
+    }
+}
+
+/// The same rule in SQL, over `n` with the kinds bound at `$needs`.
+fn needs_you_sql(needs: &str) -> String {
+    format!(
+        "(n.kind = ANY({needs}::text[]) AND NOT (n.subject_kind = 'request' AND EXISTS (\
+            SELECT 1 FROM requests answered \
+            WHERE answered.id = n.subject_id AND answered.status <> 'open')))"
+    )
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -180,6 +229,9 @@ pub enum UpdateAction {
     Restore,
     /// Out of the inbox until `snoozeUntil`, then back unread.
     Snooze,
+    /// Out of the inbox until something new happens on it (C2.10), then
+    /// back unread; a year at most.
+    SnoozeUntilActivity,
     Unsnooze,
 }
 
@@ -267,6 +319,13 @@ pub async fn deliver(
     if notification.actor_id == Some(notification.recipient_actor_id) {
         return Ok(false);
     }
+    // C2.39: nothing from someone the recipient blocked.
+    if let Some(actor) = notification.actor_id
+        && crate::direct_rules::has_blocked(transaction, notification.recipient_actor_id, actor)
+            .await?
+    {
+        return Ok(false);
+    }
     let first = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT NOT EXISTS (
@@ -347,7 +406,12 @@ pub async fn deliver(
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
             read_at = CASE WHEN $16 THEN COALESCE(notifications.read_at, now()) END,
-            surfaced_at = GREATEST(now(), COALESCE(notifications.snoozed_until, now())),
+            -- Snoozed until something new: this is it (C2.10).
+            surfaced_at = CASE WHEN notifications.wake_on_activity THEN now()
+                ELSE GREATEST(now(), COALESCE(notifications.snoozed_until, now())) END,
+            snoozed_until = CASE WHEN notifications.wake_on_activity THEN NULL
+                ELSE notifications.snoozed_until END,
+            wake_on_activity = false,
             updated_at = now()
         RETURNING id
         "#,
@@ -617,13 +681,30 @@ async fn message_mentions(
                   )
               AND conversation_visible_to(message.conversation_id, membership.actor_id)
         ),
-        everyone_allowed AS (
-            SELECT actor_id FROM everyone
-            WHERE (SELECT count(*) FROM everyone) <= $3
-               -- Decided when it was sent or last edited, with the app's agent
-               -- limit then in force (messages.may_notify_everyone); older and
-               -- system messages fall back to the author's role.
-               OR COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
+        -- C2.18: `@handle` of a group of this workspace, written as a word:
+        -- its members who can see the conversation, people and agents alike.
+        grouped AS (
+            SELECT DISTINCT member.account_id AS actor_id
+            FROM message
+            JOIN projects space ON space.id = message.project_id
+            JOIN account_groups grp
+              ON grp.workspace_id = space.organization_id AND grp.archived_at IS NULL
+            JOIN account_group_members member
+              ON member.group_id = grp.id AND member.workspace_id = grp.workspace_id
+            WHERE EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(message.content -> 'nodes') node
+                    WHERE node ->> 'type' = 'text'
+                      AND node ->> 'text' ~* ('(^|[^[:alnum:]_@])@' || grp.handle || '($|[^[:alnum:]_-])')
+                  )
+              AND conversation_visible_to(message.conversation_id, member.account_id)
+        ),
+        -- Whether the message may reach many people at once: decided when it
+        -- was sent or last edited, with the app's agent limit then in force
+        -- (messages.may_notify_everyone); older and system messages fall back
+        -- to the author's role.
+        may_reach_many AS (
+            SELECT COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
                    SELECT 1
                    FROM message
                    JOIN project_memberships author
@@ -632,12 +713,25 @@ async fn message_mentions(
                     AND author.enabled
                    WHERE author.role IN ('owner', 'admin')
                      AND custom_role_allows(author.role_id, 'channels.moderate')
-               ))
+               )) AS allowed
+        ),
+        everyone_allowed AS (
+            SELECT actor_id FROM everyone
+            WHERE (SELECT count(*) FROM everyone) <= $3
+               OR (SELECT allowed FROM may_reach_many)
+        ),
+        -- A group as large as a crowd takes the same say as @everyone.
+        grouped_allowed AS (
+            SELECT actor_id FROM grouped
+            WHERE (SELECT count(*) FROM grouped) <= $3
+               OR (SELECT allowed FROM may_reach_many)
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
                recipient.actor_id AS recipient_actor_id
         FROM message
-        JOIN (SELECT actor_id FROM named UNION SELECT actor_id FROM everyone_allowed) recipient
+        JOIN (SELECT actor_id FROM named
+              UNION SELECT actor_id FROM everyone_allowed
+              UNION SELECT actor_id FROM grouped_allowed) recipient
           ON recipient.actor_id <> message.author_actor_id
         WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
           AND conversation_visible_to(message.conversation_id, recipient.actor_id)
@@ -1469,6 +1563,8 @@ pub struct NotificationView {
     pub read: bool,
     pub archived: bool,
     pub snoozed_until: Option<String>,
+    /// Snoozed until something new happens on it (C2.10).
+    pub until_activity: bool,
     /// When it last came to the top of the inbox.
     pub at: String,
     pub created_at: String,
@@ -1485,8 +1581,11 @@ pub struct NotificationView {
     /// its options, and its answer once given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<crate::requests::RequestCard>,
-    /// The conversation a Reply from the notification posts in (mentions).
-    #[serde(skip)]
+    /// Whether it asks something of you or is for your information.
+    pub attention: Attention,
+    /// The conversation a Reply from the notification posts in (mentions,
+    /// DMs and thread replies), for replying in place (C2.10).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_conversation_id: Option<Uuid>,
     /// A reminder's saved item, which Done and Snooze change (W21).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1548,6 +1647,7 @@ struct NotificationRow {
     read: bool,
     archived: bool,
     snoozed_until: Option<String>,
+    until_activity: bool,
     at: String,
     at_micros: i64,
     created_at: String,
@@ -1599,9 +1699,10 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                actor.kind AS actor_kind,
                n.repeat_count, n.read_at IS NOT NULL AS read,
                n.archived_at IS NOT NULL AS archived,
-               CASE WHEN n.snoozed_until > now() THEN
+               CASE WHEN n.snoozed_until > now() AND NOT n.wake_on_activity THEN
                    to_char(n.snoozed_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                END AS snoozed_until,
+               n.snoozed_until > now() AND n.wake_on_activity AS until_activity,
                to_char(n.surfaced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at,
                (extract(epoch FROM n.surfaced_at) * 1000000)::bigint AS at_micros,
                to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -1814,6 +1915,49 @@ pub async fn unread_count(
     .bind(within)
     .fetch_one(crate::db::scoped(pool))
     .await?)
+}
+
+/// What the badges show (C2.4): the places that need you (a conversation,
+/// task, pull request or other subject with an unread needs-you
+/// notification, each counted once), and how many unread notifications are
+/// only for your information.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attentions {
+    pub unread_count: i64,
+    pub needs_you_conversations: i64,
+    pub fyi_unread: i64,
+}
+
+pub async fn attentions(pool: &PgPool, viewer: Uuid) -> Result<Attentions, AppError> {
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
+    let (unread_count, needs_you_conversations, fyi_unread) =
+        sqlx::query_as::<_, (i64, i64, i64)>(&format!(
+            r#"
+            SELECT count(*),
+                   count(DISTINCT COALESCE(n.conversation_id, n.work_item_id,
+                                           n.pull_request_id, n.subject_id))
+                       FILTER (WHERE {needs}),
+                   count(*) FILTER (WHERE NOT {needs})
+            FROM notifications n
+            WHERE n.recipient_actor_id = $1
+              AND {view}
+              AND {VISIBLE}
+              AND {switches}
+            "#,
+            needs = needs_you_sql("$2"),
+            view = View::Unread.condition(),
+        ))
+        .bind(viewer)
+        .bind(kind::NEEDS_YOU)
+        .fetch_one(crate::db::scoped(pool))
+        .await?;
+    Ok(Attentions {
+        unread_count,
+        needs_you_conversations,
+        fyi_unread,
+    })
 }
 
 /// Unread notifications per project: the project's attention count.
@@ -2197,7 +2341,9 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
     } else {
         subject_title
     };
+    let attention = Attention::of(&row.kind, row.request_status.as_deref());
     NotificationView {
+        attention,
         id: row.id,
         kind: row.kind,
         project_id: row.project_id,
@@ -2221,6 +2367,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         read: row.read,
         archived: row.archived,
         snoozed_until: row.snoozed_until,
+        until_activity: row.until_activity,
         at: row.at,
         created_at: row.created_at,
         href,
@@ -2286,13 +2433,18 @@ pub async fn update(
         UpdateAction::Read => "read_at = COALESCE(n.read_at, now())",
         UpdateAction::Unread => "read_at = NULL",
         UpdateAction::Archive => {
-            "archived_at = COALESCE(n.archived_at, now()), read_at = COALESCE(n.read_at, now()), snoozed_until = NULL"
+            "archived_at = COALESCE(n.archived_at, now()), read_at = COALESCE(n.read_at, now()), snoozed_until = NULL, wake_on_activity = false"
         }
         UpdateAction::Restore => "archived_at = NULL",
         UpdateAction::Snooze => {
-            "snoozed_until = $6, surfaced_at = $6, read_at = NULL, archived_at = NULL"
+            "snoozed_until = $6, surfaced_at = $6, read_at = NULL, archived_at = NULL, wake_on_activity = false"
         }
-        UpdateAction::Unsnooze => "snoozed_until = NULL, surfaced_at = now()",
+        UpdateAction::SnoozeUntilActivity => {
+            "snoozed_until = now() + make_interval(days => 366), surfaced_at = now() + make_interval(days => 366), read_at = NULL, archived_at = NULL, wake_on_activity = true"
+        }
+        UpdateAction::Unsnooze => {
+            "snoozed_until = NULL, surfaced_at = now(), wake_on_activity = false"
+        }
     };
     let applies = match action {
         UpdateAction::Read => "n.read_at IS NULL",
@@ -2302,7 +2454,7 @@ pub async fn update(
         UpdateAction::Restore => {
             "n.archived_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM notifications open WHERE open.recipient_actor_id = n.recipient_actor_id AND open.group_key = n.group_key AND open.archived_at IS NULL)"
         }
-        UpdateAction::Snooze => {
+        UpdateAction::Snooze | UpdateAction::SnoozeUntilActivity => {
             "NOT EXISTS (SELECT 1 FROM notifications open WHERE open.recipient_actor_id = n.recipient_actor_id AND open.group_key = n.group_key AND open.archived_at IS NULL AND open.id <> n.id)"
         }
         UpdateAction::Unsnooze => "n.snoozed_until IS NOT NULL",
@@ -2404,19 +2556,12 @@ async fn list_http(
     Ok(Json(page))
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SummaryResponse {
-    unread_count: i64,
-}
-
+/// The inbox's unread count and what the badges show (C2.4).
 async fn summary_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
-) -> Result<Json<SummaryResponse>, AppError> {
-    Ok(Json(SummaryResponse {
-        unread_count: unread_count(&state.pool, principal.actor_id, None).await?,
-    }))
+) -> Result<Json<Attentions>, AppError> {
+    Ok(Json(attentions(&state.pool, principal.actor_id).await?))
 }
 
 #[derive(Debug, Deserialize)]

@@ -132,8 +132,25 @@ async fn reply_from_a_mention_posts_once_and_stops_with_access() {
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["outcome"], "replied", "{body}");
+        assert!(body["badge"].is_i64(), "{body}");
     }
     assert_eq!(messages_by(pool, dana, "On it").await, 1);
+    // C2.34: replying from the phone leaves the conversation read, up to
+    // and including the reply.
+    let caught_up = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT state.highest_seen_sequence >= conversation.next_entry_sequence - 1
+        FROM conversation_read_states state
+        JOIN conversations conversation ON conversation.id = state.conversation_id
+        WHERE state.conversation_id = $1 AND state.actor_id = $2
+        "#,
+    )
+    .bind(seed.channel_id)
+    .bind(dana)
+    .fetch_one(pool)
+    .await
+    .expect("read state");
+    assert!(caught_up, "a reply from the phone reads the conversation");
     let read = sqlx::query_scalar::<_, bool>(
         "SELECT read_at IS NOT NULL FROM notifications WHERE id = $1",
     )

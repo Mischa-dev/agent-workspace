@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -12,6 +12,8 @@ import { useConversationTimeline } from '../conversations/useConversationTimelin
 import { useMessageActions } from '../conversations/MessageActions'
 import { useReplyTarget } from '../conversations/replyTarget'
 import { useConversationTools } from '../later/useConversationTools'
+import { useSidebarPlacement } from '../conversations/useSidebarPlacement'
+import { useHomeExperience } from '../experience/layout'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
@@ -45,6 +47,8 @@ import {
   showToast,
 } from '../ui'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
+import { DmStandingBar } from './DmStandingBar'
+import { useDmStanding } from './dmRules'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { uploadFile } from '../files/api'
@@ -155,7 +159,16 @@ export function DirectConversationPage() {
     )
   }
 
-  const canPost = Boolean(valid && page?.capabilities.sendMessage)
+  // C2.39: a request, a block or no shared workspace can stand between you
+  // and sending; read again as the conversation moves (a reply accepts).
+  const standing = useDmStanding(conversationId, Boolean(valid) && !isGroup)
+  const lastEntryId = entries.at(-1)?.id
+  const refetchStanding = standing.refetch
+  useEffect(() => {
+    if (lastEntryId) void refetchStanding()
+  }, [lastEntryId, refetchStanding])
+  const standingAllows = isGroup || standing.data?.canSend !== false
+  const canPost = Boolean(valid && page?.capabilities.sendMessage && standingAllows)
   const startThread = (origin: { messageId: string; text: string; author: string }) => setThreadDialog({ conversationId, origin })
   const reply = useReplyTarget(conversationId, null)
   const messageActions = useMessageActions({
@@ -206,6 +219,9 @@ export function DirectConversationPage() {
     latestMessageId: [...entries].reverse().find((entry) => entry.message)?.message?.id,
     projectId,
   })
+
+  // Starring it, or keeping it in a section you named (C2.9).
+  const placement = useSidebarPlacement(conversationId, useHomeExperience().shows('talk.sidebar_sections'))
 
   const letContinue = () => {
     setContinuing(true)
@@ -298,6 +314,7 @@ export function DirectConversationPage() {
       }
       icon="users"
       menu={[
+        ...placement.menu,
         ...tools.levelMenu,
         ...(summary ? [{ separator: true as const }, { label: 'Leave group…', icon: 'log-out' as const, danger: true, onSelect: () => setLeaving(conversationId) }] : []),
       ]}
@@ -309,7 +326,7 @@ export function DirectConversationPage() {
     <ConversationHeader
       actions={threadsButton}
       lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
-      menu={tools.levelMenu}
+      menu={[...placement.menu, ...tools.levelMenu]}
       subtitle={
         other ? (
           <>
@@ -354,6 +371,7 @@ export function DirectConversationPage() {
   return (
     <>
       {header}
+      {placement.dialog}
       {tools.banner}
       {valid && projectId ? <PinnedBar canEdit={canPost} conversationId={conversationId} direct projectId={projectId} /> : null}
       <ConversationTimeline
@@ -427,6 +445,7 @@ export function DirectConversationPage() {
           They’ll wait here until someone steps in.
         </Banner>
       ) : null}
+      {!isGroup && standing.data ? <DmStandingBar conversationId={conversationId} name={title} standing={standing.data} /> : null}
       {canPost ? (
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}

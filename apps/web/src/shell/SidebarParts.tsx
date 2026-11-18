@@ -7,6 +7,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type LiHTMLAttributes,
   type ReactElement,
   type ReactNode,
 } from 'react'
@@ -125,17 +126,27 @@ export function SidebarSection({
   addLabel,
   children,
   label,
+  menu,
   onAdd,
+  onToggle,
+  open: kept,
 }: {
   addLabel?: string
   children: ReactNode
   label: string
+  /** The section's own actions, behind a button beside its name. */
+  menu?: MenuEntry[]
   onAdd?: () => void
+  /** With `open`, the section's folding is kept by its owner, not here. */
+  onToggle?: (open: boolean) => void
+  open?: boolean
 }) {
   const space = useContext(SidebarSpace)
   const memoryKey = `${space}\u0000${label}`
-  const [open, setOpenState] = useState(() => openSections.get(memoryKey) ?? true)
+  const [remembered, setOpenState] = useState(() => openSections.get(memoryKey) ?? true)
+  const open = kept ?? remembered
   const setOpen = (next: boolean) => {
+    if (onToggle) return onToggle(next)
     openSections.set(memoryKey, next)
     setOpenState(next)
   }
@@ -150,6 +161,13 @@ export function SidebarSection({
           <Icon className="aw-section__caret" name="chevron-down" size={14} />
           <span>{label}</span>
         </button>
+        {menu ? (
+          <Menu
+            items={menu}
+            label={`${label} section menu`}
+            trigger={<IconButton className="aw-section__add" icon="more" label={`${label} section options`} size="sm" />}
+          />
+        ) : null}
         {onAdd ? <IconButton className="aw-section__add" icon="plus" label={addLabel ?? `Add to ${label}`} onClick={onAdd} size="sm" /> : null}
       </div>
       <ul className="aw-section__list" id={id}>
@@ -192,6 +210,7 @@ export function SidebarLink({
   meta,
   nested = false,
   onNavigate,
+  row,
   to,
   unread = false,
 }: {
@@ -210,6 +229,8 @@ export function SidebarLink({
   meta?: string
   nested?: boolean
   onNavigate?: () => void
+  /** Props for the row itself, such as dragging it to a new place. */
+  row?: LiHTMLAttributes<HTMLLIElement>
   to: string
   unread?: boolean
 }) {
@@ -234,7 +255,7 @@ export function SidebarLink({
     </>
   )
   return (
-    <li data-attention={dataAttention}>
+    <li data-attention={dataAttention} {...row}>
       {/* NavLink only marks its own path current, so a row that holds other pages marks itself. */}
       {active === undefined ? (
         <NavLink className={({ isActive }) => rowClass(isActive)} end={end} onClick={onNavigate} to={to}>

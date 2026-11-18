@@ -85,6 +85,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/account/appearance",
     "/api/v1/account/security",
     "/api/v1/account/sessions",
+    "/api/v1/accounts/{id}/avatar",
     "/api/v1/auth/password-reset",
     "/api/v1/auth/session",
     "/api/v1/auth/workos",
@@ -1891,6 +1892,13 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         linked(b),
         vec![],
     ));
+    // C2.17: an avatar shows only to people who share a workspace.
+    cases.push(case(
+        "/api/v1/accounts/{id}/avatar",
+        vec![format!("/api/v1/accounts/{}/avatar", a.rook)],
+        vec![format!("/api/v1/accounts/{}/avatar", b.rook)],
+        vec![],
+    ));
     // C2.19: a workspace's own emoji shows only to its members.
     cases.push(case(
         "/api/v1/custom-emoji/{id}",
@@ -2073,6 +2081,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "request_get",
     "launch_list",
     "message_history",
+    "conversation_member_list",
+    "channel_list",
+    "channel_get",
     "message_draft_list",
     "custom_emoji_list",
     "comment_list",
@@ -2086,6 +2097,14 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_work",
     "notification_list",
     "notification_keyword_list",
+    "sidebar_list",
+    "profile_get",
+    "profile_avatar_list",
+    "group_list",
+    "saved_search_list",
+    "place_search",
+    "dm_standing_get",
+    "account_block_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2607,6 +2626,27 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "channel_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "channel_get",
+            vec![json!({"channelId": a.channel})],
+            vec![json!({"channelId": b.channel})],
+            vec![],
+        ),
+        case(
+            "conversation_member_list",
+            vec![json!({"conversationId": a.dm})],
+            vec![
+                json!({"conversationId": b.dm}),
+                json!({"conversationId": b.channel}),
+            ],
+            vec![],
+        ),
+        case(
             "agent_list",
             vec![
                 json!({}),
@@ -2675,6 +2715,64 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // C2.13: keywords are kept per workspace; B's never list in A.
         case(
             "notification_keyword_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.17: B's people's profiles never read from A, and A's
+        // avatars list only A's people.
+        case(
+            "profile_get",
+            vec![json!({}), json!({"account": a.rook})],
+            vec![
+                json!({"account": b.rook}),
+                json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        case(
+            "profile_avatar_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.18: a workspace's groups list only in it.
+        case(
+            "group_list",
+            vec![json!({}), json!({"members": true})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.26: saved searches, and places to jump to, stay in their workspace.
+        case(
+            "saved_search_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "place_search",
+            vec![json!({"q": "a"})],
+            vec![json!({"workspace": b.organization, "q": "a"})],
+            vec![],
+        ),
+        // C2.39: B's DMs have no standing to read from A, and blocks list
+        // only in the workspace called.
+        case(
+            "dm_standing_get",
+            vec![json!({"conversationId": a.dm})],
+            vec![json!({"conversationId": b.dm})],
+            vec![],
+        ),
+        case(
+            "account_block_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.9: sidebar sections are kept per workspace; B's never list in A.
+        case(
+            "sidebar_list",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],

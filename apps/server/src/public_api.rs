@@ -354,7 +354,7 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
-    for branch in branches {
+    for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
             // A paused account's answer (A2.10) is the same for every
@@ -381,6 +381,27 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
     }
+    // Most results refuse in the same few ways: the list of shared refusals
+    // is shared in turn, so each result names it once.
+    let shared: Vec<Value> = branches
+        .iter()
+        .filter(|branch| branch.get("$ref").is_some())
+        .cloned()
+        .collect();
+    if shared.len() < 2 {
+        return;
+    }
+    let group = json!({ "oneOf": shared });
+    let key = (1..)
+        .map(|index| match index {
+            1 => "Refusals".to_owned(),
+            index => format!("Refusals{index}"),
+        })
+        .find(|key| components.get(key).is_none_or(|kept| *kept == group))
+        .unwrap_or_default();
+    components.entry(key.clone()).or_insert(group);
+    branches.retain(|branch| branch.get("$ref").is_none());
+    branches.push(json!({ "$ref": format!("#/components/schemas/{key}") }));
 }
 
 fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
@@ -452,7 +473,6 @@ Projects and tasks can be named by key (`AWD`, `AWD-12`) wherever an ID is asked
 Operations that change things take a `clientRequestId` so a retry never applies twice, and \
 changes to a task take the `expectedVersion` you last read.";
 
-/// The OpenAPI 3.1 document for every operation.
 /// Drops what a schema says twice, to keep the document small: a schema's
 /// `title` (the operation's id or the component's name says it), what JSON
 /// Schema assumes without being told (`default: null`,
@@ -512,6 +532,7 @@ fn slim(value: &mut Value) {
     }
 }
 
+/// The OpenAPI 3.1 document for every operation.
 pub(crate) fn document() -> Value {
     let mut tools = mcp::tool_catalog();
     tools.sort_by(|left, right| left.name.cmp(&right.name));
@@ -557,7 +578,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
-        let output = tool
+        let (result, output) = tool
             .output_schema
             .as_ref()
             .map(|schema| {
@@ -577,28 +598,25 @@ pub(crate) fn document() -> Value {
                         key
                     }
                 };
-                json!({ "$ref": format!("#/components/schemas/{key}") })
+                let reference = json!({ "$ref": format!("#/components/schemas/{key}") });
+                (key, reference)
             })
-            .unwrap_or_else(|| json!({ "type": "object" }));
+            .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
+        // The result, and a refusal (the same result with its `outcome`),
+        // are one response that 200 and the refusing statuses point at,
+        // shared by every operation with that result, so the document stays
+        // small as tools are added. The introduction says what each status
+        // means.
+        refusals.entry(result.clone()).or_insert_with(|| {
+            json!({
+                "description": "The result, or a refusal: see its `outcome`.",
+                "content": { "application/json": { "schema": output } },
+            })
+        });
         let mut responses = Map::new();
         responses.insert(
             "200".to_owned(),
-            json!({
-                "description": "The result; see `outcome`.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
-        refusals.insert(
-            refused.clone(),
-            json!({
-                "description": "Refused; see `outcome`.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
         );
         // The refusing statuses (403, 404, 409, 422, 503) share it through
         // the 4XX and 5XX ranges; the statuses every operation answers the
@@ -616,7 +634,7 @@ pub(crate) fn document() -> Value {
         for range in ["4XX", "5XX"] {
             responses.insert(
                 range.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{refused}") }),
+                json!({ "$ref": format!("#/components/responses/{result}") }),
             );
         }
         paths.insert(
