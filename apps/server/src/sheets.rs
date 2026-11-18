@@ -22,6 +22,7 @@
 
 pub mod address;
 pub mod engine;
+pub mod history;
 pub mod http;
 pub mod transfer;
 
@@ -418,6 +419,7 @@ pub async fn create(
         json!({"created": true}),
     )
     .await?;
+    history::snapshot(&mut *connection, id, 1).await?;
     Ok(CreateOutcome::Created(sheet))
 }
 
@@ -517,6 +519,7 @@ pub async fn change(
         Json::Object(summary),
     )
     .await?;
+    history::record(&mut *connection, sheet.id, revision, false, &[]).await?;
     Ok(ChangeOutcome::Changed(changed))
 }
 
@@ -1512,6 +1515,9 @@ async fn apply_unbounded(
     let mut values_changed = 0;
     let mut changed = Vec::new();
     let mut tabs_changed = false;
+    // Inputs this write changed, by tab id, for the sheet's history (C1.13):
+    // the new input, or None for a cleared cell.
+    let mut delta: Vec<history::Delta> = Vec::new();
 
     // New tabs get IDs; every tab gets its position.
     let mut ids = Vec::with_capacity(working.len());
@@ -1713,6 +1719,7 @@ async fn apply_unbounded(
                 };
                 if input_changed {
                     inputs_changed += 1;
+                    delta.push((id, cell.row, cell.column, Some(cell.input.clone())));
                     input_cells.push(line);
                 } else {
                     values_changed += 1;
@@ -1734,6 +1741,7 @@ async fn apply_unbounded(
                 delete_rows.push(cell.row_number);
                 delete_columns.push(cell.column_number);
                 inputs_changed += 1;
+                delta.push((cell.tab_id, cell.row_number, cell.column_number, None));
                 let tab_name = working
                     .iter()
                     .zip(&ids)
@@ -1899,6 +1907,7 @@ async fn apply_unbounded(
         }),
     )
     .await?;
+    history::record(&mut *connection, sheet.id, revision, tabs_changed, &delta).await?;
     Ok(Ok(Applied {
         revision,
         inputs_changed,

@@ -169,6 +169,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("sheet_cells", WORKSPACE_ID),
     ("sheet_cleared_cells", WORKSPACE_ID),
     ("sheet_revisions", WORKSPACE_ID),
+    ("sheet_snapshots", WORKSPACE_ID),
     ("sheet_tabs", WORKSPACE_ID),
     ("sheets", WORKSPACE_ID),
     ("task_import_links", WORKSPACE_ID),

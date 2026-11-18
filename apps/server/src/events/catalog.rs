@@ -396,6 +396,12 @@ pub static SHEET_UPDATED: EventType = fact(
 )
 .legacy(&["sheet.updated"])
 .automatable();
+pub static SHEET_VERSION_RESTORED: EventType = fact(
+    "sheet.version_restored",
+    "sheets",
+    Some("sheet"),
+    "An earlier revision of a sheet was put back",
+);
 
 // --- dashboards ------------------------------------------------------------
 pub static DASHBOARD_UPDATED: EventType = fact(
@@ -635,6 +641,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
+        &SHEET_VERSION_RESTORED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,

@@ -488,7 +488,8 @@
     "destructive": false,
     "emits": [
       "page.version_restored",
-      "whiteboard.version_restored"
+      "whiteboard.version_restored",
+      "sheet.version_restored"
     ],
     "idempotent": true,
     "kind": "change",

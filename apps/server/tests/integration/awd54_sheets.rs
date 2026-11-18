@@ -594,3 +594,113 @@ async fn sheet_cell_writes_do_not_wait_for_the_project_lock() {
     assert_eq!(cells["outcome"], "ok", "{cells}");
     holder.rollback().await.expect("release");
 }
+
+/// C1.13: any revision since snapshots began can be shown and put back,
+/// across row moves and tab changes, as a new revision whose values are
+/// worked out again.
+#[tokio::test]
+async fn any_revision_comes_back_as_a_new_one() {
+    let Some(setup) = setup("awd54_sheet_history").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "HIST", "History").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "HIST",
+            "name": "Counter",
+            "cells": [{"cell": "A1", "input": "0"}, {"cell": "B1", "input": "=A1*2"}],
+            "clientRequestId": "hist-0",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    // Forty revisions, more than one snapshot apart, with a row inserted
+    // above the counter and a tab added along the way.
+    let mut revisions = Vec::new();
+    for step in 1..=40 {
+        let mut arguments = json!({
+            "projectId": "HIST",
+            "sheet": "Counter",
+            "cells": [{"cell": if step > 15 { "A2" } else { "A1" }, "input": step.to_string()}],
+            "clientRequestId": format!("hist-{step}"),
+        });
+        if step == 15 {
+            arguments["tabs"] = json!([{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}]);
+            arguments["cells"] = json!([{"cell": "A2", "input": "15"}]);
+        }
+        if step == 30 {
+            arguments["tabs"] = json!([{"add": "Notes"}]);
+        }
+        let written = call("sheet_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{step}: {written}");
+        revisions.push(written["value"]["revision"].as_i64().expect("revision"));
+    }
+    let now = *revisions.last().expect("revisions");
+    // Step 12: A1 held 12, before the row moved it and before the tab.
+    let twelve = revisions[11];
+    let shown = call("history_show", json!({"thing": sheet, "version": twelve})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    let tabs = &shown["value"]["content"]["tabs"];
+    assert_eq!(tabs.as_array().map(Vec::len), Some(1), "{shown}");
+    assert_eq!(tabs[0]["cells"]["A1"], "12", "{shown}");
+    assert_eq!(tabs[0]["cells"]["B1"], "=A1*2", "{shown}");
+
+    let stale = call(
+        "history_restore",
+        json!({"thing": sheet, "version": twelve, "expectedVersion": now - 1, "clientRequestId": "hist-stale"}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let restored = call(
+        "history_restore",
+        json!({"thing": sheet, "version": twelve, "expectedVersion": now, "clientRequestId": "hist-restore"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    assert_eq!(restored["value"]["version"], now + 1, "{restored}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(12.0), "{read}");
+    assert_eq!(
+        value_at(&read, "B1"),
+        json!(24.0),
+        "values are worked out again"
+    );
+    assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
+    let tabs = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter", "tab": "Notes"}),
+    )
+    .await;
+    assert_ne!(tabs["outcome"], "ok", "the tab added later is gone: {tabs}");
+
+    // The restore is a revision of its own, so it can be undone the same way.
+    let back = call(
+        "history_restore",
+        json!({"thing": sheet, "version": now, "expectedVersion": now + 1, "clientRequestId": "hist-back"}),
+    )
+    .await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A2"), json!(40.0), "{read}");
+    let listed = call("history_list", json!({"thing": sheet, "limit": 3})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let _ = Uuid::nil();
+}
