@@ -339,6 +339,30 @@ pub async fn said_text(
     .flatten())
 }
 
+/// What a said activity's log entry keeps once its words are posted: the
+/// message they became, not the words (see [`said_text`]).
+pub async fn said_posted(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    activity_id: &str,
+    message_id: uuid::Uuid,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query(
+        r#"
+        UPDATE run_activities
+        SET payload = (payload - 'text') || jsonb_build_object('messageId', $3::uuid),
+            summary = 'Said in the thread'
+        WHERE run_id = $1 AND client_id = $2 AND kind = 'text_message'
+        "#,
+    )
+    .bind(run_id)
+    .bind(activity_id)
+    .bind(message_id)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;

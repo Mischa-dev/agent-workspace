@@ -7,8 +7,10 @@
 //! thread); what it says after goes to the same place.
 //!
 //! The job carries ids only; the words are read from the run's log when it
-//! runs (rule 10). Each message is posted once: its key is the run and the
-//! activity's own id.
+//! runs, and once posted the log entry keeps only the message's id, so the
+//! words live in the message alone (rule 10) and removing it removes them.
+//! Each message is posted once: its key is the run and the activity's own
+//! id.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -165,7 +167,7 @@ pub async fn post(state: &AppState, run_id: Uuid, activity_id: &str) -> Result<(
     let content = crate::mcp::common::content_from_text(state, space_id, &text).await?;
     let key = IdempotencyKey::parse(&format!("run-say-{}-{}", run.id, short(activity_id)))
         .map_err(|_| AppError::Internal("run say key"))?;
-    crate::conversations::append_message_command_with(
+    let posted = crate::conversations::append_message_command_with(
         state,
         MessageCommandActor {
             actor_id: run.account_id,
@@ -186,7 +188,15 @@ pub async fn post(state: &AppState, run_id: Uuid, activity_id: &str) -> Result<(
         },
     )
     .await?;
-    Ok(())
+    // The words now live in the message, where removing it reaches them;
+    // the log keeps only which message it became (rule 10).
+    super::activities::said_posted(
+        crate::db::scoped(&state.pool),
+        run.id,
+        activity_id,
+        posted.body.message.id,
+    )
+    .await
 }
 
 /// An activity id in a key: as it is when short and plain, else its digest.

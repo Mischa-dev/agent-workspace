@@ -895,5 +895,20 @@ async fn every_route_gives_one_run_with_the_same_cause_and_title() {
             .await
             .expect("posted");
     assert_eq!(posted, 1);
+    // Once posted, the words live in the message alone: the run's log keeps
+    // which message they became, so removing it leaves nothing behind.
+    let (logged, summary) = sqlx::query_as::<_, (serde_json::Value, String)>(
+        "SELECT payload, summary FROM run_activities WHERE run_id = $1 AND client_id = 'answer'",
+    )
+    .bind(run)
+    .fetch_one(pool)
+    .await
+    .expect("said activity");
+    assert!(!logged.to_string().contains("login test"), "{logged}");
+    assert!(!summary.contains("login test"), "{summary}");
+    assert_eq!(
+        logged["messageId"],
+        json!(answer.expect("answered").to_string())
+    );
     world.finish().await;
 }
