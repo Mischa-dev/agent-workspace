@@ -2297,6 +2297,7 @@ async fn guard_hand_written(
     let located = crate::ops::Located {
         workspace_id: workspace,
         space_id: Some(principal.project_id),
+        direct: None,
     };
     match Box::pin(crate::guards::check(
         state, &caller, &located, name, target, &input,

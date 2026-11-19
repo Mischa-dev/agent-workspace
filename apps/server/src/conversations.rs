@@ -2092,6 +2092,7 @@ pub(crate) async fn append_message_command_with(
     // two agents answering each other.
     crate::budgets::admit_message(
         &mut transaction,
+        conversation.workspace_id,
         conversation.project_id,
         conversation.id,
         actor.actor_id,

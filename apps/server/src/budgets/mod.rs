@@ -34,23 +34,25 @@ pub async fn admit(
     Ok(())
 }
 
-/// One message sent by `account` in `conversation`, counted once.
-/// In the send's own transaction: a send that fails counts nothing (and a
-/// separate one would wait on the conversation the send holds).
+/// One message sent by `account` in `conversation`, counted once, in the
+/// conversation's workspace (the direct scope for a DM or group, which is in
+/// no space). In the send's own transaction: a send that fails counts
+/// nothing (and a separate one would wait on the conversation the send
+/// holds).
 pub async fn admit_message(
     transaction: &mut Transaction<'_, Postgres>,
-    space: Uuid,
+    workspace: Uuid,
+    space: Option<Uuid>,
     conversation: Uuid,
     account: Uuid,
     message: Uuid,
 ) -> Result<(), AppError> {
-    let workspace = workspace_of(transaction, space).await?;
     let key = format!("message:{message}");
     admit(
         transaction,
         Ask {
             account_id: Some(account),
-            space_id: Some(space),
+            space_id: space,
             conversation_id: Some(conversation),
             record: Some(Recorded {
                 source_kind: "message",
