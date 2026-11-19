@@ -1422,8 +1422,12 @@ pub async fn list_pins(
                left(COALESCE(page.body, decision.detail, message.plain_text, ''), 600) AS text,
                pin.created_at::text AS pinned_at
         FROM conversation_pins pin
+        -- A page shows while it is in the conversation's space: one moved
+        -- out since it was pinned is no longer the conversation's to show.
         LEFT JOIN project_pages page
           ON pin.target_kind = 'page' AND page.id = pin.target_id AND page.archived_at IS NULL
+         AND page.project_id = (SELECT pinned_in.project_id FROM conversations pinned_in
+                                WHERE pinned_in.id = pin.conversation_id)
         LEFT JOIN project_decisions decision
           ON pin.target_kind = 'decision' AND decision.id = pin.target_id
          AND decision.status = 'active'

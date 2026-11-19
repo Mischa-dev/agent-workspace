@@ -866,6 +866,25 @@ async fn a_page_moves_to_another_space_with_what_it_keeps() {
     )
     .await;
     assert_eq!(commented["outcome"], "ok", "{commented}");
+    let channel = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "channel_create",
+        json!({"projectId": work, "name": "drafts"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let pinned = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "pin_set",
+        json!({"conversationId": channel, "pageId": page}),
+    )
+    .await;
+    assert_eq!(pinned["outcome"], "ok", "{pinned}");
 
     // Someone who can't put pages where it goes can't move it there, and a
     // stale version is a conflict.
@@ -916,6 +935,18 @@ async fn a_page_moves_to_another_space_with_what_it_keeps() {
     )
     .await;
     assert_eq!(lost["outcome"], "not_found", "{lost}");
+    // Its pin in the old space's channel no longer shows it.
+    let opened = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "conversation_open",
+        json!({"conversationId": channel}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert!(!opened.to_string().contains("Hello"), "{opened}");
+    assert_eq!(opened["value"]["pinned"], json!([]), "{opened}");
 
     // Where it went, it has its versions, its comment and its file.
     let (status, now) = send(
