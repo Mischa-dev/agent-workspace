@@ -179,7 +179,14 @@ impl Operation for AgentScopeGet {
         .collect();
         let private_conversations = sqlx::query_as::<
             _,
-            (Uuid, Uuid, String, Option<String>, bool, sqlx::types::Json<Vec<ScopeMember>>),
+            (
+                Uuid,
+                Uuid,
+                String,
+                Option<String>,
+                bool,
+                sqlx::types::Json<Vec<ScopeMember>>,
+            ),
         >(
             r#"
             SELECT conversation.id, conversation.workspace_id, conversation.kind::text,

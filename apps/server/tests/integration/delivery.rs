@@ -1450,7 +1450,10 @@ async fn an_agents_scope_shows_each_viewer_only_what_they_could_open() {
     );
     assert_eq!(owners["alsoInOtherWorkspaces"], false, "{owners}");
     let shared = &owners["privateConversations"][0];
-    assert_eq!(shared["members"][0]["you"], true, "named by who's in it: {owners}");
+    assert_eq!(
+        shared["members"][0]["you"], true,
+        "named by who's in it: {owners}"
+    );
     assert!(
         owners["spaces"]
             .as_array()
