@@ -2311,6 +2311,88 @@ fn writes_while_unpaused_only(tool: &str) -> bool {
     })
 }
 
+/// Whether an agent tool of this name exists (an operation's or a
+/// hand-written one): guards may name either.
+pub(crate) fn has_tool(name: &str) -> bool {
+    McpServer::tools().get(name).is_some()
+}
+
+/// What the workspace's guards make of a hand-written tool's change:
+/// `None` to go on (using up the review that allowed it, if one did), or
+/// the answer when a guard stops it or holds it for review. The target is
+/// the thing the arguments name, else the space.
+async fn guard_hand_written(
+    state: &AppState,
+    principal: &McpPrincipal,
+    limits: Option<AgentLimits>,
+    workspace: Uuid,
+    request: &rmcp::model::CallToolRequestParams,
+) -> Result<Option<rmcp::model::CallToolResponse>, crate::ops::OpError> {
+    let Some(tool) = McpServer::tools().get(&request.name) else {
+        return Ok(None);
+    };
+    let std::borrow::Cow::Borrowed(name) = &tool.name else {
+        return Ok(None);
+    };
+    let input = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
+    let kind = name.split('_').next().unwrap_or(name);
+    let target = [
+        "pageId",
+        "taskId",
+        "messageId",
+        "whiteboardId",
+        "conversationId",
+        "id",
+    ]
+    .iter()
+    .find_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
+    .and_then(|id| Uuid::parse_str(id).ok())
+    .map_or(("project", principal.project_id), |id| (kind, id));
+    let caller = crate::access::Caller::of_principal(principal, limits);
+    let located = crate::ops::Located {
+        workspace_id: workspace,
+        space_id: Some(principal.project_id),
+    };
+    match Box::pin(crate::guards::check(
+        state, &caller, &located, name, target, &input,
+    ))
+    .await?
+    {
+        crate::guards::Verdict::Allow { hold: None } => Ok(None),
+        crate::guards::Verdict::Allow { hold: Some(hold) } => {
+            let mut transaction = crate::db::scoped_tx(&state.pool)
+                .await
+                .map_err(|error| crate::ops::OpError::logged(name, &error.into()))?;
+            crate::guards::use_hold(&mut transaction, hold).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(|error| crate::ops::OpError::logged(name, &error.into()))?;
+            Ok(None)
+        }
+        crate::guards::Verdict::Deny { message } => Ok(Some(refusal(name, message))),
+        // Not made yet, in the shape `refusal` uses so it fits the tool's own
+        // results: the same call goes through once a reviewer allows it.
+        crate::guards::Verdict::Held { request_id } => {
+            let message = "A workspace guard holds this change for review. Make the same call \
+                           again once it is allowed."
+                .to_owned();
+            Ok(Some(match refusal(name, message) {
+                rmcp::model::CallToolResponse::Complete(mut result) => {
+                    if let Some(structured) = result.structured_content.as_mut() {
+                        structured["retryCategory"] = serde_json::json!("do_not_retry");
+                        structured["code"] = serde_json::json!("pending_review");
+                        structured["pendingReview"] = serde_json::json!(true);
+                        structured["requestId"] = serde_json::json!(request_id);
+                    }
+                    rmcp::model::CallToolResponse::Complete(result)
+                }
+                other => other,
+            }))
+        }
+    }
+}
+
 /// A paused account's change, not made. Like an operation's paused answer
 /// it isn't an error to retry; in the shape `refusal` uses so it fits the
 /// tool's own results.
@@ -2616,6 +2698,27 @@ async fn run_tool(
                     &request.name,
                     "Couldn't check your access just now. Try again.".to_owned(),
                 ));
+            }
+        }
+    }
+    // A2.27: a workspace's guards see a change by a hand-written tool too,
+    // as they see an operation's (`ops::dispatch`).
+    if writes_while_unpaused_only(&request.name)
+        && let Some(workspace) = acting_in
+    {
+        match guard_hand_written(
+            &server.state,
+            &principal,
+            limits.clone(),
+            workspace,
+            &request,
+        )
+        .await
+        {
+            Ok(None) => {}
+            Ok(Some(answer)) => return Ok(answer),
+            Err(error) => {
+                return Ok(refusal(&request.name, error.message().into_owned()));
             }
         }
     }
