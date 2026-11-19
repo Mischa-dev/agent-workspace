@@ -68,6 +68,11 @@ pub(crate) struct BuiltModuleSummary {
     pub id: Uuid,
     pub key: String,
     pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Switched on here (module_set).
+    pub on: bool,
     #[schemars(with = "Option<String>")]
     pub space_id: Option<Uuid>,
     pub parts: i64,

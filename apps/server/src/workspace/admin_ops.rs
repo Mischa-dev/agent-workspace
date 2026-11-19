@@ -166,16 +166,20 @@ impl Operation for ModuleList {
             reader,
         )
         .await?;
-        let built = rows
-            .into_iter()
-            .map(|row| BuiltModuleSummary {
+        let mut built = Vec::with_capacity(rows.len());
+        for row in rows {
+            let on = modules::built::is_on(tx, &row).await?;
+            built.push(BuiltModuleSummary {
                 parts: counts.get(&row.id).copied().unwrap_or(0),
                 id: row.id,
                 key: row.module_key,
                 name: row.name,
+                description: row.description,
+                icon: row.icon,
+                on,
                 space_id: row.space_id,
-            })
-            .collect();
+            });
+        }
         Ok(ModuleListValue {
             built,
             workspace_id: workspace,

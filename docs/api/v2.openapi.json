@@ -619,6 +619,15 @@
       "BuiltModuleSummary": {
         "description": "A built module in module_list.",
         "properties": {
+          "description": {
+            "type": "string"
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -627,6 +636,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "on": {
+            "description": "Switched on here (module_set).",
+            "type": "boolean"
           },
           "parts": {
             "format": "int64",
@@ -643,6 +656,8 @@
           "id",
           "key",
           "name",
+          "description",
+          "on",
           "parts"
         ],
         "type": "object"

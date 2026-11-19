@@ -48,7 +48,7 @@ export type BlockedProjection = { blockedAt: string; blockedByActorId: string; r
 
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
-export type BuiltModuleSummary = { id: string; key: string; name: string; parts: number; spaceId?: string | null }
+export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; on: boolean; parts: number; spaceId?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
