@@ -157,6 +157,7 @@
       "/reset-password",
       "/verify-email",
       "/join",
+      "/setup",
       "/settings/*",
       "/",
       "/home",
@@ -186,6 +187,8 @@
       "workspace/email",
       "workspace/layout",
       "workspace/audit-log",
+      "workspace/export",
+      "workspace/usage",
       "workspace/server"
     ],
     "palette": [
