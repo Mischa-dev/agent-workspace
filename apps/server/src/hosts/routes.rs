@@ -205,11 +205,17 @@ async fn heartbeat_route(
 /// A1.24: the plan windows of the accounts the host described.
 async fn windows_route(
     State(state): State<AppState>,
+    builtin: Option<Extension<BuiltinCaller>>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<super::windows::WindowsReport>,
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
+    use super::windows::{Reporter, report};
+    if builtin.is_some() {
+        protocol_header(&headers)?;
+        return Ok(Json(report(&state, Reporter::Builtin, request).await?));
+    }
     let host = host_caller(&state, &headers).await?;
-    Ok(Json(super::windows::report(&state, &host, request).await?))
+    Ok(Json(report(&state, Reporter::Host(&host), request).await?))
 }
 
 /// A2.26: a run the host started itself, adopted once.

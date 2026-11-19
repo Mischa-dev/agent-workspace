@@ -44,6 +44,12 @@ fn unavailable(error: ClientError) -> AppError {
 }
 
 impl RunReports {
+    /// The client the reports go through, for the host's other calls made
+    /// while the run goes (its plan windows).
+    pub fn client(&self) -> &HostClient {
+        &self.client
+    }
+
     /// The reports of the run `start_command_id` started.
     pub async fn for_start(
         client: HostClient,

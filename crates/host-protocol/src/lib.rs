@@ -330,11 +330,15 @@ pub struct DescribedAccount {
 }
 
 /// `POST /api/v1/host/windows`: the plan windows of described accounts.
-/// A full report: windows an account no longer lists are gone.
+/// A full report: windows an account no longer lists are gone. A `partial`
+/// one (what a run hears mid-turn) only updates the windows it lists, and
+/// leaves the rest, the plan and the banked resets as they were.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowsReport {
     pub accounts: Vec<AccountWindows>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]

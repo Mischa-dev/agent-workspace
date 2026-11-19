@@ -825,7 +825,15 @@ async fn drive_turn(
                         return Err(AppError::Conflict("provider", "the harness reported an error"));
                     }
                     HarnessEvent::UsageUpdated(report) => {
-                        crate::usage::record_run_report(&state, provider.account_id(), report).await;
+                        // Through the host protocol like any host's windows;
+                        // a failure is logged there, never the run's.
+                        let _ = agent_workspace_builtin_host::runtime::windows::report(
+                            reports.client(),
+                            provider.account_id(),
+                            &report,
+                            true,
+                        )
+                        .await;
                     }
                     HarnessEvent::TokensUsed(usage) => {
                         // Reported like any host's usage, so budgets count

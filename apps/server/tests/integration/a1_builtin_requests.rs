@@ -283,7 +283,10 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
     };
     reports.usage("turn-1", &tokens).await.expect("reported");
     // The same report again (a retry) adds nothing.
-    reports.usage("turn-1", &tokens).await.expect("reported again");
+    reports
+        .usage("turn-1", &tokens)
+        .await
+        .expect("reported again");
 
     let (input, output, estimated, currency) =
         sqlx::query_as::<_, (i64, i64, Option<f64>, Option<String>)>(
@@ -295,7 +298,10 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .expect("the run's usage");
     assert_eq!((input, output), (1_000_000, 100_000));
     // 1M input at 2.00 and 100k output at 10.00 a million.
-    assert!(estimated.is_some_and(|cost| (cost - 3.0).abs() < 1e-9), "{estimated:?}");
+    assert!(
+        estimated.is_some_and(|cost| (cost - 3.0).abs() < 1e-9),
+        "{estimated:?}"
+    );
     assert_eq!(currency.as_deref(), Some("USD"));
     let counted = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT sum(quantity)::bigint FROM usage_events WHERE workspace_id = $1 AND meter = 'reported_tokens'",
