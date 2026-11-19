@@ -51,7 +51,7 @@ pub async fn refusal(
         let rules = sqlx::query_scalar::<_, String>(
             "SELECT name FROM automation_rules \
              WHERE project_id = $1 AND enabled \
-               AND trigger_kind IN ('record_created', 'record_changed') \
+               AND trigger_kind IN ('record_created', 'record_changed', 'record_matches', 'field_changed') \
                AND trigger ->> 'collectionId' = $2::text \
              ORDER BY name LIMIT 3",
         )

@@ -7598,6 +7598,22 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
             }),
+            // T1.38: a record rule watches only its own space's collections.
+            json!({
+                "projectId": a.project,
+                "operation": "create",
+                "name": "Net mcp rule c",
+                "trigger": {"kind": "record_matches", "collectionId": b.collection,
+                            "filters": [{"field": "Title", "op": "notEmpty"}]},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            }),
+            json!({
+                "projectId": a.project,
+                "operation": "create",
+                "name": "Net mcp rule d",
+                "trigger": {"kind": "field_changed", "collectionId": b.collection, "field": "Title"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            }),
         ]),
         mcp_case(
             "milestone_write",

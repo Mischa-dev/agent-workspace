@@ -1428,7 +1428,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
     ExportDecl {
         module: "automations",
         version: 1,
-        after: &["projects", "tasks"],
+        after: &["projects", "tasks", "collections"],
         kinds: &[
             KindDecl {
                 kind: "automation_rule_matches",
@@ -1436,6 +1436,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("rule_id", "automation_rules"),
                     ("work_item_id", "work_items"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "automation_record_matches",
+                table: "automation_record_matches",
+                references: &[
+                    ("space_id", "projects"),
+                    ("rule_id", "automation_rules"),
+                    ("record_id", "collection_records"),
                 ],
                 text_references: &[],
                 exclude: &[],

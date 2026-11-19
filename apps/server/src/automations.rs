@@ -29,6 +29,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+mod record_rules;
+
 use axum::{
     Json, Router,
     extract::State,
@@ -45,6 +47,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
+    collections::definition::FilterWrite,
     collections::task_query::{self, TaskQuery},
     error::{ApiJson, ApiPath, AppError},
     events::{self, Caller, Event, Subject},
@@ -172,6 +175,38 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         collection_id: Option<Uuid>,
     },
+    /// A record of the collection starts matching a view of it and these
+    /// filters, all of which must hold (T1.38). Fires when it enters them,
+    /// not on every change while it matches; leaving and coming back fires
+    /// again. Needs a view or filters.
+    RecordMatches {
+        #[schemars(with = "String")]
+        collection_id: Uuid,
+        /// A view of the collection: the maker's own or a shared one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<String>")]
+        view_id: Option<Uuid>,
+        /// Field filters, as record_query takes them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        filters: Vec<FilterWrite>,
+    },
+    /// A field of a record in the collection changes (T1.38). With to, only
+    /// when its new value is one of them (option names, people, numbers,
+    /// dates, true or false); a view and filters narrow it as for
+    /// record_matches.
+    FieldChanged {
+        #[schemars(with = "String")]
+        collection_id: Uuid,
+        /// The field, by name or ID.
+        field: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        to: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<String>")]
+        view_id: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        filters: Vec<FilterWrite>,
+    },
     /// A page is saved as a new version (K3.5), in the project or this one.
     /// Takes no task conditions; its actions notify or post a message.
     PageChanged {
@@ -219,6 +254,8 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "message_posted",
     "record_created",
     "record_changed",
+    "record_matches",
+    "field_changed",
     "page_changed",
     "sheet_changed",
     "whiteboard_changed",
@@ -246,6 +283,8 @@ impl Trigger {
             Self::MessagePosted { .. } => "message_posted",
             Self::RecordCreated { .. } => "record_created",
             Self::RecordChanged { .. } => "record_changed",
+            Self::RecordMatches { .. } => "record_matches",
+            Self::FieldChanged { .. } => "field_changed",
             Self::PageChanged { .. } => "page_changed",
             Self::SheetChanged { .. } => "sheet_changed",
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
@@ -261,9 +300,22 @@ impl Trigger {
             self,
             Self::RecordCreated { .. }
                 | Self::RecordChanged { .. }
+                | Self::RecordMatches { .. }
+                | Self::FieldChanged { .. }
                 | Self::PageChanged { .. }
                 | Self::SheetChanged { .. }
                 | Self::WhiteboardChanged { .. }
+        )
+    }
+
+    /// Fired by a collection's records.
+    fn about_collection_records(&self) -> bool {
+        matches!(
+            self,
+            Self::RecordCreated { .. }
+                | Self::RecordChanged { .. }
+                | Self::RecordMatches { .. }
+                | Self::FieldChanged { .. }
         )
     }
 
@@ -376,7 +428,8 @@ pub enum Recipients {
 
 /// What a rule does. Text may use {{task.key}}, {{task.title}},
 /// {{task.url}}, {{task.status}}, {{run.state}}, {{pr.number}},
-/// {{pr.title}}, {{pr.url}}, {{record.title}}, {{record.url}},
+/// {{pr.title}}, {{pr.url}}, {{record.title}}, {{record.url}}, {{record.id}},
+/// {{record.number}},
 /// {{collection.name}}, {{page.title}}, {{page.url}}, {{sheet.title}},
 /// {{sheet.url}}, {{whiteboard.title}}, {{whiteboard.url}}, {{rule.name}}
 /// and {{event}}.
@@ -553,6 +606,35 @@ fn check_shape(
                 return Err(AppError::Invalid(
                     "a record rule has no task conditions: name its collection instead",
                 ));
+            }
+        }
+        Trigger::RecordMatches {
+            view_id, filters, ..
+        } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a record rule has no task conditions: give the trigger a view or filters",
+                ));
+            }
+            if view_id.is_none() && filters.is_empty() {
+                return Err(AppError::Invalid(
+                    "a record-matches rule needs a view of the collection or filters",
+                ));
+            }
+        }
+        Trigger::FieldChanged { field, to, .. } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a record rule has no task conditions: give the trigger a view or filters",
+                ));
+            }
+            let trimmed = field.trim();
+            if trimmed.is_empty() || trimmed.chars().count() > 200 {
+                return Err(AppError::Validation("trigger.field"));
+            }
+            *field = trimmed.to_owned();
+            if to.len() > 20 || to.iter().any(|value| value.chars().count() > 200) {
+                return Err(AppError::Validation("trigger.to"));
             }
         }
         Trigger::PageChanged { .. }
@@ -914,11 +996,24 @@ async fn check_references(
     project_id: Uuid,
     maker: Uuid,
     conditions: &Conditions,
-    trigger: &Trigger,
+    trigger: &mut Trigger,
     actions: &[Action],
     fresh_collections: &[Uuid],
 ) -> Result<(), AppError> {
     let pool = &state.pool;
+    {
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        record_rules::resolve(
+            &mut connection,
+            project_id,
+            maker,
+            trigger,
+            fresh_collections,
+        )
+        .await?;
+        connection.commit().await?;
+    }
+    let trigger = &*trigger;
     if let Some(view_id) = conditions.view_id {
         let mut connection = crate::db::scoped_tx(pool).await?;
         if task_query::usable_view(&mut connection, project_id, view_id, maker)
@@ -1192,7 +1287,7 @@ pub(crate) async fn prepare(
         project_id,
         caller.actor_id,
         &request.conditions,
-        &request.trigger,
+        &mut request.trigger,
         &request.actions,
         fresh_collections,
     )
@@ -1232,6 +1327,10 @@ pub(crate) async fn prepare_in(
     )?;
     let names_setup = request.conditions.view_id.is_some()
         || !request.conditions.filters.is_empty()
+        || matches!(
+            request.trigger,
+            Trigger::RecordMatches { .. } | Trigger::FieldChanged { .. }
+        )
         || request.actions.iter().any(|action| {
             matches!(
                 action,
@@ -1447,7 +1546,7 @@ pub(crate) async fn update(
             project_id,
             caller.actor_id,
             &conditions,
-            &trigger,
+            &mut trigger,
             &actions,
             &[],
         )
@@ -1718,8 +1817,8 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "run.finished" => &["run_finished"],
         "pull_request.checks_failed" => &["pull_request_checks_failed"],
         "message.created" => &["message_posted"],
-        "record.created" => &["record_created"],
-        "record.updated" => &["record_changed"],
+        "record.created" => &["record_created", "record_matches"],
+        "record.updated" => &["record_changed", "record_matches", "field_changed"],
         "page.updated" => &["page_changed"],
         "sheet.updated" => &["sheet_changed"],
         "whiteboard.updated" => &["whiteboard_changed"],
@@ -1848,7 +1947,14 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
         }
         // Only what its maker could see fires it, and for a rule made through
         // an app, only what that app's current limit lets it see.
-        if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
+        if !crate::webhooks::visible_to(
+            pool,
+            rule.owner_actor_id,
+            rule.external_agent_connection_id,
+            rule.project_id,
+            subject,
+        )
+        .await?
         {
             continue;
         }
@@ -1887,6 +1993,10 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             Trigger::RecordCreated { collection_id } | Trigger::RecordChanged { collection_id } => {
                 collection_id.is_none_or(|only| subject.collection_id == Some(only))
             }
+            Trigger::RecordMatches { collection_id, .. }
+            | Trigger::FieldChanged { collection_id, .. } => {
+                subject.collection_id == Some(*collection_id)
+            }
             Trigger::PageChanged { page_id } => {
                 page_id.is_none_or(|only| subject.page_id == Some(only))
             }
@@ -1902,15 +2012,30 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             continue;
         }
         let conditions = rule.conditions();
-        let matched = match subject.work_item_id {
-            Some(work_item_id) => match task_matches(pool, &rule, work_item_id).await? {
+        let matched = if matches!(
+            trigger,
+            Trigger::RecordMatches { .. } | Trigger::FieldChanged { .. }
+        ) {
+            match record_rules::fires(pool, rule.project_id, rule.owner_actor_id, &trigger, event)
+                .await?
+            {
                 Ok(matched) => matched,
                 Err(reason) => {
                     disable(state, &rule, reason).await?;
                     continue;
                 }
-            },
-            None => conditions.is_empty(),
+            }
+        } else {
+            match subject.work_item_id {
+                Some(work_item_id) => match task_matches(pool, &rule, work_item_id).await? {
+                    Ok(matched) => matched,
+                    Err(reason) => {
+                        disable(state, &rule, reason).await?;
+                        continue;
+                    }
+                },
+                None => conditions.is_empty(),
+            }
         };
         let mut dedupe = event.key.clone();
         if let (Trigger::TaskMatches {}, Some(work_item_id)) = (&trigger, subject.work_item_id) {
@@ -1942,6 +2067,39 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
                 continue;
             }
             dedupe = format!("matches:{work_item_id}:{}", event.key);
+        } else if let (Trigger::RecordMatches { .. }, Some(record_id)) =
+            (&trigger, subject.record_id)
+        {
+            // As for tasks: fires when the record enters the conditions.
+            if !matched {
+                sqlx::query(
+                    "DELETE FROM automation_record_matches WHERE rule_id = $1 AND record_id = $2",
+                )
+                .bind(rule.id)
+                .bind(record_id)
+                .execute(crate::db::scoped(pool))
+                .await?;
+                continue;
+            }
+            let entered = sqlx::query(
+                r#"
+                INSERT INTO automation_record_matches (rule_id, record_id, workspace_id, space_id)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT DO NOTHING
+                "#,
+            )
+            .bind(rule.id)
+            .bind(record_id)
+            .bind(rule.organization_id)
+            .bind(rule.project_id)
+            .execute(crate::db::scoped(pool))
+            .await?
+            .rows_affected()
+                == 1;
+            if !entered {
+                continue;
+            }
+            dedupe = format!("matches:{record_id}:{}", event.key);
         } else if !matched {
             continue;
         }
@@ -2185,12 +2343,22 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
             "Turned off because {who} has no active connection that can make changes."
         )));
     }
+    // A rule on a collection's records needs its maker to edit records
+    // there (T1.38); any other, to edit tasks.
+    let edits = if rule
+        .trigger()
+        .is_ok_and(|trigger| trigger.about_collection_records())
+    {
+        PolicyAction::CollectionRecordEdit
+    } else {
+        PolicyAction::WorkItemEdit
+    };
     let can_edit = crate::memory::project_access(
         pool,
         rule.owner_actor_id,
         actor_kind,
         rule.project_id,
-        PolicyAction::WorkItemEdit,
+        edits,
     )
     .await
     .is_ok();
@@ -2570,8 +2738,14 @@ impl Context {
             whiteboard_id: subject.whiteboard_id,
             ..Subject::default()
         };
-        if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
-            .await?
+        if !crate::webhooks::visible_to(
+            &state.pool,
+            rule.owner_actor_id,
+            rule.external_agent_connection_id,
+            rule.project_id,
+            &about,
+        )
+        .await?
         {
             return Ok(None);
         }
@@ -2596,6 +2770,7 @@ impl Context {
                 if crate::webhooks::visible_to(
                     &state.pool,
                     rule.owner_actor_id,
+                    rule.external_agent_connection_id,
                     rule.project_id,
                     &task,
                 )
@@ -2644,6 +2819,8 @@ impl Context {
                 "record.url",
                 record["url"].as_str().unwrap_or_default().to_owned(),
             ));
+            variables.push(("record.id", record_id.to_string()));
+            variables.push(("record.number", record["number"].to_string()));
             variables.push((
                 "collection.name",
                 record["collection"]["name"]
@@ -2823,9 +3000,22 @@ async fn run_operation(
     acting: &Acting,
     run_id: Uuid,
     operation: &str,
-    input: Value,
+    mut input: Value,
     request_id: Option<String>,
 ) -> Result<Value, String> {
+    // An operation that takes a space acts in the rule's own unless the
+    // input names one (T1.38: "create a task" needs no projectId).
+    let takes_space = crate::ops::registry().get(operation).is_some_and(|entry| {
+        (entry.meta.input_schema)()["properties"]
+            .get("projectId")
+            .is_some()
+    });
+    if takes_space
+        && let Some(object) = input.as_object_mut()
+        && !object.contains_key("projectId")
+    {
+        object.insert("projectId".to_owned(), json!(rule.project_id.to_string()));
+    }
     let principal = principal_for(rule, acting);
     let caller = crate::ops::mcp::caller_of(state, &principal)
         .await

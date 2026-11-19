@@ -42,7 +42,7 @@
   "events": { "emits": ["collection.updated", "record.created", "record.updated", "view.changed"], "listens": [] },
   "notifications": ["form_paused"],
   "search": ["records"],
-  "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
+  "automations": { "triggers": ["record_created", "record_changed", "record_matches", "field_changed"], "actions": [] },
   "things": [
     {
       "kind": "collection",

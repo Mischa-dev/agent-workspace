@@ -46,6 +46,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("ai_usage", ORGANIZATION_ID),
     ("audit_events", ORGANIZATION_ID),
     ("automation_rule_matches", WORKSPACE_ID),
+    ("automation_record_matches", WORKSPACE_ID),
     ("automation_rules", ORGANIZATION_ID),
     ("automation_runs", WORKSPACE_ID),
     ("background_jobs", ORGANIZATION_ID),
