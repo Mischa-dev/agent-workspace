@@ -22,9 +22,10 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // index.html's stylesheets (tokens, base, components, shell, kit): 61,731.
   initialCssRawBytes: 67_905,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
-  // largest measured 56,135 raw (collections) and 16,415 gzip (task panel).
-  chunkJavascriptRawBytes: 61_749,
-  chunkJavascriptGzipBytes: 18_057,
+  // largest measured 62,055 raw (the shared buttonDraft chunk) and 18,257
+  // gzip (sheets, with charts, validation and the layout checks).
+  chunkJavascriptRawBytes: 68_261,
+  chunkJavascriptGzipBytes: 20_083,
   // Any stylesheet a lazy chunk loads: the largest, the task pages', 32,641.
   chunkCssRawBytes: 35_906,
   // Whiteboards draw with Excalidraw, which apps/web/vite.config.ts puts under
