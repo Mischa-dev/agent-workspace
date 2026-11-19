@@ -184,7 +184,7 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
             &format!("/api/v1/conversations/{conversation}/messages"),
             Some(&Uuid::now_v7().to_string()),
             json!({"content": {"version": 1, "nodes": [
-                {"type": "text", "text": "Which projects are there? [[call projects_list {}]]"}]}}),
+                {"type": "text", "text": "Which projects are there? [[call project_list {}]]"}]}}),
         ),
     )
     .await;
@@ -213,7 +213,7 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
     .fetch_all(world.pool())
     .await
     .expect("run log");
-    assert_eq!(tools, vec!["projects_list".to_owned()], "{log:#?}");
+    assert_eq!(tools, vec!["project_list".to_owned()], "{log:#?}");
     let answer = sqlx::query_scalar::<_, String>(
         "SELECT plain_text FROM messages WHERE conversation_id = $1::uuid AND author_actor_id = $2",
     )
@@ -222,7 +222,7 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
     .fetch_all(world.pool())
     .await
     .expect("answers");
-    assert_eq!(answer, vec!["Done: projects_list worked.".to_owned()]);
+    assert_eq!(answer, vec!["Done: project_list worked.".to_owned()]);
 
     // Its tokens are on the run and in the workspace's AI usage.
     let (input, output) = sqlx::query_as::<_, (i64, i64)>(
@@ -253,7 +253,7 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
             &format!("/api/v1/conversations/{conversation}/messages"),
             Some(&Uuid::now_v7().to_string()),
             json!({"content": {"version": 1, "nodes": [
-                {"type": "text", "text": "And the tasks? [[call projects_list {}]]"}]}}),
+                {"type": "text", "text": "And the tasks? [[call project_list {}]]"}]}}),
         ),
     )
     .await;
