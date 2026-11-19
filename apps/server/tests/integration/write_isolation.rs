@@ -3096,12 +3096,16 @@ pub(super) async fn digest_ignoring(
 /// except the shared limit counters: every call into a workspace spends its
 /// budget (H1.1), so a counter row changes on reads too. They hold numbers,
 /// never records; `hosting_limits` checks whose budget a call spends.
-async fn base_tables(pool: &PgPool) -> Vec<String> {
+pub(super) async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
-        SELECT table_name::text FROM information_schema.tables
-        WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
-          AND table_name <> 'rate_limit_counters'
+        -- pg_catalog, not information_schema, whose view reads every test
+        -- schema's tables.
+        SELECT listed.relname::text FROM pg_class listed
+        JOIN pg_namespace schema
+          ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
+        WHERE listed.relkind IN ('r', 'p')
+          AND listed.relname <> 'rate_limit_counters'
         ORDER BY 1
         "#,
     )
@@ -3161,8 +3165,10 @@ pub(super) async fn digest_tables(
 /// [`digest_tables`] again: the full digest matches every row of every table
 /// against hundreds of IDs and is far too slow to repeat after each of
 /// hundreds of calls.
-pub(super) async fn table_fingerprints(pool: &PgPool) -> BTreeMap<String, String> {
-    let tables = base_tables(pool).await;
+pub(super) async fn table_fingerprints(
+    pool: &PgPool,
+    tables: &[String],
+) -> BTreeMap<String, String> {
     let query = tables
         .iter()
         .map(|table| {
@@ -3187,10 +3193,11 @@ pub(super) async fn refresh_digest(
     pool: &PgPool,
     ids: &[String],
     ignored: &[&str],
+    tables: &[String],
     fingerprints: &BTreeMap<String, String>,
     rows: &mut BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeMap<String, String> {
-    let now = table_fingerprints(pool).await;
+    let now = table_fingerprints(pool, tables).await;
     let moved = now
         .iter()
         .filter(|(table, print)| fingerprints.get(*table) != Some(*print))
