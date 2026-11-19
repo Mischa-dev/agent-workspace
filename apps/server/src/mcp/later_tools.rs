@@ -165,6 +165,16 @@ async fn within(state: &AppState, principal: &McpPrincipal) -> Result<Option<Vec
     .bind(&within)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // The direct scope isn't a project row: keep it when the limit and the
+    // connection reach it. Which kept DMs it covers is decided per item.
+    let mut reached = reached;
+    if workspaces.contains(&crate::spaces::DIRECT)
+        && within
+            .as_ref()
+            .is_none_or(|within| within.contains(&crate::spaces::DIRECT))
+    {
+        reached.push(crate::spaces::DIRECT);
+    }
     Ok(Some(reached))
 }
 

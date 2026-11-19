@@ -4488,3 +4488,83 @@ async fn a_private_channels_memory_stays_with_its_members() {
     );
     world.finish().await;
 }
+
+/// App accounts are workspace members like people and agents: the Members
+/// page lists them, and an owner changes their role and turns them off
+/// through the same controls.
+#[tokio::test]
+async fn an_owner_manages_an_app_account_like_any_member() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .build("privacy_app_member_managed")
+        .await
+    else {
+        return;
+    };
+    let app_account = sqlx::query_scalar::<_, uuid::Uuid>(
+        "INSERT INTO actors (id, kind, account_kind, status, owner_workspace_id) \
+         VALUES (gen_random_uuid(), 'integration', 'app', 'active', $1) RETURNING id",
+    )
+    .bind(world.organization)
+    .fetch_one(world.pool())
+    .await
+    .expect("app account");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) \
+         VALUES ($1, $2, 'member')",
+    )
+    .bind(world.organization)
+    .bind(app_account)
+    .execute(world.pool())
+    .await
+    .expect("the app joins");
+    let version = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT version FROM organization_memberships \
+             WHERE organization_id = $1 AND actor_id = $2",
+        )
+        .bind(world.organization)
+        .bind(app_account)
+        .fetch_one(world.pool())
+        .await
+        .expect("membership version")
+    };
+    let member = format!(
+        "/api/v1/organizations/{}/members/{app_account}",
+        world.organization
+    );
+    let expected = version().await;
+    let (status, changed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &member,
+            None,
+            json!({"expectedVersion": expected, "role": "admin"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "role change: {changed}");
+    let expected = version().await;
+    let (status, removed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &member,
+            None,
+            json!({"expectedVersion": expected, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "turned off: {removed}");
+    let (role, enabled) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT role, enabled FROM organization_memberships \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(app_account)
+    .fetch_one(world.pool())
+    .await
+    .expect("membership after");
+    assert_eq!((role.as_str(), enabled), ("admin", false));
+    world.finish().await;
+}

@@ -3604,6 +3604,104 @@ async fn check_token(
         (0, saved.len() as i64),
         "A's token changed B's saved items"
     );
+
+    // A message saved and one scheduled in a DM: while the DM is kept in B,
+    // A's token doesn't see them in Later; once it's the account's own
+    // personal DM, it does, and can change them.
+    let dm_message = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM messages WHERE conversation_id = $1::uuid ORDER BY created_at LIMIT 1",
+    )
+    .bind(&b.dm)
+    .fetch_one(pool)
+    .await
+    .expect("a message in B's DM");
+    let (status, saved_dm) = send_json(
+        app,
+        b.browser.request(
+            "POST",
+            "/api/v1/later",
+            None,
+            json!({"messageId": dm_message, "note": "From the DM"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {saved_dm}");
+    let saved_dm = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM saved_items WHERE actor_id = $1 AND message_id = $2",
+    )
+    .bind(b_owner)
+    .bind(dm_message)
+    .fetch_one(pool)
+    .await
+    .expect("the saved DM message");
+    let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let (status, scheduled_dm) = send_json(
+        app,
+        b.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{}/scheduled-messages", b.dm),
+            None,
+            json!({
+                "content": {"version": 1, "nodes": [{"type": "text", "text": "Later in the DM"}]},
+                "sendAt": soon,
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {scheduled_dm}");
+    let scheduled_dm = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM scheduled_messages WHERE author_actor_id = $1 AND conversation_id = $2::uuid",
+    )
+    .bind(b_owner)
+    .bind(&b.dm)
+    .fetch_one(pool)
+    .await
+    .expect("the scheduled DM message");
+    async fn later(app: &axum::Router, token: &str, session: &str, view: &str) -> String {
+        call_tool(app, token, session, "later_list", json!({"view": view}))
+            .await
+            .1
+    }
+    let (open, waiting) = (
+        later(app, &token, &session, "open").await,
+        later(app, &token, &session, "scheduled").await,
+    );
+    if open.contains(&saved_dm.to_string()) || waiting.contains(&scheduled_dm.to_string()) {
+        report.failures.push(format!(
+            "A's token saw Later items from a DM kept in B: {open} {waiting}"
+        ));
+    }
+    sqlx::query(
+        "UPDATE conversations SET kept = false, workspace_id = direct_scope_id() WHERE id = $1::uuid",
+    )
+    .bind(&b.dm)
+    .execute(pool)
+    .await
+    .expect("the DM becomes personal");
+    let (open, waiting) = (
+        later(app, &token, &session, "open").await,
+        later(app, &token, &session, "scheduled").await,
+    );
+    assert!(
+        open.contains(&saved_dm.to_string()),
+        "A's token lists a message saved from a personal DM: {open}"
+    );
+    assert!(
+        waiting.contains(&scheduled_dm.to_string()),
+        "A's token lists a message scheduled in a personal DM: {waiting}"
+    );
+    let (_, done) = call_tool(
+        app,
+        &token,
+        &session,
+        "later_update",
+        json!({"id": saved_dm, "done": true}),
+    )
+    .await;
+    assert!(
+        succeeded(&structured(&done)["outcome"]),
+        "A's token marks a personal DM's saved message done: {done}"
+    );
 }
 
 async fn send_json(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {

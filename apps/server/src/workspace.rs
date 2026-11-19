@@ -253,7 +253,7 @@ async fn load_workspace(
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND actor.kind IN ('human', 'external_agent')) AS member_count, -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
+                   AND actor.kind IN ('human', 'external_agent', 'integration')) AS member_count, -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
@@ -732,7 +732,7 @@ async fn lock_member(
         SELECT actor.kind, membership.role, membership.enabled, membership.version
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to manage)
+         AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps, as the Members page lists them; the system and workers aren't members to manage)
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
         FOR UPDATE OF membership
         "#,

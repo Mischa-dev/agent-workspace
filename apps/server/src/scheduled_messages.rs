@@ -94,6 +94,7 @@ struct ScheduledRow {
     conversation_kind: String,
     conversation_name: String,
     parent_conversation_id: Option<Uuid>,
+    conversation_workspace_id: Option<Uuid>,
     project_id: Uuid,
     workspace_id: Uuid,
     project_name: String,
@@ -116,6 +117,7 @@ fn select_sql(extra: &str) -> String {
         SELECT scheduled.id, scheduled.conversation_id,
                conversation.kind AS conversation_kind, conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
+               conversation.workspace_id AS conversation_workspace_id,
                COALESCE(scheduled.project_id, direct_scope_id()) AS project_id,
                scheduled.organization_id AS workspace_id,
                COALESCE(project.name, 'Messages') AS project_name,
@@ -207,6 +209,7 @@ pub async fn list(
         .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
+        .filter(|row| !hidden_by_limit(viewer, row))
         .map(|row| view(addresses, row))
         .collect())
 }
@@ -222,8 +225,15 @@ pub async fn get_scheduled(
         .bind(id)
         .fetch_optional(crate::db::scoped(pool))
         .await?
+        .filter(|row| !hidden_by_limit(viewer, row))
         .map(|row| view(addresses, row))
         .ok_or(AppError::NotFound("scheduled_message"))
+}
+
+/// A scheduled DM message an app or token acting for `viewer` may not
+/// see: the DM is kept in a workspace the credential isn't held to.
+fn hidden_by_limit(viewer: Uuid, row: &ScheduledRow) -> bool {
+    row.direct_space && crate::access::limit_hides_direct(viewer, row.conversation_workspace_id)
 }
 
 // ---------------------------------------------------------------------------

@@ -518,6 +518,25 @@ pub fn limit_hides(account: Uuid, space: Uuid, permission: Permission) -> bool {
     crate::policy::agent_limit_hides(account, space, permission)
 }
 
+/// While a credential held to some workspaces acts for `account`, whether a
+/// DM or group kept in `workspace` is beyond it. A personal one (the direct
+/// scope) never is, and nothing is outside such a call.
+pub fn limit_hides_direct(account: Uuid, workspace: Option<Uuid>) -> bool {
+    match (limited_direct_workspaces(account), workspace) {
+        (Some(allowed), Some(workspace)) => {
+            workspace != crate::spaces::DIRECT && !allowed.contains(&workspace)
+        }
+        _ => false,
+    }
+}
+
+/// While a credential held to some workspaces acts for `account`, the
+/// workspaces whose DMs and groups it reaches (with the direct scope for
+/// personal ones); `None` outside such a call. For list SQL.
+pub fn limited_direct_workspaces(account: Uuid) -> Option<Vec<Uuid>> {
+    crate::policy::agent_limit_direct_workspaces(account, Permission::ProjectsView)
+}
+
 /// While an app acts for `account`, the spaces its delegation limit leaves
 /// `permission` in; `None` outside such a call. For list SQL that checks
 /// the role itself and binds the limit as a space list.

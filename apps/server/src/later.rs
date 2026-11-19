@@ -121,6 +121,7 @@ struct SavedRow {
     conversation_kind: Option<String>,
     conversation_name: Option<String>,
     parent_conversation_id: Option<Uuid>,
+    conversation_workspace_id: Option<Uuid>,
     author_name: Option<String>,
     message_preview: Option<String>,
     message_removed: Option<bool>,
@@ -150,6 +151,7 @@ fn select_sql(extra: &str) -> String {
                message.id AS message_id, message.conversation_id,
                conversation.kind AS conversation_kind, conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
+               conversation.workspace_id AS conversation_workspace_id,
                author.display_name AS author_name,
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
@@ -344,9 +346,13 @@ pub async fn list(
 
 /// A saved task an app acting for `viewer` may not see: its agent limit
 /// leaves out "see tasks" there.
+/// A saved DM message is hidden when the DM is kept in a workspace the
+/// credential isn't held to.
 fn hidden_by_limit(viewer: Uuid, row: &SavedRow) -> bool {
-    row.work_item_id.is_some()
-        && crate::access::limit_hides(viewer, row.project_id, crate::policy::Permission::TasksView)
+    (row.work_item_id.is_some()
+        && crate::access::limit_hides(viewer, row.project_id, crate::policy::Permission::TasksView))
+        || (row.direct_space
+            && crate::access::limit_hides_direct(viewer, row.conversation_workspace_id))
 }
 
 pub async fn open_count(
@@ -369,6 +375,11 @@ pub async fn open_count(
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
           AND (item.work_item_id IS NULL OR ({sees_task}
                AND ($3::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($3))))
+          -- $4: while a credential held to some workspaces acts for them,
+          -- a saved DM message only from a DM kept in one of those.
+          AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL
+               OR (SELECT kept.workspace_id FROM conversations kept
+                   WHERE kept.id = message.conversation_id) = ANY($4))
         "#
     ))
     .bind(viewer)
@@ -377,6 +388,7 @@ pub async fn open_count(
         viewer,
         crate::policy::Permission::TasksView,
     ))
+    .bind(crate::access::limited_direct_workspaces(viewer))
     .fetch_one(crate::db::scoped(pool))
     .await?)
 }
