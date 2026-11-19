@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useHostOffers, useJoinableAccounts } from './addPaths'
+import { AgentScopeDialog } from './AgentScopeDialog'
 import { HostOfferList } from './HostOfferList'
 import { JoinAgentList } from './JoinAgentList'
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
@@ -617,6 +618,7 @@ function AgentCard({
 }) {
   const active = connection.status === 'active'
   const [editing, setEditing] = useState(false)
+  const [scoping, setScoping] = useState(false)
   const [secret, setSecret] = useState<string | null>(null)
   // A2.10: a paused agent is asked nothing new and its changes do nothing.
   const workspaceId = useWorkspaceId() ?? undefined
@@ -652,6 +654,7 @@ function AgentCard({
                 onSelect: () =>
                   pause.mutate({ account: connection.actorId }, { onError: (reason) => toastError(`${connection.displayName} wasn’t paused`, reason) }),
               },
+          { label: 'What it can reach…', icon: 'shield-check' as const, onSelect: () => setScoping(true) },
           { label: 'Set up in an app…', icon: 'link' as const, disabled, onSelect: () => onConfirm('setup') },
           { label: 'New token…', icon: 'retry' as const, disabled, onSelect: () => onConfirm('rotate') },
           { label: 'Disable', icon: 'circle-minus' as const, disabled, onSelect: () => onEnable(false) },
@@ -692,6 +695,7 @@ function AgentCard({
           Give it to the runner now so it can check each wakeup. It can’t be shown again after you close this.
         </OneTimeValue>
       ) : null}
+      {scoping ? <AgentScopeDialog accountId={connection.actorId} name={connection.displayName} onClose={() => setScoping(false)} /> : null}
       {active && editing ? (
         <div className="aw-agentcard__edit">
           <AgentEditForm

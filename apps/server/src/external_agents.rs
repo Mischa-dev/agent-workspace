@@ -1,4 +1,5 @@
 pub mod ops;
+pub mod scope;
 
 use axum::{
     Json, Router,

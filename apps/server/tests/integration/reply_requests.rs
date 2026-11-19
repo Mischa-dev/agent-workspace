@@ -310,7 +310,9 @@ async fn what_an_agent_does_for_someone_is_recorded_as_asked_by_them() {
         )
         .await;
     let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
-    owner.say(&app, &dm_id, "asked-1", "Mara, please look").await;
+    owner
+        .say(&app, &dm_id, "asked-1", "Mara, please look")
+        .await;
     let owner_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT author_actor_id FROM messages WHERE conversation_id = $1::uuid LIMIT 1",
     )
@@ -352,7 +354,10 @@ async fn what_an_agent_does_for_someone_is_recorded_as_asked_by_them() {
         .await;
     assert_eq!(sent["outcome"], "ok", "{sent}");
     let after_reply = asked_by(&pool).await;
-    assert!(after_reply > before_reply, "the reply is made for its asker");
+    assert!(
+        after_reply > before_reply,
+        "the reply is made for its asker"
+    );
 
     // Another call says who asked by naming the request.
     let unasked = mara_mcp
@@ -393,7 +398,10 @@ async fn what_an_agent_does_for_someone_is_recorded_as_asked_by_them() {
                 json!({ "conversationId": dm_id, "text": "x", "context": context }),
             )
             .await;
-        assert_eq!(refused["outcome"], "invalid_request", "{context}: {refused}");
+        assert_eq!(
+            refused["outcome"], "invalid_request",
+            "{context}: {refused}"
+        );
     }
     let borrowed = rook_mcp
         .tool(

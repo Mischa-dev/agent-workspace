@@ -406,6 +406,12 @@ export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
+export type ScopeAccount = { accountId: string; displayName?: string | null }
+
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; name?: string | null }
+
+export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
+
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
 
 export type SectionShow = "all" | "unread"
@@ -594,6 +600,10 @@ export type AgentResumeInput = { account: string; everywhere?: boolean; reason?:
 
 export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
+export type AgentScopeGetInput = { account: string }
+
+export type AgentScopeGetOutput = { accountId: string; alsoInOtherWorkspaces: boolean; connections: number; displayName?: string | null; follows: number; handle?: string | null; managers: ScopeAccount[]; privateConversations: ScopeConversation[]; readsWithConsent: boolean; spaces: ScopeSpace[]; workspaceRole: string }
+
 export type AgentTemplateListInput = { spaceId?: string | null }
 
 export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
@@ -601,6 +611,10 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AppConsentSetInput = { app: string; conversation: string; granted?: boolean | null }
+
+export type AppConsentSetOutput = { appAccountId: string; changed: boolean; conversationId: string; granted: boolean }
 
 export type AutomationCreateInput = { actions: Action[]; conditions?: Conditions | null; enabled?: boolean | null; name: string; projectId: string; trigger: Trigger }
 
@@ -1674,8 +1688,10 @@ export type Operations = {
   agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
+  agent_scope_get: { input: AgentScopeGetInput; output: AgentScopeGetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  app_consent_set: { input: AppConsentSetInput; output: AppConsentSetOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
   automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }

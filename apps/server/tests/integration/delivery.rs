@@ -1265,6 +1265,25 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
     world.finish().await;
 }
 
+/// The direct scope, where DMs and groups live.
+const DIRECT_SCOPE: &str = "00000000-0000-7000-8000-00000000d1ec";
+
+/// An operation the owner runs on a DM or group.
+async fn direct_op(world: &Workspace, name: &str, input: Value) -> Value {
+    let (status, body) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v2/w/{DIRECT_SCOPE}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{name}: {body}");
+    body
+}
+
 async fn owner_op(world: &Workspace, name: &str, input: Value) -> Value {
     let (status, body) = send(
         &world.app,
@@ -1278,6 +1297,193 @@ async fn owner_op(world: &Workspace, name: &str, input: Value) -> Value {
     .await;
     assert_eq!(status, StatusCode::OK, "{name}: {body}");
     body
+}
+
+/// A2.15: an account that reads with consent (an app acting as itself)
+/// hears nothing from a DM it is in until a participant consents, and
+/// nothing again once consent is taken back. A shared channel needs none.
+#[tokio::test]
+async fn an_app_hears_a_dm_only_with_consent() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .agent("mara", "member")
+        .build("delivery_consent")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let mara = &world.agents["mara"];
+    // The world makes no app acting as itself, so Rook stands in for one:
+    // an app account starts with this on.
+    sqlx::query("UPDATE actors SET reads_with_consent = true WHERE id = $1")
+        .bind(rook.actor)
+        .execute(world.pool())
+        .await
+        .expect("rook reads with consent");
+    let start = read(&world, rook, None).await["nextCursor"].clone();
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook.actor }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    post(&world, &dm, "consent-1", mention("before ", rook.actor)).await;
+    let heard = read(&world, rook, Some(&start)).await;
+    assert!(!heard.to_string().contains(&dm), "no consent yet: {heard}");
+
+    // A DM lives in the direct scope, so it is named there.
+    let granted = direct_op(
+        &world,
+        "app_consent_set",
+        json!({ "conversation": dm, "app": rook.actor }),
+    )
+    .await;
+    assert_eq!(granted["value"]["granted"], true, "{granted}");
+    assert_eq!(granted["value"]["changed"], true, "{granted}");
+    let before = heard["nextCursor"].clone();
+    post(&world, &dm, "consent-2", mention("after ", rook.actor)).await;
+    let heard = read(&world, rook, Some(&before)).await;
+    let mentioned = of_type(&heard, "message.mentioned");
+    assert_eq!(mentioned.len(), 1, "{heard}");
+    assert_eq!(mentioned[0]["data"]["conversationId"], dm.as_str());
+
+    let revoked = direct_op(
+        &world,
+        "app_consent_set",
+        json!({ "conversation": dm, "app": rook.actor, "granted": false }),
+    )
+    .await;
+    assert_eq!(revoked["value"]["changed"], true, "{revoked}");
+    let before = heard["nextCursor"].clone();
+    post(&world, &dm, "consent-3", mention("revoked ", rook.actor)).await;
+    let heard = read(&world, rook, Some(&before)).await;
+    assert!(
+        !heard.to_string().contains(&dm),
+        "consent taken back: {heard}"
+    );
+
+    // A shared channel needs no consent, and an account that hears what it
+    // can see needs none either.
+    let general = channel(&world, "general").await;
+    for (workspace, input, field) in [
+        (
+            world.organization.to_string(),
+            json!({ "conversation": general, "app": rook.actor }),
+            "conversation",
+        ),
+        (
+            DIRECT_SCOPE.to_owned(),
+            json!({ "conversation": dm, "app": mara.actor }),
+            "app",
+        ),
+    ] {
+        let (status, body) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v2/w/{workspace}/ops/app_consent_set"),
+                Some(&Uuid::now_v7().to_string()),
+                input,
+            ),
+        )
+        .await;
+        assert_eq!(body["outcome"], "invalid_request", "{status} {body}");
+        assert_eq!(body["field"], field, "{body}");
+    }
+    world.finish().await;
+}
+
+/// A2.15: an agent's scope lists a private conversation only to people in
+/// it, and says it is in another workspace without naming it.
+#[tokio::test]
+async fn an_agents_scope_shows_each_viewer_only_what_they_could_open() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("delivery_scope")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let lena = &world.people["lena"];
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook.actor }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    let scope_for = async |who: &super::support::callers::Person| -> Value {
+        let (status, body) = send(
+            &world.app,
+            who.browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/agent_scope_get", world.organization),
+                None,
+                json!({ "account": rook.actor }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["value"].clone()
+    };
+
+    let owners = scope_for(&world.owner).await;
+    assert!(
+        owners.to_string().contains(&dm),
+        "the owner is in the DM: {owners}"
+    );
+    assert_eq!(owners["alsoInOtherWorkspaces"], false, "{owners}");
+    assert!(
+        owners["spaces"]
+            .as_array()
+            .expect("spaces")
+            .iter()
+            .any(|space| space["spaceId"] == world.project("WORK")),
+        "{owners}"
+    );
+    let lenas = scope_for(lena).await;
+    assert!(
+        !lenas.to_string().contains(&dm),
+        "Lena isn't in it: {lenas}"
+    );
+
+    // In a workspace nobody here is in: yes, and never its name.
+    let elsewhere = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Zebrafinch Labs', $2)")
+        .bind(elsewhere)
+        .bind(format!("zebrafinch-{}", elsewhere.simple()))
+        .execute(world.pool())
+        .await
+        .expect("another workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) \
+         VALUES ($1, $2, 'member')",
+    )
+    .bind(elsewhere)
+    .bind(rook.actor)
+    .execute(world.pool())
+    .await
+    .expect("rook joins it");
+    let lenas = scope_for(lena).await;
+    assert_eq!(lenas["alsoInOtherWorkspaces"], true, "{lenas}");
+    assert!(!lenas.to_string().contains("Zebrafinch"), "{lenas}");
+    world.finish().await;
 }
 
 /// A2.10: a paused agent hears only about its pause until resumed, then
