@@ -4491,7 +4491,8 @@ async fn a_private_channels_memory_stays_with_its_members() {
 
 /// App accounts are workspace members like people and agents: the Members
 /// page lists them, and an owner changes their role and turns them off
-/// through the same controls.
+/// through the same controls. The workspace isn't handed to one, since an
+/// owner has to sign in.
 #[tokio::test]
 async fn an_owner_manages_an_app_account_like_any_member() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -4544,6 +4545,44 @@ async fn an_owner_manages_an_app_account_like_any_member() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "role change: {changed}");
+    // But the workspace can't be handed to it: an owner has to sign in.
+    let (status, handed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/organizations/{}/transfer-ownership",
+                world.organization
+            ),
+            None,
+            json!({"actorId": app_account}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_client_error(),
+        "handed to an app: {status} {handed}"
+    );
+    let (_, listed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{}/members", world.organization),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    let entry = listed["members"]
+        .as_array()
+        .and_then(|members| {
+            members
+                .iter()
+                .find(|member| member["actorId"] == app_account.to_string())
+        })
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(entry["mayOwn"], false, "{listed}");
     let expected = version().await;
     let (status, removed) = send(
         &world.app,

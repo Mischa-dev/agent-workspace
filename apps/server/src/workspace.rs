@@ -475,6 +475,9 @@ struct MemberView {
     joined_at: DateTime<Utc>,
     project_count: i64,
     is_you: bool,
+    /// Whether the workspace can be handed to them: an owner has to sign in
+    /// to use it, which an app account can't.
+    may_own: bool,
     capabilities: MemberCapabilities,
 }
 
@@ -510,6 +513,12 @@ const MEMBER_FROM: &str = r#"
      AND (held.id = membership.role_id OR (membership.role_id IS NULL AND held.key = membership.role))
 "#;
 
+/// Whether an account of this kind signs in itself. An app account acts
+/// only through the hosts and connections it was made for.
+fn signs_in(kind: &str) -> bool {
+    kind != "integration" // kind-check: mechanical (whether the account can sign in at all)
+}
+
 fn member_view(
     row: MemberRow,
     caller: Standing,
@@ -520,6 +529,7 @@ fn member_view(
     let is_you = row.actor_id == principal.actor_id;
     let connects_apps = row.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
     let capabilities = member_capabilities(caller, is_you, target_tier, connects_apps, row.enabled);
+    let may_own = signs_in(&row.kind);
     Ok(MemberView {
         actor_id: row.actor_id,
         kind: row.kind,
@@ -532,6 +542,7 @@ fn member_view(
         agent_limit: (caller.may(Permission::MembersManage) || is_you)
             .then_some(row.agent_limit)
             .flatten(),
+        may_own,
         enabled: row.enabled,
         version: row.version,
         joined_at: row.joined_at,
@@ -899,7 +910,8 @@ async fn transfer_ownership(
     if caller.role != MembershipRole::Owner {
         return Err(AppError::Forbidden);
     }
-    // Any active member can be given the workspace, a person or an agent.
+    // Any active member who signs in can be given the workspace, a person
+    // or an agent.
     let target = lock_member(&mut transaction, organization_id, request.actor_id).await?;
     let target_active = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND status = 'active')",
@@ -909,6 +921,10 @@ async fn transfer_ownership(
     .await?;
     if !target.enabled || !target_active {
         return Err(AppError::NotFound("workspace member"));
+    }
+    // An owner has to sign in to use the workspace or hand it on.
+    if !signs_in(&target.kind) {
+        return Err(AppError::Validation("new owner"));
     }
     sqlx::query(
         r#"

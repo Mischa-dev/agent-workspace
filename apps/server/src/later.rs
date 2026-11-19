@@ -320,10 +320,12 @@ pub async fn list(
     let extra = match view_ {
         ListView::Open => {
             "AND item.done_at IS NULL AND ($2::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($2))
+             AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL OR conversation.workspace_id = ANY($4))
              ORDER BY item.remind_at ASC NULLS LAST, item.created_at DESC, item.id DESC LIMIT $3"
         }
         ListView::Done => {
             "AND item.done_at IS NOT NULL AND ($2::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($2))
+             AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL OR conversation.workspace_id = ANY($4))
              ORDER BY item.done_at DESC, item.id DESC LIMIT $3"
         }
     };
@@ -331,6 +333,8 @@ pub async fn list(
         .bind(viewer)
         .bind(within)
         .bind(LIST_LIMIT)
+        // Before the limit, so DMs kept elsewhere don't crowd out the rest.
+        .bind(crate::access::limited_direct_workspaces(viewer))
         .fetch_all(crate::db::scoped(pool))
         .await?;
     let open_count = open_count(pool, viewer, within).await?;
