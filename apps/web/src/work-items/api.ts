@@ -1,5 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
+import { ApiError, isApiError } from '../api/errors'
 import { callOp } from '../api/ops'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
@@ -715,11 +716,26 @@ async function changeCriteria(
   input: { projectId: string; workItemId: string; expectedVersion: number; idempotencyKey: string },
   operation: CriterionOperationArgument,
 ) {
-  await callOp(
-    'task_criteria_update',
-    { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations: [operation] },
-    { requestId: input.idempotencyKey },
-  )
+  try {
+    await callOp(
+      'task_criteria_update',
+      { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations: [operation] },
+      { requestId: input.idempotencyKey },
+    )
+  } catch (error) {
+    // Its conflicts don't carry the task: read it, and if it moved on, refuse
+    // the way `task_update` does, so the editor loads the newer one.
+    if (!isApiError(error) || error.code !== 'conflict') throw error
+    const current = await getWorkItem(input.projectId, input.workItemId).catch(() => null)
+    if (!current || current.version === input.expectedVersion) throw error
+    throw new ApiError({
+      status: error.status,
+      code: 'conflict',
+      message: error.message,
+      details: { reason: 'version', currentVersion: current.version, current: { task: current } },
+      requestId: error.requestId,
+    })
+  }
   return getWorkItem(input.projectId, input.workItemId)
 }
 
