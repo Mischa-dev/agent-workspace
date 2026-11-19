@@ -305,3 +305,71 @@ async fn secrets_exchange_rotate_and_revoke() {
     assert!(token_for(&world.app, &rook_secret).await.is_some());
     world.finish().await;
 }
+
+/// An exchanged token holds what its secret does, no more and no less: a
+/// read-only secret's token can't write, a space secret's token stays in
+/// its space, and an account secret's token reaches the person's other
+/// spaces in the workspace.
+#[tokio::test]
+async fn an_exchanged_token_keeps_its_secrets_scope_and_reach() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("OTHER")
+        .person("lena", "member")
+        .build("k123_token_reach")
+        .await
+    else {
+        return;
+    };
+    let work = world.project("WORK").to_owned();
+    let other = world.project("OTHER").to_owned();
+    let token_of = async |key: &str, input: Value| {
+        let (_, secret) = made(&op(&world, "lena", "credential_create", key, input).await);
+        let token = token_for(&world.app, &secret).await.expect("exchanged");
+        let session = initialize(&world.app, &token).await.expect("session");
+        (token, session)
+    };
+    let call = async |(token, session): &(String, String), name: &str, arguments: Value| {
+        super::support::app::tool(&world.app, token, session, name, arguments).await
+    };
+    let opens = |space: &str| json!({"spaceId": space});
+    let writes =
+        |key: &str| json!({"projectId": work, "title": "From a token", "clientRequestId": key});
+
+    let read_only = token_of(
+        "lena-read",
+        json!({"name": "reader", "space": work, "write": false}),
+    )
+    .await;
+    assert_eq!(
+        call(&read_only, "space_open", opens(&work)).await["outcome"],
+        "ok"
+    );
+    let refused = call(&read_only, "task_create", writes("read-only")).await;
+    assert_ne!(
+        refused["outcome"], "ok",
+        "a read-only token wrote: {refused}"
+    );
+
+    let in_space = token_of("lena-space", json!({"name": "space", "space": work})).await;
+    let wrote = call(&in_space, "task_create", writes("in-space")).await;
+    assert_eq!(wrote["outcome"], "ok", "{wrote}");
+    let outside = call(&in_space, "space_open", opens(&other)).await;
+    assert_ne!(
+        outside["outcome"], "ok",
+        "a space token left its space: {outside}"
+    );
+
+    let everywhere = token_of(
+        "lena-account",
+        json!({"name": "account", "space": work, "reach": "account"}),
+    )
+    .await;
+    let reached = call(&everywhere, "space_open", opens(&other)).await;
+    assert_eq!(
+        reached["outcome"], "ok",
+        "an account token's other space: {reached}"
+    );
+
+    world.finish().await;
+}

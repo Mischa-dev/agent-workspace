@@ -138,7 +138,21 @@ const ACCESS_COLUMNS: &str = r#"
                  THEN direct_permissions(conversation.id, $2)
                  ELSE workspace_role_permissions(membership.role_id)
             END AS membership_role_permissions,
-            COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled
+            COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled,
+            -- K1.27: what the account's groups are given in the space, as
+            -- `holding::load` adds them.
+            CASE WHEN conversation.project_id IS NOT NULL THEN ARRAY(
+                SELECT DISTINCT granted.key
+                FROM role_grants grant_row
+                JOIN account_groups grp
+                  ON grp.id = grant_row.group_id AND grp.archived_at IS NULL
+                JOIN account_group_members group_member
+                  ON group_member.group_id = grant_row.group_id
+                 AND group_member.account_id = $2
+                CROSS JOIN LATERAL unnest(workspace_role_permissions(grant_row.role_id))
+                    AS granted(key)
+                WHERE grant_row.space_id = conversation.project_id
+            ) END AS group_permissions
 "#;
 
 const ACCESS_FROM: &str = r#"
@@ -184,6 +198,10 @@ pub(crate) struct ConversationAccessRow {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
+    /// What the account's groups are given in the space (K1.27); read with
+    /// `ACCESS_COLUMNS`, none elsewhere.
+    #[sqlx(default)]
+    group_permissions: Option<Vec<String>>,
 }
 
 impl ConversationAccessRow {
@@ -243,7 +261,7 @@ impl ConversationAccessRow {
             Some(space) => crate::access::membership_allows(
                 actor_id,
                 space,
-                grant,
+                grant.with_groups(self.groups()),
                 self.membership_enabled,
                 permission,
             ),
@@ -255,6 +273,15 @@ impl ConversationAccessRow {
 }
 
 impl ConversationAccessRow {
+    /// What the account's groups are given in the conversation's space.
+    fn groups(&self) -> crate::policy::PermissionSet {
+        self.group_permissions
+            .as_deref()
+            .map_or(crate::policy::PermissionSet::EMPTY, |keys| {
+                crate::policy::PermissionSet::from_keys(keys)
+            })
+    }
+
     /// [`Self::allows`] for an account speaking as one of its runs, in the
     /// run's space (`runs::say`): a run hands a worker membership what its
     /// agent says there.

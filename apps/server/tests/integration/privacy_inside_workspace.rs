@@ -3282,6 +3282,72 @@ async fn channel_writes_keep_to_private_channels() {
     world.finish().await;
 }
 
+/// K1.27: a role given to someone's group adds to their own seat in a
+/// space, in chat as everywhere else: a Viewer whose group is a Member
+/// there posts in its channels.
+#[tokio::test]
+async fn a_group_role_adds_to_a_viewer_seat_in_chat() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TEAM")
+        .person("lena", "viewer")
+        .build("privacy_group_posting")
+        .await
+    else {
+        return;
+    };
+    let team = world.project("TEAM").to_owned();
+    let lena = &world.people["lena"];
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    let (_, channel) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "channel_create",
+            "owner-channel",
+            json!({"projectId": team, "name": "design"}),
+        ),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let post = |key: &'static str| {
+        op(
+            &lena.browser,
+            "message_send",
+            key,
+            json!({"conversationId": channel, "text": "hello"}),
+        )
+    };
+    let (_, refused) = send(&world.app, post("lena-viewer")).await;
+    assert_ne!(refused["outcome"], "ok", "a Viewer doesn't post: {refused}");
+    for (name, key, body) in [
+        (
+            "group_create",
+            "owner-group",
+            json!({"handle": "design", "name": "Design", "members": [lena.actor]}),
+        ),
+        (
+            "space_group_add",
+            "owner-grant",
+            json!({"spaceId": team, "group": "@design", "role": "member"}),
+        ),
+    ] {
+        let (_, done) = send(&world.app, op(&world.owner.browser, name, key, body)).await;
+        assert_eq!(done["outcome"], "ok", "{name}: {done}");
+    }
+    let (_, sent) = send(&world.app, post("lena-member")).await;
+    assert_eq!(sent["outcome"], "ok", "her group's role posts: {sent}");
+
+    world.finish().await;
+}
+
 /// K1.27: a group given a role in a space gives its members that space,
 /// and taking someone out of the group takes it away; a guest sees only
 /// the spaces they're added to (not open ones, the workspace's own or the

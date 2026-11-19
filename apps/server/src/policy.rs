@@ -262,6 +262,19 @@ impl RoleGrant {
     pub const fn permissions(self) -> PermissionSet {
         self.permissions
     }
+
+    /// The grant with what the account's groups are given in the same
+    /// space added (K1.27). A worker's membership takes nothing from them:
+    /// it acts only through its run.
+    pub fn with_groups(self, groups: PermissionSet) -> Self {
+        if self.role == MembershipRole::Worker {
+            return self;
+        }
+        Self {
+            role: self.role,
+            permissions: self.permissions.union(groups),
+        }
+    }
 }
 
 impl MembershipRole {
