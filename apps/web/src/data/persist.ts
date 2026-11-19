@@ -7,10 +7,10 @@
 // person or the workspace turns it off. The service worker still never keeps
 // API answers.
 
-import { dehydrate, hydrate, type DehydratedState, type QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 
 import { things as thingStore, type Thing } from './things'
-import { offlineOwner, setOfflineOwner } from './offlinePointer'
+import { forgetOffline, OFFLINE_DATABASE, offlineOwner, setOfflineOwner } from './offlinePointer'
 
 /** How much is kept: things, conversations (with their latest messages), lists, and what pages need around them. */
 export const OFFLINE_CAPS = { things: 500, conversations: 30, messages: 100, lists: 20, pages: 120, shell: 60 } as const
@@ -111,23 +111,34 @@ function trimmed(data: unknown, kind: OfflineClass): unknown {
   return data
 }
 
-/** The cache's answers worth keeping, the most recent of each class up to its cap. */
-export function pickForOffline(state: DehydratedState): DehydratedState {
+/** One kept answer: its key, what it said, and when. */
+export type KeptQuery = { queryKey: readonly unknown[]; data: unknown; updatedAt: number }
+
+/** Every answer in the cache of a kind worth keeping. */
+export function cachedForOffline(queryClient: QueryClient): KeptQuery[] {
+  return queryClient
+    .getQueryCache()
+    .getAll()
+    .filter((query) => query.state.status === 'success' && offlineClass(query.queryKey) !== null)
+    .map((query) => ({ queryKey: query.queryKey, data: query.state.data, updatedAt: query.state.dataUpdatedAt }))
+}
+
+/** The answers worth keeping, the most recent of each class up to its cap. */
+export function pickForOffline(queries: readonly KeptQuery[]): KeptQuery[] {
   const counts: Record<OfflineClass, number> = { conversation: 0, list: 0, page: 0, shell: 0 }
-  const queries = [...state.queries]
-    .sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)
+  return [...queries]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
     .flatMap((query) => {
       const kind = offlineClass(query.queryKey)
-      if (!kind || query.state.status !== 'success' || counts[kind] >= CLASS_CAP[kind]) return []
+      if (!kind || counts[kind] >= CLASS_CAP[kind]) return []
       counts[kind] += 1
-      return [{ ...query, state: { ...query.state, data: trimmed(query.state.data, kind), fetchStatus: 'idle' as const } }]
+      return [{ ...query, data: trimmed(query.data, kind) }]
     })
-  return { mutations: [], queries }
 }
 
 // --- Where it's kept ---------------------------------------------------------
 
-export type OfflineCopy = { owner: string; savedAt: number; queries: DehydratedState; things: Thing[] }
+export type OfflineCopy = { owner: string; savedAt: number; queries: KeptQuery[]; things: Thing[] }
 
 type Store = {
   get(owner: string): Promise<OfflineCopy | undefined>
@@ -135,7 +146,6 @@ type Store = {
   clear(): Promise<void>
 }
 
-const DATABASE = 'agent-workspace-offline'
 const STORE = 'copies'
 
 function memoryStore(): Store {
@@ -153,11 +163,18 @@ function indexedStore(factory: IDBFactory): Store {
   let database: Promise<IDBDatabase> | null = null
   const open = () => {
     database ??= new Promise((resolve, reject) => {
-      const opening = factory.open(DATABASE, 1)
+      const opening = factory.open(OFFLINE_DATABASE, 1)
       opening.onupgradeneeded = () => {
         if (!opening.result.objectStoreNames.contains(STORE)) opening.result.createObjectStore(STORE, { keyPath: 'owner' })
       }
-      opening.onsuccess = () => resolve(opening.result)
+      opening.onsuccess = () => {
+        // Signing out deletes the database (`forgetOffline`): let it go, and open afresh next time.
+        opening.result.onversionchange = () => {
+          opening.result.close()
+          database = null
+        }
+        resolve(opening.result)
+      }
       opening.onerror = () => {
         database = null
         reject(opening.error)
@@ -196,7 +213,7 @@ export function resetOfflineForTests() {
 /** Write what's worth keeping now, for `owner`. */
 export async function saveOffline(queryClient: QueryClient, owner: string): Promise<void> {
   const started = generation
-  const queries = pickForOffline(dehydrate(queryClient, { shouldDehydrateQuery: (query) => offlineClass(query.queryKey) !== null }))
+  const queries = pickForOffline(cachedForOffline(queryClient))
   // Through JSON, so nothing that can't be stored (a function, a class) stops the write.
   const copy = JSON.parse(
     JSON.stringify({ owner, savedAt: Date.now(), queries, things: thingStore.snapshot(OFFLINE_CAPS.things) }),
@@ -214,7 +231,11 @@ export async function restoreOffline(queryClient: QueryClient): Promise<boolean>
   if (!owner) return false
   const copy = await store.get(owner).catch(() => undefined)
   if (!copy || copy.owner !== owner) return false
-  hydrate(queryClient, copy.queries)
+  for (const kept of copy.queries) {
+    // A fresher answer already here wins.
+    if ((queryClient.getQueryState(kept.queryKey)?.dataUpdatedAt ?? 0) >= kept.updatedAt) continue
+    queryClient.setQueryData(kept.queryKey, kept.data, { updatedAt: kept.updatedAt })
+  }
   for (const thing of copy.things) thingStore.put(thing)
   return true
 }
@@ -257,5 +278,5 @@ export function keepOffline(queryClient: QueryClient, owner: string, delay = 200
 export async function clearOffline(): Promise<void> {
   generation += 1
   setOfflineOwner(null)
-  await store.clear().catch(() => undefined)
+  await store.clear().catch(() => forgetOffline())
 }

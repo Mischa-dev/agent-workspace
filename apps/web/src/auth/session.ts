@@ -12,7 +12,7 @@ import {
 import { requestJson } from '../api/client'
 import { clearLocalDrafts, setLocalDraftOwner } from '../app/localDrafts'
 import { things } from '../data/things'
-import { offlineOwner, setOfflineOwner } from '../data/offlinePointer'
+import { forgetOffline, offlineOwner } from '../data/offlinePointer'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
@@ -191,7 +191,7 @@ export async function logout() {
   // And the writes waiting for the connection (W1.30), kept in IndexedDB.
   await import('../data/outbound').then((outbound) => outbound.clearOutbound()).catch(() => undefined)
   // And what was kept for reading offline (W1.31).
-  await import('../data/persist').then((persist) => persist.clearOffline()).catch(() => undefined)
+  forgetOffline()
   await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 
@@ -206,10 +206,7 @@ export function useSession() {
 
 export function clearAuthenticatedQueryCache(queryClient: QueryClient) {
   // Signed out (or the server says the session is gone): nothing stays for reading offline (W1.31).
-  if (offlineOwner()) {
-    setOfflineOwner(null)
-    void import('../data/persist').then((persist) => persist.clearOffline()).catch(() => undefined)
-  }
+  if (offlineOwner()) forgetOffline()
   resetQueryScope()
   clearActorScopedQueries(queryClient)
   setLocalDraftOwner(null)

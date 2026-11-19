@@ -36,12 +36,19 @@ test('a rule built from pickers and an operation’s form, tried without writing
   await trying.getByRole('button', { name: 'Done' }).click()
 
   // Trying it ran nothing.
-  const rules = await page.evaluate(async ({ projectId, name }) => {
-    const api = await import('/src/automations/api.ts')
-    const listed = await api.listRules(projectId)
-    const rule = listed.rules.find((entry) => entry.name === name)!
-    return { rule, runs: (await api.listRuns(projectId, rule.id)).runs.length }
-  }, { projectId, name })
+  const csrf = (await page.context().cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
+  const op = async <T>(name: string, input: Record<string, unknown>): Promise<T> => {
+    const response = await page.request.post(`/api/v2/ops/${name}`, {
+      headers: { 'x-csrf-token': csrf, origin: new URL(page.url()).origin },
+      data: input,
+    })
+    expect(response.ok(), await response.text()).toBe(true)
+    return ((await response.json()) as { value: T }).value
+  }
+  type Rule = { id: string; name: string; actions: unknown[]; conditions: { filters?: { statusId?: string } } }
+  const listed = await op<{ rules: Rule[] }>('automation_list', { projectId })
+  const rule = listed.rules.find((entry) => entry.name === name)!
+  const rules = { rule, runs: (await op<{ runs: unknown[] }>('automation_history', { projectId, ruleId: rule.id })).runs.length }
   expect(rules.runs).toBe(0)
   expect(rules.rule.actions[0]).toMatchObject({ kind: 'run_operation', operation: 'task_comment_create', input: { taskId: '{{task.key}}' } })
   expect(rules.rule.conditions.filters?.statusId).toBeTruthy()

@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider, dehydrate } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
@@ -9,6 +9,7 @@ import OfflineReading from './OfflineReading'
 import { offlineOwner, offlineReadingOn } from './offlinePointer'
 import {
   OFFLINE_CAPS,
+  cachedForOffline,
   clearOffline,
   keepOffline,
   offlineClass,
@@ -78,16 +79,16 @@ describe('reading offline', () => {
     cache.setQueryData(queryKeys.timeline('p', 'long'), { messages: long }, { updatedAt: 6000 })
     cache.setQueryData(['account', 'tokens'], { tokens: ['secret'] })
 
-    const picked = pickForOffline(dehydrate(cache))
-    const timelines = picked.queries.filter((query) => offlineClass(query.queryKey) === 'conversation')
+    const picked = pickForOffline(cachedForOffline(cache))
+    const timelines = picked.filter((query) => offlineClass(query.queryKey) === 'conversation')
     expect(timelines).toHaveLength(OFFLINE_CAPS.conversations)
     expect(timelines.some((query) => query.queryKey[3] === 'c0')).toBe(false)
-    const inbox = picked.queries.find((query) => query.queryKey[0] === 'inbox')?.state.data as { pages: unknown[] }
+    const inbox = picked.find((query) => query.queryKey[0] === 'inbox')?.data as { pages: unknown[] }
     expect(inbox.pages).toEqual([{ items: [1] }])
-    const kept = picked.queries.find((query) => query.queryKey[3] === 'long')?.state.data as { messages: { id: number }[] }
+    const kept = picked.find((query) => query.queryKey[3] === 'long')?.data as { messages: { id: number }[] }
     expect(kept.messages).toHaveLength(OFFLINE_CAPS.messages)
     expect(kept.messages.at(-1)).toEqual({ id: OFFLINE_CAPS.messages + 19 })
-    expect(picked.queries.some((query) => query.queryKey[0] === 'account')).toBe(false)
+    expect(picked.some((query) => query.queryKey[0] === 'account')).toBe(false)
   })
 
   it('shows an account’s copy at start, to that account only, and forgets it at sign-out', async () => {

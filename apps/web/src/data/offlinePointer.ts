@@ -6,6 +6,8 @@
 import type { EffectiveSettings } from '../settings/api'
 
 const POINTER = 'agent-workspace:offline-reading'
+/** Where the copy is kept (data/persist.ts opens it). */
+export const OFFLINE_DATABASE = 'agent-workspace-offline'
 
 /** The account whose pages this device keeps for reading offline, if any. */
 export function offlineOwner(): string | null {
@@ -22,6 +24,16 @@ export function setOfflineOwner(owner: string | null) {
     else window.localStorage.removeItem(POINTER)
   } catch {
     // Without storage nothing is kept, so there's nothing to point at.
+  }
+}
+
+/** Forget every kept copy on this device, without loading the code that keeps them: signing out calls this. */
+export function forgetOffline() {
+  setOfflineOwner(null)
+  try {
+    indexedDB?.deleteDatabase(OFFLINE_DATABASE)
+  } catch {
+    // No IndexedDB, so nothing was kept.
   }
 }
 
