@@ -194,7 +194,7 @@ const KINDS: &[(&str, &str)] = &[
         "page",
         "SELECT project.organization_id, project.id FROM project_pages page \
          JOIN projects project ON project.id = page.project_id \
-         WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
+         WHERE page.id = $1 AND page_visible_to(page.id, $2)",
     ),
     (
         "change_set",

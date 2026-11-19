@@ -30,6 +30,7 @@ use crate::{
 };
 
 pub mod a2a;
+pub mod adopt;
 pub mod builtin;
 pub mod commands;
 pub mod dispatch;

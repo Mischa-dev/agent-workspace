@@ -733,6 +733,36 @@
     "title": "Update connection"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "channels",
+    "name": "conversation_agent_settings_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Ambient mode here"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "conversation_agent_settings_set",
+    "permission": "replies.steer",
+    "preview": false,
+    "proposable": false,
+    "title": "Set ambient mode"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1331,6 +1361,36 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
+    "module": "workspace",
+    "name": "follow_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "What you follow"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "follows.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "follow_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Follow"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
     "module": "collections",
     "name": "formula_preview",
     "permission": null,
@@ -1383,6 +1443,36 @@
     "preview": false,
     "proposable": false,
     "title": "List groups"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "guard_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Guards"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "guards.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "guard_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a guard"
   },
   {
     "automation": false,
@@ -1705,6 +1795,36 @@
     "preview": false,
     "proposable": false,
     "title": "Update label"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "pages",
+    "name": "memory_page_open",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open memory"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "memory_page_set",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Write memory"
   },
   {
     "automation": true,

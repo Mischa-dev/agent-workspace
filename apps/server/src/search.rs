@@ -702,6 +702,7 @@ const PAGES_SQL: &str = r#"
     WHERE page.search_vector @@ query.q
       AND page.project_id = ANY({projects})
       AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $1))
       AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
       AND $3::uuid[] IS NULL
       AND ($4::uuid[] IS NULL OR page.updated_by_actor_id = ANY($4))

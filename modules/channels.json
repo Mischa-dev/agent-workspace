@@ -16,6 +16,8 @@
     "channel_join": "change",
     "channel_leave": "change",
     "channel_update": "change",
+    "conversation_agent_settings_set": "change",
+    "conversation_agent_settings_list": "query",
     "thread_start": "create",
     "thread_update": "change"
   },

@@ -413,7 +413,7 @@ pub(crate) async fn thing_destination(
 ) -> Result<Destination, AppError> {
     match thing {
         ThingKind::Page => {
-            let project_id = crate::memory::page_project(pool, thing_id).await?;
+            let project_id = crate::memory::page_project(pool, thing_id, editor).await?;
             crate::memory::project_access(
                 pool,
                 editor,

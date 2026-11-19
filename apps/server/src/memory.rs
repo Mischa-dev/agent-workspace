@@ -33,6 +33,7 @@ use crate::{
 };
 
 pub mod make;
+pub mod memory_pages;
 pub mod ops;
 pub mod templates;
 
@@ -383,6 +384,9 @@ pub async fn list_pages(
         LEFT JOIN project_memberships editor
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
         WHERE page.project_id = $1 AND ($2 OR page.archived_at IS NULL)
+          -- A conversation's memory page is opened from its conversation
+          -- (A2.16), never listed with the space's pages.
+          AND page.memory_for_kind IS DISTINCT FROM 'conversation'
           AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         ORDER BY page.is_guide DESC, page.updated_at DESC, page.id
         LIMIT 500
@@ -406,6 +410,7 @@ const PAGE_SELECT: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = $1
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
       -- A page that is a part of a module that's off or archived is hidden
       -- with it (M1.6), as collections are.
       AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
@@ -421,6 +426,7 @@ pub async fn get_page(
     let Some(mut page) = sqlx::query_as::<_, PageView>(PAGE_SELECT)
         .bind(page_id)
         .bind(STALE_AFTER_DAYS)
+        .bind(viewer)
         .fetch_optional(crate::db::scoped(pool))
         .await?
     else {
@@ -519,6 +525,8 @@ pub async fn get_revision(
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         {joins}
         WHERE revision.page_id = $1 AND revision.version = $2
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
+               OR page_visible_to(page.id, $3))
           AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         "#,
         joins = revision_session_joins("$3"),
@@ -720,10 +728,12 @@ pub async fn update_page(
                    archived_at IS NOT NULL, is_template
             FROM project_pages
             WHERE id = $1 AND module_part_on('page', id) AND module_part_on('skill', id)
+              AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))
             FOR UPDATE
             "#,
         )
         .bind(page_id)
+        .bind(writer.actor_id)
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("page"))?;
@@ -1519,12 +1529,24 @@ pub(crate) async fn free_page_title(
         .unwrap_or(base))
 }
 
-pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
-        .bind(page_id)
-        .fetch_optional(crate::db::scoped(pool))
-        .await?
-        .ok_or(AppError::NotFound("page"))
+/// The page's project, for a viewer who may see the page at all: a
+/// conversation's memory page is found only by those who can read the
+/// conversation. Every page route starts here, so its live document,
+/// discussion, versions and exports follow the same rule.
+pub(crate) async fn page_project(
+    pool: &PgPool,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT project_id FROM project_pages WHERE id = $1 \
+         AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))",
+    )
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .ok_or(AppError::NotFound("page"))
 }
 
 async fn get_page_http(
@@ -1532,7 +1554,7 @@ async fn get_page_http(
     principal: AuthenticatedActor,
     ApiPath(page_id): ApiPath<Uuid>,
 ) -> Result<Json<PageView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,
@@ -1568,7 +1590,7 @@ async fn update_page_http(
 ) -> Result<Json<PageSaved>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     if let Some(version) = input.restore_version {
         crate::history::cold::warm_page(&state, page_id, version).await?;
     }
@@ -1710,7 +1732,7 @@ async fn get_revision_http(
     principal: AuthenticatedActor,
     ApiPath((page_id, version)): ApiPath<(Uuid, i64)>,
 ) -> Result<Json<RevisionView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,

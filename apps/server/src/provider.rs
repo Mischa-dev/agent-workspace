@@ -366,7 +366,7 @@ pub async fn start_run(
             )
             .await
     {
-        tracing::warn!(error_category = error.log_category(), %run_id, "run address not reported");
+        tracing::warn!(error_category = AppError::from(error).log_category(), %run_id, "run address not reported");
     }
 
     spawn_drive(
@@ -480,7 +480,7 @@ pub(crate) async fn follow_recovered_run(
     {
         return Ok(false);
     }
-    let reports = Arc::new(RunReports::open(state, run_id).await?);
+    let reports = Arc::new(report::open(state, run_id).await?);
     // Following took a while: take the run back only while the host is ours.
     let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
@@ -695,7 +695,7 @@ pub(crate) async fn complete_recovered_run(
     .bind(run_id)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let reports = RunReports::open(state, run_id).await?;
+    let reports = report::open(state, run_id).await?;
     let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
@@ -896,16 +896,9 @@ async fn drive_turn(
 /// Wait until a stopped run should be looked at: a wake on the control
 /// channel, or a second at most.
 async fn stop_wake(state: &AppState) {
-    let cluster = state.supervisors.cluster();
-    let woken = async {
-        match &cluster {
-            Some(cluster) => cluster.released().await,
-            None => std::future::pending().await,
-        }
-    };
     tokio::select! {
         () = sleep(Duration::from_secs(1)) => {}
-        () = woken => {}
+        () = state.supervisors.lease_released() => {}
     }
 }
 
@@ -953,17 +946,10 @@ async fn handle_provider_request(
     // The answer comes to the host as an `answer` command; the driver reads
     // it with the run's credential. The wake on the control channel is the
     // prompt; the one-second check is the safety net.
-    let cluster = state.supervisors.cluster();
     loop {
-        let woken = async {
-            match &cluster {
-                Some(cluster) => cluster.released().await,
-                None => std::future::pending().await,
-            }
-        };
         tokio::select! {
             () = sleep(Duration::from_secs(1)) => {}
-            () = woken => {}
+            () = state.supervisors.lease_released() => {}
             () = lease_lost.cancelled() => {}
         }
         if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
@@ -1160,7 +1146,7 @@ async fn record_step(
             false,
         ));
     }
-    reports.activities(steps).await
+    Ok(reports.activities(steps).await?)
 }
 
 /// Attempts at failing a run whose turn failed before leaving it to

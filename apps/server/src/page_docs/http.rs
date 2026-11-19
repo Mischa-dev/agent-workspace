@@ -102,7 +102,7 @@ async fn page_access(
     page_id: Uuid,
     action: Action,
 ) -> Result<Uuid, AppError> {
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     memory::project_access(
         &state.pool,
         principal.actor_id,
@@ -193,7 +193,7 @@ pub async fn update_document(
     let writer = memory::browser_writer(&principal)?;
     let update = decode(&request.update, store::MAX_UPDATE_BYTES, "update")?;
     let since = decode(&request.state_vector, MAX_STATE_VECTOR_BYTES, "stateVector")?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     memory::project_access(
         &mut *transaction,

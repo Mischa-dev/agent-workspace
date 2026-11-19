@@ -360,9 +360,10 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
-            // A paused account's answer (A2.10) is the same for every
-            // operation: shared too.
-            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
+            // A call set aside, by a paused account (A2.10) or a team's
+            // guard (A2.27), is answered the same for every operation:
+            // shared too.
+            Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
             Some("ok") => {
                 share_ok_envelope(branch, components);
                 continue;
@@ -446,6 +447,36 @@ fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
             "$ref": "#/components/schemas/Ok",
             "properties": { "value": value },
         });
+    }
+}
+
+/// An argument left out and one sent as `null` mean the same, so an
+/// optional argument's type is written without `null`: what a client should
+/// send, and a shorter document.
+fn drop_optional_nulls(input: &mut Value) {
+    let required = input
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, property) in properties.iter_mut() {
+        if required.iter().any(|known| known.as_str() == Some(name)) {
+            continue;
+        }
+        let Some(types) = property.get("type").and_then(Value::as_array) else {
+            continue;
+        };
+        let kept: Vec<Value> = types
+            .iter()
+            .filter(|kind| *kind != "null")
+            .cloned()
+            .collect();
+        if kept.len() == 1 && types.len() == 2 {
+            property["type"] = kept[0].clone();
+        }
     }
 }
 
@@ -623,6 +654,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
+        drop_optional_nulls(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()
@@ -749,6 +781,7 @@ pub(crate) fn document() -> Value {
         },
     });
     share_common_properties(&mut document);
+    share_repeated_properties(&mut document);
     document
 }
 
@@ -803,6 +836,181 @@ fn visit_properties(value: &mut Value, name: &str, visit: &mut dyn FnMut(&mut Va
                 visit_properties(item, name, visit);
             }
         }
+        _ => {}
+    }
+}
+
+/// Any other property written the same way by several operations (a task
+/// id with its description, a cursor, a limit) is written once in
+/// `components` too, when referencing it is shorter than repeating it.
+fn share_repeated_properties(document: &mut Value) {
+    let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
+    each_property(document, &mut |name, schema| {
+        if schema.get("$ref").is_none() {
+            *seen
+                .entry((name.to_owned(), schema.to_string()))
+                .or_default() += 1;
+        }
+    });
+    let mut shared: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut ranked: Vec<_> = seen.into_iter().collect();
+    // The most repeated schema of a name takes the plain name.
+    ranked.sort_by(
+        |((left_name, left), left_count), ((right_name, right), right_count)| {
+            left_name
+                .cmp(right_name)
+                .then(right_count.cmp(left_count))
+                .then(left.cmp(right))
+        },
+    );
+    let mut schemas = document["components"]["schemas"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for ((name, schema), count) in ranked {
+        // Component names allow letters, digits, `.`, `-` and `_` only.
+        let Some(first) = name.chars().next() else {
+            continue;
+        };
+        if !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            continue;
+        }
+        let base = format!("{}{}", first.to_ascii_uppercase(), &name[1..]);
+        let mut component = base.clone();
+        let mut suffix = 1;
+        while schemas.contains_key(&component) {
+            suffix += 1;
+            component = format!("{base}{suffix}");
+        }
+        let reference = format!(r##"{{"$ref":"#/components/schemas/{component}"}}"##).len();
+        let written_once = schema.len() + component.len() + 4;
+        if count < 2 || count * schema.len() <= count * reference + written_once {
+            continue;
+        }
+        let value: Value = serde_json::from_str(&schema).expect("a schema it just wrote");
+        schemas.insert(component.clone(), value);
+        shared.insert((name, schema), component);
+    }
+    if shared.is_empty() {
+        return;
+    }
+    replace_properties(document, &shared);
+    let added: BTreeMap<&String, (String, String)> = shared
+        .iter()
+        .map(|(key, component)| (component, key.clone()))
+        .collect();
+    for component in added.keys() {
+        if let Some(schema) = schemas.get_mut(*component) {
+            replace_properties(schema, &shared);
+        }
+    }
+    document["components"]["schemas"] = Value::Object(schemas);
+    // A schema counted inside a larger one that is now shared may be left
+    // with too few uses to be worth its own component: put it back.
+    let mut uses: BTreeMap<String, usize> = BTreeMap::new();
+    count_refs(document, &mut uses);
+    let schemas = document["components"]["schemas"]
+        .as_object_mut()
+        .expect("schemas");
+    let mut inline = BTreeMap::new();
+    for (component, (_, schema)) in &added {
+        let count = uses.get(component.as_str()).copied().unwrap_or(0);
+        let reference = format!(r##"{{"$ref":"#/components/schemas/{component}"}}"##).len();
+        if count * schema.len() <= count * reference + schema.len() + component.len() + 4 {
+            if let Some(value) = schemas.remove(component.as_str()) {
+                inline.insert(format!("#/components/schemas/{component}"), value);
+            }
+        }
+    }
+    if !inline.is_empty() {
+        inline_refs(document, &inline);
+    }
+}
+
+fn count_refs(value: &Value, uses: &mut BTreeMap<String, usize>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(reference)) = map.get("$ref")
+                && let Some(name) = reference.strip_prefix("#/components/schemas/")
+            {
+                *uses.entry(name.to_owned()).or_default() += 1;
+            }
+            map.values().for_each(|child| count_refs(child, uses));
+        }
+        Value::Array(items) => items.iter().for_each(|item| count_refs(item, uses)),
+        _ => {}
+    }
+}
+
+/// Replaces each reference in `inline` with the schema it named.
+fn inline_refs(value: &mut Value, inline: &BTreeMap<String, Value>) {
+    if let Some(schema) = value
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| inline.get(reference))
+    {
+        *value = schema.clone();
+        inline_refs(value, inline);
+        return;
+    }
+    match value {
+        Value::Object(map) => map
+            .values_mut()
+            .for_each(|child| inline_refs(child, inline)),
+        Value::Array(items) => items.iter_mut().for_each(|item| inline_refs(item, inline)),
+        _ => {}
+    }
+}
+
+/// Calls `visit` with the name and schema of every property.
+fn each_property(value: &Value, visit: &mut dyn FnMut(&str, &Value)) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "properties"
+                    && let Value::Object(properties) = child
+                {
+                    for (name, schema) in properties {
+                        visit(name, schema);
+                        each_property(schema, visit);
+                    }
+                } else {
+                    each_property(child, visit);
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| each_property(item, visit)),
+        _ => {}
+    }
+}
+
+/// Points every shared property schema at its component.
+fn replace_properties(value: &mut Value, shared: &BTreeMap<(String, String), String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "properties"
+                    && let Value::Object(properties) = child
+                {
+                    for (name, schema) in properties.iter_mut() {
+                        if let Some(component) = shared.get(&(name.clone(), schema.to_string())) {
+                            *schema =
+                                json!({ "$ref": format!("#/components/schemas/{component}") });
+                        } else {
+                            replace_properties(schema, shared);
+                        }
+                    }
+                } else {
+                    replace_properties(child, shared);
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| replace_properties(item, shared)),
         _ => {}
     }
 }
