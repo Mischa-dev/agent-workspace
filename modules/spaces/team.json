@@ -1,0 +1,11 @@
+{
+  "kind": "team",
+  "channels": [{ "name": "general" }],
+  "pages": [
+    {
+      "title": "Guide",
+      "guide": true,
+      "markdown": "# About this team\n\nWhat the team does, who is in it, and how to reach it. Agents read this page before they work here.\n"
+    }
+  ]
+}

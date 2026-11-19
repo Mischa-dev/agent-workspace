@@ -87,7 +87,14 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
                     .map_or_else(|| kind.to_owned(), |manifest| manifest.display_name.clone())
             });
             WorkingRun {
-                href: format!("/projects/{}/threads/{}", row.project_id, row.thread_id),
+                href: crate::addresses::link(
+                    state,
+                    None,
+                    &crate::addresses::Target::space(
+                        row.project_id,
+                        crate::addresses::Place::Thread(row.thread_id),
+                    ),
+                ),
                 id: row.id,
                 state: row.state,
                 project_id: row.project_id,

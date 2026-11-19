@@ -76,7 +76,7 @@ struct ThingRow {
     project_id: Option<Uuid>,
     /// For a thing across a workspace (no project): that workspace.
     organization_id: Option<Uuid>,
-    /// For conversations: whether they're in the hidden direct project.
+    /// For conversations: whether they're a DM or group (in no space).
     direct: bool,
     /// For a thread: the conversation it was started in. For a record: its
     /// collection.
@@ -218,10 +218,10 @@ const CONVERSATIONS_SQL: &str = r#"
            CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name,
            conversation.project_id, NULL::uuid AS organization_id,
-           project.kind = 'direct' AS direct, conversation.parent_channel_id AS parent_id
+           conversation.project_id IS NULL AS direct, conversation.parent_channel_id AS parent_id
     FROM conversations conversation
-    JOIN projects project ON project.id = conversation.project_id
-    WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)
+    WHERE conversation.id = ANY($1)
+      AND (conversation.project_id IS NULL OR conversation.project_id = ANY($2))
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $3)
 "#;

@@ -179,20 +179,10 @@ pub(super) async fn agent_profile_list(
     }
     let project_id = principal.project_id;
     let listed = async {
-        let list = crate::agent_profiles::list_profiles(
-            state,
-            principal.actor_id,
-            principal.actor_kind,
-            project_id,
-        )
-        .await?;
-        let presence = crate::agent_profiles::presence(
-            state,
-            principal.actor_id,
-            principal.actor_kind,
-            project_id,
-        )
-        .await?;
+        let list =
+            crate::agent_profiles::list_profiles(state, principal.actor_id, project_id).await?;
+        let presence =
+            crate::agent_profiles::presence(state, principal.actor_id, project_id).await?;
         Ok::<_, AppError>(AgentProfileListValue {
             profiles: json(&list.profiles),
             agents: json(&presence.agents),

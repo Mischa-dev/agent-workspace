@@ -407,7 +407,7 @@ async fn column_values(
             "SELECT membership.actor_id, membership.display_name \
              FROM project_memberships membership JOIN actors actor ON actor.id = membership.actor_id \
              WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active' \
-               AND actor.kind IN ('human', 'external_agent') \
+               AND actor.kind IN ('human', 'external_agent') /* // kind-check: mechanical (accounts only) */ \
              ORDER BY lower(membership.display_name), membership.actor_id::text",
         )
         .bind(project_id)

@@ -171,11 +171,10 @@ pub(crate) fn harness_choices(state: &AppState, organization_id: Uuid) -> Vec<Ha
 pub(crate) async fn authorize_project(
     executor: impl PgExecutor<'_> + Copy,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<Uuid, AppError> {
-    memory::project_access(executor, actor_id, actor_kind, project_id, action).await?;
+    memory::project_access(executor, actor_id, project_id, action).await?;
     sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(executor)
@@ -248,26 +247,14 @@ pub(crate) async fn active_environment(
 pub(crate) async fn list_for(
     state: &AppState,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<EnvironmentList, AppError> {
-    let organization_id = authorize_project(
-        &state.pool,
-        actor_id,
-        actor_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
-    let can_manage = memory::project_access(
-        &state.pool,
-        actor_id,
-        actor_kind,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await
-    .is_ok();
+    let organization_id =
+        authorize_project(&state.pool, actor_id, project_id, Action::ProjectView).await?;
+    let can_manage =
+        memory::project_access(&state.pool, actor_id, project_id, Action::SettingsManage)
+            .await
+            .is_ok();
     let (default, default_source) =
         default_environment(state, organization_id, project_id, actor_id).await?;
     let rows = active_environments(&state.pool, project_id).await?;
@@ -290,13 +277,7 @@ async fn list_environments(
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<EnvironmentList>, AppError> {
     Ok(Json(
-        list_for(
-            &state,
-            principal.actor_id,
-            principal_kind(&principal)?,
-            project_id,
-        )
-        .await?,
+        list_for(&state, principal.actor_id, project_id).await?,
     ))
 }
 
@@ -458,7 +439,6 @@ async fn create_environment(
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -559,7 +539,6 @@ async fn update_environment(
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -677,7 +656,6 @@ async fn archive_environment(
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -702,13 +680,7 @@ async fn archive_environment(
     .await?;
     transaction.commit().await?;
     Ok(Json(
-        list_for(
-            &state,
-            principal.actor_id,
-            crate::settings::actor_kind(&principal.actor_kind)?,
-            project_id,
-        )
-        .await?,
+        list_for(&state, principal.actor_id, project_id).await?,
     ))
 }
 
@@ -765,7 +737,6 @@ async fn make_default(
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -791,13 +762,7 @@ async fn make_default(
     .await?;
     transaction.commit().await?;
     Ok(Json(
-        list_for(
-            &state,
-            principal.actor_id,
-            crate::settings::actor_kind(&principal.actor_kind)?,
-            project_id,
-        )
-        .await?,
+        list_for(&state, principal.actor_id, project_id).await?,
     ))
 }
 
@@ -867,7 +832,6 @@ async fn check_environment(
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::WorkerInvoke,
     )

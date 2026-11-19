@@ -79,8 +79,8 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": "WORK"}),
+        "space_archive",
+        json!({"spaceId": "WORK"}),
     )
     .await;
     assert_ne!(archived["outcome"], "ok", "{archived}");
@@ -96,8 +96,8 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": theirs}),
+        "space_archive",
+        json!({"spaceId": theirs}),
     )
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
@@ -105,8 +105,8 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": theirs, "archived": false}),
+        "space_restore",
+        json!({"spaceId": theirs}),
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
@@ -258,8 +258,8 @@ async fn a_workspace_you_left_stops_listing_its_archived_projects() {
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": theirs}),
+        "space_archive",
+        json!({"spaceId": theirs}),
     )
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");

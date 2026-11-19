@@ -112,6 +112,29 @@ pub(crate) async fn dm_policy(
     .await?)
 }
 
+/// Why a DM takes no new message from `sender`, when it is blocked either
+/// way or its two no longer share a workspace; none otherwise.
+pub(crate) async fn why_closed(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+    kind: &str,
+    sender: Uuid,
+) -> Result<Option<AppError>, AppError> {
+    if kind != "dm" {
+        return Ok(None);
+    }
+    let Some(other) = other_member(tx, conversation, sender).await? else {
+        return Ok(None);
+    };
+    if blocked_either_way(tx, sender, other).await? {
+        return Ok(Some(CLOSED));
+    }
+    if !share_a_workspace(tx, sender, other).await? {
+        return Ok(Some(NOT_SHARED));
+    }
+    Ok(None)
+}
+
 /// Checks a message `sender` is about to send into a conversation of
 /// `kind`, inside the send's transaction (the conversation is locked). The
 /// first message to someone who asks first opens a request; a reply from

@@ -4,10 +4,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::McpPrincipal;
-use crate::policy::{
-    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
-    authorize,
-};
+use crate::policy::{Action, MembershipRole, RoleGrant};
 
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
 
@@ -376,7 +373,6 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
           AND pm.actor_id = $2
           AND pm.enabled
           AND p.archived_at IS NULL
-          AND a.kind IN ('human', 'external_agent')
           AND a.status = 'active'
         "#,
     )
@@ -386,23 +382,21 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
     .await
     .ok()
     .flatten();
-    let Some(role) = role.and_then(|(role, permissions)| {
+    let Some(grant) = role.and_then(|(role, permissions)| {
         parse_membership_role(&role)?;
         RoleGrant::stored(&role, permissions.as_deref()).ok()
     }) else {
         return false;
     };
-    let subject = Subject::new(
-        principal.actor_id,
-        principal.actor_kind,
-        true,
-        Some(Membership::project(principal.project_id, role, true)),
-        None,
-    );
-    let resource = Resource::Project(ProjectScope::project(principal.project_id));
-    [Action::McpRead, action]
-        .into_iter()
-        .all(|action| matches!(authorize(&subject, action, resource), Decision::Allow))
+    [Action::McpRead, action].into_iter().all(|action| {
+        crate::access::membership_allows(
+            principal.actor_id,
+            principal.project_id,
+            grant,
+            true,
+            action.permission(),
+        )
+    })
 }
 
 fn parse_membership_role(role: &str) -> Option<MembershipRole> {
@@ -717,7 +711,11 @@ fn work_item_projection(
             .collect(),
         canonical_url: canonical_url(
             state,
-            &format!("/projects/{}/work-items/{}", row.project_id, row.id),
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::task(row.project_id, row.id),
+            ),
         ),
     }
 }
@@ -745,9 +743,13 @@ fn repository_projection(state: &crate::AppState, row: RepositoryRow) -> Reposit
         archived: row.archived,
         canonical_url: canonical_url(
             state,
-            &format!(
-                "/projects/{}/settings/repositories/{}",
-                row.project_id, row.id
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::space(
+                    row.project_id,
+                    crate::addresses::Place::Repository(row.id),
+                ),
             ),
         ),
     }
@@ -773,7 +775,14 @@ fn pull_request_projection(state: &crate::AppState, row: PullRequestRow) -> Pull
         version: row.version,
         canonical_url: canonical_url(
             state,
-            &format!("/projects/{}/pull-requests/{}", row.project_id, row.id),
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::space(
+                    row.project_id,
+                    crate::addresses::Place::PullRequest(row.id),
+                ),
+            ),
         ),
         suggested: row.suggested,
     }

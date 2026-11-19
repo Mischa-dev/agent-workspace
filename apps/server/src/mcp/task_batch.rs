@@ -30,7 +30,7 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, ToolResult, accessible_project_ids,
-        archived_task_message, insert_audit, parse_id, project_is_chosen, public_url,
+        archived_task_message, insert_audit, link_url, parse_id, project_is_chosen,
         version_conflict_message,
     },
     task_drafts::{self, NewTask, ParentChoice},
@@ -497,23 +497,26 @@ async fn create_many(
         return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
     }
     let project_id = principal.project_id;
-    let Some((project_key, direct)) = sqlx::query_as::<_, (String, bool)>(
-        "SELECT project_key, kind = 'direct' FROM projects WHERE id = $1",
-    )
-    .bind(project_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
+    // Tasks never go where DMs live, which is no space at all.
+    if crate::spaces::kind::holds_messages(project_id)
+        || super::common::anchored_in_workspace(
+            &mut *crate::db::scoped_tx(&state.pool).await?,
+            principal,
+        )
+        .await?
+    {
+        return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
+    }
+    let Some(project_key) =
+        sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(crate::db::scoped(&state.pool))
+            .await?
     else {
         return Ok(BatchResult::not_found(
             "That project wasn't found, or you can't see it.",
         ));
     };
-    // Tasks never go in the hidden Messages space, where nobody would see
-    // them.
-    if direct {
-        return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
-    }
-
     let (mut drafts, mut problems) = task_drafts::check_shapes(&arguments.tasks);
     // Existing parents, found only among projects the caller can reach, and
     // only in this project. Another project's task is never named.
@@ -744,9 +747,10 @@ async fn create_many(
             labels,
             criteria_count: u32::try_from(task.acceptance_criteria.len()).unwrap_or(u32::MAX),
             version: versions.get(task.index).copied().unwrap_or(1),
-            url: Some(public_url(
+            url: Some(link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{}", row.work_item_id),
+                None,
+                &crate::addresses::Target::task(project_id, row.work_item_id),
             )),
         });
     }
@@ -1950,9 +1954,10 @@ async fn update_many(
             changed_fields: outcome.changed_fields,
             status: workflow.status_name(outcome.status_id).to_owned(),
             archived: outcome.archived,
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{task_id}"),
+                None,
+                &crate::addresses::Target::task(project_id, *task_id),
             ),
         })
         .collect::<Vec<_>>();

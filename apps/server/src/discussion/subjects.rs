@@ -124,6 +124,19 @@ impl SubjectKind {
         }
     }
 
+    /// What commenting on this kind takes: its module's "comment on"
+    /// permission, in place of posting in channels (K1.16).
+    pub fn comment_permission(self) -> crate::policy::Permission {
+        use crate::policy::Permission;
+        match self {
+            Self::Page => Permission::PagesComment,
+            Self::Sheet => Permission::SheetsComment,
+            Self::Whiteboard => Permission::WhiteboardsComment,
+            Self::Record => Permission::CollectionsComment,
+            Self::Task => Permission::TasksComment,
+        }
+    }
+
     pub fn subject(self) -> &'static Subject {
         SUBJECTS
             .iter()

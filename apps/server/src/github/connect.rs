@@ -599,10 +599,9 @@ async fn record_claims(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The person who started this must still be allowed to manage the
     // project's GitHub connection when they come back.
-    let (role, role_permissions, kind) =
-        sqlx::query_as::<_, (String, Option<Vec<String>>, String)>(
-            r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id), actor.kind
+    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -617,31 +616,20 @@ async fn record_claims(
           AND project.archived_at IS NULL
         FOR SHARE OF project, membership, organization_membership
         "#,
-        )
-        .bind(attempt.project_id)
-        .bind(attempt.actor_id)
-        .bind(attempt.organization_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(AppError::Forbidden)?;
-    let subject = Subject::new(
-        attempt.actor_id,
-        crate::accounts::actor_kind(&kind)?,
-        true,
-        Some(Membership::project(
-            attempt.project_id,
-            crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    if !authorize(
-        &subject,
-        Action::GithubIntegrationManage,
-        Resource::Project(ProjectScope::project(attempt.project_id)),
     )
-    .is_allowed()
-    {
+    .bind(attempt.project_id)
+    .bind(attempt.actor_id)
+    .bind(attempt.organization_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Forbidden)?;
+    if !crate::access::membership_allows(
+        attempt.actor_id,
+        attempt.project_id,
+        crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?,
+        true,
+        Action::GithubIntegrationManage.permission(),
+    ) {
         return Err(AppError::Forbidden);
     }
     for installation in installations {
@@ -852,7 +840,6 @@ pub(crate) struct PickedRepository {
 pub(crate) async fn add_picked_repository_as(
     state: &AppState,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     installation_id: i64,
     github_repository_id: i64,
@@ -874,7 +861,6 @@ pub(crate) async fn add_picked_repository_as(
     require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::RepositoryManage,
     )
@@ -882,7 +868,6 @@ pub(crate) async fn add_picked_repository_as(
     require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -892,7 +877,6 @@ pub(crate) async fn add_picked_repository_as(
     require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::RepositoryView,
     )
@@ -944,7 +928,6 @@ pub(crate) async fn add_picked_repository_as(
     let role = require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1018,7 +1001,6 @@ async fn add_repository(
     } = add_picked_repository_as(
         &state,
         principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         request.installation_id,
         request.github_repository_id,

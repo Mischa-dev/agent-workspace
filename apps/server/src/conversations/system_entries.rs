@@ -163,18 +163,16 @@ async fn may_post(
     conversation: Uuid,
     actor: Uuid,
 ) -> Result<bool, AppError> {
-    let Some(kind) = sqlx::query_scalar::<_, String>("SELECT kind FROM actors WHERE id = $1")
+    let known = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1)")
         .bind(actor)
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
+        .fetch_one(&mut **tx)
+        .await?;
+    if !known {
         return Ok(false);
-    };
-    let kind = crate::conversations::parse_actor_kind(&kind)?;
+    }
     match crate::conversations::lock_conversation_for(
         tx,
         actor,
-        kind,
         conversation,
         crate::policy::Action::MessageSend,
         false,

@@ -215,8 +215,8 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
         .call(
             app,
             tool(
-                "project_member_set",
-                json!({"projectId": "WORK", "person": "@rook", "role": "viewer"}),
+                "space_member_update",
+                json!({"spaceId": "WORK", "account": "@rook", "role": "viewer"}),
             ),
         )
         .await;

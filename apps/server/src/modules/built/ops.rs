@@ -324,6 +324,7 @@ impl Operation for ModuleCreate {
             let located = crate::ops::Located {
                 workspace_id: call.ctx.workspace_id,
                 space_id: call.ctx.space_id,
+                direct: None,
             };
             let ctx = call.ctx;
             let tx = call.tx().await?;

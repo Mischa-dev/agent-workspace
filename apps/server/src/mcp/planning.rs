@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, accessible_project_ids_in, archived_task_message, parse_id, public_url},
+    common::{ToolResult, accessible_project_ids_in, archived_task_message, link_url, parse_id},
     tasks::{command_actor, resolve_tasks},
     writes::{
         CreateRetry, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, check_write_access,
@@ -197,7 +197,7 @@ pub(crate) async fn visible_links(
     // call, its agent limit decides as well.
     let seen = |task: &work_item_planning::TaskRef| {
         (task.project_id == project_id || reachable.contains(&task.project_id))
-            && !crate::policy::agent_limit_hides(
+            && !crate::access::limit_hides(
                 principal.actor_id,
                 task.project_id,
                 crate::policy::Permission::TasksView,
@@ -979,9 +979,13 @@ pub(crate) struct MilestoneListValue {
 fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> MilestoneValue {
     MilestoneValue {
         id: view.id.to_string(),
-        url: public_url(
-            state,
-            &format!("/projects/{project_id}/work-items?milestoneId={}", view.id),
+        url: crate::addresses::with_query(
+            link_url(
+                state,
+                None,
+                &crate::addresses::Target::space(project_id, crate::addresses::Place::Tasks),
+            ),
+            &format!("milestoneId={}", view.id),
         ),
         name: view.name,
         description: view.description,
@@ -1019,7 +1023,6 @@ pub(crate) async fn milestone_list(
         crate::memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             crate::policy::Action::WorkItemView,
         )

@@ -747,7 +747,7 @@ impl Operation for TaskCommentCreate {
     const NAME: &'static str = "task_comment_create";
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Comment on task";
     const DESCRIPTION: &'static str = "Comment on a task: progress, a handoff, or what's left. \
@@ -2143,7 +2143,6 @@ impl Operation for ProjectUpdatePost {
                 crate::conversations::update_thread(
                     &mut tx,
                     actor,
-                    call.ctx.caller.kind,
                     thread.id,
                     &ThreadPatch {
                         name: None,
@@ -2167,7 +2166,7 @@ impl Operation for ProjectUpdatePost {
         };
         tx.commit().await.map_err(crate::error::AppError::from)?;
 
-        let content = crate::mcp::content_from_text(state, space, &text).await?;
+        let content = crate::mcp::content_from_text(state, space, Some(thread_id), &text).await?;
         let posted = append_message_command_with(
             state,
             call.ctx.into(),

@@ -8,6 +8,7 @@ import { isWorkspacePath, legacyPathOf, workspaceHref } from './href'
 import { appRoutes, routesWithHandles } from './routes'
 import { WorkspaceBoundary, WorkspaceProvider, WorkspaceRedirect } from './WorkspaceBoundary'
 import { rememberWorkspace } from './workspace'
+import { permissionsOf } from '../test/permissions'
 
 // W1.14a: every old address of a workspace page (the workspace-level routes
 // of the route table before W1.14a) still opens that page, now under
@@ -36,8 +37,8 @@ const OLD_WORKSPACE_ROUTES = [
   '/share',
 ]
 
-const acme = { id: 'org-acme', name: 'Acme', slug: 'acme', role: 'owner' as const }
-const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const }
+const acme = { id: 'org-acme', name: 'Acme', slug: 'acme', role: 'owner' as const, permissions: permissionsOf('owner') }
+const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const, permissions: permissionsOf('member') }
 const session: AuthenticatedSession = {
   authenticated: true,
   user: {

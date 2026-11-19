@@ -230,7 +230,7 @@ async fn list_message(
 ) -> Result<Option<Vec<FileRow>>, AppError> {
     let project_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT project_id FROM messages
+        SELECT COALESCE(project_id, direct_scope_id()) FROM messages
         WHERE id = $1 AND removed_at IS NULL AND conversation_visible_to(conversation_id, $2)
         "#,
     )
@@ -678,17 +678,19 @@ async fn conversation_destination(
     )
     .await?;
     require_active_conversation(&conversation)?;
-    let limit = files::upload_limit(&mut transaction, conversation.project_id).await?;
+    let limit = files::upload_limit(&mut transaction, conversation.place()).await?;
     transaction.commit().await?;
-    if !accessible_project_ids(state, principal)
-        .await?
-        .contains(&conversation.project_id)
+    // A DM or group is in no space: seeing it was the check.
+    if let Some(space) = conversation.project_id
+        && !accessible_project_ids(state, principal)
+            .await?
+            .contains(&space)
     {
         return Err(AppError::NotFound("conversation"));
     }
     Ok((
         Destination::Conversation {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
         },
         limit,
@@ -703,14 +705,8 @@ async fn thing_upload_destination(
     thing: files::ThingKind,
     thing_id: Uuid,
 ) -> Result<(Destination, usize), AppError> {
-    let destination = files::thing_destination(
-        &state.pool,
-        principal.actor_id,
-        principal.actor_kind,
-        thing,
-        thing_id,
-    )
-    .await?;
+    let destination =
+        files::thing_destination(&state.pool, principal.actor_id, thing, thing_id).await?;
     let project_id = destination.project_id();
     if !can_write_in(state, principal, project_id, thing.edit_action()).await?
         || !accessible_project_ids(state, principal)

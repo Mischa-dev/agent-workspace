@@ -2,6 +2,7 @@ import { Suspense, lazy, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { can } from '../auth/can'
 import { requestJson } from '../api/client'
 import { toastError } from '../app/mutations'
 import { useProjectExperience, type Experience } from '../experience/layout'
@@ -108,7 +109,7 @@ export function ProjectOverviewPage() {
           {experience.shows('area.tasks') ? (
             <RecentTasks
               base={base}
-              canCreate={project.data.role !== 'viewer' && !project.data.archivedAt}
+              canCreate={can(project.data, 'tasks.create') && !project.data.archivedAt}
               experience={experience}
               projectId={project.data.id}
             />
@@ -116,7 +117,7 @@ export function ProjectOverviewPage() {
         </div>
         {experience.shows('area.whiteboards') ? (
           <Suspense fallback={null}>
-            <ProjectWhiteboards canEdit={project.data.role !== 'viewer' && !project.data.archivedAt} projectId={project.data.id} />
+            <ProjectWhiteboards canEdit={can(project.data, 'whiteboards.edit') && !project.data.archivedAt} projectId={project.data.id} />
           </Suspense>
         ) : null}
       </div>

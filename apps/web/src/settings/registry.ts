@@ -9,6 +9,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 import { ArrowDownUp, Bell, Blocks, BookOpen, Bug, Cpu, HardDrive, LayoutTemplate, Mail, Package, PanelsTopLeft, Plug, ScrollText, Server, User, UserCog, Webhook, Zap } from 'lucide-react'
 import settingsClaims from 'virtual:modules/slots/settings'
 
+import { can } from '../auth/can'
 import type { PartId } from '../experience/parts'
 import { moduleSwitchable, ownerOf } from '../modules/ownership'
 import type { IconGlyph } from '../ui'
@@ -46,13 +47,14 @@ function page(
   return { group, id, label, icon, keywords, component: lazy(load), ...options }
 }
 
-const manager = ({ workspace }: SettingsVisibility) => workspace?.role === 'owner' || workspace?.role === 'admin'
-const owner = ({ workspace }: SettingsVisibility) => workspace?.role === 'owner'
-/** Owns this workspace and runs the server it's on. */
-const serverOperator = (context: SettingsVisibility) => owner(context) && context.session.user.capabilities.serverStatus === true
+const manager = ({ workspace }: SettingsVisibility) => can(workspace, 'settings.manage')
+const auditor = ({ workspace }: SettingsVisibility) => can(workspace, 'settings.audit')
+/** Runs the server this workspace is on (the server checks the rest). */
+const serverOperator = (context: SettingsVisibility) => manager(context) && context.session.user.capabilities.serverStatus === true
 const manageProject = ({ project }: SettingsVisibility) => project?.capabilities.manage === true
-const projectMember = ({ project }: SettingsVisibility) => Boolean(project) && project?.role !== 'viewer'
-const runsSomewhere = ({ projects }: SettingsVisibility) => projects.some((project) => project.role !== 'viewer')
+const projectWriter = ({ project }: SettingsVisibility) => can(project, 'tasks.edit')
+const launchesRuns = ({ project }: SettingsVisibility) => can(project, 'runs.launch')
+const runsSomewhere = ({ projects }: SettingsVisibility) => projects.some((project) => can(project, 'runs.launch'))
 
 export const SETTINGS_PAGES: SettingsPage[] = [
   // Account
@@ -72,7 +74,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
   page('workspace', 'roles', 'Roles', UserCog, ['roles', 'permissions', 'access', 'custom role', 'contractor', 'read only', 'family', 'agent limit', 'what agents can do', 'default role'], () => import('./workspace/RolesPage')),
   page('workspace', 'keys', 'Keys', 'lock', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
-  page('workspace', 'email', 'Email', Mail, ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: owner }),
+  page('workspace', 'email', 'Email', Mail, ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: manager }),
   page('workspace', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'defaults', 'run defaults', 'model list', 'hide model', 'provider', 'suggestions', 'summaries', 'api key', 'budget', 'usage', 'spend', 'launch prompt', 'template', 'ai', 'anthropic', 'openai', 'gemini'], () => import('./workspace/RunsPage'), { settings: ['run.', 'ai.', 'launch.'] }),
   page('workspace', 'hosts', 'Hosts', HardDrive, ['host', 'hosts', 'machine', 'server', 'runner', 'link a host', 'enrol', 'agents', 'unlink'], () => import('./workspace/HostsPage'), { part: 'workspace.hosts' }),
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
@@ -81,7 +83,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'templates', 'Workspace templates', Package, ['templates', 'workspace template', 'starter', 'setup', 'packages', 'software team', 'personal', 'company', 'small team', 'save as template'], () => import('./workspace/TemplatesPage')),
   page('workspace', 'modules', 'Modules', Blocks, ['modules', 'features', 'turn off', 'switch off', 'presets', 'projects', 'pages only', 'dms only', 'chat with my agents'], () => import('./workspace/ModulesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
-  page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
+  page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: auditor }),
   page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: serverOperator }),
   // Project
   page('project', 'general', 'General', 'settings', ['about', 'archive', 'key', 'name'], () => import('./project/GeneralPage')),
@@ -92,13 +94,13 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'repositories', 'Repositories', 'repo', ['github', 'connect', 'mirror', 'code'], () => import('./project/RepositoriesPage'), { part: 'area.code' }),
   page('project', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'repository', 'defaults', 'run defaults', 'provider', 'suggestions', 'summaries', 'dependencies', 'automatic', 'launch prompt', 'template', 'ai'], () => import('./project/RunsPage'), { settings: ['run.', 'ai.', 'launch.'], part: 'area.runs' }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials', 'profiles', 'reviewer', 'planner', 'fixer', 'instructions'], () => import('./project/AgentsPage'), { visible: manageProject, part: 'area.agents' }),
-  page('project', 'automations', 'Automation', Zap, ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation', 'pull requests', 'review', 'github'], () => import('./project/AutomationRulesPage'), { visible: projectMember, part: 'area.automations' }),
-  page('project', 'bug-reports', 'Bug reports', Bug, ['bug reports', 'crash reports', 'errors', 'intake', 'inbound', 'report link', 'feedback', 'other apps', 'webhook'], () => import('./project/BugReportsPage'), { visible: projectMember, part: 'area.bug_reports' }),
-  page('project', 'workflow', 'Workflow', 'board', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
-  page('project', 'fields', 'Fields', 'list', ['custom fields', 'properties', 'columns', 'choices', 'options', 'select', 'attributes'], () => import('./project/FieldsPage'), { visible: projectMember, part: 'task.custom_fields' }),
-  page('project', 'templates', 'Templates', 'bookmark', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
+  page('project', 'automations', 'Automation', Zap, ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation', 'pull requests', 'review', 'github'], () => import('./project/AutomationRulesPage'), { visible: projectWriter, part: 'area.automations' }),
+  page('project', 'bug-reports', 'Bug reports', Bug, ['bug reports', 'crash reports', 'errors', 'intake', 'inbound', 'report link', 'feedback', 'other apps', 'webhook'], () => import('./project/BugReportsPage'), { visible: projectWriter, part: 'area.bug_reports' }),
+  page('project', 'workflow', 'Workflow', 'board', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectWriter }),
+  page('project', 'fields', 'Fields', 'list', ['custom fields', 'properties', 'columns', 'choices', 'options', 'select', 'attributes'], () => import('./project/FieldsPage'), { visible: projectWriter, part: 'task.custom_fields' }),
+  page('project', 'templates', 'Templates', 'bookmark', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectWriter }),
   page('project', 'import-export', 'Import and export', ArrowDownUp, ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
-  page('project', 'run-requests', 'Run requests', 'circle-check', ['run requests', 'sponsored', 'approve', 'provider account'], () => import('./project/CodexRunsPage'), { visible: projectMember, part: 'area.runs' }),
+  page('project', 'run-requests', 'Run requests', 'circle-check', ['run requests', 'sponsored', 'approve', 'provider account'], () => import('./project/CodexRunsPage'), { visible: launchesRuns, part: 'area.runs' }),
 ]
 
 export const GROUP_LABELS: Record<SettingsGroup, string> = {

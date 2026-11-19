@@ -20,7 +20,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    WorkItemCommentView, authorize_task_change, authorize_work_item, message_content_error,
+    WorkItemCommentView, authorize_task_comment, authorize_work_item, message_content_error,
     project_membership, timeline_entry_view,
 };
 use crate::{
@@ -187,10 +187,8 @@ fn refusal(error: ChangeError, change: Change) -> Result<CommentRefusal, AppErro
     match error {
         ChangeError::App(error) => Err(error),
         ChangeError::Refused(refused) => Ok(match refused {
-            Refused::NotYourMessage | Refused::OnlyPeopleModerate if change == Change::Remove => {
-                CommentRefusal::NotModerator
-            }
-            Refused::NotYourMessage | Refused::OnlyPeopleModerate => CommentRefusal::NotAuthor,
+            Refused::NotYourMessage if change == Change::Remove => CommentRefusal::NotModerator,
+            Refused::NotYourMessage => CommentRefusal::NotAuthor,
             Refused::RoleCannotWrite => return Err(AppError::Forbidden),
             Refused::Removed => CommentRefusal::Removed,
             Refused::Archived => CommentRefusal::TaskArchived,
@@ -462,15 +460,15 @@ pub(crate) fn browser_message_actor(principal: &AuthenticatedActor) -> MessageCo
     }
 }
 
-/// Checks the caller may comment on the task now (WorkItemEdit, project not
-/// archived). An archived task's comments can still be removed.
+/// Checks the caller may comment on the task now ("comment on tasks",
+/// project not archived). An archived task's comments can still be removed.
 async fn check_commenter(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &AuthenticatedActor,
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<(), AppError> {
-    match authorize_task_change(transaction, principal, project_id, work_item_id).await {
+    match authorize_task_comment(transaction, principal, project_id, work_item_id).await {
         Ok(()) | Err(AppError::Conflict("work_item", "archived")) => Ok(()),
         Err(error) => Err(error),
     }
