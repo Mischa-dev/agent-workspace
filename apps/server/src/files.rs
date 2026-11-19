@@ -1386,6 +1386,12 @@ pub(crate) async fn move_content(
     attached_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool, AppError> {
     let organization_id = organization_of(&mut **transaction, file.project_id).await?;
+    // The same lock as uploads and cleanup: bytes found stored here stay
+    // until this row commits beside them.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{organization_id}"))
+        .execute(&mut **transaction)
+        .await?;
     let sha256 = hex::encode(Sha256::digest(file.bytes));
     let key = content_key(organization_id, &sha256);
     let store = FileStore::from_config(&state.config);
