@@ -1426,7 +1426,7 @@ async fn run_requester(
 /// option, the rest expire. Run by the job queue every minute.
 pub async fn expire_due(state: &crate::AppState) -> Result<usize, AppError> {
     // Expires due requests in every workspace.
-    crate::tenancy::system("requests.expire", expire_due_here(state)).await
+    crate::tenancy::system("requests.expire", Box::pin(expire_due_here(state))).await
 }
 
 async fn expire_due_here(state: &crate::AppState) -> Result<usize, AppError> {

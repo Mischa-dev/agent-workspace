@@ -264,7 +264,7 @@ async fn accept_claim(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        accept_claim_here(State(state), headers, ApiJson(request)),
+        Box::pin(accept_claim_here(State(state), headers, ApiJson(request))),
     )
     .await
 }

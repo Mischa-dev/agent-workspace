@@ -155,7 +155,11 @@ async fn drain_with(
     builtin: &agent_workspace_host_protocol::HostClient,
 ) -> Result<(), AppError> {
     // Claims runs of every workspace, each checked against its run's space.
-    crate::tenancy::system("runs.host", drain_with_here(state, fence, builtin)).await
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(drain_with_here(state, fence, builtin)),
+    )
+    .await
 }
 
 async fn drain_with_here(

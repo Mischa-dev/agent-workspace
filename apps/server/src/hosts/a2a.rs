@@ -990,7 +990,7 @@ async fn reply_message(state: &AppState, run_id: Uuid, message: &Value) {
 /// were looked at.
 pub async fn poll_due(state: &AppState) -> Result<usize, AppError> {
     // Server-wide: due remote tasks of every workspace.
-    crate::tenancy::system("runs.host", poll_due_here(state)).await
+    crate::tenancy::system("runs.host", Box::pin(poll_due_here(state))).await
 }
 
 async fn poll_due_here(state: &AppState) -> Result<usize, AppError> {

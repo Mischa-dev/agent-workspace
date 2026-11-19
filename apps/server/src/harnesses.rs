@@ -122,7 +122,7 @@ fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, Stri
 /// Loads every registered harness into the registry.
 pub async fn reload(state: &AppState) -> Result<(), AppError> {
     // Every workspace's registered harnesses.
-    crate::tenancy::system("harnesses.reload", reload_here(state)).await
+    crate::tenancy::system("harnesses.reload", Box::pin(reload_here(state))).await
 }
 
 async fn reload_here(state: &AppState) -> Result<(), AppError> {

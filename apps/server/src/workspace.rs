@@ -1575,7 +1575,11 @@ async fn resolve_invitation(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        resolve_invitation_here(State(state), headers, ApiJson(request)),
+        Box::pin(resolve_invitation_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }
@@ -1718,7 +1722,11 @@ async fn accept_new_user(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        accept_new_user_here(State(state), headers, ApiJson(request)),
+        Box::pin(accept_new_user_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }
@@ -1823,7 +1831,12 @@ async fn accept_existing_user(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        accept_existing_user_here(State(state), headers, principal, ApiJson(request)),
+        Box::pin(accept_existing_user_here(
+            State(state),
+            headers,
+            principal,
+            ApiJson(request),
+        )),
     )
     .await
 }

@@ -1255,7 +1255,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 /// removed files (and link preview images nothing shows any more).
 pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     // Removes unattached files in every workspace.
-    crate::tenancy::system("files.sweep", cleanup_here(state)).await
+    crate::tenancy::system("files.sweep", Box::pin(cleanup_here(state))).await
 }
 
 async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
@@ -1334,7 +1334,11 @@ pub(crate) async fn sweep_pending_objects(
     store: &FileStore,
 ) -> Result<u64, AppError> {
     // Removes unfinished uploads in every workspace.
-    crate::tenancy::system("files.sweep", sweep_pending_objects_here(state, store)).await
+    crate::tenancy::system(
+        "files.sweep",
+        Box::pin(sweep_pending_objects_here(state, store)),
+    )
+    .await
 }
 
 async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Result<u64, AppError> {

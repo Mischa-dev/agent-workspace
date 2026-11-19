@@ -180,7 +180,7 @@ async fn enrol_route(
     // The one-time code, not a session, names the workspace: it is known only once the code is read.
     crate::tenancy::system(
         "hosts.protocol",
-        enrol_route_here(State(state), headers, ApiJson(request)),
+        Box::pin(enrol_route_here(State(state), headers, ApiJson(request))),
     )
     .await
 }

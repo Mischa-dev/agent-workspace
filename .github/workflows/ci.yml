@@ -92,7 +92,8 @@ jobs:
       - name: A database role bound by row rules
         run: |
           psql -d "${CI_DATABASE_BASE}/postgres" -v ON_ERROR_STOP=1 -c \
-            "CREATE ROLE aw_app LOGIN PASSWORD 'aw_app' CREATEDB NOSUPERUSER NOBYPASSRLS"
+            "CREATE ROLE aw_app LOGIN PASSWORD 'aw_app' CREATEDB NOSUPERUSER NOBYPASSRLS" \
+            -c "GRANT pg_signal_backend TO aw_app"
       - name: Checks
         env:
           CI_DATABASE_BASE: postgres://aw_app:aw_app@127.0.0.1:5432

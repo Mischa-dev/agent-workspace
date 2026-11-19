@@ -193,7 +193,11 @@ pub(crate) async fn id_scope(
     param: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<Scope>, AppError> {
     // Where a route acts is read before its caller is known.
-    crate::tenancy::system("modules.gate", id_scope_here(state, template, param)).await
+    crate::tenancy::system(
+        "modules.gate",
+        Box::pin(id_scope_here(state, template, param)),
+    )
+    .await
 }
 
 async fn id_scope_here(
@@ -261,7 +265,7 @@ async fn off_module(
     // A workspace's switches are read before its caller is known; only its caller learns of them.
     crate::tenancy::system(
         "modules.gate",
-        off_module_here(state, module, scope, plumbing),
+        Box::pin(off_module_here(state, module, scope, plumbing)),
     )
     .await
 }

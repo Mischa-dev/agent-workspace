@@ -75,7 +75,7 @@ pub(crate) async fn receipt_http(
     // The receipt itself names the push it is for; the service worker has no session.
     crate::tenancy::system(
         "auth.link",
-        receipt_http_here(State(state), headers, Json(request)),
+        Box::pin(receipt_http_here(State(state), headers, Json(request))),
     )
     .await
 }

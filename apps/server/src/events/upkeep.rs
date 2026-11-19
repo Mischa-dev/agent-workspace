@@ -119,7 +119,11 @@ pub async fn apply_retention(pool: &PgPool) -> Result<u64, AppError> {
 /// [`apply_retention`] with its periods given.
 pub async fn retain(pool: &PgPool, signal_days: i32, fact_days: i32) -> Result<u64, AppError> {
     // Prunes every workspace's old signals.
-    crate::tenancy::system("events.log", retain_here(pool, signal_days, fact_days)).await
+    crate::tenancy::system(
+        "events.log",
+        Box::pin(retain_here(pool, signal_days, fact_days)),
+    )
+    .await
 }
 
 async fn retain_here(pool: &PgPool, signal_days: i32, fact_days: i32) -> Result<u64, AppError> {

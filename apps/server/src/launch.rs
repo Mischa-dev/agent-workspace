@@ -2448,7 +2448,7 @@ pub(crate) fn actor_kind(value: &str) -> Option<ActorKind> {
 /// so they start last.
 pub async fn drain(state: &AppState) -> Result<usize, AppError> {
     // Starts queued launches of every workspace, each as its launcher.
-    crate::tenancy::system("runs.host", drain_here(state)).await
+    crate::tenancy::system("runs.host", Box::pin(drain_here(state))).await
 }
 
 async fn drain_here(state: &AppState) -> Result<usize, AppError> {

@@ -430,7 +430,7 @@ async fn receive(
     // A signed delivery: its hook, and so its workspace, is known only once it is read.
     crate::tenancy::system(
         "hooks.incoming",
-        receive_here(State(state), ApiPath(hook_id), headers, body),
+        Box::pin(receive_here(State(state), ApiPath(hook_id), headers, body)),
     )
     .await
 }

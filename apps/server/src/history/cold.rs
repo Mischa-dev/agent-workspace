@@ -92,7 +92,7 @@ pub async fn archive_page(
             account: None,
             workspace,
         },
-        archive_page_here(state, workspace, page, days),
+        Box::pin(archive_page_here(state, workspace, page, days)),
     )
     .await
 }

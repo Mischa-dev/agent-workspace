@@ -53,7 +53,7 @@ pub async fn clean_deliveries(
     apply: bool,
 ) -> Result<DeliveryRetentionResult, AppError> {
     // Retention runs over every workspace.
-    crate::tenancy::system("retention", clean_deliveries_here(pool, apply)).await
+    crate::tenancy::system("retention", Box::pin(clean_deliveries_here(pool, apply))).await
 }
 
 async fn clean_deliveries_here(
@@ -130,7 +130,11 @@ pub async fn clean_worktrees(
     apply: bool,
 ) -> Result<WorktreeRetentionResult, AppError> {
     // Retention runs over every workspace.
-    crate::tenancy::system("retention", clean_worktrees_here(pool, data_root, apply)).await
+    crate::tenancy::system(
+        "retention",
+        Box::pin(clean_worktrees_here(pool, data_root, apply)),
+    )
+    .await
 }
 
 async fn clean_worktrees_here(
@@ -361,7 +365,7 @@ pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
 /// Returns how many rows changed.
 pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
     // Retention runs over every workspace.
-    crate::tenancy::system("retention", clean_database_windows_here(pool)).await
+    crate::tenancy::system("retention", Box::pin(clean_database_windows_here(pool))).await
 }
 
 async fn clean_database_windows_here(pool: &PgPool) -> Result<i64, AppError> {

@@ -4842,7 +4842,11 @@ pub async fn revoke_credential(
     // The host command line, before any account's scope is known.
     crate::tenancy::system(
         "server.operator",
-        revoke_credential_here(pool, credential_id, expected_version),
+        Box::pin(revoke_credential_here(
+            pool,
+            credential_id,
+            expected_version,
+        )),
     )
     .await
 }
@@ -4913,7 +4917,12 @@ pub async fn replace_credential(
     // The host command line, before any account's scope is known.
     crate::tenancy::system(
         "server.operator",
-        replace_credential_here(pool, credential_id, expected_version, expires_in_days),
+        Box::pin(replace_credential_here(
+            pool,
+            credential_id,
+            expected_version,
+            expires_in_days,
+        )),
     )
     .await
 }

@@ -506,7 +506,11 @@ async fn take_attempt(
     browser: Option<&str>,
 ) -> Result<Attempt, &'static str> {
     // The browser's cookie, not a session, finds the attempt: its account is known only once it is read.
-    crate::tenancy::system("auth.link", take_attempt_here(state, oauth_state, browser)).await
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(take_attempt_here(state, oauth_state, browser)),
+    )
+    .await
 }
 
 async fn take_attempt_here(

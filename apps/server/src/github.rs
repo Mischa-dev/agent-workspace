@@ -2412,7 +2412,7 @@ async fn refresh_pull_request(
 
 pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
     // GitHub's job queue holds jobs of every workspace.
-    crate::tenancy::system("github.jobs", drain_jobs_here(state)).await
+    crate::tenancy::system("github.jobs", Box::pin(drain_jobs_here(state))).await
 }
 
 async fn drain_jobs_here(state: &AppState) -> Result<(), AppError> {

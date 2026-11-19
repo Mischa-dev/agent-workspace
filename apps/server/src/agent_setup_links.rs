@@ -209,7 +209,7 @@ in Agents (Set up in an app) and paste you the new message.\n";
 /// The agent opens its link: the token and its app's steps, once.
 async fn claim(State(state): State<AppState>, Path(code): Path<String>) -> Response {
     // A link's token names the one row it opens, before any scope is known.
-    crate::tenancy::system("auth.link", claim_here(State(state), Path(code))).await
+    crate::tenancy::system("auth.link", Box::pin(claim_here(State(state), Path(code)))).await
 }
 
 async fn claim_here(State(state): State<AppState>, Path(code): Path<String>) -> Response {

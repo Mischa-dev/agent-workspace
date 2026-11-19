@@ -718,7 +718,7 @@ async fn reply(
 /// how many things changed.
 pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
     // Server-wide: every host's commands and liveness.
-    crate::tenancy::system("runs.host", sweep_here(pool)).await
+    crate::tenancy::system("runs.host", Box::pin(sweep_here(pool))).await
 }
 
 async fn sweep_here(pool: &PgPool) -> Result<usize, AppError> {

@@ -500,7 +500,7 @@ async fn abandon(state: &AppState, store: &FileStore, upload: &UploadRow) {
 /// stay pending for the next run.
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
     // Removes abandoned uploads in every workspace.
-    crate::tenancy::system("files.sweep", sweep_here(state)).await
+    crate::tenancy::system("files.sweep", Box::pin(sweep_here(state))).await
 }
 
 async fn sweep_here(state: &AppState) -> Result<u64, AppError> {

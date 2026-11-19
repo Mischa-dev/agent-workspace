@@ -29,7 +29,11 @@ struct RecoverableRun {
 /// retaining the exact worktree.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
     // Recovers runs of every workspace.
-    crate::tenancy::system("runs.host", reconcile_non_terminal_runs_here(state)).await
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_non_terminal_runs_here(state)),
+    )
+    .await
 }
 
 async fn reconcile_non_terminal_runs_here(state: &AppState) -> Result<u64, AppError> {
@@ -64,7 +68,11 @@ pub async fn reconcile_owned(
     lease: &Lease,
 ) -> Result<(), AppError> {
     // Recovers runs of every workspace.
-    crate::tenancy::system("runs.host", reconcile_owned_here(state, cluster, lease)).await
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_owned_here(state, cluster, lease)),
+    )
+    .await
 }
 
 async fn reconcile_owned_here(
@@ -293,7 +301,11 @@ async fn idle_terminal_provider_sessions(
 
 pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {
     // Recovers runs of every workspace.
-    crate::tenancy::system("runs.host", reconcile_registered_worktrees_here(state)).await
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_registered_worktrees_here(state)),
+    )
+    .await
 }
 
 async fn reconcile_registered_worktrees_here(state: &AppState) -> Result<u64, AppError> {
@@ -351,7 +363,11 @@ async fn record_inspection(
 /// it; this catches any a crash left open).
 pub async fn withdraw_finished_run_requests(state: &AppState) -> Result<u64, AppError> {
     // Recovers runs of every workspace.
-    crate::tenancy::system("runs.host", withdraw_finished_run_requests_here(state)).await
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(withdraw_finished_run_requests_here(state)),
+    )
+    .await
 }
 
 async fn withdraw_finished_run_requests_here(state: &AppState) -> Result<u64, AppError> {

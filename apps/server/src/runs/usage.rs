@@ -256,7 +256,7 @@ pub fn split(total: i64, weights: &[f64]) -> Vec<i64> {
 /// many reports were split.
 pub async fn attribute_window_usage(pool: &PgPool) -> Result<u64, AppError> {
     // Splits reported usage across runs in every workspace.
-    crate::tenancy::system("runs.host", attribute_window_usage_here(pool)).await
+    crate::tenancy::system("runs.host", Box::pin(attribute_window_usage_here(pool))).await
 }
 
 async fn attribute_window_usage_here(pool: &PgPool) -> Result<u64, AppError> {

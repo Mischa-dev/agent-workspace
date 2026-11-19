@@ -150,7 +150,11 @@ async fn register_client(
     // Anonymous, rate limited: the cap and the cleanup must see which clients anyone has authorized, in every workspace.
     crate::tenancy::system(
         "auth.credential",
-        register_client_here(State(state), headers, ApiJson(request)),
+        Box::pin(register_client_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }

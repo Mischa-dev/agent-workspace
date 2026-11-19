@@ -170,7 +170,11 @@ async fn delta_route(
     event: &RealtimeEvent,
 ) -> Result<Option<(Uuid, bool)>, AppError> {
     // Streamed text names its run; its conversation is read here, and each socket checks it.
-    crate::tenancy::system("realtime.connections", delta_route_here(state, event)).await
+    crate::tenancy::system(
+        "realtime.connections",
+        Box::pin(delta_route_here(state, event)),
+    )
+    .await
 }
 
 async fn delta_route_here(

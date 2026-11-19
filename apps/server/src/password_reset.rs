@@ -410,7 +410,7 @@ async fn verify_http(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        verify_http_here(State(state), headers, ApiJson(request)),
+        Box::pin(verify_http_here(State(state), headers, ApiJson(request))),
     )
     .await
 }
@@ -504,7 +504,11 @@ async fn reset_available_http(
     State(state): State<AppState>,
 ) -> Result<Json<ResetAvailability>, AppError> {
     // Server-wide: whether any workspace can send mail, asked before anyone signs in.
-    crate::tenancy::system("auth.link", reset_available_http_here(State(state))).await
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(reset_available_http_here(State(state))),
+    )
+    .await
 }
 
 async fn reset_available_http_here(
@@ -553,7 +557,11 @@ async fn request_reset_http(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        request_reset_http_here(State(state), headers, ApiJson(request)),
+        Box::pin(request_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }
@@ -781,7 +789,11 @@ async fn inspect_reset_http(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        inspect_reset_http_here(State(state), headers, ApiJson(request)),
+        Box::pin(inspect_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }
@@ -840,7 +852,11 @@ async fn complete_reset_http(
     // A link's token names the one row it opens, before any scope is known.
     crate::tenancy::system(
         "auth.link",
-        complete_reset_http_here(State(state), headers, ApiJson(request)),
+        Box::pin(complete_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
     )
     .await
 }

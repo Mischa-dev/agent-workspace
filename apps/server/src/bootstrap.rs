@@ -208,7 +208,7 @@ pub async fn rotate_password(
     // Run by an operator on the host, before any scope.
     crate::tenancy::system(
         "server.operator",
-        rotate_password_here(pool, command, password),
+        Box::pin(rotate_password_here(pool, command, password)),
     )
     .await
 }
@@ -307,7 +307,7 @@ pub async fn bootstrap_admin(
     // first account and workspace, as on first run in the browser.
     crate::tenancy::system(
         "server.first_run",
-        bootstrap_admin_here(pool, command, password),
+        Box::pin(bootstrap_admin_here(pool, command, password)),
     )
     .await
 }
@@ -475,7 +475,7 @@ pub async fn bootstrap_development_member(
     // first account and workspace, as on first run in the browser.
     crate::tenancy::system(
         "server.first_run",
-        bootstrap_development_member_here(pool, command, password),
+        Box::pin(bootstrap_development_member_here(pool, command, password)),
     )
     .await
 }

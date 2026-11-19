@@ -978,7 +978,7 @@ pub async fn delete<'e, E: PgExecutor<'e>>(executor: E, secret_id: Uuid) -> Resu
 /// data keys don't change, so this is safe to run while the server serves.
 pub async fn rewrap_all(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
     // Rewraps every workspace's secrets, run on the host.
-    crate::tenancy::system("server.operator", rewrap_all_here(pool, keys)).await
+    crate::tenancy::system("server.operator", Box::pin(rewrap_all_here(pool, keys))).await
 }
 
 async fn rewrap_all_here(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
@@ -1121,7 +1121,11 @@ pub async fn rotate_master_key(
     config: &AppConfig,
 ) -> Result<RotationResult, AppError> {
     // Rewraps every workspace's secrets, run on the host.
-    crate::tenancy::system("server.operator", rotate_master_key_here(pool, config)).await
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(rotate_master_key_here(pool, config)),
+    )
+    .await
 }
 
 async fn rotate_master_key_here(

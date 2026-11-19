@@ -43,7 +43,7 @@ pub async fn prepare_m3_repository_upgrade(
     // Before migrating: every workspace's rows, run on the host.
     crate::tenancy::system(
         "server.operator",
-        prepare_m3_repository_upgrade_here(pool, config),
+        Box::pin(prepare_m3_repository_upgrade_here(pool, config)),
     )
     .await
 }
@@ -150,7 +150,11 @@ pub async fn prepare_m3_upgrade(
     config: &AppConfig,
 ) -> Result<M3UpgradePreflight, AppError> {
     // Before migrating: every workspace's rows, run on the host.
-    crate::tenancy::system("server.operator", prepare_m3_upgrade_here(pool, config)).await
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(prepare_m3_upgrade_here(pool, config)),
+    )
+    .await
 }
 
 async fn prepare_m3_upgrade_here(

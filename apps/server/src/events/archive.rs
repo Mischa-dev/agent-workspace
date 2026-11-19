@@ -113,7 +113,7 @@ pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Resul
             account: None,
             workspace,
         },
-        archive_once_here(state, workspace, days),
+        Box::pin(archive_once_here(state, workspace, days)),
     )
     .await
 }

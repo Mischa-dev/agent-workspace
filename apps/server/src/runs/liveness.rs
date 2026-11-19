@@ -43,7 +43,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 /// Returns how many changed.
 pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
     // Marks quiet runs in every workspace.
-    crate::tenancy::system("runs.host", sweep_here(pool)).await
+    crate::tenancy::system("runs.host", Box::pin(sweep_here(pool))).await
 }
 
 async fn sweep_here(pool: &PgPool) -> Result<usize, AppError> {
@@ -116,7 +116,7 @@ pub const STOP_GRACE_SECONDS: i64 = 600;
 /// Returns how many ended.
 pub async fn settle(pool: &PgPool) -> Result<usize, AppError> {
     // Settles runs in every workspace.
-    crate::tenancy::system("runs.host", settle_here(pool)).await
+    crate::tenancy::system("runs.host", Box::pin(settle_here(pool))).await
 }
 
 async fn settle_here(pool: &PgPool) -> Result<usize, AppError> {

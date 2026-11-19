@@ -32,7 +32,7 @@ const BATCH: i64 = 1000;
 /// counter).
 pub async fn step(pool: &PgPool) -> Result<u64, AppError> {
     // Positions every workspace's events.
-    crate::tenancy::system("events.log", step_here(pool)).await
+    crate::tenancy::system("events.log", Box::pin(step_here(pool))).await
 }
 
 async fn step_here(pool: &PgPool) -> Result<u64, AppError> {

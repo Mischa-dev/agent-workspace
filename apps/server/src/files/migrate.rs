@@ -164,7 +164,7 @@ struct ToMove {
 /// Copies the next batch of files that aren't in `to` yet.
 pub async fn move_batch(state: &AppState, payload: &MovePayload) -> Result<Moved, AppError> {
     // Files of every workspace, or of one.
-    crate::tenancy::system("files.move", move_batch_here(state, payload)).await
+    crate::tenancy::system("files.move", Box::pin(move_batch_here(state, payload))).await
 }
 
 async fn move_batch_here(state: &AppState, payload: &MovePayload) -> Result<Moved, AppError> {
@@ -340,7 +340,7 @@ async fn write_copy(state: &AppState, target: &FileStore, file: &ToMove) -> Resu
 /// without copying again. Returns how many files' old copies went.
 pub async fn prune_sources(pool: &PgPool, config: &AppConfig) -> Result<u64, AppError> {
     // Server-wide: the old copies of every moved file.
-    crate::tenancy::system("files.move", prune_sources_here(pool, config)).await
+    crate::tenancy::system("files.move", Box::pin(prune_sources_here(pool, config))).await
 }
 
 async fn prune_sources_here(pool: &PgPool, config: &AppConfig) -> Result<u64, AppError> {

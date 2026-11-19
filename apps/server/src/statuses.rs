@@ -456,7 +456,7 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 /// explicit clear does. Returns how many went.
 pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
     // Server-wide: due statuses of every account, told to every workspace that shows them.
-    crate::tenancy::system("statuses.clear", clear_due_here(pool, limit)).await
+    crate::tenancy::system("statuses.clear", Box::pin(clear_due_here(pool, limit))).await
 }
 
 async fn clear_due_here(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
