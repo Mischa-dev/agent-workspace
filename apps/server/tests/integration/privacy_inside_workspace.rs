@@ -3823,6 +3823,19 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .await;
     assert_ne!(edited["outcome"], "ok", "{edited}");
     assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor list it among the space's Pages records, by any view of them.
+    let (_, records) = world.agents["rook"]
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "record_query",
+                arguments: json!({ "projectId": "WORK", "collection": "Pages" }),
+            },
+        )
+        .await;
+    assert_eq!(records["outcome"], "ok", "{records}");
+    assert!(!records.to_string().contains(&page), "{records}");
+    assert!(!records.to_string().contains("plans"), "{records}");
     // Nor its live document, its discussion or an export of it.
     for path in ["document", "discussion", "export?format=markdown"] {
         let (status, read) = send(
