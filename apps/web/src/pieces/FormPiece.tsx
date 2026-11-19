@@ -74,15 +74,7 @@ export function FormPiece({
 
   return (
     <form aria-label={labelledBy ? undefined : label} aria-labelledby={labelledBy} className="aw-piece__form" noValidate onSubmit={submit}>
-      {fields.map((field, index) => (
-        <FieldInput
-          autoFocus={autoFocus && index === 0}
-          field={field}
-          key={field.id}
-          onChange={(value) => set(field.id, value)}
-          value={values[field.id]}
-        />
-      ))}
+      <FormPieceFields autoFocus={autoFocus} fields={fields} onChange={set} values={values} />
       {trap ? (
         <div aria-hidden="true" className="aw-piece__trap">
           <label>
@@ -109,6 +101,37 @@ export function FormPiece({
         </Button>
       </div>
     </form>
+  )
+}
+
+/**
+ * The form piece's questions without its form: for a form that holds them
+ * among its own fields (an automation's operation input, say) and sends
+ * them itself.
+ */
+export function FormPieceFields({
+  autoFocus = false,
+  fields,
+  onChange,
+  values,
+}: {
+  autoFocus?: boolean
+  fields: readonly FormField[]
+  onChange: (id: string, value: FormValue) => void
+  values: FormValues
+}) {
+  return (
+    <>
+      {fields.map((field, index) => (
+        <FieldInput
+          autoFocus={autoFocus && index === 0}
+          field={field}
+          key={field.id}
+          onChange={(value) => onChange(field.id, value)}
+          value={values[field.id]}
+        />
+      ))}
+    </>
   )
 }
 

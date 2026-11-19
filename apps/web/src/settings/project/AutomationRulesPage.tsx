@@ -15,6 +15,7 @@ import {
   type Trigger,
 } from '../../automations/api'
 import '../../automations/automations.css'
+import { TryRuleDialog } from '../../automations/TryRuleDialog'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
 import { priorityLabel } from '../../work-items/constants'
@@ -154,6 +155,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
   const [editing, setEditing] = useState<AutomationRule | 'new' | null>(null)
   const [deleting, setDeleting] = useState<AutomationRule | null>(null)
   const [history, setHistory] = useState<AutomationRule | null>(null)
+  const [trying, setTrying] = useState<AutomationRule | null>(null)
   const refresh = () =>
     queryClient.invalidateQueries({
       queryKey: automationKeys.rules(projectId),
@@ -245,6 +247,12 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
                                   onSelect: () => setEditing(rule),
                                 },
                                 {
+                                  label: 'Try it',
+                                  icon: 'list' as const,
+                                  disabled: !rule.enabled,
+                                  onSelect: () => setTrying(rule),
+                                },
+                                {
                                   label: 'Run now',
                                   icon: 'play' as const,
                                   disabled: !rule.enabled,
@@ -329,6 +337,17 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
           }}
           projectId={projectId}
           rule={editing === 'new' ? null : editing}
+        />
+      )}
+      {trying && (
+        <TryRuleDialog
+          onClose={() => setTrying(null)}
+          onRan={() => {
+            setTrying(null)
+            void refresh()
+          }}
+          projectId={projectId}
+          rule={trying}
         />
       )}
       {history && <HistoryDialog onClose={() => setHistory(null)} projectId={projectId} rule={history} />}

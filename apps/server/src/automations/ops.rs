@@ -28,6 +28,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<AutomationUpdate>()
         .add::<AutomationDelete>()
         .add::<AutomationRunStart>()
+        .add::<AutomationPreview>()
         .add::<AutomationHistory>();
 }
 
@@ -347,6 +348,44 @@ impl Operation for AutomationRunStart {
         .await
         .map_err(refused)?;
         to_value(ran)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// automation_preview
+
+pub(crate) struct AutomationPreview;
+
+impl Operation for AutomationPreview {
+    const NAME: &'static str = "automation_preview";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "automations";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "Preview automation";
+    const DESCRIPTION: &'static str = "What an automation rule you made would do if it fired \
+        now, optionally on one task: the tasks it would act on and each action with its text \
+        filled in. It sends, changes and records nothing; automation_run_start fires it for real.";
+
+    type Input = RunStartInput;
+    type Output = super::PreviewView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RunStartInput,
+    ) -> Result<super::PreviewView, OpError> {
+        let rule = rule_id(&input.rule_id)?;
+        let work_item_id = match input.task_id.as_deref() {
+            Some(value) => Some(parse_id(value).ok_or(OpError::Invalid {
+                field: "taskId".into(),
+                message: "Use the task's ID or link.".into(),
+            })?),
+            None => None,
+        };
+        let (caller, space) = caller_and_space(call);
+        super::preview(call.state, &caller, space, rule, RunNow { work_item_id })
+            .await
+            .map_err(refused)
     }
 }
 

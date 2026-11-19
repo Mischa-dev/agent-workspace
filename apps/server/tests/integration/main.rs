@@ -119,6 +119,7 @@ mod modules_space_events;
 mod modules_targets;
 mod notifications;
 mod oauth_agent;
+mod ops_automation_preview;
 mod ops_decisions;
 mod ops_edges;
 mod ops_kernel;

@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
@@ -26,6 +26,7 @@ import { listMembers } from '../../team/api'
 import { launchKeys } from '../../launch/hooks'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
 import '../../automations/automations.css'
+import { OperationAction } from '../../automations/OperationAction'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { listProjectTaskViews, viewKeys } from '../../views/api'
 import { workItemPriorities } from '../../work-items/constants'
@@ -69,6 +70,7 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'notify', label: 'Notify people' },
   { kind: 'post_message', label: 'Post a message' },
   { kind: 'ask_agent', label: 'Ask an agent' },
+  { kind: 'run_operation', label: 'Run an operation' },
 ]
 
 /** Record rules (AWD-110) and page, sheet and board rules aren't about tasks: no saved view, and only actions that don't change tasks. */
@@ -78,7 +80,7 @@ const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'page_changed' ||
   trigger.kind === 'sheet_changed' ||
   trigger.kind === 'whiteboard_changed'
-const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent']
+const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent', 'run_operation']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
   switch (kind) {
@@ -149,11 +151,17 @@ export function RuleDialog({
   const [name, setName] = useState(rule?.name ?? '')
   const [trigger, setTrigger] = useState<Trigger>(rule?.trigger ?? defaultTrigger('pull_request_checks_failed'))
   const [viewId, setViewId] = useState(rule?.conditions.viewId ?? '')
+  const [filters, setFilters] = useState<Record<string, string>>(rule?.conditions.filters ?? {})
   const [actions, setActions] = useState<RuleAction[]>(rule?.actions ?? [defaultAction('launch')])
   const [error, setError] = useState<string | null>(null)
+  // What stops an action saving, by its place (an operation's missing answer, say).
+  const [problems, setProblems] = useState<Record<number, string | null>>({})
+  const setProblem = useCallback((index: number, problem: string | null) => {
+    setProblems((current) => (current[index] === problem ? current : { ...current, [index]: problem }))
+  }, [])
   // A half-made rule survives a stray click outside the dialog.
-  const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, actions }))
-  const dirty = JSON.stringify({ name, trigger, viewId, actions }) !== initial
+  const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, filters, actions }))
+  const dirty = JSON.stringify({ name, trigger, viewId, filters, actions }) !== initial
   const views = useQuery({
     queryKey: viewKeys.views(projectId),
     queryFn: () => listProjectTaskViews(projectId),
@@ -200,7 +208,7 @@ export function RuleDialog({
         name: name.trim(),
         trigger,
         conditions: {
-          ...(rule?.conditions.filters ? { filters: rule.conditions.filters } : {}),
+          ...(records || !Object.keys(filters).length ? {} : { filters }),
           viewId: viewId || null,
         },
         actions,
@@ -219,6 +227,11 @@ export function RuleDialog({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim() || !actions.length) return
+    const problem = actions.map((_, index) => problems[index]).find(Boolean)
+    if (problem) {
+      setError(problem)
+      return
+    }
     save.mutate()
   }
   const setAction = (index: number, action: RuleAction) =>
@@ -254,6 +267,7 @@ export function RuleDialog({
               if (isRecordTrigger(next)) {
                 // A record rule changes no tasks and reads no saved view.
                 setViewId('')
+                setFilters({})
                 setActions((current) => {
                   const kept = current.filter((action) => RECORD_ACTIONS.includes(action.kind) && !(action.kind === 'notify' && action.recipients === 'assignee'))
                   return kept.length ? kept : [defaultAction('notify', true)]
@@ -292,6 +306,7 @@ export function RuleDialog({
             ))}
           </SelectField>
         )}
+        {records ? null : <TaskConditions filters={filters} onChange={setFilters} projectId={projectId} />}
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">Then</legend>
           {actions.map((action, index) => (
@@ -300,7 +315,10 @@ export function RuleDialog({
                 <SelectField
                   aria-label={`Action ${index + 1}`}
                   id={`rule-action-${index}`}
-                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind, records))}
+                  onChange={(event) => {
+                    setProblem(index, null)
+                    setAction(index, defaultAction(event.target.value as RuleActionKind, records))
+                  }}
                   value={action.kind}
                 >
                   {ACTIONS.filter((entry) => !records || RECORD_ACTIONS.includes(entry.kind)).map((entry) => (
@@ -313,7 +331,10 @@ export function RuleDialog({
                   <IconButton
                     icon="trash"
                     label={`Remove action ${index + 1}`}
-                    onClick={() => setActions((current) => current.filter((_, at) => at !== index))}
+                    onClick={() => {
+                      setActions((current) => current.filter((_, at) => at !== index))
+                      setProblems({})
+                    }}
                     size="sm"
                   />
                 )}
@@ -326,6 +347,7 @@ export function RuleDialog({
                 members={(members.data?.members ?? []).filter((member) => member.enabled)}
                 profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
+                onProblem={setProblem}
                 projectId={projectId}
                 records={records}
               />
@@ -350,6 +372,63 @@ export function RuleDialog({
         {error && <Banner tone="danger">{error}</Banner>}
       </div>
     </Dialog>
+  )
+}
+
+/**
+ * "And only when the task…": the list filters a rule's conditions take
+ * inline (status, priority, label), so a rule like "when a task moves to
+ * review" needs no saved view. Kept beside any filters it doesn't show.
+ */
+function TaskConditions({
+  filters,
+  onChange,
+  projectId,
+}: {
+  filters: Record<string, string>
+  onChange: (filters: Record<string, string>) => void
+  projectId: string
+}) {
+  const workflow = useWorkItemWorkflow(projectId)
+  const labels = useLabels(projectId)
+  const set = (key: string, value: string) => {
+    const next = { ...filters }
+    if (value) next[key] = value
+    else delete next[key]
+    onChange(next)
+  }
+  return (
+    <fieldset className="aw-fieldset aw-rule-conditions" data-part="automation-conditions">
+      <legend className="aw-field__label">And only when the task</legend>
+      <div className="aw-rule-conditions__row">
+        <SelectField id="rule-status" label="Is in" onChange={(event) => set('statusId', event.target.value)} value={filters.statusId ?? ''}>
+          <option value="">Any status</option>
+          {workflow.data?.statuses.map((status) => (
+            <option key={status.id} value={status.id}>
+              {status.name}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField id="rule-priority" label="Has priority" onChange={(event) => set('priority', event.target.value)} value={filters.priority ?? ''}>
+          <option value="">Any priority</option>
+          {workItemPriorities.map((priority) => (
+            <option key={priority.value} value={priority.value}>
+              {priority.label}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField id="rule-label" label="Has label" onChange={(event) => set('labelIds', event.target.value)} value={filters.labelIds ?? ''}>
+          <option value="">Any label</option>
+          {labels.data
+            ?.filter((label) => !label.archived)
+            .map((label) => (
+              <option key={label.id} value={label.id}>
+                {label.name}
+              </option>
+            ))}
+        </SelectField>
+      </div>
+    </fieldset>
   )
 }
 
@@ -579,6 +658,7 @@ function ActionFields({
   index,
   members,
   onChange,
+  onProblem,
   profiles,
   projectId,
   records,
@@ -590,6 +670,7 @@ function ActionFields({
   /** Who an "Ask an agent" action can ask: the space's members. */
   members: { actorId: string; displayName: string; handle: string }[]
   onChange: (action: RuleAction) => void
+  onProblem: (index: number, problem: string | null) => void
   profiles: { id: string; name: string; handle: string }[]
   projectId: string
   /** A record rule: there's no task, so no assignee. */
@@ -769,9 +850,7 @@ function ActionFields({
         </>
       )
     case 'run_operation':
-      // Made by an agent or a script (automation_create); the builder for
-      // these comes with the operation catalogue.
-      return <p className="aw-quiet">Runs {action.operation || 'an operation'} with the input it was saved with.</p>
+      return <OperationAction action={action} index={index} onChange={onChange} onProblem={(problem) => onProblem(index, problem)} spaceId={projectId} />
   }
 }
 
