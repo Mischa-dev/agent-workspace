@@ -226,6 +226,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     None,
     "Someone's saved searches changed",
 );
+pub static FOLLOWS_CHANGED: EventType = signal(
+    "follows.changed",
+    "workspace",
+    None,
+    "What someone follows changed",
+);
 pub static INBOX_VIEWS_CHANGED: EventType = signal(
     "inbox_views.changed",
     "inbox",
@@ -601,6 +607,12 @@ pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     None,
     "A workspace's custom emoji changed",
 );
+pub static GUARDS_CHANGED: EventType = signal(
+    "guards.changed",
+    "agents",
+    None,
+    "A workspace's guards changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -677,6 +689,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &FOLLOWS_CHANGED,
         &INBOX_VIEWS_CHANGED,
         &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
@@ -733,6 +746,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
+        &GUARDS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,

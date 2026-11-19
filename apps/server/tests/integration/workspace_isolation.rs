@@ -2042,6 +2042,10 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "proposal_list",
     "connection_delivery_list",
     "schedule_list",
+    "follow_list",
+    "guard_list",
+    "memory_page_open",
+    "conversation_agent_settings_list",
     "conversation_list",
     "conversation_open",
     "conversation_read",
@@ -3062,6 +3066,35 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "schedule_list",
             vec![json!({}), json!({"includeFinished": true})],
             vec![],
+            vec![],
+        ),
+        // A2.9: what the caller follows, in A; B's space isn't found.
+        case(
+            "follow_list",
+            vec![json!({}), json!({"space": a.project})],
+            vec![json!({"space": b.project})],
+            vec![],
+        ),
+        // A2.27: the guards of the workspace called.
+        case("guard_list", vec![json!({})], vec![], vec![]),
+        // A2.16: memory of A's channel or space; B's aren't found.
+        case(
+            "memory_page_open",
+            vec![
+                json!({"conversation": a.channel}),
+                json!({"space": a.project}),
+            ],
+            vec![
+                json!({"conversation": b.channel}),
+                json!({"space": b.project}),
+            ],
+            vec![],
+        ),
+        // A2.9: ambient mode in A's channel; B's channel isn't found.
+        case(
+            "conversation_agent_settings_list",
+            vec![json!({"conversation": a.channel})],
+            vec![json!({"conversation": b.channel})],
             vec![],
         ),
         case(

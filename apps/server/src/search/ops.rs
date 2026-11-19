@@ -626,6 +626,7 @@ impl Operation for PlaceSearch {
             JOIN projects project ON project.id = page.project_id
             WHERE page.project_id = ANY($1)
               AND page.archived_at IS NULL
+              AND page.memory_for_kind IS DISTINCT FROM 'conversation'
               AND lower(page.title) LIKE $2 ESCAPE '\'
             ORDER BY page.updated_at DESC
             LIMIT 20

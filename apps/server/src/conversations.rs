@@ -2226,7 +2226,9 @@ pub(crate) async fn append_message_command_with(
         &mentioned_actor_ids,
     )
     .await?;
-    replies::ask_for_replies(
+    // Boxed: asking for replies can start runs, and every send path (an
+    // automation's too) would otherwise carry all of it on its stack.
+    Box::pin(replies::ask_for_replies(
         &mut transaction,
         replies::NewMessage {
             project_id: conversation.project_id,
@@ -2237,7 +2239,7 @@ pub(crate) async fn append_message_command_with(
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &mentioned_actor_ids,
         },
-    )
+    ))
     .await?;
     if let Some(mcp) = actor.mcp_credential {
         sqlx::query(

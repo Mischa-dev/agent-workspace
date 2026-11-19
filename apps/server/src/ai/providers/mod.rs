@@ -12,6 +12,10 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+pub use agent_workspace_host_protocol::{
+    ModelMessage, ModelPart, ModelReply, ModelRole, ModelStop, ModelTool, ModelTurn,
+};
+
 use crate::{provider::manifest::ModelEntry, secrets::SecretValue};
 
 mod anthropic;
@@ -49,6 +53,24 @@ pub fn secret_name(provider: &str) -> String {
     format!("ai_key.{provider}")
 }
 
+/// A tool call's input as an object: the shape every provider wants.
+fn object(input: &Value) -> Value {
+    if input.is_object() {
+        input.clone()
+    } else {
+        Value::Object(serde_json::Map::new())
+    }
+}
+
+/// A tool's input schema as an object schema.
+fn tool_schema(schema: &Value) -> Value {
+    if schema.get("type").and_then(Value::as_str) == Some("object") {
+        schema.clone()
+    } else {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+}
+
 /// The providers this server knows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderId {
@@ -84,6 +106,22 @@ impl ProviderId {
             .find(|provider| provider.manifest().id == id)
     }
 
+    /// A1.25: one turn of a conversation with tools (an assistant's).
+    pub async fn chat(
+        self,
+        client: &reqwest::Client,
+        request: &ChatRequest<'_>,
+    ) -> Result<Chat, ProviderError> {
+        match self {
+            Self::Anthropic => anthropic::chat(client, request).await,
+            Self::OpenAi | Self::OpenAiCompatible => {
+                openai::chat(client, request, self == Self::OpenAi).await
+            }
+            Self::Google => google::chat(client, request).await,
+            Self::Fake => fake::chat(request),
+        }
+    }
+
     pub async fn complete(
         self,
         client: &reqwest::Client,
@@ -112,6 +150,26 @@ pub struct CompletionRequest<'a> {
     pub api_key: Option<&'a SecretValue>,
     pub base_url: Option<&'a str>,
     pub timeout: Duration,
+}
+
+/// A1.25: one turn of a conversation with tools: the provider-neutral
+/// shapes the host protocol carries, which each adapter turns into its own.
+pub struct ChatRequest<'a> {
+    pub model: &'a str,
+    pub turn: &'a ModelTurn,
+    pub max_output_tokens: u32,
+    pub api_key: Option<&'a SecretValue>,
+    pub base_url: Option<&'a str>,
+    pub timeout: Duration,
+}
+
+/// What the model said in a turn, and the tokens it used.
+#[derive(Debug)]
+pub struct Chat {
+    pub parts: Vec<ModelPart>,
+    pub stop: ModelStop,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
 }
 
 /// The reply: its JSON text and the tokens it used.
@@ -191,7 +249,12 @@ fn transport_error(error: &reqwest::Error) -> ProviderError {
 /// The base URL to call: the configured one when the provider takes one,
 /// checked to be http(s) with no credentials, else the default.
 fn base_url(request: &CompletionRequest<'_>, default: &str) -> Result<String, ProviderError> {
-    let chosen = request.base_url.unwrap_or(default).trim_end_matches('/');
+    address(request.base_url, default)
+}
+
+/// [`base_url`] for any call: the configured address, else `default`.
+fn address(configured: Option<&str>, default: &str) -> Result<String, ProviderError> {
+    let chosen = configured.unwrap_or(default).trim_end_matches('/');
     let parsed = url::Url::parse(chosen)
         .map_err(|_| ProviderError::BadRequest("the provider address isn't a URL".to_owned()))?;
     if !matches!(parsed.scheme(), "http" | "https")

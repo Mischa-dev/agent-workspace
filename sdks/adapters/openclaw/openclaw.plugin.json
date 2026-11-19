@@ -1,0 +1,32 @@
+{
+  "id": "agent-workspace",
+  "channels": ["agent-workspace"],
+  "name": "Agent Workspace",
+  "description": "Agent Workspace channel: the agent's reply requests become turns, and its answers go back as replies.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "agent-workspace": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "mcpUrl": { "type": "string" },
+          "token": { "type": "string" },
+          "cursorFile": { "type": "string" },
+          "allowFrom": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "uiHints": {
+        "mcpUrl": { "label": "Workspace MCP address (https://<host>/api/v1/mcp)" },
+        "token": { "label": "Agent token", "sensitive": true },
+        "cursorFile": { "label": "Cursor file (optional)" },
+        "allowFrom": { "label": "Only answer these account ids (optional)" }
+      }
+    }
+  }
+}

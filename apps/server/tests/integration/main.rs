@@ -2,6 +2,7 @@
 //! compiled and linked for tests once rather than once per file.
 
 mod a1_a2a_binding;
+mod a1_assistant;
 mod a1_builtin_requests;
 mod a1_example_host;
 mod a1_host_protocol;
@@ -148,6 +149,7 @@ mod t1_formulas;
 mod t1_task_record_owner;
 mod t1_task_records_migration;
 mod t1_views_at_scale;
+mod teammate;
 mod templates;
 mod tenancy_backfill;
 mod tenancy_row_rules;

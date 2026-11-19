@@ -24,6 +24,8 @@ export type Action = ({ agentProfileId?: string | null; environmentId?: string |
 
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
+export type AgentSettingsView = { accountId: string; ambient: boolean; displayName: string; handle: string; replyCooldownSeconds: number }
+
 export type AgentTemplateView = { definition: unknown; id: string; installId?: string | null; key: string; name: string; purpose: string; spaceId?: string | null }
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
@@ -162,6 +164,12 @@ export type FilterOp = ("equals" | "notEquals" | "contains" | "notContains" | "g
 
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
+export type FollowKind = "space" | "task" | "page" | "sheet" | "record" | "whiteboard" | "conversation"
+
+export type FollowLevel = "changes" | "everything"
+
+export type FollowView = { id: string; kind: FollowKind; level: FollowLevel; spaceId?: string | null }
+
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
 export type FormFieldWrite = { field: string; required?: boolean }
@@ -171,6 +179,10 @@ export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[];
 export type FormulaView = { result: ResultType; source: string }
 
 export type GroupView = { description: string; handle: string; id: string; memberCount: number; memberIds?: string[] | null; name: string }
+
+export type GuardAction = "deny" | "review"
+
+export type GuardView = { accounts: string[]; action: string; enabled: boolean; id: string; name: string; operations: string[]; reviewers: string[]; spaceId?: string | null; targetKinds: string[]; terms: string[]; version: number }
 
 export type GuidePage = { body: string; pageId: string; stale: boolean; title: string; truncated: boolean; updatedAt: string; version: number }
 
@@ -243,6 +255,10 @@ export type LinkedThread = { id: string; name: string; url: string }
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
 
 export type MemberRef = { handle: string; id: string; kind: string; name: string }
+
+export type MemoryPageView = { body: string; pageId: string; spaceId: string; title: string; updatedAt: string; version: number }
+
+export type MemoryPointer = { head: string; pageId: string; title: string; truncated: boolean; updatedAt: string; version: number }
 
 export type Mention = { author: string; conversation: string; conversationId: string; messageId: string; project: string; sentAt: string; sequence: number; text: string }
 
@@ -510,9 +526,9 @@ export type AgentOfferListInput = Record<string, never>
 
 export type AgentOfferListOutput = { offers: Offer[] }
 
-export type AgentOfferStartInput = { host: string; offerId: string }
+export type AgentOfferStartInput = { host: string; name?: string | null; offerId: string; roleId?: string | null }
 
-export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+export type AgentOfferStartOutput = { accountId?: string | null; commandId?: string | null; page?: string | null }
 
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 
@@ -662,6 +678,14 @@ export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: nu
 
 export type ConnectionUpdateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConversationAgentSettingsListInput = { conversation: string }
+
+export type ConversationAgentSettingsListOutput = { accounts: AgentSettingsView[] }
+
+export type ConversationAgentSettingsSetInput = { account: string; ambient?: boolean | null; conversation: string; replyCooldownSeconds?: number | null }
+
+export type ConversationAgentSettingsSetOutput = { accountId: string; ambient: boolean; displayName: string; handle: string; replyCooldownSeconds: number }
+
 export type ConversationContinueInput = { conversationId: string }
 
 export type ConversationContinueOutput = { agentTurnsRemaining: number; asked?: MemberRef[]; conversationId: string; idempotentReplay?: boolean; latestMessageId?: string | null }
@@ -810,6 +834,14 @@ export type FileLinkGetInput = { fileId: string }
 
 export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
 
+export type FollowListInput = { space?: string | null }
+
+export type FollowListOutput = { follows: FollowView[] }
+
+export type FollowSetInput = { id: string; kind: FollowKind; level?: FollowLevel | null; on?: boolean | null }
+
+export type FollowSetOutput = { changed: boolean; id: string; kind: FollowKind; level?: FollowLevel | null }
+
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
 export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
@@ -825,6 +857,14 @@ export type GithubInstallationLinkOutput = { automation?: Record<string, unknown
 export type GroupListInput = { members?: boolean; prefix?: string | null }
 
 export type GroupListOutput = { groups: GroupView[] }
+
+export type GuardListInput = Record<string, never>
+
+export type GuardListOutput = { guards: GuardView[] }
+
+export type GuardSetInput = { accounts?: string[] | null; action?: GuardAction | null; enabled?: boolean | null; expectedVersion?: number | null; guardId?: string | null; name?: string | null; operations?: string[] | null; remove?: boolean; reviewers?: string[] | null; space?: string | null; targetKinds?: string[] | null; terms?: string[] | null }
+
+export type GuardSetOutput = { guard?: GuardView | null }
 
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
@@ -897,6 +937,14 @@ export type LabelListOutput = { labels: LabelLine[] }
 export type LabelUpdateInput = { archived?: boolean | null; color?: string | null; description?: string | null; expectedVersion?: number | null; label?: string | null; name?: string | null; projectId: string }
 
 export type LabelUpdateOutput = { changedFields: string[]; created: boolean; label: LabelLine; note?: string | null }
+
+export type MemoryPageOpenInput = { conversation?: string | null; space?: string | null }
+
+export type MemoryPageOpenOutput = { page?: MemoryPageView | null }
+
+export type MemoryPageSetInput = { body: string; conversation?: string | null; expectedVersion?: number | null; note?: string | null; space?: string | null }
+
+export type MemoryPageSetOutput = { body: string; pageId: string; spaceId: string; title: string; updatedAt: string; version: number }
 
 export type MessageDeleteInput = { messageId: string }
 
@@ -1052,7 +1100,7 @@ export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null
 
 export type ProjectGetInput = { projectId: string }
 
-export type ProjectGetOutput = { channels: ConversationSummary[]; decisions: DecisionLine[]; guide?: GuidePage | null; labels?: string[]; layout?: LayoutLine | null; modulesOff?: string[]; openThreads: ConversationSummary[]; pages: PageLine[]; project: ProjectHeader; repositories: RepositoryLine[]; skills?: SkillLine[]; taskCollections?: string[]; taskFields?: string[]; tasks: TaskOverview }
+export type ProjectGetOutput = { channels: ConversationSummary[]; decisions: DecisionLine[]; guide?: GuidePage | null; labels?: string[]; layout?: LayoutLine | null; memory?: MemoryPointer | null; modulesOff?: string[]; openThreads: ConversationSummary[]; pages: PageLine[]; project: ProjectHeader; repositories: RepositoryLine[]; skills?: SkillLine[]; taskCollections?: string[]; taskFields?: string[]; tasks: TaskOverview }
 
 export type ProjectListInput = { includeArchived?: boolean | null }
 
@@ -1100,7 +1148,7 @@ export type RecurringUpdateOutput = { created: boolean; deleted: boolean; recurr
 
 export type ReplyClaimInput = { requestId: string }
 
-export type ReplyClaimOutput = { instructions: string; recentMessages: ContextMessage[]; request: InboxItem; run?: ClaimRun | null; session?: ClaimSession | null }
+export type ReplyClaimOutput = { instructions: string; memory?: MemoryPointer | null; recentMessages: ContextMessage[]; request: InboxItem; run?: ClaimRun | null; session?: ClaimSession | null }
 
 export type ReplyPassInput = { generation?: number | null; reason?: string | null; requestId: string }
 
@@ -1498,6 +1546,8 @@ export type Operations = {
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
   connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
+  conversation_agent_settings_list: { input: ConversationAgentSettingsListInput; output: ConversationAgentSettingsListOutput }
+  conversation_agent_settings_set: { input: ConversationAgentSettingsSetInput; output: ConversationAgentSettingsSetOutput }
   conversation_continue: { input: ConversationContinueInput; output: ConversationContinueOutput }
   conversation_file_list: { input: ConversationFileListInput; output: ConversationFileListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
@@ -1535,10 +1585,14 @@ export type Operations = {
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  follow_list: { input: FollowListInput; output: FollowListOutput }
+  follow_set: { input: FollowSetInput; output: FollowSetOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
   github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
+  guard_list: { input: GuardListInput; output: GuardListOutput }
+  guard_set: { input: GuardSetInput; output: GuardSetOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
@@ -1557,6 +1611,8 @@ export type Operations = {
   label_create: { input: LabelCreateInput; output: LabelCreateOutput }
   label_list: { input: LabelListInput; output: LabelListOutput }
   label_update: { input: LabelUpdateInput; output: LabelUpdateOutput }
+  memory_page_open: { input: MemoryPageOpenInput; output: MemoryPageOpenOutput }
+  memory_page_set: { input: MemoryPageSetInput; output: MemoryPageSetOutput }
   message_delete: { input: MessageDeleteInput; output: MessageDeleteOutput }
   message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }

@@ -1,0 +1,30 @@
+name: agent-workspace-platform
+label: Agent Workspace
+kind: platform
+version: 0.1.0
+description: >
+  Agent Workspace as a Hermes gateway platform. The agent's Workspace
+  account hears the requests to answer (mentions, direct messages, threads
+  it follows) on Workspace's event stream, and each becomes a message to
+  Hermes; Hermes's answer goes back as the reply. Needs the
+  agent-workspace-runner package (sdks/runner-python) in Hermes's
+  environment.
+author: Agent Workspace
+requires_env:
+  - name: AGENT_WORKSPACE_MCP_URL
+    description: "The workspace's MCP address (https://<host>/api/v1/mcp)"
+    prompt: "Workspace MCP address"
+    password: false
+  - name: AGENT_WORKSPACE_TOKEN
+    description: "The agent account's token, from the agent's page in Workspace"
+    prompt: "Agent token"
+    password: true
+optional_env:
+  - name: AGENT_WORKSPACE_CURSOR_FILE
+    description: "A file to keep the event cursor in across restarts (default: the server keeps it)"
+    prompt: "Cursor file (or empty)"
+    password: false
+  - name: AGENT_WORKSPACE_HOME_CONVERSATION
+    description: "A conversation id for cron and notification delivery"
+    prompt: "Home conversation id (or empty)"
+    password: false

@@ -32,6 +32,7 @@ pub mod credentials;
 pub mod finished;
 #[cfg(test)]
 mod guards;
+pub mod hosted;
 pub mod launch_paths;
 pub mod liveness;
 pub mod operations;

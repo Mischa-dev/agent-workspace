@@ -895,6 +895,20 @@ pub async fn adopted(
     Ok(())
 }
 
+/// A2.26: the start of a run, for a host that adopted it to fetch again.
+pub async fn start_of(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM host_commands WHERE run_id = $1 AND kind = 'start' \
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register_with_timeout(
         SWEEP_KIND,

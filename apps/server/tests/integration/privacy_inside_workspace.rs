@@ -3099,3 +3099,347 @@ async fn channel_writes_keep_to_private_channels() {
 
     world.finish().await;
 }
+
+/// A2.9: following and ambient mode keep to what the caller may see and
+/// do. A member can't follow a DM they aren't in, nor set ambient mode
+/// there; a viewer (no `replies.steer`) can't set it in a channel; and what
+/// the member follows never lists the DM.
+#[tokio::test]
+async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("vera", "viewer")
+        .agent("rook", "member")
+        .build("privacy_follows")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/channels", world.project("WORK")),
+            Some("privacy-follows-channel"),
+            json!({ "name": "general" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let channel = made["conversation"]["id"]
+        .as_str()
+        .or_else(|| made["id"].as_str())
+        .expect("channel")
+        .to_owned();
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    let vera = &world.people["vera"].browser;
+    for (who, name, body) in [
+        (
+            lena,
+            "follow_set",
+            json!({ "kind": "conversation", "id": dm, "level": "everything" }),
+        ),
+        (
+            lena,
+            "conversation_agent_settings_set",
+            json!({ "conversation": dm, "account": rook, "ambient": true }),
+        ),
+        (
+            vera,
+            "conversation_agent_settings_set",
+            json!({ "conversation": channel, "account": rook, "ambient": true }),
+        ),
+        // A2.27: guards are set by those who manage the workspace's settings.
+        (
+            lena,
+            "guard_set",
+            json!({ "name": "Mine", "action": "deny", "accounts": [rook] }),
+        ),
+        // A2.16: a viewer doesn't write a channel's memory.
+        (
+            vera,
+            "memory_page_set",
+            json!({ "conversation": channel, "body": "Viewer's note." }),
+        ),
+    ] {
+        let key = Uuid::now_v7().to_string();
+        let (status, body) =
+            send(&world.app, who.request("POST", &op(name), Some(&key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+    }
+    let (_, listed) = send(
+        &world.app,
+        lena.request("POST", &op("follow_list"), None, json!({})),
+    )
+    .await;
+    assert!(!listed.to_string().contains(&dm), "{listed}");
+    let settings = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_agent_settings")
+        .fetch_one(world.pool())
+        .await
+        .expect("settings");
+    assert_eq!(settings, 0);
+    world.finish().await;
+}
+
+/// A2.16: a private channel's memory page is as private as the channel.
+/// Someone in the space but not the channel can't open it, find it in the
+/// space's pages or search, or read it by its id; a space's memory is the
+/// space's.
+#[tokio::test]
+async fn a_private_channels_memory_stays_with_its_members() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_memory")
+        .await
+    else {
+        return;
+    };
+    let work = world.project("WORK");
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some("privacy-memory-channel"),
+            json!({ "name": "plans", "private": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let channel = made["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let word = format!("zqmemory{}", &Uuid::now_v7().simple().to_string()[20..]);
+    let key = Uuid::now_v7().to_string();
+    let (status, written) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("memory_page_set"),
+            Some(&key),
+            json!({ "conversation": channel, "body": format!("Launch is {word}.") }),
+        ),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{status} {written}");
+    let page = written["value"]["pageId"]
+        .as_str()
+        .expect("page")
+        .to_owned();
+    let key = Uuid::now_v7().to_string();
+    let (_, space_memory) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("memory_page_set"),
+            Some(&key),
+            json!({ "space": work, "body": "Ship on Fridays." }),
+        ),
+    )
+    .await;
+    assert_eq!(space_memory["outcome"], "ok", "{space_memory}");
+
+    let (_, opened) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("memory_page_open"),
+            None,
+            json!({ "conversation": channel }),
+        ),
+    )
+    .await;
+    assert_eq!(opened["value"]["page"]["pageId"], page.as_str(), "{opened}");
+
+    let (_, refused) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("memory_page_open"),
+            None,
+            json!({ "conversation": channel }),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let key = Uuid::now_v7().to_string();
+    let (_, refused) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("memory_page_set"),
+            Some(&key),
+            json!({ "conversation": channel, "body": "Overwritten." }),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let (status, read) = send(
+        &world.app,
+        lena.request("GET", &format!("/api/v1/pages/{page}"), None, Value::Null),
+    )
+    .await;
+    assert!(!status.is_success(), "{status} {read}");
+    // Nor change its blocks through an agent tool, which would answer with
+    // them.
+    let (_, edited) = world.agents["rook"]
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "page_edit",
+                arguments: json!({
+                    "pageId": page,
+                    "edits": [{ "op": "append", "markdown": "Overwritten." }],
+                }),
+            },
+        )
+        .await;
+    assert_ne!(edited["outcome"], "ok", "{edited}");
+    assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor its live document, its discussion or an export of it.
+    for path in ["document", "discussion", "export?format=markdown"] {
+        let (status, read) = send(
+            &world.app,
+            lena.request(
+                "GET",
+                &format!("/api/v1/pages/{page}/{path}"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert!(!status.is_success(), "{path}: {status} {read}");
+        assert!(!read.to_string().contains(&word), "{path}: {read}");
+    }
+    let (status, read) = send(
+        &world.app,
+        owner.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/document"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {read}");
+    // Nor any of its versions.
+    let (status, read) = send(
+        &world.app,
+        lena.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/revisions/1"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status} {read}");
+    assert!(!read.to_string().contains(&word), "{read}");
+    let (status, read) = send(
+        &world.app,
+        owner.request(
+            "GET",
+            &format!("/api/v1/pages/{page}/revisions/1"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {read}");
+    let (_, listed) = send(
+        &world.app,
+        lena.request(
+            "GET",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!listed.to_string().contains(&page), "{listed}");
+    let (_, found) = send(
+        &world.app,
+        lena.request(
+            "GET",
+            &format!("/api/v1/search?q={word}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(!found.to_string().contains(&word), "{found}");
+    // Made a template by a reader, it still isn't hers: not listed, not
+    // copied into a page of her own.
+    let (status, marked) = send(
+        &world.app,
+        owner.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({ "isTemplate": true }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {marked}");
+    let (_, templates) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("page_template_list"),
+            None,
+            json!({ "spaceId": work }),
+        ),
+    )
+    .await;
+    assert_eq!(templates["outcome"], "ok", "{templates}");
+    assert!(!templates.to_string().contains(&page), "{templates}");
+    assert!(!templates.to_string().contains(&word), "{templates}");
+    let (_, copied) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({ "fromTemplateId": page }),
+        ),
+    )
+    .await;
+    assert!(!copied.to_string().contains(&word), "{copied}");
+    // The space's memory is the space's.
+    let (_, opened) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("memory_page_open"),
+            None,
+            json!({ "space": work }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        opened["value"]["page"]["body"], "Ship on Fridays.",
+        "{opened}"
+    );
+    world.finish().await;
+}
