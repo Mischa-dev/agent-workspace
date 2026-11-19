@@ -9,7 +9,7 @@
 //!   `workspace_suspended` ([`ensure_open`]); people can still sign in and
 //!   see why.
 //! - [`request_deletion`] marks it `deleting` and queues the
-//!   `workspace.delete` job for 14 days later; [`cancel_deletion`] undoes
+//!   `workspace.delete` job for 14 days later; until then [`cancel_deletion`] undoes
 //!   both. While it is deleting, every call but cancelling is refused.
 //! - The job ([`delete_now`]) deletes the workspace's file bytes, retires the
 //!   agent and app accounts it owns (credentials revoked, memberships
@@ -741,6 +741,17 @@ pub async fn cancel_deletion(
     if lock(connection, workspace).await? != Lifecycle::Deleting {
         return Err(AppError::Conflict("workspace", "not being deleted"));
     }
+    // Past its date the deletion has begun (its own buckets may already be
+    // empty), so it can't be kept any more.
+    let started = sqlx::query_scalar::<_, bool>(
+        "SELECT coalesce(delete_after <= now(), false) FROM organizations WHERE id = $1",
+    )
+    .bind(workspace)
+    .fetch_one(&mut *connection)
+    .await?;
+    if started {
+        return Err(AppError::Conflict("workspace", "its deletion has started"));
+    }
     let delete_after = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
         r#"
         UPDATE organizations organization
@@ -842,6 +853,15 @@ async fn delete_in_scope(
     workspace: Uuid,
     ignore_date: bool,
 ) -> Result<Option<Deleted>, AppError> {
+    // The workspace's own buckets are emptied first, while their rows (and
+    // the credentials to reach them) still exist, so a failed attempt is
+    // retried with everything it needs. Once due, a deletion can't be
+    // cancelled (`cancel_deletion`), so a kept workspace never loses a file.
+    if start_deletion(state, workspace, ignore_date).await? {
+        for store in crate::files::workspace_store::all_of(state, workspace).await? {
+            store.delete_workspace(workspace).await?;
+        }
+    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let connection = &mut *transaction;
     // The decision is taken under the workspace's row lock, which keeping
@@ -937,9 +957,41 @@ async fn delete_in_scope(
     }))
 }
 
-/// Remove what a deleted workspace kept on disk: its repositories'
-/// mirrors and worktrees, and its file folder. Missing pieces are fine, so
-/// a retry finishes a removal that failed part way.
+/// Whether `workspace` is deleting and due. With `ignore_date` its date is
+/// brought forward to now, so it can't be cancelled from here on either.
+async fn start_deletion(
+    state: &AppState,
+    workspace: Uuid,
+    ignore_date: bool,
+) -> Result<bool, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let due = sqlx::query_scalar::<_, bool>(
+        "SELECT lifecycle = 'deleting' AND ($2 OR delete_after <= now()) \
+         FROM organizations WHERE id = $1 FOR UPDATE",
+    )
+    .bind(workspace)
+    .bind(ignore_date)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(false);
+    if due && ignore_date {
+        sqlx::query(
+            "UPDATE organizations SET delete_after = least(coalesce(delete_after, now()), now()) \
+             WHERE id = $1",
+        )
+        .bind(workspace)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(due)
+}
+
+/// Remove what a deleted workspace kept on the server's own storage: its
+/// repositories' mirrors and worktrees, and its file folder in each of the
+/// server's stores. (Its own buckets were emptied before its rows went.)
+/// Missing pieces are fine, so a retry finishes a removal that failed part
+/// way.
 async fn remove_bytes(
     state: &AppState,
     workspace: Uuid,
@@ -948,11 +1000,7 @@ async fn remove_bytes(
     for repository in repositories {
         crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
     }
-    let own = crate::files::workspace_store::all_of(state, workspace).await?;
-    for store in crate::files::store::FileStore::all(&state.config)
-        .into_iter()
-        .chain(own)
-    {
+    for store in crate::files::store::FileStore::all(&state.config) {
         store.delete_workspace(workspace).await?;
     }
     Ok(())
