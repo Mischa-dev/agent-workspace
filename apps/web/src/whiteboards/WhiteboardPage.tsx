@@ -277,7 +277,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'Rename', icon: 'pencil', disabled: !editable, onSelect: () => setPanel('rename') },
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
-            ...(whiteboard.projectId && !whiteboard.deleted
+            ...(whiteboard.projectId && !whiteboard.deleted && projectExperience.shows('whiteboard.convert')
               ? [
                   { label: 'Make tasks from notes', icon: 'checklist' as const, onSelect: () => void notesToTasks(whiteboard.projectId as string) },
                   { label: 'Make a page from board', icon: 'list' as const, onSelect: () => void toPage(whiteboard.projectId as string) },

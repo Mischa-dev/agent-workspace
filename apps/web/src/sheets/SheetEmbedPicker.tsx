@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 
+import { useProjectExperience } from '../experience/layout'
 import { sheetChartEmbed, sheetEmbed } from '../memory/embeds/embedModel'
 import { Button, SelectField, TextField, describeError } from '../ui'
 import { useSheet, useSheets } from './api'
@@ -21,6 +22,7 @@ export default function SheetEmbedPicker({
   projectId: string
 }) {
   const sheets = useSheets(projectId)
+  const showsCharts = useProjectExperience(projectId).shows('sheet.charts')
   const [sheetId, setSheetId] = useState('')
   const [tabId, setTabId] = useState('')
   const [range, setRange] = useState('')
@@ -100,7 +102,7 @@ export default function SheetEmbedPicker({
               </option>
             ))}
           </SelectField>
-          {picked && picked.charts.length > 0 ? (
+          {showsCharts && picked && picked.charts.length > 0 ? (
             <SelectField className="aw-live__address" compact label="Chart" onChange={(event) => setChartId(event.target.value)} value={chartId}>
               <option value="">None: show cells</option>
               {picked.charts.map((entry) => (
