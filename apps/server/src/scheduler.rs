@@ -233,9 +233,10 @@ async fn may_start_runs(
     } else {
         None
     };
-    let membership = sqlx::query_as::<_, (String, Option<Vec<String>>, bool)>(
+    let membership = sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>, bool)>(
         r#"
-        SELECT role, workspace_role_permissions(role_id), enabled
+        SELECT role, workspace_role_permissions(role_id),
+               space_group_permissions(actor_id, project_id), enabled
         FROM project_memberships
         WHERE project_id = $1 AND actor_id = $2
         "#,
@@ -244,10 +245,11 @@ async fn may_start_runs(
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    let Some((role, permissions, enabled)) = membership else {
+    let Some((role, permissions, groups, enabled)) = membership else {
         return Ok(false);
     };
-    let grant = RoleGrant::stored(&role, permissions.as_deref())?;
+    let grant = RoleGrant::stored(&role, permissions.as_deref())?
+        .with_groups(crate::access::group_permissions(groups.as_deref()));
     Ok(within_agent_limits(limits, async {
         crate::access::membership_allows(
             actor_id,

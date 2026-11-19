@@ -501,7 +501,7 @@ const MEMBER_COLUMNS: &str = r#"
 const MEMBER_FROM: &str = r#"
     FROM organization_memberships membership
     JOIN actors actor ON actor.id = membership.actor_id
-     AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
+     AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
     LEFT JOIN organization_actor_profiles profile
       ON profile.organization_id = membership.organization_id
      AND profile.actor_id = membership.actor_id
@@ -914,6 +914,8 @@ async fn transfer_ownership(
         r#"
         UPDATE organization_memberships
         SET role = CASE WHEN actor_id = $2 THEN $4 ELSE $5 END, role_id = NULL,
+            -- An owner's membership lasts.
+            expires_at = CASE WHEN actor_id = $2 THEN NULL ELSE expires_at END,
             role_explicit = true, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND actor_id IN ($2, $3)
         "#,

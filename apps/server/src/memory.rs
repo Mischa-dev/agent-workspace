@@ -300,6 +300,7 @@ pub struct PinView {
 struct ProjectAccessRow {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     enabled: bool,
     archived: bool,
     kind: String,
@@ -317,6 +318,7 @@ pub async fn project_access(
     let row = sqlx::query_as::<_, ProjectAccessRow>(
         r#"
         SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions,
                membership.enabled,
                project.archived_at IS NOT NULL AS archived, project.kind
         FROM projects project
@@ -338,7 +340,9 @@ pub async fn project_access(
     if row.archived {
         return Err(AppError::NotFound("project"));
     }
-    let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
+    let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(row.group_permissions.as_deref()),
+    );
     if !crate::access::membership_allows(
         actor_id,
         project_id,

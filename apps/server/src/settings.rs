@@ -1094,11 +1094,12 @@ async fn project_role<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
     project_id: Uuid,
-) -> Result<Option<(Uuid, String, Option<Vec<String>>)>, AppError> {
-    Ok(sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+) -> Result<Option<(Uuid, String, RoleGrant)>, AppError> {
+    let row = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
         SELECT project.organization_id, membership.role,
-               workspace_role_permissions(membership.role_id)
+               workspace_role_permissions(membership.role_id),
+               space_group_permissions($2, project.id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -1114,7 +1115,14 @@ async fn project_role<'e, E: PgExecutor<'e>>(
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(executor)
-    .await?)
+    .await?;
+    // With what their groups are given in the project (K1.27).
+    row.map(|(organization_id, role, permissions, groups)| {
+        let grant = membership_grant(&role, permissions.as_deref())?
+            .with_groups(crate::access::group_permissions(groups.as_deref()));
+        Ok((organization_id, role, grant))
+    })
+    .transpose()
 }
 
 /// Owners and admins of the workspace, as people. Anyone else gets "not
@@ -1165,13 +1173,13 @@ pub(crate) async fn authorize_project_manage_as<'e, E: PgExecutor<'e>>(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let (organization_id, role, permissions) = project_role(executor, actor_id, project_id)
+    let (organization_id, _, grant) = project_role(executor, actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
     if crate::access::membership_allows(
         actor_id,
         project_id,
-        membership_grant(&role, permissions.as_deref())?,
+        grant,
         true,
         Action::SettingsManage.permission(),
     ) {

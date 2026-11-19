@@ -164,6 +164,7 @@ pub async fn run_jobs(
 struct ProjectAccess {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -6349,7 +6350,8 @@ pub(crate) async fn require_project_access_as(
 ) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -6368,7 +6370,9 @@ pub(crate) async fn require_project_access_as(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
+    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(access.group_permissions.as_deref()),
+    );
     if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(role)
     } else {

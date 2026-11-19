@@ -64,6 +64,7 @@ async fn development_bootstrap(
         thread_id: Uuid,
         membership_role: String,
         membership_role_permissions: Option<Vec<String>>,
+        membership_group_permissions: Option<Vec<String>>,
         membership_enabled: bool,
     }
 
@@ -75,6 +76,7 @@ async fn development_bootstrap(
             thread.id AS thread_id,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled
         FROM conversations thread
         JOIN conversations parent ON parent.id = thread.parent_channel_id
@@ -103,6 +105,7 @@ async fn development_bootstrap(
         bootstrap.project_id,
         &bootstrap.membership_role,
         bootstrap.membership_role_permissions.as_deref(),
+        bootstrap.membership_group_permissions.as_deref(),
         bootstrap.membership_enabled,
         Action::ProjectView,
     )?;

@@ -415,6 +415,14 @@ pub async fn write_mode_locked(
     ))
 }
 
+/// What the roles given to an account's groups in a space allow (K1.27),
+/// as SQL's `space_group_permissions(account, space)` reads them. Every
+/// grant built from a seat for [`membership_allows`] adds them
+/// (`RoleGrant::with_groups`), as `holding::load` does.
+pub fn group_permissions<S: AsRef<str>>(keys: Option<&[S]>) -> PermissionSet {
+    keys.map_or(PermissionSet::EMPTY, PermissionSet::from_keys)
+}
+
 /// A membership read with the row it governs (a conversation looked up
 /// with the caller's membership joined in): whether it lets `account` use
 /// `permission` in `space`, the answer `check` gives from the same

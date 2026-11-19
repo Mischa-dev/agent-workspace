@@ -21,6 +21,7 @@ use crate::{
 pub(super) struct ConnectionAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,7 +49,9 @@ pub(super) async fn begin_authorized_read<'a>(
     let authorization = sqlx::query_as::<_, ConnectionAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(credential.actor_id, project.id)
+                 AS membership_group_permissions
         FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
@@ -91,11 +94,14 @@ pub(super) async fn begin_authorized_read<'a>(
     .await
     .map_err(|_| ReadFailure::Database("authorize"))?
     .ok_or(ReadFailure::Authorization)?;
-    if !super::mcp_policy_allows(
-        principal.actor_id,
+    if !super::common::role_allows(
+        principal,
         principal.project_id,
-        &authorization.membership_role,
-        authorization.membership_role_permissions.as_deref(),
+        &super::common::StoredRole::of(
+            &authorization.membership_role,
+            authorization.membership_role_permissions.as_deref(),
+        )
+        .with_groups(authorization.membership_group_permissions.clone()),
         Action::McpRead,
     ) {
         return Err(ReadFailure::Authorization);

@@ -142,10 +142,30 @@ async fn within(state: &AppState, principal: &McpPrincipal) -> Result<Option<Vec
         return Ok(Some(vec![project_id]));
     }
     let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's app or an agent's connection)
-    if person {
-        return Ok(None);
-    }
-    accessible_project_ids(state, principal).await.map(Some)
+    let within = if person {
+        None
+    } else {
+        Some(accessible_project_ids(state, principal).await?)
+    };
+    // K1.24: a credential held to some workspaces (a token's, an app's
+    // limit) reaches the account's items in those alone, and its personal
+    // DMs (the direct scope).
+    let Some(workspaces) = crate::policy::agent_limit_direct_workspaces(
+        principal.actor_id,
+        crate::policy::Permission::ProjectsView,
+    ) else {
+        return Ok(within);
+    };
+    let reached = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects \
+         WHERE (organization_id = ANY($1) OR id = ANY($1)) \
+           AND ($2::uuid[] IS NULL OR id = ANY($2))",
+    )
+    .bind(&workspaces)
+    .bind(&within)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    Ok(Some(reached))
 }
 
 /// AWD-75: of `within` (or, when it's everywhere, every project the caller

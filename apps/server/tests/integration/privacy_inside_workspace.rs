@@ -3364,6 +3364,118 @@ async fn a_group_role_adds_to_a_viewer_seat_in_chat() {
 /// and taking someone out of the group takes it away; a guest sees only
 /// the spaces they're added to (not open ones, the workspace's own or the
 /// directory), and a membership whose time passes is turned off by the job.
+/// K1.27 follow-up: a group's role in a space counts in every check, the
+/// older seat-built ones too. Lena's own seat in TEAM is a Viewer's; her
+/// group is a Member there, so she writes pages and tasks like a Member,
+/// and once she leaves the group she can't.
+#[tokio::test]
+async fn a_groups_role_counts_beside_a_lower_seat() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TEAM")
+        .person("lena", "member")
+        .build("privacy_group_beside_seat")
+        .await
+    else {
+        return;
+    };
+    let team = world.project("TEAM").to_owned();
+    let lena = &world.people["lena"];
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer', \
+           role_id = (SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'viewer') \
+         WHERE project_id = $2::uuid AND actor_id = $3",
+    )
+    .bind(world.organization)
+    .bind(&team)
+    .bind(lena.actor)
+    .execute(world.pool())
+    .await
+    .expect("lena views TEAM");
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    async fn write(app: &axum::Router, lena: &Browser, team: &str, key: &str) -> (bool, bool) {
+        let (page, _) = send(
+            app,
+            lena.request(
+                "POST",
+                &format!("/api/v1/projects/{team}/pages"),
+                Some(&format!("{key}-page")),
+                json!({"title": format!("Plan {key}"), "body": "Notes."}),
+            ),
+        )
+        .await;
+        let (task, _) = send(
+            app,
+            lena.request(
+                "POST",
+                &format!("/api/v1/projects/{team}/work-items"),
+                Some(&format!("{key}-task")),
+                json!({"title": format!("Task {key}")}),
+            ),
+        )
+        .await;
+        (page.is_success(), task.is_success())
+    }
+    assert_eq!(
+        write(&world.app, &lena.browser, &team, "viewer").await,
+        (false, false),
+        "a Viewer seat alone"
+    );
+
+    let (_, group) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_create",
+            "owner-group",
+            json!({"handle": "writers", "name": "Writers", "members": [lena.actor]}),
+        ),
+    )
+    .await;
+    assert_eq!(group["outcome"], "ok", "{group}");
+    let (_, granted) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_group_add",
+            "owner-grant",
+            json!({"spaceId": team, "group": "@writers", "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(granted["outcome"], "ok", "{granted}");
+    assert_eq!(
+        write(&world.app, &lena.browser, &team, "grouped").await,
+        (true, true),
+        "her group's Member role"
+    );
+
+    let (_, out) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_members_set",
+            "owner-out",
+            json!({"group": "writers", "remove": [lena.actor]}),
+        ),
+    )
+    .await;
+    assert_eq!(out["outcome"], "ok", "{out}");
+    assert_eq!(
+        write(&world.app, &lena.browser, &team, "left").await,
+        (false, false),
+        "out of the group"
+    );
+
+    world.finish().await;
+}
+
 #[tokio::test]
 async fn groups_give_spaces_and_guests_see_only_theirs() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -3721,6 +3833,54 @@ async fn groups_give_spaces_and_guests_see_only_theirs() {
     )
     .await;
     assert_eq!(owner_on_admin["outcome"], "ok", "{owner_on_admin}");
+
+    // An owner's membership lasts: taking the workspace clears gus's time,
+    // and an owner's time that passes anyway never turns them off.
+    let (status, transferred) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/organizations/{}/transfer-ownership",
+                world.organization
+            ),
+            None,
+            json!({"actorId": gus.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{transferred}");
+    let cleared = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+        "SELECT expires_at FROM organization_memberships \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .fetch_one(world.pool())
+    .await
+    .expect("gus's membership");
+    assert!(cleared.is_none(), "the new owner's time is cleared");
+    sqlx::query(
+        "UPDATE organization_memberships SET expires_at = now() - interval '1 minute' \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .execute(world.pool())
+    .await
+    .expect("an owner's time passes");
+    agent_workspace_server::memberships::expiry::expire_due(world.pool(), 10)
+        .await
+        .expect("expire");
+    let still = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .fetch_one(world.pool())
+    .await
+    .expect("membership");
+    assert!(still, "an owner's membership never expires");
 
     world.finish().await;
 }
