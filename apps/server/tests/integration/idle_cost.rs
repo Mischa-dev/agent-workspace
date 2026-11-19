@@ -14,6 +14,8 @@ use crate::cluster_support::cluster;
 
 /// How long each idle stretch is counted for.
 const WINDOW: Duration = Duration::from_secs(20);
+/// How often the other connections' statements are sampled in a window.
+const SAMPLE: Duration = Duration::from_millis(100);
 /// The workspaces added for the second count.
 const WORKSPACES: i64 = 10_000;
 
@@ -65,10 +67,15 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
         })
         .filter(|(rows, scans, _)| *rows > 0 || *scans > 0)
         .collect::<Vec<_>>();
+    // The most rows read, then the most scans among the rest: a probe that
+    // finds nothing reads no rows but still scans.
     grown.sort_unstable_by(|a, b| b.cmp(a));
-    grown
+    let mut shown = grown.iter().take(8).collect::<Vec<_>>();
+    let mut by_scans = grown.iter().skip(8).collect::<Vec<_>>();
+    by_scans.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(b.2)));
+    shown.extend(by_scans.into_iter().take(6));
+    shown
         .iter()
-        .take(8)
         .map(|(rows, scans, table)| format!("{table} {rows} rows in {scans} scans"))
         .collect::<Vec<_>>()
         .join("; ")
@@ -84,9 +91,13 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     // What the other connections to the database are doing, sampled each
     // second, so a failure names the statements behind its transactions
     // even when they read no table.
+    // Each sample is a transaction of its own, taken off the count below.
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for _ in 0..WINDOW.as_secs() {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut samples = 0;
+    let started = tokio::time::Instant::now();
+    while started.elapsed() < WINDOW {
+        tokio::time::sleep(SAMPLE).await;
+        samples += 1;
         for statement in activity(pool).await {
             *seen.entry(statement).or_default() += 1;
         }
@@ -106,7 +117,7 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     seen.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let seen = seen
         .iter()
-        .take(10)
+        .take(16)
         .map(|(statement, times)| format!("{times}x {statement}"))
         .collect::<Vec<_>>()
         .join(" | ");
@@ -126,7 +137,7 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     .expect("window work")
     .unwrap_or_default();
     (
-        transactions_after - transactions,
+        transactions_after - transactions - samples,
         rows_after - rows,
         format!(
             "{}; autovacuum passes {maintenance}; rollbacks {rollbacks}; \
@@ -153,14 +164,15 @@ async fn sessions(pool: &PgPool) -> (i64, i64) {
     .expect("session statistics")
 }
 
-/// The other connections to the test database: their kind, state and the
-/// start of their current or last statement.
+/// The other busy connections to the test database: their kind, state and
+/// the start of their current statement.
 async fn activity(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         "SELECT concat_ws(' ', backend_type, state, \
                 left(regexp_replace(query, '\\s+', ' ', 'g'), 90)) \
          FROM pg_stat_activity \
-         WHERE datname = current_database() AND pid <> pg_backend_pid()",
+         WHERE datname = current_database() AND pid <> pg_backend_pid() \
+           AND state <> 'idle'",
     )
     .fetch_all(pool)
     .await
