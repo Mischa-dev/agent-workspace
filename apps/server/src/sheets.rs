@@ -900,6 +900,8 @@ pub struct Applied {
     pub tabs_changed: bool,
     /// Up to `limit` of the cells that changed, inputs first.
     pub changed: Vec<ChangedCell>,
+    /// The row each row change landed in, in the order of the changes.
+    pub rows: Vec<i32>,
 }
 
 /// A tab as a write sees it while its changes are worked through.
@@ -1202,6 +1204,7 @@ async fn apply_unbounded(
     let mut operations = Vec::new();
     // Rows a `Row` change added, per tab, so two in one write don't collide.
     let mut appended: HashMap<usize, i32> = HashMap::new();
+    let mut landed_rows = Vec::new();
 
     for (index, change) in changes.iter().enumerate() {
         let tab_at = |working: &[WorkingTab], reference: &TabRef| {
@@ -1510,6 +1513,7 @@ async fn apply_unbounded(
                         next
                     }
                 };
+                landed_rows.push(row);
                 for (column, input) in sets {
                     operations.push((
                         index,
@@ -2493,6 +2497,7 @@ async fn apply_unbounded(
             looks_changed,
             tabs_changed,
             changed,
+            rows: landed_rows,
         }));
     }
     sqlx::query(
@@ -2548,6 +2553,7 @@ async fn apply_unbounded(
         looks_changed,
         tabs_changed,
         changed,
+        rows: landed_rows,
     }))
 }
 

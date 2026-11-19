@@ -1275,3 +1275,46 @@ async fn a_sheet_write_is_undone_in_a_step() {
         "{changes}"
     );
 }
+
+#[tokio::test]
+async fn an_added_row_reports_its_own_row_not_a_formula_below_it() {
+    let Some(setup) = setup("c2_sheet_row_add_row").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "ROW", "Rows").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let made = tool(
+        app,
+        &codex,
+        &session,
+        "sheet_write",
+        json!({
+            "projectId": "ROW",
+            "name": "Log",
+            "tabs": [{"add": "Work"}, {"add": "Totals"}],
+            "cells": [
+                {"tab": "Work", "cell": "A1", "input": "Task"},
+                {"tab": "Work", "cell": "A2", "input": "Paint"},
+                {"tab": "Totals", "cell": "A40", "input": "=COUNTA(Work!A1:A100)"},
+            ],
+            "clientRequestId": "log-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    // The count on the other tab, forty rows down, changes with the
+    // append; the row reported is still the one the values went in.
+    let added = tool(
+        app,
+        &codex,
+        &session,
+        "sheet_row_add",
+        json!({"sheetId": sheet, "tab": "Work", "values": {"Task": "Sand"}, "clientRequestId": "row-1"}),
+    )
+    .await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert_eq!(added["value"]["row"], 3, "{added}");
+}
