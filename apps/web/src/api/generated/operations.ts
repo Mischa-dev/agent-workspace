@@ -46,6 +46,14 @@ export type BlockedProjection = { blockedAt: string; blockedByActorId: string; r
 
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
+export type BudgetMeter = { id: string; name: string; unit: string }
+
+export type BudgetPeriod = "minute" | "hour" | "day" | "month"
+
+export type BudgetScope = "workspace" | "account" | "space" | "conversation"
+
+export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
+
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
 export type ButtonStepInput = { arguments?: Record<string, unknown>; operation: string }
@@ -601,6 +609,14 @@ export type AutomationUpdateOutput = unknown
 export type BriefingGetInput = { projectId?: string | null }
 
 export type BriefingGetOutput = { claims?: TaskLine[]; mentions: Mention[]; nextSteps: string; notifications: NotificationLine[]; replyRequests?: InboxItem[]; tasks: TaskLine[]; threadUpdates: ThreadUpdate[]; unread: ConversationSummary[]; you: You }
+
+export type BudgetListInput = { account?: string | null }
+
+export type BudgetListOutput = { budgets: BudgetView[]; meters: BudgetMeter[] }
+
+export type BudgetSetInput = { eachAccount?: boolean; expectedVersion?: number | null; hardLimit?: number | null; meter: string; period: BudgetPeriod; scope: BudgetScope; scopeId?: string | null; softLimit?: number | null }
+
+export type BudgetSetOutput = { budget?: BudgetView | null }
 
 export type BugReportLinkCreateInput = { collection?: string | null; delete?: boolean | null; form?: FormWrite | null; linkId?: string | null; name?: string | null; projectId: string; replace?: boolean | null; state?: string | null }
 
@@ -1599,6 +1615,8 @@ export type Operations = {
   automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
   automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }
+  budget_list: { input: BudgetListInput; output: BudgetListOutput }
+  budget_set: { input: BudgetSetInput; output: BudgetSetOutput }
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }

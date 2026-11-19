@@ -227,12 +227,6 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The statuses an operation's own refusal answers with (its `outcome`
-/// says which), rather than the shared error body.
-fn refuses(status: &str) -> bool {
-    matches!(status, "403" | "404" | "409" | "422" | "503")
-}
-
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -391,9 +385,13 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     }
     // The shared branches together (paused, started, each refusal) are the
     // same list for most operations: one `oneOf` of them, named once.
-    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+    let (kept, mut shared): (Vec<Value>, Vec<Value>) = branches
         .drain(..)
         .partition(|branch| !is_shared_branch(branch));
+    // What the edge answers before any operation runs (401, 413, 429) is
+    // one more branch of the same list, rather than a response named again
+    // under every path.
+    shared.push(json!({ "$ref": "#/components/schemas/Error" }));
     if shared.len() < 2 {
         branches.extend(kept);
         branches.extend(shared);
@@ -689,21 +687,10 @@ pub(crate) fn document() -> Value {
                 "content": { "application/json": { "schema": output } },
             })
         });
+        // Every status shares one answer, the `default` response: the
+        // operation's result, a refusal (its `outcome` says which) or the
+        // edge's own error (401, 413, 429), each a branch of it.
         let mut responses = Map::new();
-        // 200 and the refusing statuses (403, 404, 409, 422, 503) share it
-        // as the `default` response (every status not named), which is
-        // written once rather than again under 200; the statuses every
-        // operation answers the same way are named, which takes precedence.
-        for (status, _) in ERROR_STATUSES {
-            if !refuses(status) {
-                // The same for every operation, so referenced rather than
-                // repeated, which keeps the document small as tools are added.
-                responses.insert(
-                    (*status).to_owned(),
-                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
-                );
-            }
-        }
         responses.insert(
             "default".to_owned(),
             json!({ "$ref": format!("#/components/responses/{result}") }),
@@ -753,24 +740,7 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
-            "responses": ERROR_STATUSES
-                .iter()
-                .filter(|(status, _)| !refuses(status))
-                .map(|(status, description)| {
-                    (
-                        format!("Error{status}"),
-                        json!({
-                            "description": description,
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Error" },
-                                },
-                            },
-                        }),
-                    )
-                })
-                .chain(refusals)
-                .collect::<Map<_, _>>(),
+            "responses": refusals,
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",

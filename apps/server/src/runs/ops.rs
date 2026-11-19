@@ -1353,15 +1353,18 @@ pub async fn record_usage(
     // A2.14: counted against the account's budgets on what runs cost.
     crate::budgets::record_run_usage(
         transaction,
-        workspace_id,
-        run.as_ref()
-            .and_then(|run| run.space_id)
-            .or(input.window.map(|_| input.space_id)),
-        run.as_ref().and_then(|run| run.conversation_id),
-        account_id,
-        report_id,
-        input.input_tokens.saturating_add(input.output_tokens),
-        input.cost,
+        crate::budgets::RunUsage {
+            workspace: workspace_id,
+            space: run
+                .as_ref()
+                .and_then(|run| run.space_id)
+                .or(input.window.map(|_| input.space_id)),
+            conversation: run.as_ref().and_then(|run| run.conversation_id),
+            account: account_id,
+            report: report_id,
+            tokens: input.input_tokens.saturating_add(input.output_tokens),
+            cost: input.cost,
+        },
     )
     .await?;
     if let Some(run) = run {

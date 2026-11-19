@@ -781,7 +781,7 @@ fn decide(
     checked: &[(Limit, i64)],
     quantity: i64,
     kind: MeterKind,
-) -> Result<Option<Decided>, Decided> {
+) -> Result<Option<Decided>, Box<Decided>> {
     let after = |used: i64| {
         if kind == MeterKind::Each {
             quantity
@@ -799,7 +799,7 @@ fn decide(
         }
     }
     if let Some(refused) = refused {
-        return Err(refused);
+        return Err(Box::new(refused));
     }
     // Near a hard limit (80%), or over a soft one: the nearest of them.
     let mut near: Option<(Limit, i64, i64, f64)> = None;
@@ -866,7 +866,8 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
     }
     let decided = match decide(&checked, quantity, meter.kind) {
         Ok(decided) => decided,
-        Err((limit, value, used)) => {
+        Err(refused) => {
+            let (limit, value, used) = *refused;
             note(connection, meter, ask.workspace_id, &limit, "hard").await?;
             return Err(AppError::LimitReached(Box::new(LimitRefusal::new(
                 meter, &limit, value, used,
@@ -1258,10 +1259,11 @@ mod tests {
             (limit(Scope::Space(Uuid::nil()), None, Some(1_000)), 50),
         ];
         // 50 + 20 is over the account's 60, not the workspace's 100.
-        let (refused, value, used) = decide(&checked, 20, MeterKind::Counter).expect_err("refused");
+        let (refused, value, used) =
+            *decide(&checked, 20, MeterKind::Counter).expect_err("refused");
         assert_eq!((refused.scope, value, used), (account, 60, 50));
         // Over two: the smaller is named.
-        let (refused, value, _) = decide(&checked, 60, MeterKind::Counter).expect_err("refused");
+        let (refused, value, _) = *decide(&checked, 60, MeterKind::Counter).expect_err("refused");
         assert_eq!((refused.scope, value), (account, 60));
         // Within all: allowed, with the nearest named once past 80%.
         let (near, value, _) = decide(&checked, 0, MeterKind::Counter)

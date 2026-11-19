@@ -65,6 +65,11 @@
     "title": "Update automation"
   },
   {
+    "kind": "change",
+    "name": "budget_set",
+    "title": "Set a budget"
+  },
+  {
     "kind": "create",
     "name": "bug_report_link_create",
     "title": "Create bug report link"

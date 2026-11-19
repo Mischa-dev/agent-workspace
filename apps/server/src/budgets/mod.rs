@@ -28,8 +28,7 @@ pub async fn admit(
     ask: Ask<'_>,
 ) -> Result<(), AppError> {
     let workspace = ask.workspace_id;
-    if let Admission::AllowedNearLimit { notice } = metering::admit(&mut **transaction, ask).await?
-    {
+    if let Admission::AllowedNearLimit { notice } = metering::admit(transaction, ask).await? {
         warn(transaction, workspace, &notice).await?;
     }
     Ok(())
@@ -135,16 +134,30 @@ pub async fn admit_run(
 
 /// What a run reported it used: counted against its account's budgets.
 /// Already spent, so never refused.
+pub struct RunUsage {
+    pub workspace: Uuid,
+    pub space: Option<Uuid>,
+    pub conversation: Option<Uuid>,
+    pub account: Uuid,
+    /// The usage report it came in, which keeps a retry from counting twice.
+    pub report: Uuid,
+    pub tokens: i64,
+    pub cost: Option<f64>,
+}
+
 pub async fn record_run_usage(
     transaction: &mut Transaction<'_, Postgres>,
-    workspace: Uuid,
-    space: Option<Uuid>,
-    conversation: Option<Uuid>,
-    account: Uuid,
-    report: Uuid,
-    tokens: i64,
-    cost: Option<f64>,
+    usage: RunUsage,
 ) -> Result<(), AppError> {
+    let RunUsage {
+        workspace,
+        space,
+        conversation,
+        account,
+        report,
+        tokens,
+        cost,
+    } = usage;
     let micros = cost
         .filter(|cost| cost.is_finite() && *cost > 0.0)
         .map(|cost| (cost * 1_000_000.0).round() as i64);
@@ -156,7 +169,7 @@ pub async fn record_run_usage(
         let Some(quantity) = quantity else { continue };
         let key = format!("{meter}:{report}");
         metering::record(
-            &mut **transaction,
+            transaction,
             metering::Usage {
                 workspace_id: workspace,
                 meter,
@@ -237,7 +250,6 @@ async fn warn(
         conversation_id: None,
         message_id: None,
         work_item_id: None,
-        comment_id: None,
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({

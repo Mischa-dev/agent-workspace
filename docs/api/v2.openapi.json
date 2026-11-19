@@ -577,6 +577,167 @@
         ],
         "type": "object"
       },
+      "BudgetMeter": {
+        "description": "A meter a budget can count.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "BudgetPeriod": {
+        "description": "How long a budget counts over.",
+        "oneOf": [
+          {
+            "const": "minute",
+            "description": "The last minute.",
+            "type": "string"
+          },
+          {
+            "const": "hour",
+            "description": "The last hour.",
+            "type": "string"
+          },
+          {
+            "const": "day",
+            "description": "The day (UTC).",
+            "type": "string"
+          },
+          {
+            "const": "month",
+            "description": "The month (UTC).",
+            "type": "string"
+          }
+        ]
+      },
+      "BudgetScope": {
+        "description": "What a budget is on.",
+        "oneOf": [
+          {
+            "const": "workspace",
+            "description": "The whole workspace.",
+            "type": "string"
+          },
+          {
+            "const": "account",
+            "description": "One person, agent or app.",
+            "type": "string"
+          },
+          {
+            "const": "space",
+            "description": "One space.",
+            "type": "string"
+          },
+          {
+            "const": "conversation",
+            "description": "One conversation.",
+            "type": "string"
+          }
+        ]
+      },
+      "BudgetView": {
+        "description": "One budget.",
+        "properties": {
+          "eachAccount": {
+            "description": "Each account in the scope on its own (minute and hour budgets).",
+            "type": "boolean"
+          },
+          "hardLimit": {
+            "description": "Past this, more is refused (pushes wait for the next period).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Null for the default message rate, until someone sets it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isDefault": {
+            "description": "The default message rate, not a budget anyone set.",
+            "type": "boolean"
+          },
+          "meter": {
+            "type": "string"
+          },
+          "meterName": {
+            "description": "What the meter counts, in words.",
+            "type": "string"
+          },
+          "period": {
+            "description": "minute, hour, day or month.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "workspace, account, space or conversation.",
+            "type": "string"
+          },
+          "scopeId": {
+            "description": "The account, space or conversation; null for the workspace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "softLimit": {
+            "description": "Past this, whoever set it is told.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unit": {
+            "description": "count, micros (millionths of the currency), or tokens.",
+            "type": "string"
+          },
+          "used": {
+            "description": "Use so far in the period; for each account on its own, the account\nasked about (or the caller).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "eachAccount",
+          "meter",
+          "meterName",
+          "unit",
+          "period",
+          "used",
+          "isDefault"
+        ],
+        "type": "object"
+      },
       "ButtonInput": {
         "additionalProperties": false,
         "description": "A button as people and agents write it.",
@@ -18853,6 +19014,752 @@
           "workspace"
         ],
         "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/budget_list": {
+      "post": {
+        "description": "The workspace's budgets, each with its use so far, and the meters a budget can count. With account, only those that apply to that account, with its use. Needs \"Manage settings\" where it acts.",
+        "operationId": "budget_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "Only the budgets that apply to this account: on it, and on each\naccount on its own. Use is counted for it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "BudgetListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "budgets": {
+                              "items": {
+                                "$ref": "#/components/schemas/BudgetView"
+                              },
+                              "type": "array"
+                            },
+                            "meters": {
+                              "description": "The meters a budget can count.",
+                              "items": {
+                                "$ref": "#/components/schemas/BudgetMeter"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "budgets",
+                            "meters"
+                          ],
+                          "title": "BudgetListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "budgets": {
+                              "items": {
+                                "$ref": "#/components/schemas/BudgetView"
+                              },
+                              "type": "array"
+                            },
+                            "meters": {
+                              "description": "The meters a budget can count.",
+                              "items": {
+                                "$ref": "#/components/schemas/BudgetMeter"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "budgets",
+                            "meters"
+                          ],
+                          "title": "BudgetListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Budgets",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/budget_set": {
+      "post": {
+        "description": "Set, change or remove a budget: how much the workspace, an account, a space or a conversation may use of a meter in a minute, hour, day or month. Past the soft limit its setter is told; past the hard limit more is refused, the same for people and agents. Leave both limits out to remove it. Needs \"Manage settings\" where it acts.",
+        "operationId": "budget_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "eachAccount": {
+                    "description": "Each account in the scope on its own (minute and hour only).",
+                    "type": "boolean"
+                  },
+                  "expectedVersion": {
+                    "description": "Leave both limits out to remove the budget.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "hardLimit": {
+                    "description": "Past this, more is refused (pushes wait for the next period).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "meter": {
+                    "description": "What it counts: operations, writes, messages, deliveries,\nreported_cost_micros, reported_tokens, or another counted meter\nbudget_list names.",
+                    "type": "string"
+                  },
+                  "period": {
+                    "$ref": "#/components/schemas/BudgetPeriod"
+                  },
+                  "scope": {
+                    "$ref": "#/components/schemas/BudgetScope",
+                    "description": "What the budget is on."
+                  },
+                  "scopeId": {
+                    "description": "The account, space or conversation; left out for the workspace.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "softLimit": {
+                    "description": "Past this, you are told once a period.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "scope",
+                  "meter",
+                  "period"
+                ],
+                "title": "BudgetSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "budget": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/BudgetView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The budget as it is now; null once removed."
+                            }
+                          },
+                          "title": "BudgetSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "budget": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/BudgetView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The budget as it is now; null once removed."
+                            }
+                          },
+                          "title": "BudgetSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set a budget",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/bug_report_link_create": {
