@@ -223,6 +223,38 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
         json!(11)
     );
 
+    // Once a tester needs a build, taking Ada off her last one from the
+    // build's side is refused, as clearing it on Ada would be.
+    let required = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Testers",
+            "fields": [{"field": "Builds", "rules": {"required": true}}],
+        }),
+    )
+    .await;
+    assert_eq!(required["outcome"], "ok", "{required}");
+    let builds = query("Builds").await;
+    let off = |build: &str| {
+        json!({
+            "projectId": "WORK",
+            "collection": "Builds",
+            "records": [{"record": title_ref(&builds, build), "fields": {"Tested by": []}}],
+        })
+    };
+    let still_one = call("record_write", off("Build 2")).await;
+    assert_eq!(still_one["outcome"], "ok", "{still_one}");
+    let last = call("record_write", off("Build 1")).await;
+    assert_ne!(last["outcome"], "ok", "{last}");
+    assert!(last.to_string().contains("Ada"), "{last}");
+    let people = query("Testers").await;
+    assert_eq!(
+        value_of(&people, "Ada", "Builds"),
+        json!(["Build 1"]),
+        "{people}"
+    );
+
     // A loop is refused with its path: Testers count their builds, Builds
     // add up those counts, and Testers can't then add up the Builds' sums.
     let counted = call(

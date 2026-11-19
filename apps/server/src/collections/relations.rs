@@ -141,6 +141,30 @@ pub async fn write_pairs(
         .bind(actor_id)
         .execute(&mut *connection)
         .await?;
+        // A removal may not leave a paired record without the relation
+        // its rules require, as editing that record itself couldn't.
+        let emptied = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT record.number, record.title, pair.name \
+             FROM collection_records record \
+             JOIN field_definitions pair ON pair.project_id = record.project_id AND pair.id = $4 \
+             WHERE record.project_id = $1 AND record.collection_id = $2 AND record.id = ANY($3) \
+               AND pair.archived_at IS NULL AND (pair.config -> 'rules' ->> 'required')::boolean \
+               AND NOT (record.field_values ? $5) \
+             ORDER BY record.number LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&removed)
+        .bind(pair)
+        .bind(&pair_key)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some((number, title, name)) = emptied {
+            return Ok(Err(format!(
+                "#{number} {title} needs a value in \"{name}\", so it can't lose its last record through \"{}\".",
+                field.name
+            )));
+        }
         record_history(connection, project_id, actor_id, collection, pair, was).await?;
         match changes
             .iter_mut()
