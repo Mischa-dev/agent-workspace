@@ -4049,6 +4049,12 @@ async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
             "conversation_agent_settings_set",
             json!({ "conversation": channel, "account": rook, "ambient": true }),
         ),
+        // A2.15: only the DM's participants say which apps hear it.
+        (
+            lena,
+            "app_consent_set",
+            json!({ "conversation": dm, "app": rook }),
+        ),
         // A2.27: guards are set by those who manage the workspace's settings.
         (
             lena,

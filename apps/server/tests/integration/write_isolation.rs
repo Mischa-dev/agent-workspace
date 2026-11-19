@@ -521,6 +521,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_ref_decide",
     "agent_ref_remove",
     "agent_ref_update",
+    "app_consent_set",
     "group_archive",
     "group_create",
     "group_members_set",
@@ -6554,6 +6555,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"conversation": a.channel, "account": b.agent, "ambient": true}),
         ]),
+        // A2.15: consent is given in A's own DM; B's DM and channel aren't
+        // found from A.
+        mcp_case(
+            "app_consent_set",
+            json!({"conversation": a.dm, "app": a.agent}),
+            vec![
+                json!({"conversation": b.dm, "app": a.agent}),
+                json!({"conversation": b.channel, "app": a.agent}),
+            ],
+        )
+        .without_own(
+            "consent is for an account that acts as itself as an app, which this world \
+             doesn't make; reply_requests covers granting it",
+        ),
         // A2.27: a guard in A, or in A's space; B's space isn't found.
         mcp_case(
             "guard_set",

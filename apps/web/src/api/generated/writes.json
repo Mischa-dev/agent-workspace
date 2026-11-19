@@ -70,6 +70,11 @@
     "title": "Resume agent"
   },
   {
+    "kind": "change",
+    "name": "app_consent_set",
+    "title": "Let an app hear a conversation"
+  },
+  {
     "kind": "create",
     "name": "automation_create",
     "title": "Create automation"

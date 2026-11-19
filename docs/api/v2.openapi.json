@@ -8080,6 +8080,110 @@
         ],
         "type": "object"
       },
+      "ScopeAccount": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "type": "object"
+      },
+      "ScopeConversation": {
+        "properties": {
+          "conversationId": {
+            "type": "string"
+          },
+          "heard": {
+            "description": "Whether it hears this conversation, for an account that reads with\nconsent; always true for one that doesn't.",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "dm, group or channel.",
+            "type": "string"
+          },
+          "members": {
+            "description": "Who else is in it (up to six, you first), for naming one that has\nno name.",
+            "items": {
+              "$ref": "#/components/schemas/ScopeMember"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspaceId": {
+            "description": "Where it lives: this workspace, or the direct scope for a DM or\ngroup (name it as `workspace` to change consent there).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversationId",
+          "workspaceId",
+          "kind",
+          "heard",
+          "members"
+        ],
+        "type": "object"
+      },
+      "ScopeMember": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "you": {
+            "description": "Whether this is you.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accountId",
+          "you"
+        ],
+        "type": "object"
+      },
+      "ScopeSpace": {
+        "properties": {
+          "kind": {
+            "description": "project, team, personal or workspace.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "description": "Its role there.",
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spaceId",
+          "name",
+          "kind",
+          "role"
+        ],
+        "type": "object"
+      },
       "SearchResult": {
         "properties": {
           "at": {
@@ -18108,6 +18212,462 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/agent_scope_get": {
+      "post": {
+        "description": "An account's scope in this workspace: the spaces it is in and its role there, the DMs, groups and private channels it shares with you, who manages it, its connections and follows, and whether it is in other workspaces too.",
+        "operationId": "agent_scope_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "The agent (or any account in this workspace), or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "account"
+                ],
+                "title": "AgentScopeGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "alsoInOtherWorkspaces": {
+                              "description": "Whether it is also a member of another workspace. Which one is\nnever said.",
+                              "type": "boolean"
+                            },
+                            "connections": {
+                              "description": "Its delivery connections (webhooks and readers), not removed.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "displayName": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "follows": {
+                              "description": "How many things it follows that you can see too.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "handle": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "managers": {
+                              "description": "Who manages it.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeAccount"
+                              },
+                              "type": "array"
+                            },
+                            "privateConversations": {
+                              "description": "DMs, groups and private channels it is in that you are in too.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeConversation"
+                              },
+                              "type": "array"
+                            },
+                            "readsWithConsent": {
+                              "description": "Whether it hears private conversations only where a participant\nconsented (apps acting as themselves).",
+                              "type": "boolean"
+                            },
+                            "spaces": {
+                              "description": "The spaces of this workspace it is a member of, that you can read.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeSpace"
+                              },
+                              "type": "array"
+                            },
+                            "workspaceRole": {
+                              "description": "Its role in this workspace.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "accountId",
+                            "workspaceRole",
+                            "spaces",
+                            "privateConversations",
+                            "readsWithConsent",
+                            "managers",
+                            "connections",
+                            "follows",
+                            "alsoInOtherWorkspaces"
+                          ],
+                          "title": "AgentScopeView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "alsoInOtherWorkspaces": {
+                              "description": "Whether it is also a member of another workspace. Which one is\nnever said.",
+                              "type": "boolean"
+                            },
+                            "connections": {
+                              "description": "Its delivery connections (webhooks and readers), not removed.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "displayName": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "follows": {
+                              "description": "How many things it follows that you can see too.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "handle": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "managers": {
+                              "description": "Who manages it.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeAccount"
+                              },
+                              "type": "array"
+                            },
+                            "privateConversations": {
+                              "description": "DMs, groups and private channels it is in that you are in too.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeConversation"
+                              },
+                              "type": "array"
+                            },
+                            "readsWithConsent": {
+                              "description": "Whether it hears private conversations only where a participant\nconsented (apps acting as themselves).",
+                              "type": "boolean"
+                            },
+                            "spaces": {
+                              "description": "The spaces of this workspace it is a member of, that you can read.",
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeSpace"
+                              },
+                              "type": "array"
+                            },
+                            "workspaceRole": {
+                              "description": "Its role in this workspace.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "accountId",
+                            "workspaceRole",
+                            "spaces",
+                            "privateConversations",
+                            "readsWithConsent",
+                            "managers",
+                            "connections",
+                            "follows",
+                            "alsoInOtherWorkspaces"
+                          ],
+                          "title": "AgentScopeView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "What an agent can reach",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/agent_template_list": {
       "post": {
         "description": "List the agent templates installed packages brought: each one's key, name, purpose and definition (instructions, what it may and must not do, when it asks a person, a suggested role and its skills). A template is a starting point for adding an agent, never an account or a connection.",
@@ -18812,6 +19372,389 @@
           "runs"
         ],
         "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/app_consent_set": {
+      "post": {
+        "description": "Let an app that acts as itself hear a DM, group or private channel you are in, or stop it (granted: false). Without consent it hears nothing from there, even as a member. A shared channel needs none.",
+        "operationId": "app_consent_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "app": {
+                    "description": "The app's account, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "conversation": {
+                    "description": "The DM, group or private channel (or a thread in one), or a link to\nit. Consent covers the whole conversation and its threads.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "granted": {
+                    "description": "false takes consent back. Left out: true.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation",
+                  "app"
+                ],
+                "title": "AppConsentSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "appAccountId": {
+                              "type": "string"
+                            },
+                            "changed": {
+                              "description": "Whether this call changed anything.",
+                              "type": "boolean"
+                            },
+                            "conversationId": {
+                              "description": "The conversation consent is held on (a thread's DM, group or\nchannel).",
+                              "type": "string"
+                            },
+                            "granted": {
+                              "description": "Whether the app hears this conversation now.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "conversationId",
+                            "appAccountId",
+                            "granted",
+                            "changed"
+                          ],
+                          "title": "AppConsentView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "appAccountId": {
+                              "type": "string"
+                            },
+                            "changed": {
+                              "description": "Whether this call changed anything.",
+                              "type": "boolean"
+                            },
+                            "conversationId": {
+                              "description": "The conversation consent is held on (a thread's DM, group or\nchannel).",
+                              "type": "string"
+                            },
+                            "granted": {
+                              "description": "Whether the app hears this conversation now.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "conversationId",
+                            "appAccountId",
+                            "granted",
+                            "changed"
+                          ],
+                          "title": "AppConsentView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Let an app hear a conversation",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/automation_create": {

@@ -59,6 +59,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("collection_views", WORKSPACE_ID),
     ("collections", WORKSPACE_ID),
     ("conversation_agent_settings", WORKSPACE_ID),
+    ("conversation_app_consents", WORKSPACE_ID),
     ("conversation_entries", WORKSPACE_ID),
     ("conversation_members", WORKSPACE_ID),
     ("conversation_notification_levels", WORKSPACE_ID),
