@@ -286,6 +286,7 @@ pub async fn write_elements(
             id: element.id.clone(),
             before: stored.get(&element.id).map(|(_, _, data)| data.clone()),
             version: element.version,
+            nonce: Some(element.version_nonce),
         })
         .collect();
     crate::change_sets::record_board(

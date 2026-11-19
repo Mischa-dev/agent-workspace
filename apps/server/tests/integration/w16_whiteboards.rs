@@ -1635,6 +1635,44 @@ async fn board_changes_are_listed_and_undone() {
         json!(0.0),
         "{now}"
     );
+
+    // An edit that wins a tie at the same version on its nonce is a change
+    // since, so undo leaves it alone.
+    let edited = call(
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [{"op": "update", "id": "plan", "x": 555}]}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    sqlx::query(
+        "UPDATE whiteboard_elements \
+         SET version_nonce = CASE WHEN version_nonce = 0 THEN 1 ELSE 0 END, \
+             data = jsonb_set(data, '{x}', '777') \
+         WHERE whiteboard_id::text = $1 AND element_id = 'plan'",
+    )
+    .bind(&board)
+    .execute(&setup.pool)
+    .await
+    .expect("a tie won on the nonce");
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo-tie"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    assert_eq!(undo["value"]["skipped"], json!(["element plan"]), "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(777),
+        "{now}"
+    );
 }
 
 /// C1.29: a board's images are files of the board in the file store. A
