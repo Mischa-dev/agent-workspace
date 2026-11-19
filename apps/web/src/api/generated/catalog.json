@@ -678,6 +678,84 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "module.connected"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_approve",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Approve a connected module's scopes"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "module.connected"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_install",
+    "permission": "modules.manage",
+    "preview": true,
+    "proposable": false,
+    "title": "Install a connected module"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_list",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "List connected modules"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "module.connected"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_refresh",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Re-read a connected module's manifest"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "module.connected"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_revoke",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Revoke a connected module"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "connection.changed"
     ],
     "idempotent": true,

@@ -3504,6 +3504,12 @@ pub(crate) async fn resolve_bearer_principal(
                -- the space it was made in.
                AND (c.reach = 'account' OR (p.archived_at IS NULL AND pm.enabled)))
               OR
+              -- M1.12: a connected module's app account signs in with the
+              -- secret it collected with its install code; its role decides
+              -- every call, as anyone's does.
+              (a.account_kind = 'app' AND c.external_agent_connection_id IS NULL
+               AND c.reach = 'account')
+              OR
               -- K1.6: a connection belongs to the workspace, not to the
               -- project it was first added to; each call is checked against
               -- the target space (`agent_connection_can_access`).
@@ -3955,6 +3961,8 @@ pub(crate) fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
     match value {
         "human" => Ok(ActorKind::Human),
         "external_agent" => Ok(ActorKind::ExternalAgent),
+        // M1.12: a connected module's app account.
+        "integration" => Ok(ActorKind::Integration),
         _ => Err(AppError::Internal("invalid MCP Actor kind")),
     }
 }

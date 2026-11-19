@@ -443,6 +443,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ("POST /api/v1/workspace-invitations/accept-new", CAPABILITY),
     ("POST /api/v1/workspace-invitations/resolve", CAPABILITY),
     (
+        "POST /api/v1/connected-modules/token",
+        "a connected app trades the one-time install code it was sent for its credentials; \
+         no session, and the code names its one install; covered in connected_modules",
+    ),
+    (
         "POST /oauth/register",
         "OAuth client registration: makes a public client that belongs to no workspace",
     ),
@@ -578,6 +583,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "message_update",
     "module_archive",
+    "connected_module_approve",
+    "connected_module_install",
+    "connected_module_refresh",
+    "connected_module_revoke",
     "module_create",
     "module_part_link",
     "module_part_unlink",
@@ -7741,6 +7750,33 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
             vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
         ),
+        // Connected modules (M1.12): B's module never opens from A, and an
+        // install never lands in B. Installing needs an app serving its
+        // manifest, which connected_modules runs end to end.
+        mcp_case(
+            "connected_module_install",
+            json!({"url": "https://example.invalid/manifest.json"}),
+            vec![json!({"workspace": b.organization, "url": "https://example.invalid/manifest.json"})],
+        )
+        .without_own("needs an app serving its manifest; connected_modules runs it"),
+        mcp_case(
+            "connected_module_refresh",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_approve",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-approve-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_revoke",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-revoke-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",

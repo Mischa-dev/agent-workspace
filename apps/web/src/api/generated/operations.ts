@@ -78,6 +78,8 @@ export type CommentThreadView = { anchor?: unknown; createdAt: string; id: strin
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
+export type ConnectedModuleView = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+
 export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
@@ -246,6 +248,8 @@ export type LinkedTask = { id: string; key: string; status: string; title: strin
 
 export type LinkedThread = { id: string; name: string; url: string }
 
+export type ManifestSummary = { accountName: string; description: string; digest: string; events: string[]; frameOrigins: string[]; key: string; kinds: string[]; name: string; operations: OperationSummary[]; panels: PanelSummary[]; publisher?: string | null; scopes: ScopeView[]; version: string }
+
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
 
 export type MemberRef = { handle: string; id: string; kind: string; name: string }
@@ -288,6 +292,8 @@ export type Operation = { arrowheads?: string | null; axis?: string | null; back
 
 export type OperationResult = { ids: string[]; op: string }
 
+export type OperationSummary = { name: string; permission?: string | null; verb: string }
+
 export type OptionInput = { category?: string | null; color?: string | null; id?: string | null; name: string }
 
 export type OptionView = { archived?: boolean; category?: string | null; color: string; id: string; name: string }
@@ -303,6 +309,8 @@ export type PackageTarget = "space" | "workspace"
 export type PageLine = { id: string; stale: boolean; title: string; updatedAt: string }
 
 export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
+
+export type PanelSummary = { id: string; slot: string; title: string }
 
 export type PartRef = { id: string; kind: string }
 
@@ -341,6 +349,8 @@ export type ReactionSummary = { byYou: boolean; count: number; emoji: string; na
 export type RecipeView = { id: string; title: string }
 
 export type Recipients = "owner" | "assignee" | "project_admins"
+
+export type Refreshed = "unchanged" | "applied" | "pending"
 
 export type RelationRef = { kind: string; task: TaskRef }
 
@@ -389,6 +399,8 @@ export type SavedSearch = { id: string; name: string; position: number; query: s
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
+
+export type ScopeView = { approved: boolean; known: boolean; label: string; required: boolean; scope: string; why: string }
 
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
 
@@ -683,6 +695,26 @@ export type CommentListOutput = { acceptsComments: boolean; conversationId?: str
 export type CommentThreadUpdateInput = { outcome?: string | null; status: string; threadId: string }
 
 export type CommentThreadUpdateOutput = { outcome?: string | null; status: string; threadId: string }
+
+export type ConnectedModuleApproveInput = { digest?: string | null; moduleId: string; scopes?: string[] | null }
+
+export type ConnectedModuleApproveOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+
+export type ConnectedModuleInstallInput = { digest?: string | null; scopes?: string[] | null; url: string }
+
+export type ConnectedModuleInstallOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+
+export type ConnectedModuleListInput = { includeRevoked?: boolean; moduleId?: string | null }
+
+export type ConnectedModuleListOutput = { modules: ConnectedModuleView[] }
+
+export type ConnectedModuleRefreshInput = { moduleId: string }
+
+export type ConnectedModuleRefreshOutput = { module: ConnectedModuleView; refreshed: Refreshed }
+
+export type ConnectedModuleRevokeInput = { moduleId: string }
+
+export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectionCreateInput = { account?: string | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -1681,6 +1713,11 @@ export type Operations = {
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
+  connected_module_approve: { input: ConnectedModuleApproveInput; output: ConnectedModuleApproveOutput }
+  connected_module_install: { input: ConnectedModuleInstallInput; output: ConnectedModuleInstallOutput }
+  connected_module_list: { input: ConnectedModuleListInput; output: ConnectedModuleListOutput }
+  connected_module_refresh: { input: ConnectedModuleRefreshInput; output: ConnectedModuleRefreshOutput }
+  connected_module_revoke: { input: ConnectedModuleRevokeInput; output: ConnectedModuleRevokeOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
   connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }

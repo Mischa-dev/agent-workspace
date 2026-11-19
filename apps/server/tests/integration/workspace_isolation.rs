@@ -2108,6 +2108,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "milestone_list",
     "module_list",
     "module_open",
+    "connected_module_list",
     "my_permissions",
     "my_work_get",
     "notification_list",
@@ -2446,6 +2447,15 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "module_open",
             vec![json!({"moduleId": a.module.to_string()})],
             vec![json!({"moduleId": b.module.to_string()})],
+            vec![],
+        ),
+        case(
+            "connected_module_list",
+            vec![json!({})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"moduleId": b.module.to_string()}),
+            ],
             vec![],
         ),
         by_project("milestone_list"),

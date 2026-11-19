@@ -30,6 +30,7 @@
 //! navigation, palette, shortcuts, slash commands and settings pages.
 
 pub mod built;
+pub mod connected;
 pub mod contract;
 pub mod core;
 pub mod gate;

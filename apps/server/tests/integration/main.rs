@@ -49,6 +49,7 @@ mod chat_only;
 mod cluster;
 mod cluster_support;
 mod compat_clients;
+mod connected_modules;
 mod content_events;
 mod conversation_privacy;
 mod credentials;

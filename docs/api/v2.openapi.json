@@ -1021,6 +1021,146 @@
         },
         "type": "object"
       },
+      "ConnectedModuleView": {
+        "description": "A connected module as its admins see it.",
+        "properties": {
+          "accountId": {
+            "description": "The app's own account here.",
+            "type": "string"
+          },
+          "accountName": {
+            "description": "The name its account will have.",
+            "type": "string"
+          },
+          "approvedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "approvedBy": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digest": {
+            "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "frameOrigins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "installSentAt": {
+            "description": "When the install code was last sent to the app.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "description": "The module's key here (`publisher.module`).",
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "manifestUrl": {
+            "type": "string"
+          },
+          "moduleId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/OperationSummary"
+            },
+            "type": "array"
+          },
+          "panels": {
+            "items": {
+              "$ref": "#/components/schemas/PanelSummary"
+            },
+            "type": "array"
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManifestSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeView"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "moduleId",
+          "state",
+          "accountId",
+          "manifestUrl",
+          "baseUrl",
+          "key",
+          "name",
+          "version",
+          "description",
+          "accountName",
+          "scopes",
+          "kinds",
+          "operations",
+          "events",
+          "panels",
+          "frameOrigins",
+          "digest",
+          "approvedBy",
+          "approvedAt"
+        ],
+        "type": "object"
+      },
       "ConnectionView": {
         "description": "A connection, as its account and its managers see it.",
         "properties": {
@@ -4341,6 +4481,89 @@
         ],
         "type": "object"
       },
+      "ManifestSummary": {
+        "description": "What a manifest adds, for a preview or a pending change.",
+        "properties": {
+          "accountName": {
+            "description": "The name its account will have.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digest": {
+            "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "frameOrigins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "key": {
+            "description": "The module's key here (`publisher.module`).",
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/OperationSummary"
+            },
+            "type": "array"
+          },
+          "panels": {
+            "items": {
+              "$ref": "#/components/schemas/PanelSummary"
+            },
+            "type": "array"
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeView"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "version",
+          "description",
+          "accountName",
+          "scopes",
+          "kinds",
+          "operations",
+          "events",
+          "panels",
+          "frameOrigins",
+          "digest"
+        ],
+        "type": "object"
+      },
       "MeasureOp": {
         "description": "What a chart counts for each group (T1.31): how many records, or the\nsum, average, least or most of a number field.",
         "enum": [
@@ -5418,6 +5641,27 @@
         ],
         "type": "object"
       },
+      "OperationSummary": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "permission": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verb": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "verb"
+        ],
+        "type": "object"
+      },
       "OptionInput": {
         "additionalProperties": false,
         "description": "A choice option as someone writes it: an existing option keeps its ID.",
@@ -5671,6 +5915,25 @@
           "title",
           "excerpt",
           "builtIn"
+        ],
+        "type": "object"
+      },
+      "PanelSummary": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slot",
+          "title"
         ],
         "type": "object"
       },
@@ -6467,6 +6730,26 @@
           {
             "const": "project_admins",
             "description": "The project's owners and admins.",
+            "type": "string"
+          }
+        ]
+      },
+      "Refreshed": {
+        "description": "What a re-fetch did.",
+        "oneOf": [
+          {
+            "const": "unchanged",
+            "description": "The same manifest.",
+            "type": "string"
+          },
+          {
+            "const": "applied",
+            "description": "Applied: it asks for nothing new.",
+            "type": "string"
+          },
+          {
+            "const": "pending",
+            "description": "It asks for more: waiting for approval (scopes it dropped are\ndropped already).",
             "type": "string"
           }
         ]
@@ -7445,6 +7728,43 @@
           "sendAt",
           "status",
           "url"
+        ],
+        "type": "object"
+      },
+      "ScopeView": {
+        "description": "A scope the manifest asks for, as an admin reads it.",
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "known": {
+            "description": "This server has it; one it doesn't can't be approved.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "What it lets the app do, in this server's words.",
+            "type": "string"
+          },
+          "required": {
+            "description": "The install can't leave it out.",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "A permission key, or `events:<type>`.",
+            "type": "string"
+          },
+          "why": {
+            "description": "The app's reason.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "label",
+          "why",
+          "required",
+          "known",
+          "approved"
         ],
         "type": "object"
       },
@@ -25626,6 +25946,2432 @@
         "summary": "Resolve comment thread",
         "tags": [
           "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connected_module_approve": {
+      "post": {
+        "description": "Set what a connected module's app may do: approve a re-fetched manifest that asks for more, or approve more or fewer of its optional scopes. Its account's role then holds exactly the scopes given. You can only approve what you hold yourself. Needs \"Manage modules\" where it acts.",
+        "operationId": "connected_module_approve",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "digest": {
+                    "description": "The digest of the manifest you looked at (the pending one, if any).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "moduleId": {
+                    "description": "The connected module (its module id).",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "description": "Every scope the app should hold from now on. Leave out to approve\nall it asks for that this server has; required ones must be\nincluded.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "moduleId"
+                ],
+                "title": "ConnectedModuleApproveInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Approve a connected module's scopes",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connected_module_install": {
+      "post": {
+        "description": "Install an outside app as a module from its manifest's address, approving the scopes given (or all it asks for that this server has). The app gets its own account here with a role holding exactly what was approved, and is sent a one-time code at its install address to collect its credentials. You can only approve what you hold yourself. Pass preview: true first to see who publishes it, each scope it asks for and why, and the kinds, operations, events, panels and frame origins it adds, with nothing installed; then install with the digest it showed. Needs \"Manage modules\" where it acts.",
+        "operationId": "connected_module_install",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Run it and roll it back.",
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "digest": {
+                    "description": "The digest a preview showed: the install is refused if the manifest\nhas changed since.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scopes": {
+                    "description": "The scopes to approve. Leave out to approve every one it asks for\nthat this server has; required ones must be included.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "url": {
+                    "description": "The address of the app's manifest.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "title": "ConnectedModuleInstallInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Install a connected module",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connected_module_list": {
+      "post": {
+        "description": "List the outside apps installed here as modules (or open one by moduleId): their state, account, manifest as approved, the scopes they hold, and any re-fetched manifest waiting for approval. Needs \"Manage modules\" where it acts.",
+        "operationId": "connected_module_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "includeRevoked": {
+                    "description": "Include revoked ones.",
+                    "type": "boolean"
+                  },
+                  "moduleId": {
+                    "description": "Just this one (its module id).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ConnectedModuleListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "modules": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConnectedModuleView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "modules"
+                          ],
+                          "title": "ConnectedModuleListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "modules": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConnectedModuleView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "modules"
+                          ],
+                          "title": "ConnectedModuleListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List connected modules",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connected_module_refresh": {
+      "post": {
+        "description": "Fetch a connected module's manifest again. A manifest that asks for nothing new applies at once; one with new scopes or frame origins waits for connected_module_approve, and scopes it no longer asks for are dropped at once. Needs \"Manage modules\" where it acts.",
+        "operationId": "connected_module_refresh",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "moduleId": {
+                    "description": "The connected module (its module id).",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "moduleId"
+                ],
+                "title": "ConnectedModuleRef",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "module": {
+                              "$ref": "#/components/schemas/ConnectedModuleView"
+                            },
+                            "refreshed": {
+                              "$ref": "#/components/schemas/Refreshed",
+                              "description": "unchanged, applied, or pending (it asks for more; approve it with\nconnected_module_approve)."
+                            }
+                          },
+                          "required": [
+                            "refreshed",
+                            "module"
+                          ],
+                          "title": "RefreshView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "module": {
+                              "$ref": "#/components/schemas/ConnectedModuleView"
+                            },
+                            "refreshed": {
+                              "$ref": "#/components/schemas/Refreshed",
+                              "description": "unchanged, applied, or pending (it asks for more; approve it with\nconnected_module_approve)."
+                            }
+                          },
+                          "required": [
+                            "refreshed",
+                            "module"
+                          ],
+                          "title": "RefreshView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Re-read a connected module's manifest",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connected_module_revoke": {
+      "post": {
+        "description": "Disconnect an outside app: its account is disabled and its credentials revoked at once, its signing secrets deleted, and its module switched off and archived. What it made stays. Install it again to reconnect. Needs \"Manage modules\" where it acts.",
+        "operationId": "connected_module_revoke",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "moduleId": {
+                    "description": "The connected module (its module id).",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "moduleId"
+                ],
+                "title": "ConnectedModuleRef",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connected module as its admins see it.",
+                          "properties": {
+                            "accountId": {
+                              "description": "The app's own account here.",
+                              "type": "string"
+                            },
+                            "accountName": {
+                              "description": "The name its account will have.",
+                              "type": "string"
+                            },
+                            "approvedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "approvedBy": {
+                              "type": "string"
+                            },
+                            "baseUrl": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "digest": {
+                              "description": "SHA-256 of the manifest served: pass it to install or approve to be\nsure nothing changed since you looked.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "frameOrigins": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "installSentAt": {
+                              "description": "When the install code was last sent to the app.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "key": {
+                              "description": "The module's key here (`publisher.module`).",
+                              "type": "string"
+                            },
+                            "kinds": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "manifestUrl": {
+                              "type": "string"
+                            },
+                            "moduleId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "operations": {
+                              "items": {
+                                "$ref": "#/components/schemas/OperationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "panels": {
+                              "items": {
+                                "$ref": "#/components/schemas/PanelSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pending": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ManifestSummary"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "A re-fetched manifest that asks for more, waiting for approval\n(connected_module_approve)."
+                            },
+                            "publisher": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "revokedAt": {
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "scopes": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScopeView"
+                              },
+                              "type": "array"
+                            },
+                            "state": {
+                              "description": "`pending` until the app exchanges its install code, then `active`;\n`revoked` for good.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "moduleId",
+                            "state",
+                            "accountId",
+                            "manifestUrl",
+                            "baseUrl",
+                            "key",
+                            "name",
+                            "version",
+                            "description",
+                            "accountName",
+                            "scopes",
+                            "kinds",
+                            "operations",
+                            "events",
+                            "panels",
+                            "frameOrigins",
+                            "digest",
+                            "approvedBy",
+                            "approvedAt"
+                          ],
+                          "title": "ConnectedModuleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Revoke a connected module",
+        "tags": [
+          "workspace"
         ],
         "x-operation-kind": "change"
       }

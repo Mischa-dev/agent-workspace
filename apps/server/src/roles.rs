@@ -1118,7 +1118,8 @@ pub(crate) async fn create(
     let defaults = checked_defaults(transaction, organization_id, input.defaults).await?;
     lock_roles(transaction, organization_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM workspace_roles WHERE organization_id = $1 AND NOT built_in",
+        "SELECT count(*) FROM workspace_roles role WHERE organization_id = $1 AND NOT built_in \
+         AND NOT EXISTS (SELECT 1 FROM module_apps app WHERE app.role_id = role.id)",
     )
     .bind(organization_id)
     .fetch_one(&mut **transaction)
@@ -1180,6 +1181,171 @@ pub(crate) async fn create(
         )
         .await?;
     Ok(view)
+}
+
+/// A connected module's role (M1.12) holds exactly what an admin approved
+/// for the app: it changes only through the module's approval, and goes
+/// with it.
+async fn refuse_app_role(connection: &mut PgConnection, role_id: Uuid) -> Result<(), AppError> {
+    let held = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM module_apps WHERE role_id = $1)",
+    )
+    .bind(role_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if held {
+        return Err(AppError::Refused {
+            field: "role",
+            message: "This role belongs to a connected module: change what the app may do by \
+                      approving its scopes on the module.",
+        });
+    }
+    Ok(())
+}
+
+/// The base a connected module's role takes: the lowest built-in role that
+/// holds every approved permission. None when only an owner holds them.
+pub(crate) fn app_role_base(permissions: PermissionSet) -> Option<MembershipRole> {
+    [
+        MembershipRole::Viewer,
+        MembershipRole::Member,
+        MembershipRole::Admin,
+    ]
+    .into_iter()
+    .find(|base| permissions.is_subset_of(PermissionSet::built_in(*base)))
+}
+
+/// What `caller` may approve for an app: what they hold themselves, and an
+/// admin-based role only from an owner (as any role).
+pub(crate) fn may_grant_app(
+    caller: Standing,
+    permissions: PermissionSet,
+) -> Result<MembershipRole, AppError> {
+    let base = app_role_base(permissions).ok_or(AppError::Refused {
+        field: "scopes",
+        message: "An app can't be given what only owners hold.",
+    })?;
+    may_define(caller, base)?;
+    if !permissions.is_subset_of(caller.permissions) {
+        return Err(AppError::Refused {
+            field: "scopes",
+            message: "You can only approve permissions you hold yourself.",
+        });
+    }
+    Ok(base)
+}
+
+/// Makes the role a connected module's app account holds (M1.12): exactly
+/// `permissions` (with the ones every role holds), named after the app. It
+/// counts against no limit on custom roles and is changed only through
+/// [`set_app_role`].
+pub(crate) async fn insert_app_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    name: &str,
+    base: MembershipRole,
+    permissions: PermissionSet,
+    actor_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let permissions = permissions.union(PermissionSet::required()).implied();
+    lock_roles(transaction, organization_id).await?;
+    let taken = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, lower(name) FROM workspace_roles WHERE organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let stem: String = name.chars().take(50).collect();
+    let stem = format!("{} (app)", stem.trim());
+    let name = std::iter::once(stem.clone())
+        .chain((2..100).map(|n| format!("{stem} {n}")))
+        .find(|candidate| {
+            !taken
+                .iter()
+                .any(|(_, used)| *used == candidate.to_lowercase())
+        })
+        .unwrap_or_else(|| format!("{stem} {}", Uuid::now_v7().simple()));
+    let base_key = slug(&name);
+    let key = std::iter::once(base_key.clone())
+        .chain((2..).map(|n| format!("{base_key}-{n}")))
+        .find(|candidate| {
+            !taken.iter().any(|(used, _)| used == candidate)
+                && !crate::access::tier::reserved(candidate)
+        })
+        .unwrap_or_else(|| format!("role-{}", Uuid::now_v7().simple()));
+    let id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO workspace_roles (
+            id, organization_id, key, built_in, base_role, name, description, permissions,
+            created_by_actor_id, updated_by_actor_id
+        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $8)
+        "#,
+    )
+    .bind(id)
+    .bind(organization_id)
+    .bind(&key)
+    .bind(base.key())
+    .bind(&name)
+    .bind("What a connected module's app may do, as approved.")
+    .bind(permissions.keys())
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(name_taken)?;
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
+    Ok(id)
+}
+
+/// Sets what a connected module's role holds, after an approval or a
+/// narrowed manifest, and the tier its holders' memberships carry.
+pub(crate) async fn set_app_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    role_id: Uuid,
+    base: MembershipRole,
+    permissions: PermissionSet,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let permissions = permissions.union(PermissionSet::required()).implied();
+    lock_roles(transaction, organization_id).await?;
+    sqlx::query(
+        r#"
+        UPDATE workspace_roles
+        SET base_role = $3, permissions = $4, updated_by_actor_id = $5,
+            version = version + 1, updated_at = now()
+        WHERE organization_id = $1 AND id = $2
+        "#,
+    )
+    .bind(organization_id)
+    .bind(role_id)
+    .bind(base.key())
+    .bind(permissions.keys())
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    // A space membership takes admin from an admin-based role and member
+    // otherwise, as `workspace_space_add_member` gives it.
+    let space_role = if base == MembershipRole::Admin {
+        MembershipRole::Admin
+    } else {
+        MembershipRole::Member
+    };
+    for (table, role) in [
+        ("organization_memberships", base),
+        ("project_memberships", space_role),
+    ] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET role = $2, version = version + 1, updated_at = now() \
+             WHERE role_id = $1 AND role <> $2"
+        ))
+        .bind(role_id)
+        .bind(role.key())
+        .execute(&mut **transaction)
+        .await?;
+    }
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
+    Ok(())
 }
 
 async fn clear_default(
@@ -1246,6 +1412,7 @@ pub(crate) async fn change(
     let base = row.base()?;
     let row_editable = row.permissions_editable();
     may_define(caller, base)?;
+    refuse_app_role(transaction, role_id).await?;
     if let Some(expected) = change.expected_version
         && expected != row.version
     {
@@ -1382,6 +1549,7 @@ pub(crate) async fn remove(
     if row.built_in {
         return Err(AppError::Conflict("role", "built_in"));
     }
+    refuse_app_role(transaction, role_id).await?;
     if row.is_default {
         return Err(AppError::Conflict("role", "default_role"));
     }
