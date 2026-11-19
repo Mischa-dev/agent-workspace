@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest'
 
 import { SELF_HANDLED } from '../handlers'
 import { HANDLERS } from '../handlers/table'
-import { parseLegacyRealtimeEvent, parseRealtimeEnvelope } from '../realtimeModel'
+import { parseRealtimeEnvelope } from '../realtimeModel'
 import { parseServerFrame } from './protocol'
 import { parseFrames, replay, type Seed } from './replay'
 
 // W1.7: every recorded stream under fixtures/ (from e2e/live-streams.spec.ts,
 // re-recorded with RECORD_FRAMES=1) replays through the real live connection
-// with its seed, and meets its expectations file. The protocol 1 streams
-// stand for a server without protocol 2 (the fallback); `resume` and
-// `resync` are protocol 2's (W1.6).
+// with its seed, and meets its expectations file. All are protocol 2's
+// (W1.6); the first four were recorded on protocol 1 and rewrapped as
+// `event` frames when its path went (W1.6b), with the same expectations.
 
 type Count = number | { min: number }
 type Expectations = {
@@ -48,16 +48,11 @@ describe('recorded event streams', () => {
     for (const frame of fixture.frames) {
       if ('$' in frame) continue
       const wire = parseServerFrame(frame)
-      if (wire) {
-        expect(wire.type, JSON.stringify(frame)).not.toBe('other')
-        if (wire.type !== 'event') continue
-        const event = parseRealtimeEnvelope(wire.event)
-        expect(event && (event.type in HANDLERS || SELF_HANDLED.has(event.type)), JSON.stringify(frame)).toBe(true)
-        continue
-      }
-      const envelope = parseRealtimeEnvelope(frame)
-      if (envelope) expect(envelope.type in HANDLERS || SELF_HANDLED.has(envelope.type), envelope.type).toBe(true)
-      else expect(parseLegacyRealtimeEvent(frame), JSON.stringify(frame)).not.toBeNull()
+      expect(wire, JSON.stringify(frame)).not.toBeNull()
+      expect(wire?.type, JSON.stringify(frame)).not.toBe('other')
+      if (wire?.type !== 'event') continue
+      const event = parseRealtimeEnvelope(wire.event)
+      expect(event && (event.type in HANDLERS || SELF_HANDLED.has(event.type)), JSON.stringify(frame)).toBe(true)
     }
   })
 

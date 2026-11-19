@@ -34,11 +34,9 @@ import { NO_LIVE_CONTROLS, type ConnectionStatus, type DocumentFrame, type LiveC
 import {
   durableMessageId,
   messageUpdate,
-  parseLegacyRealtimeEvent,
   reactionChange,
   parseRealtimeEnvelope,
   removedConversationId,
-  streamDelta,
   terminalAgentRunId,
   type RealtimeEnvelope,
 } from './realtimeModel'
@@ -62,7 +60,7 @@ const TYPING_EVERY_MS = 3_000
 
 function websocketUrl() {
   // The live origin from client-config (H1.41), as ws or wss; protocol 2
-  // (W1.6). A server without it ignores `v` and sends protocol 1.
+  // (W1.6), the only one this client reads (W1.6b).
   return `${(origins.live ?? window.location.origin).replace(/^http/, 'ws')}/api/v1/realtime?v=2`
 }
 
@@ -117,12 +115,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
     let socket: WebSocket | undefined
     let reconnectTimer: number | undefined
     let streamFrame: number | undefined
-    // Protocol 2: the last log position heard, kept across reconnects so the
-    // next `hello` resumes from it; whether this server speaks protocol 2;
-    // the wait for `ready` after a resuming hello; and when the server asked
-    // to be called back.
+    // The last log position heard, kept across reconnects so the next
+    // `hello` resumes from it; the wait for `ready` after a resuming hello;
+    // and when the server asked to be called back.
     let position: string | null = null
-    let speaksProtocol2 = false
     let resumeTimer: number | undefined
     let plannedDelay: number | undefined
     let typingTimer: number | undefined
@@ -356,10 +352,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
         reconnectAttempt.current = 0
         setConnection('live')
         resetStreams()
-        // `hello` first (a server on protocol 1 ignores it), then the
-        // documents still open. A server known to speak protocol 2 is asked
-        // to resume from the last position heard, and its `ready` says
-        // whether anything needs refetching; otherwise the broad refresh.
+        // `hello` first, then the documents still open. With a position
+        // heard before, the server is asked to resume from it, and its
+        // `ready` says whether anything needs refetching; otherwise the
+        // broad refresh.
         const resume = resumable()
         current.send(hello(resume ? position : null))
         for (const watch of watches.values()) current.send(watchFrame(watch.document))
@@ -381,30 +377,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
           return
         }
 
+        // Every frame is protocol 2's (W1.6b: protocol 1's bare envelopes
+        // are gone); anything else is dropped.
         const frame = parseServerFrame(wire)
-        if (frame) {
-          protocol2(current, frame)
-          return
-        }
-        const envelope = parseRealtimeEnvelope(wire)
-        if (envelope) {
-          durable(envelope)
-          return
-        }
-
-        const legacy = parseLegacyRealtimeEvent(wire)
-        if (!legacy || !remember(legacy.eventId)) return
-        const delta = streamDelta(legacy)
-        if (legacy.conversationId && delta) {
-          queueDelta(
-            legacy.conversationId,
-            delta.messageId,
-            delta.runId,
-            delta.delta,
-          )
-        }
-        // Only stream text is sent outside the durable envelope; anything
-        // else there names nothing to refetch.
+        if (frame) received(current, frame)
       })
       current.addEventListener('close', () => {
         // A socket replaced by reconnectNow closes quietly.
@@ -429,15 +405,14 @@ export function useRealtimeConnection(): RealtimeContextValue {
       })
     }
 
-    const resumable = () => speaksProtocol2 && position !== null
+    const resumable = () => position !== null
     const stopWaitingForResume = () => {
       if (resumeTimer !== undefined) window.clearTimeout(resumeTimer)
       resumeTimer = undefined
     }
 
-    /** A protocol 2 frame: the server speaks it, so later connections resume. */
-    const protocol2 = (current: WebSocket, frame: ServerFrame) => {
-      speaksProtocol2 = true
+    /** A frame from the server. */
+    const received = (current: WebSocket, frame: ServerFrame) => {
       switch (frame.type) {
         case 'ready':
           if (after(frame.position, position)) position = frame.position

@@ -169,6 +169,8 @@ export const timeline = {
 export class WebSocketStub extends EventTarget {
   static instances: WebSocketStub[] = []
   close = vi.fn()
+  // The page sends `hello`, watches and typing frames (W1.6).
+  send = vi.fn()
 
   constructor(public readonly url: string) {
     super()

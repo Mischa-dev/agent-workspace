@@ -16,16 +16,26 @@ const secondRunId = '019fb600-0000-7000-8000-000000000010'
 class WebSocketStub extends EventTarget {
   static instances: WebSocketStub[] = []
   close = vi.fn()
+  // The page sends `hello`, watches and typing frames (W1.6).
+  send = vi.fn()
 
   constructor(public readonly url: string) {
     super()
     WebSocketStub.instances.push(this)
   }
 
-  message(value: unknown) {
-    this.dispatchEvent(
-      new MessageEvent('message', { data: JSON.stringify(value) }),
-    )
+  /**
+   * Sends what the server would for `value` on protocol 2 (W1.6b): a durable
+   * envelope inside an `event` frame, a reply's next words as a
+   * `stream.delta`.
+   */
+  message(value: Record<string, unknown>) {
+    const payload = (value.payload ?? {}) as Record<string, unknown>
+    const frame =
+      value.kind === 'message.delta'
+        ? { type: 'ephemeral', kind: 'stream.delta', conversationId: value.conversation_id, messageId: payload.message_id, runId: payload.agent_run_id ?? null, delta: payload.delta }
+        : { type: 'event', position: String(value.event_cursor ?? 0), event: value }
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(frame) }))
   }
 }
 
@@ -174,7 +184,7 @@ describe('authenticated realtime provider', () => {
     unsubscribe()
   })
 
-  it('coalesces bounded legacy provider deltas without creating another socket', async () => {
+  it('coalesces stream deltas without creating another socket', async () => {
     const queryClient = new QueryClient()
     render(
       <QueryClientProvider client={queryClient}>

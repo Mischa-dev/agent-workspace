@@ -21,15 +21,17 @@ const createdThreadId = '019fb600-0000-7000-8000-000000000007'
 class WebSocketStub extends EventTarget {
   static instances: WebSocketStub[] = []
   close = vi.fn()
+  send = vi.fn()
 
   constructor() {
     super()
     WebSocketStub.instances.push(this)
   }
 
-  message(value: unknown) {
+  /** A durable envelope as the server sends it, inside a protocol 2 `event` frame. */
+  message(value: { event_cursor: number } & Record<string, unknown>) {
     this.dispatchEvent(
-      new MessageEvent('message', { data: JSON.stringify(value) }),
+      new MessageEvent('message', { data: JSON.stringify({ type: 'event', position: String(value.event_cursor), event: value }) }),
     )
   }
 }
