@@ -1722,6 +1722,17 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     .await;
     assert_eq!(by_id["outcome"], "ok", "{by_id}");
 
+    // The token is for the first workspace: the second's groups (a call
+    // that needs no permission) stay out of its reach.
+    let elsewhere = call("group_list", json!({"workspace": second.to_string()})).await;
+    assert_ne!(elsewhere["outcome"], "ok", "{elsewhere}");
+    let at_home = call(
+        "group_list",
+        json!({"workspace": world.organization.to_string()}),
+    )
+    .await;
+    assert_eq!(at_home["outcome"], "ok", "{at_home}");
+
     // A decision made from the personal DM pins there.
     let decided = call(
         "decision_record",
