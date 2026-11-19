@@ -162,9 +162,11 @@ async fn inbox_within(
         None => {
             sqlx::query_scalar::<_, Uuid>(
                 r#"
-                SELECT project_id FROM saved_items WHERE actor_id = $1
+                SELECT COALESCE(project_id, direct_scope_id()) FROM saved_items
+                WHERE actor_id = $1
                 UNION
-                SELECT project_id FROM scheduled_messages WHERE author_actor_id = $1
+                SELECT COALESCE(project_id, direct_scope_id()) FROM scheduled_messages
+                WHERE author_actor_id = $1
                 "#,
             )
             .bind(actor_id)

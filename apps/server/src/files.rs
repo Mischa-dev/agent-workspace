@@ -253,6 +253,11 @@ pub(crate) async fn readable_file(
             .fetch_one(&mut *connection)
             .await?;
     if let Some(conversation) = conversation
+        && direct_beyond_limit(&mut connection, reader.actor_id(), conversation).await?
+    {
+        return Err(AppError::NotFound("file"));
+    }
+    if let Some(conversation) = conversation
         && crate::conversations::task_discussion_hidden(
             &mut connection,
             reader.actor_id(),
@@ -275,11 +280,56 @@ pub(crate) async fn message_files(
         "SELECT {FILE_COLUMNS} FROM files file WHERE file.message_id = $1 AND {READABLE}
          ORDER BY file.position, file.id"
     );
-    Ok(
-        bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(message_id), reader)
-            .fetch_all(crate::db::scoped(pool))
-            .await?,
+    let rows = bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(message_id), reader)
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
+    if rows
+        .iter()
+        .any(|row| row.project_id == crate::spaces::DIRECT)
+    {
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        let conversation = sqlx::query_scalar::<_, Uuid>(
+            "SELECT conversation_id FROM messages \
+             WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+        )
+        .bind(message_id)
+        .bind(reader.actor_id())
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some(conversation) = conversation
+            && direct_beyond_limit(&mut connection, reader.actor_id(), conversation).await?
+        {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(rows)
+}
+
+/// Whether `conversation` is a kept DM or group in a workspace the
+/// credential `actor` calls with doesn't reach (a token made for another
+/// workspace). Channels are checked by their space.
+async fn direct_beyond_limit(
+    connection: &mut sqlx::PgConnection,
+    actor: Uuid,
+    conversation: Uuid,
+) -> Result<bool, AppError> {
+    let Some(allowed) = crate::policy::agent_limit_direct_workspaces(
+        actor,
+        crate::policy::Permission::ProjectsView,
+    ) else {
+        return Ok(false);
+    };
+    let workspace = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT workspace_id FROM conversations
+        WHERE id = $1 AND project_id IS NULL AND conversation_visible_to(id, $2)
+        "#,
     )
+    .bind(conversation)
+    .bind(actor)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(workspace.is_some_and(|workspace| !allowed.contains(&workspace)))
 }
 
 /// A task's files the reader may see (its own and its comments'), oldest
