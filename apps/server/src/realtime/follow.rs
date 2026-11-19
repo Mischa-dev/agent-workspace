@@ -165,8 +165,7 @@ impl Follower {
 
     /// Works out the set and checks the start isn't too far back.
     async fn start(&mut self) -> Result<(), AppError> {
-        self.set =
-            Some(subscription_for(&self.state, self.spec.account_id, &self.spec.actor_kind).await?);
+        self.set = Some(subscription_for(&self.state, self.spec.account_id).await?);
         let mut connection = crate::db::scoped_tx(&self.state.pool).await?;
         let head = crate::events::head(&mut connection).await?;
         if head - self.cursor > RESUME_LIMIT || self.cursor < 0 {
@@ -202,7 +201,7 @@ impl Follower {
         let changed = access_changed(event) == Some(account)
             || route.as_ref().is_some_and(|route| set.changed_by(route));
         if changed {
-            self.set = Some(subscription_for(&self.state, account, &self.spec.actor_kind).await?);
+            self.set = Some(subscription_for(&self.state, account).await?);
         }
         let Some(route) = route else {
             return Ok(false);

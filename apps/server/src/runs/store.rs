@@ -277,6 +277,28 @@ pub async fn get(
 
 /// The project of a run the account does itself, while it still sees the
 /// run's conversation. Every reporting call (and its replay) starts here.
+/// The DM or group (in no space) a run of `account_id` answers, when it
+/// answers one it can see: where its messages may go besides its space.
+pub async fn direct_of_own(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT run.conversation_id FROM runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1 AND run.account_id = $2
+          AND conversation.project_id IS NULL
+          AND conversation_visible_to(run.conversation_id, $2)
+        "#,
+    )
+    .bind(run_id)
+    .bind(account_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 pub async fn space_of_own(
     executor: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,

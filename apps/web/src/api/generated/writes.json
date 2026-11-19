@@ -6,6 +6,11 @@
   },
   {
     "kind": "change",
+    "name": "account_owner_take",
+    "title": "Take ownership of an agent"
+  },
+  {
+    "kind": "change",
     "name": "account_workspace_add",
     "title": "Add an agent you have to this workspace"
   },
@@ -33,6 +38,26 @@
     "kind": "change",
     "name": "agent_pause",
     "title": "Pause agent"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_decide",
+    "title": "Decide on an agent's proposed rebind"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_remove",
+    "title": "Detach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_set",
+    "title": "Attach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_update",
+    "title": "Rebind an agent's outside reference"
   },
   {
     "kind": "change",
@@ -181,6 +206,21 @@
   },
   {
     "kind": "create",
+    "name": "credential_create",
+    "title": "Make a secret"
+  },
+  {
+    "kind": "change",
+    "name": "credential_revoke",
+    "title": "Revoke a secret"
+  },
+  {
+    "kind": "change",
+    "name": "credential_rotate",
+    "title": "Rotate a secret"
+  },
+  {
+    "kind": "create",
     "name": "custom_emoji_create",
     "title": "Add custom emoji"
   },
@@ -278,6 +318,31 @@
     "kind": "change",
     "name": "github_installation_link",
     "title": "Link GitHub installation"
+  },
+  {
+    "kind": "change",
+    "name": "group_archive",
+    "title": "Archive a group"
+  },
+  {
+    "kind": "create",
+    "name": "group_create",
+    "title": "Make a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_members_set",
+    "title": "Change who is in a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_restore",
+    "title": "Bring back a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_update",
+    "title": "Change a group"
   },
   {
     "kind": "change",
@@ -666,6 +731,61 @@
   },
   {
     "kind": "change",
+    "name": "space_archive",
+    "title": "Archive a space"
+  },
+  {
+    "kind": "create",
+    "name": "space_create",
+    "title": "Make a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_group_add",
+    "title": "Give a group a role in a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_group_remove",
+    "title": "Take a group out of a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_join",
+    "title": "Join a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_leave",
+    "title": "Leave a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_add",
+    "title": "Add someone to a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_remove",
+    "title": "Remove someone from a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_update",
+    "title": "Change someone's role in a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_restore",
+    "title": "Restore a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_update",
+    "title": "Change a space"
+  },
+  {
+    "kind": "change",
     "name": "status_delete",
     "title": "Clear status"
   },
@@ -780,6 +900,21 @@
     "title": "Link two things"
   },
   {
+    "kind": "create",
+    "name": "thing_link_create",
+    "title": "Make a link to one thing"
+  },
+  {
+    "kind": "change",
+    "name": "thing_share_add",
+    "title": "Share one thing"
+  },
+  {
+    "kind": "change",
+    "name": "thing_share_remove",
+    "title": "Stop sharing one thing"
+  },
+  {
     "kind": "change",
     "name": "thing_unlink",
     "title": "Take a link away"
@@ -863,6 +998,11 @@
     "kind": "create",
     "name": "workspace_export_start",
     "title": "Export the workspace"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_member_update",
+    "title": "Change someone's workspace membership"
   },
   {
     "kind": "change",

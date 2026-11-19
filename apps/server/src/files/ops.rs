@@ -83,6 +83,7 @@ async fn destination(
     let located = Located {
         workspace_id: call.ctx.workspace_id,
         space_id: call.ctx.space_id,
+        direct: call.ctx.direct,
     };
     let mut transaction = crate::db::scoped_tx(&call.state.pool)
         .await

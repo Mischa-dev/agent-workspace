@@ -19,7 +19,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     secrets::{self, NewSecret, SecretOwner, SecretValue},
-    workspace::{WorkspaceRole, caller_role},
+    workspace::standing_of,
 };
 
 pub fn router() -> Router<AppState> {
@@ -58,17 +58,21 @@ pub struct MailSettingsView {
     pub your_address: Option<String>,
 }
 
-/// Owners only: mail settings send as the workspace, and their password
-/// reaches outside the server.
-async fn require_owner(
+/// Mail settings send as the workspace: for those who manage its settings
+/// (`settings.manage`).
+async fn require_settings_manager(
     state: &AppState,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    match caller_role(&mut connection, principal, organization_id, false).await? {
-        WorkspaceRole::Owner => Ok(()),
-        _ => Err(AppError::Forbidden),
+    if standing_of(&mut connection, principal.actor_id, organization_id, false)
+        .await?
+        .may(crate::policy::Permission::SettingsManage)
+    {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 
@@ -124,7 +128,7 @@ async fn read_http(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<MailSettingsView>, AppError> {
-    require_owner(&state, &principal, organization_id).await?;
+    require_settings_manager(&state, &principal, organization_id).await?;
     Ok(Json(
         view(&state, organization_id, principal.actor_id).await?,
     ))
@@ -166,7 +170,7 @@ async fn save_http(
     ApiJson(mut request): ApiJson<SaveRequest>,
 ) -> Result<Json<MailSettingsView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    require_owner(&state, &principal, organization_id).await?;
+    require_settings_manager(&state, &principal, organization_id).await?;
     if request.provider != "smtp" {
         return Err(AppError::Validation("provider"));
     }
@@ -298,7 +302,7 @@ async fn remove_http(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    require_owner(&state, &principal, organization_id).await?;
+    require_settings_manager(&state, &principal, organization_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM workspace_mail_settings WHERE organization_id = $1")
         .bind(organization_id)
@@ -352,7 +356,7 @@ async fn test_http(
     ApiJson(request): ApiJson<TestRequest>,
 ) -> Result<Json<TestResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    require_owner(&state, &principal, organization_id).await?;
+    require_settings_manager(&state, &principal, organization_id).await?;
     let Some(row) = super::settings_row(&state.pool, organization_id).await? else {
         return Err(AppError::Conflict("mail", "mail isn't set up yet"));
     };

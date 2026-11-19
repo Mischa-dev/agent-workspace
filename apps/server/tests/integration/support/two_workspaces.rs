@@ -501,15 +501,33 @@ pub(crate) async fn add_person(
     .execute(&setup.pool)
     .await
     .expect("organization membership");
+    // Their workspace name, which also puts them in the workspace's space.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, actor_id) DO NOTHING",
+    )
+    .bind(setup.organization_id)
+    .bind(actor_id)
+    .bind(display_name)
+    .bind(handle)
+    .execute(&setup.pool)
+    .await
+    .expect("workspace profile");
     for project in projects {
+        // DMs live in no space (K4.17): the workspace membership is enough.
+        let project = project.parse::<Uuid>().expect("project");
+        if project == agent_workspace_server::spaces::DIRECT {
+            continue;
+        }
         sqlx::query(
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
             VALUES ($1, $2, $3, 'member', $4, $5)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
             "#,
         )
         .bind(Uuid::now_v7())
-        .bind(project.parse::<Uuid>().expect("project"))
+        .bind(project)
         .bind(actor_id)
         .bind(display_name)
         .bind(handle)
@@ -1986,6 +2004,21 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
         .await
         .expect("users");
     ids.extend(users);
+    // K4.17: DMs and groups live in the direct scope, not in a workspace;
+    // they belong to the people in them.
+    let direct = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: a test sweep of every row a workspace's people own.
+        SELECT DISTINCT conversation.id FROM conversations conversation
+        JOIN conversation_members member ON member.conversation_id = conversation.id
+        WHERE conversation.project_id IS NULL AND member.actor_id = ANY($1)
+        "#,
+    )
+    .bind(&actors)
+    .fetch_all(pool)
+    .await
+    .expect("direct conversations");
+    ids.extend(direct);
 
     // Tables with a UUID `id` and one of these parent columns.
     let tables = sqlx::query_as::<_, (String, String)>(

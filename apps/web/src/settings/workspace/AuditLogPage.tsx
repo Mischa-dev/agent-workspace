@@ -12,6 +12,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  actorKind,
   dayKey,
   dayLabel,
   formatDateTime,
@@ -129,7 +130,7 @@ export default function AuditLogPage({ workspace }: SettingsPageProps) {
           {facets.data?.actors.map((actor) => (
             <option key={actor.actorId} value={actor.actorId}>
               {actor.displayName}
-              {actor.kind === 'external_agent' ? ' (agent)' : ''}
+              {actorKind(actor.kind) === 'agent' ? ' (agent)' : ''}
             </option>
           ))}
         </SelectField>
@@ -211,7 +212,7 @@ function AuditRow({ event }: { event: AuditEvent }) {
       <span className="aw-row__lead">
         {event.actor ? (
           <Avatar
-            kind={event.actor.kind === 'external_agent' ? 'agent' : 'person'}
+            kind={actorKind(event.actor.kind) === 'agent' ? 'agent' : 'person'}
             name={event.actor.displayName}
             seed={event.actor.actorId}
             size={28}

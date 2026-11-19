@@ -392,6 +392,7 @@ pub fn default_registry() -> JobRegistry {
     crate::notification_email::register_jobs(&mut registry);
     crate::later::register_jobs(&mut registry);
     crate::statuses::register_jobs(&mut registry);
+    crate::memberships::expiry::register_jobs(&mut registry);
     crate::drafts::register_jobs(&mut registry);
     crate::history::cold::register_jobs(&mut registry);
     crate::export::transfer::register_jobs(&mut registry);

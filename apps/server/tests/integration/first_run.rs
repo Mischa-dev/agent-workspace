@@ -61,6 +61,14 @@ pub(crate) async fn post_setup(
     (status, value, browser)
 }
 
+/// Workspaces made so far; the direct scope, there from the start, isn't one.
+async fn workspaces(pool: &PgPool) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM organizations WHERE kind <> 'direct'")
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
 async fn count(pool: &PgPool, table: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
         .fetch_one(pool)
@@ -138,7 +146,7 @@ async fn the_first_person_sets_up_once_and_imports_only_for_themselves() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(count(pool, "users").await, 0);
-    assert_eq!(count(pool, "organizations").await, 0);
+    assert_eq!(workspaces(pool).await, 0);
 
     // The right one: the person, signed in, owning a workspace in the shape
     // they chose.
@@ -234,7 +242,7 @@ async fn the_first_person_sets_up_once_and_imports_only_for_themselves() {
         post_setup(&router, json!({ "code": code, "person": person("first") })).await;
     assert_eq!(status, StatusCode::OK);
     let importer = importer.expect("signed in");
-    assert_eq!(count(pool, "organizations").await, 0, "no workspace yet");
+    assert_eq!(workspaces(pool).await, 0, "no workspace yet");
     let (_, shown) = send(
         &router,
         importer.request("GET", "/api/v1/setup", None, Value::Null),
@@ -262,7 +270,7 @@ async fn the_first_person_sets_up_once_and_imports_only_for_themselves() {
     // A file that isn't an archive is refused, and the person can try again.
     let (status, refused) = send(&router, upload(&importer, b"not a zip".to_vec())).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    assert_eq!(count(pool, "organizations").await, 0);
+    assert_eq!(workspaces(pool).await, 0);
     assert_eq!(count(pool, "server_setup").await, 1);
 
     let (status, accepted) = send(&router, upload(&importer, archive.to_vec())).await;

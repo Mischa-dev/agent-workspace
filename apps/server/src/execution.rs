@@ -13,9 +13,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
-    policy::{
-        Action, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject, authorize,
-    },
+    policy::{Action, Permission, RoleGrant},
     provider::{
         CODEX_KIND, ProfileHealth, SupervisorRegistry,
         catalog::{self, Catalog},
@@ -317,7 +315,7 @@ async fn list_execution_workers(
         JOIN project_memberships membership
           ON membership.project_id = worker.project_id
          AND membership.actor_id = worker.actor_id
-         AND membership.role = 'worker'
+         AND membership.role = $5
         JOIN provider_connections connection
           ON connection.project_id = worker.project_id
          AND connection.id = worker.provider_connection_id
@@ -368,6 +366,7 @@ async fn list_execution_workers(
             .map(|manifest| manifest.kind.clone())
             .collect::<Vec<_>>(),
     )
+    .bind(crate::policy::MembershipRole::Worker.key())
     .fetch_all(&mut *transaction)
     .await?;
 
@@ -688,13 +687,12 @@ async fn workspace_access(
     .await?)
 }
 
-fn may_edit_catalog(principal: &AuthenticatedActor, workspace: &WorkspaceAccessRow) -> bool {
-    principal.actor_kind == "human"
-        && RoleGrant::stored(
-            &workspace.organization_role,
-            workspace.organization_role_permissions.as_deref(),
-        )
-        .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
+fn may_edit_catalog(workspace: &WorkspaceAccessRow) -> bool {
+    RoleGrant::stored(
+        &workspace.organization_role,
+        workspace.organization_role_permissions.as_deref(),
+    )
+    .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
 }
 
 async fn harness_view(
@@ -727,7 +725,7 @@ async fn list_harnesses(
     .await?;
     let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
     transaction.commit().await?;
-    let can_edit = may_edit_catalog(&principal, &workspace);
+    let can_edit = may_edit_catalog(&workspace);
     let mut harnesses = Vec::new();
     for manifest in state.supervisors.manifests_in(workspace.organization_id) {
         harnesses.push(harness_view(&state, workspace.organization_id, &manifest, can_edit).await?);
@@ -945,7 +943,7 @@ async fn require_catalog_editor(
     require_project_action(&mut transaction, principal, project_id, Action::ProjectView).await?;
     let workspace = workspace_access(&mut transaction, principal, project_id).await?;
     transaction.commit().await?;
-    if may_edit_catalog(principal, &workspace) {
+    if may_edit_catalog(&workspace) {
         Ok(workspace.organization_id)
     } else {
         Err(AppError::Forbidden)
@@ -1175,20 +1173,13 @@ async fn require_project_action(
     .await?
     .ok_or(AppError::NotFound("project"))?;
 
-    let subject = Subject::new(
+    if crate::access::membership_allows(
         principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
+        project_id,
+        access.grant()?,
         true,
-        Some(Membership::project(project_id, access.grant()?, true)),
-        None,
-    );
-    if authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+        action.permission(),
+    ) {
         Ok(access)
     } else {
         // Read endpoints deliberately make missing, foreign, disabled, and

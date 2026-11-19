@@ -10,10 +10,7 @@ use crate::{
     domain::RunState,
     error::AppError,
     outbox,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize, within_agent_limits,
-    },
+    policy::{Action, RoleGrant, within_agent_limits},
 };
 
 const SCHEDULER_LEASE: Duration = Duration::from_secs(30);
@@ -214,7 +211,7 @@ async fn admission_refusal(
 
 /// Whether `actor_id`'s role in the project lets them start runs now, and
 /// for a run their app started (`through_app`), within the app's limit.
-/// Actors other than people and agents aren't checked here.
+/// System and worker actors hold no role and aren't checked here.
 async fn may_start_runs(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
@@ -222,12 +219,12 @@ async fn may_start_runs(
     project_id: Uuid,
     through_app: bool,
 ) -> Result<bool, AppError> {
-    let actor_kind = match kind {
-        "human" => ActorKind::Human,
-        "external_agent" => ActorKind::ExternalAgent,
-        _ => return Ok(true),
-    };
-    let limits = if through_app && actor_kind == ActorKind::Human {
+    let account = matches!(kind, "human" | "external_agent"); // kind-check: mechanical (system and worker actors hold no role)
+    if !account {
+        return Ok(true);
+    }
+    let person = kind == "human"; // kind-check: mechanical (an app acts as the person who connected it)
+    let limits = if through_app && person {
         Some(
             crate::roles::app_access(transaction, actor_id)
                 .await?
@@ -250,26 +247,17 @@ async fn may_start_runs(
     let Some((role, permissions, enabled)) = membership else {
         return Ok(false);
     };
-    let subject = Subject::new(
-        actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(
+    let grant = RoleGrant::stored(&role, permissions.as_deref())?;
+    Ok(within_agent_limits(limits, async {
+        crate::access::membership_allows(
+            actor_id,
             project_id,
-            RoleGrant::stored(&role, permissions.as_deref())?,
+            grant,
             enabled,
-        )),
-        None,
-    );
-    let decision = within_agent_limits(limits, async {
-        authorize(
-            &subject,
-            Action::WorkerInvoke,
-            Resource::Project(ProjectScope::project(project_id)),
+            Action::WorkerInvoke.permission(),
         )
     })
-    .await;
-    Ok(decision == Decision::Allow)
+    .await)
 }
 
 /// What one look at the queue found.

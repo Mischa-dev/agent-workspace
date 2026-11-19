@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
+        ToolResult, insert_audit, link_url, parse_id, parse_time, project_is_chosen, public_url,
         scope_projects, string_or_number, truncate_text,
     },
     writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
@@ -334,7 +334,6 @@ pub(crate) async fn page_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -449,7 +448,6 @@ pub(crate) async fn page_get(
             || memory::project_access(
                 &state.pool,
                 principal.actor_id,
-                principal.actor_kind,
                 page.project_id,
                 Action::McpRead,
             )
@@ -495,9 +493,10 @@ pub(crate) async fn page_get(
             pending_suggestions,
             suggestion: None,
             idempotent_replay: false,
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{}/pages/{}", page.project_id, page.id),
+                None,
+                &crate::addresses::Target::page(page.project_id, page.id),
             ),
             id: page.id.to_string(),
             project_id: page.project_id.to_string(),
@@ -652,7 +651,6 @@ pub(crate) async fn page_write(
         let direct = memory::project_access(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::ProjectView,
         )
@@ -1041,7 +1039,6 @@ async fn readable_page(
         || memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             page.project_id,
             Action::McpRead,
         )
@@ -1223,9 +1220,10 @@ fn blocks_value(
         })
         .collect();
     PageBlocksValue {
-        url: public_url(
+        url: link_url(
             state,
-            &format!("/projects/{}/pages/{}", page.project_id, page.page_id),
+            None,
+            &crate::addresses::Target::page(page.project_id, page.page_id),
         ),
         page_id: page.page_id.to_string(),
         project_id: page.project_id.to_string(),
@@ -1677,7 +1675,6 @@ pub(crate) async fn skill_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -1763,7 +1760,6 @@ pub(crate) async fn skill_get(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -1796,9 +1792,10 @@ pub(crate) async fn skill_get(
         let (body, truncated) = truncate_text(&page.body, PAGE_BODY_CHARACTERS);
         Ok::<_, AppError>(ToolResult::ok(SkillValue {
             skill_md: skill_md(&name, &description, &body),
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{}/pages/{}", page.project_id, page.id),
+                None,
+                &crate::addresses::Target::page(page.project_id, page.id),
             ),
             name,
             description,

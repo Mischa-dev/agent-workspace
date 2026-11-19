@@ -248,7 +248,16 @@ pub async fn reach(
     .bind(delivery.home_workspace_id)
     .bind(delivery.source_connection_id)
     .fetch_all(&mut *connection)
-    .await?)
+    .await
+    .map(|mut workspaces| {
+        // DMs and groups are in no workspace (K4.12): their events are in
+        // the direct scope, which every connection that reaches a workspace
+        // reads; each is still checked against who can see it.
+        if !workspaces.is_empty() {
+            workspaces.push(crate::spaces::DIRECT);
+        }
+        workspaces
+    })?)
 }
 
 /// A connection's subscriptions, or the default when it has none.

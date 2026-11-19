@@ -269,6 +269,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          subscribes as A and checks no B event arrives",
     ),
     (
+        "/api/v1/shared/{token}",
+        "a page opened by a link's secret token, made for that one page; covered in \
+         privacy_inside_workspace (a_shared_page_opens_only_itself)",
+    ),
+    (
         "/api/v1/forms/{token}",
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
@@ -311,7 +316,11 @@ const READ_TOUCHES: &[&str] = &[
 
 /// Tools marked read-only that change rows anyway, each with why. The list
 /// only shrinks: fix the tool (or its hint) and take it off.
-const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[];
+const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[(
+    "space_personal_open",
+    "opening your own space makes it the first time (K4 3.9: personal spaces are made on \
+     first use, never eagerly); only the caller's own rows, in their own workspace",
+)];
 
 // ---------------------------------------------------------------------------
 // Coverage guard (no database needed)
@@ -2090,6 +2099,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "conversation_list",
     "conversation_open",
     "conversation_read",
+    "credential_list",
     "decision_list",
     "dependency_graph_get",
     "environment_list",
@@ -2186,6 +2196,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_usage_list",
     "workspace_search",
     "settings_get",
+    "space_list",
+    "space_open",
+    "space_personal_open",
     "status_list",
     "skill_get",
     "skill_list",
@@ -2218,7 +2231,10 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ) -> McpCase {
         McpCase {
             tool,
-            agent_only: matches!(tool, "inbox_list" | "external_event_poll"),
+            agent_only: matches!(
+                tool,
+                "inbox_list" | "external_event_poll" | "credential_list"
+            ),
             own,
             foreign,
             filtered,
@@ -2261,6 +2277,29 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("project_get"),
+        // K4.7: another workspace's spaces are out of reach.
+        case(
+            "space_list",
+            vec![
+                json!({}),
+                json!({"includeArchived": true, "kinds": ["project", "team"]}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "space_open",
+            vec![json!({"spaceId": "WORK"}), json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
+            vec![],
+        ),
+        // K4.9: your own space is in your workspace only.
+        case(
+            "space_personal_open",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("invitation_list"),
@@ -2723,6 +2762,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"messageId": b.message}),
                 json!({"messageId": b.dm_message}),
             ],
+            vec![],
+        ),
+        // K1.23: an account's secrets. B's agent and B's owner aren't A's
+        // agent's to list.
+        case(
+            "credential_list",
+            vec![json!({})],
+            vec![json!({"account": b.agent}), json!({"account": b.rook})],
             vec![],
         ),
         case(

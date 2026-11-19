@@ -8,6 +8,9 @@ import {
  * Workspace invitations start `aw_wsi_`; Project invitations start `aw_inv_`;
  * invitation links, which several people may use, start `aw_lnk_`.
  */
+
+/** The built-in roles an invitation can name. */
+const INVITATION_ROLES = new Set(['admin', 'member', 'viewer'])
 export type InvitationKind = 'workspace' | 'project' | 'link'
 
 export type ResolvedInvitation = {
@@ -44,9 +47,7 @@ function normalizeResolvedInvitation(value: unknown, kind: InvitationKind): Reso
   if (
     typeof record.organizationName !== 'string' ||
     (kind === 'project' && projectName === null) ||
-    (record.role !== 'admin' &&
-      record.role !== 'member' &&
-      record.role !== 'viewer') ||
+    !INVITATION_ROLES.has(record.role as string) ||
     typeof record.expiresAt !== 'string'
   ) {
     throw new Error('Invitation response was malformed.')
@@ -55,7 +56,7 @@ function normalizeResolvedInvitation(value: unknown, kind: InvitationKind): Reso
     kind,
     organizationName: record.organizationName,
     projectName: kind === 'workspace' ? null : projectName,
-    role: record.role,
+    role: record.role as ResolvedInvitation['role'],
     expiresAt: record.expiresAt,
   }
 }

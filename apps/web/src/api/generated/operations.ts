@@ -100,7 +100,13 @@ export type ConversationTab = { id: string; kind: string; position: number; titl
 
 export type ConversationTask = { how: string; id: string; key: string; statusCategory: string; title: string }
 
+export type CreatableKind = "project" | "team"
+
 export type CreatedTask = { assignee?: string | null; criteriaCount: number; id?: string | null; index: number; key: string; labels?: string[]; parentKey?: string | null; ref?: string | null; status: string; title: string; type: string; url?: string | null; version: number }
+
+export type CredentialReach = "space" | "account"
+
+export type CredentialView = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
 
 export type CriterionOp = "add" | "edit" | "check" | "uncheck" | "remove" | "move"
 
@@ -314,6 +320,8 @@ export type OptionInput = { category?: string | null; color?: string | null; id?
 
 export type OptionView = { archived?: boolean; category?: string | null; color: string; id: string; name: string }
 
+export type OutsideRef = { at: string; externalId: string; hostId?: string | null; issuer: string; lineage: unknown[] }
+
 export type OwnerView = { id: string; kind: string; name: string }
 
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
@@ -418,6 +426,14 @@ export type SectionSort = "manual" | "alpha" | "recent"
 
 export type SentMessage = { conversationId: string; idempotentReplay: boolean; messageId: string; sentAt: string; sequence: number; text: string }
 
+export type ShapeChannel = { name: string; private?: boolean }
+
+export type ShapePage = { guide?: boolean; markdown?: string; title: string }
+
+export type SharedAccount = { account: string; expiresAt?: string | null }
+
+export type SharedLink = { expiresAt?: string | null; id: string }
+
 export type SharedSpace = { id: string; name: string }
 
 export type SheetMatch = { cell: string; input: string; shown: string; tab: string }
@@ -434,11 +450,21 @@ export type SortWrite = { direction?: Direction; field: string }
 
 export type SourceView = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
 
+export type SpaceKind = "workspace" | "project" | "team" | "personal"
+
+export type SpaceShape = { channels?: ShapeChannel[]; kind?: string | null; pages?: ShapePage[] }
+
+export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceVisibility = "members" | "workspace"
+
 export type StatusCount = { category: string; count: number; status: string }
 
 export type StatusProjection = { id: string; name: string; semanticCategory: string }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
+
+export type StoredKind = SpaceKind
 
 export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 
@@ -463,6 +489,8 @@ export type TaskSummary = { archived?: boolean; assignee?: string | null; blocke
 export type TemplateSubtask = { description?: string | null; title: string }
 
 export type ThingInput = { id: string; kind: SubjectKind }
+
+export type ThingKind = "page"
 
 export type ThreadRef = { id: string; name: string; status: string }
 
@@ -518,6 +546,10 @@ export type AccountJoinableListInput = Record<string, never>
 
 export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
 
+export type AccountOwnerTakeInput = { account: string }
+
+export type AccountOwnerTakeOutput = { account: string; ownerAccount: string }
+
 export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
 
 export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
@@ -557,6 +589,22 @@ export type AgentPauseOutput = { account: string; changed: boolean; status: stri
 export type AgentRecipeListInput = Record<string, never>
 
 export type AgentRecipeListOutput = { recipes: RecipeView[] }
+
+export type AgentRefDecideInput = { accept: boolean; agent: string }
+
+export type AgentRefDecideOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefRemoveInput = { agent: string }
+
+export type AgentRefRemoveOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefSetInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefSetOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefUpdateInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefUpdateOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
 
 export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
 
@@ -746,6 +794,22 @@ export type ConversationsMarkReadInput = { spaceId?: string | null }
 
 export type ConversationsMarkReadOutput = { marked: number; more: boolean }
 
+export type CredentialCreateInput = { account?: string | null; days?: number | null; name: string; reach?: CredentialReach | null; space?: string | null; write?: boolean | null }
+
+export type CredentialCreateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
+
+export type CredentialListInput = { account?: string | null }
+
+export type CredentialListOutput = { credentials: CredentialView[] }
+
+export type CredentialRevokeInput = { credential: string }
+
+export type CredentialRevokeOutput = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
+
+export type CredentialRotateInput = { credential: string; days?: number | null; graceMinutes?: number | null }
+
+export type CredentialRotateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
+
 export type CustomEmojiCreateInput = { imageBase64: string; name: string }
 
 export type CustomEmojiCreateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
@@ -882,9 +946,29 @@ export type GithubInstallationLinkInput = { installationId: number; projectId: s
 
 export type GithubInstallationLinkOutput = { automation?: Record<string, unknown> | null; done: string; installation?: Record<string, unknown> | null }
 
+export type GroupArchiveInput = { group: string }
+
+export type GroupArchiveOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupCreateInput = { description?: string | null; handle: string; members?: string[]; name: string }
+
+export type GroupCreateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
 export type GroupListInput = { members?: boolean; prefix?: string | null }
 
 export type GroupListOutput = { groups: GroupView[] }
+
+export type GroupMembersSetInput = { add?: string[]; group: string; remove?: string[] }
+
+export type GroupMembersSetOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupRestoreInput = { group: string }
+
+export type GroupRestoreOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupUpdateInput = { description?: string | null; expectedVersion?: number | null; group: string; handle?: string | null; name?: string | null }
+
+export type GroupUpdateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
 
 export type GuardListInput = Record<string, never>
 
@@ -1238,7 +1322,7 @@ export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
-export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; spaceId?: string | null; taskId?: string | null; title: string }
+export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; sensitive?: boolean | null; spaceId?: string | null; taskId?: string | null; title: string }
 
 export type RequestCreateOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
@@ -1349,6 +1433,62 @@ export type SidebarListOutput = { sections: SidebarSection[]; workspaceSpaceId?:
 export type SidebarSectionSetInput = { collapsed?: boolean | null; delete?: boolean | null; expectedVersion?: number | null; name?: string | null; position?: number | null; sectionId?: string | null; show?: SectionShow | null; sort?: SectionSort | null }
 
 export type SidebarSectionSetOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
+
+export type SpaceArchiveInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; shape?: SpaceShape | null; templateId?: string | null; visibility?: SpaceVisibility | null }
+
+export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceGroupAddInput = { group: string; role?: string | null; spaceId: string }
+
+export type SpaceGroupAddOutput = { groupId: string; handle: string; role: string; roleId: string; seats: number; spaceId: string }
+
+export type SpaceGroupRemoveInput = { group: string; spaceId: string }
+
+export type SpaceGroupRemoveOutput = { groupId: string; removed: boolean; spaceId: string }
+
+export type SpaceJoinInput = { spaceId: string }
+
+export type SpaceJoinOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceLeaveInput = { spaceId: string }
+
+export type SpaceLeaveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | null }
+
+export type SpaceListOutput = { spaces: SpaceView[] }
+
+export type SpaceMemberAddInput = { account: string; expiresAt?: string | null; role?: string | null; spaceId: string }
+
+export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceMemberRemoveInput = { account: string; expectedVersion?: number | null; spaceId: string }
+
+export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role: string; spaceId: string }
+
+export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceOpenInput = { spaceId: string }
+
+export type SpaceOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpacePersonalOpenInput = Record<string, never>
+
+export type SpacePersonalOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceRestoreInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceRestoreOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceUpdateInput = { description?: string | null; expectedVersion?: number | null; icon?: string | null; name?: string | null; spaceId: string; visibility?: SpaceVisibility | null }
+
+export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
@@ -1462,6 +1602,18 @@ export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingLinkOutput = { changed: boolean }
 
+export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind }
+
+export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
+
+export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
+
+export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
+export type ThingShareRemoveInput = { account?: string | null; id: string; kind: ThingKind; link?: string | null }
+
+export type ThingShareRemoveOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
 export type ThingUnlinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingUnlinkOutput = { changed: boolean }
@@ -1542,6 +1694,10 @@ export type WorkspaceExportStartInput = Record<string, never>
 
 export type WorkspaceExportStartOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
 
+export type WorkspaceMemberUpdateInput = { account: string; expiresAt: string }
+
+export type WorkspaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; version: number }
+
 export type WorkspaceSearchInput = { conversationId?: string | null; from?: string | null; kinds?: string[] | null; limit?: number | null; projectId?: string | null; query: string; since?: string | null; until?: string | null }
 
 export type WorkspaceSearchOutput = { hint: string; results: SearchResult[] }
@@ -1578,6 +1734,7 @@ export type Operations = {
   account_block_list: { input: AccountBlockListInput; output: AccountBlockListOutput }
   account_block_set: { input: AccountBlockSetInput; output: AccountBlockSetOutput }
   account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_owner_take: { input: AccountOwnerTakeInput; output: AccountOwnerTakeOutput }
   account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
@@ -1588,6 +1745,10 @@ export type Operations = {
   agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
   agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
   agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
+  agent_ref_decide: { input: AgentRefDecideInput; output: AgentRefDecideOutput }
+  agent_ref_remove: { input: AgentRefRemoveInput; output: AgentRefRemoveOutput }
+  agent_ref_set: { input: AgentRefSetInput; output: AgentRefSetOutput }
+  agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
@@ -1635,6 +1796,10 @@ export type Operations = {
   conversation_task_list: { input: ConversationTaskListInput; output: ConversationTaskListOutput }
   conversation_update: { input: ConversationUpdateInput; output: ConversationUpdateOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
+  credential_create: { input: CredentialCreateInput; output: CredentialCreateOutput }
+  credential_list: { input: CredentialListInput; output: CredentialListOutput }
+  credential_revoke: { input: CredentialRevokeInput; output: CredentialRevokeOutput }
+  credential_rotate: { input: CredentialRotateInput; output: CredentialRotateOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
@@ -1669,7 +1834,12 @@ export type Operations = {
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
   github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }
+  group_archive: { input: GroupArchiveInput; output: GroupArchiveOutput }
+  group_create: { input: GroupCreateInput; output: GroupCreateOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
+  group_members_set: { input: GroupMembersSetInput; output: GroupMembersSetOutput }
+  group_restore: { input: GroupRestoreInput; output: GroupRestoreOutput }
+  group_update: { input: GroupUpdateInput; output: GroupUpdateOutput }
   guard_list: { input: GuardListInput; output: GuardListOutput }
   guard_set: { input: GuardSetInput; output: GuardSetOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
@@ -1786,6 +1956,20 @@ export type Operations = {
   sidebar_item_move: { input: SidebarItemMoveInput; output: SidebarItemMoveOutput }
   sidebar_list: { input: SidebarListInput; output: SidebarListOutput }
   sidebar_section_set: { input: SidebarSectionSetInput; output: SidebarSectionSetOutput }
+  space_archive: { input: SpaceArchiveInput; output: SpaceArchiveOutput }
+  space_create: { input: SpaceCreateInput; output: SpaceCreateOutput }
+  space_group_add: { input: SpaceGroupAddInput; output: SpaceGroupAddOutput }
+  space_group_remove: { input: SpaceGroupRemoveInput; output: SpaceGroupRemoveOutput }
+  space_join: { input: SpaceJoinInput; output: SpaceJoinOutput }
+  space_leave: { input: SpaceLeaveInput; output: SpaceLeaveOutput }
+  space_list: { input: SpaceListInput; output: SpaceListOutput }
+  space_member_add: { input: SpaceMemberAddInput; output: SpaceMemberAddOutput }
+  space_member_remove: { input: SpaceMemberRemoveInput; output: SpaceMemberRemoveOutput }
+  space_member_update: { input: SpaceMemberUpdateInput; output: SpaceMemberUpdateOutput }
+  space_open: { input: SpaceOpenInput; output: SpaceOpenOutput }
+  space_personal_open: { input: SpacePersonalOpenInput; output: SpacePersonalOpenOutput }
+  space_restore: { input: SpaceRestoreInput; output: SpaceRestoreOutput }
+  space_update: { input: SpaceUpdateInput; output: SpaceUpdateOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }
@@ -1814,6 +1998,9 @@ export type Operations = {
   template_list: { input: TemplateListInput; output: TemplateListOutput }
   template_update: { input: TemplateUpdateInput; output: TemplateUpdateOutput }
   thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
+  thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
+  thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
+  thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
   thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
@@ -1834,6 +2021,7 @@ export type Operations = {
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
   workspace_export_start: { input: WorkspaceExportStartInput; output: WorkspaceExportStartOutput }
+  workspace_member_update: { input: WorkspaceMemberUpdateInput; output: WorkspaceMemberUpdateOutput }
   workspace_search: { input: WorkspaceSearchInput; output: WorkspaceSearchOutput }
   workspace_shape_set: { input: WorkspaceShapeSetInput; output: WorkspaceShapeSetOutput }
   workspace_store_get: { input: WorkspaceStoreGetInput; output: WorkspaceStoreGetOutput }

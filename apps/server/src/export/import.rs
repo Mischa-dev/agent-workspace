@@ -1087,6 +1087,13 @@ const DERIVED: &str = "things";
 /// record shares its task's id and is checked against it at commit.
 const AFTER: &[(&str, &str)] = &[("collection_records", "work_items")];
 
+/// Columns never filled in afterwards, even where tables point at each
+/// other: where a row lives. A DM or group has no space, so a NULL space
+/// says "a DM" to the checks and triggers, never "not yet". A reference
+/// that pairs one with another column (a message in the same space) defers
+/// only the other, which leaves the reference unchecked until the fixups.
+const PLACEMENT: &[&str] = &["project_id", "space_id"];
+
 /// Rows that go in together, in one transaction: (table, its companion).
 /// A Tasks record goes in first, then its task, which checks for it.
 const COMPANIONS: &[(&str, &str)] = &[("work_items", "collection_records")];
@@ -1152,11 +1159,13 @@ fn plan(
     for (table, targets) in &edges {
         for (target, nullable) in targets {
             let cycle = reach[target].contains(table);
+            let nullable = nullable
+                .iter()
+                .filter(|column| !PLACEMENT.contains(&column.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
             if cycle && !nullable.is_empty() {
-                deferred
-                    .entry(table)
-                    .or_default()
-                    .extend(nullable.iter().cloned());
+                deferred.entry(table).or_default().extend(nullable);
             } else {
                 hard.entry(table).or_default().insert(target);
             }

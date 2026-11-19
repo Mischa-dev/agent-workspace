@@ -694,7 +694,8 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
     assert_ne!(rotated_csrf, existing_csrf);
     let accepted_existing = response_json(accepted_existing_response).await;
     assert_eq!(accepted_existing["user"]["loginName"], "existing.human");
-    assert_eq!(accepted_existing["organizations"][0]["role"], "admin");
+    // A project role never changes the workspace role they already hold.
+    assert_eq!(accepted_existing["organizations"][0]["role"], "member");
 
     let existing_shape = sqlx::query_as::<_, (String, i64, String, String, i64, bool)>(
         r#"
@@ -728,8 +729,8 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
     .fetch_one(&pool)
     .await
     .expect("accepted existing-user shape");
-    assert_eq!(existing_shape.0, "admin");
-    assert_eq!(existing_shape.1, 2);
+    assert_eq!(existing_shape.0, "member");
+    assert_eq!(existing_shape.1, 1);
     assert_eq!(existing_shape.2, "admin");
     assert_eq!(existing_shape.3, "existing_human");
     assert_eq!(existing_shape.4, 2);

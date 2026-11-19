@@ -143,7 +143,7 @@ pub async fn task_links(
     let visible = "((item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id)) \
          AND EXISTS (SELECT 1 FROM project_memberships sees_task \
              WHERE sees_task.project_id = item.project_id AND sees_task.actor_id = $4 \
-               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')))";
+               AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM task_dependencies dependency
@@ -242,7 +242,7 @@ pub async fn task_links(
     let shown = |task: &TaskRef| {
         sees_here
             && (task.project_id == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     task.project_id,
                     crate::policy::Permission::TasksView,

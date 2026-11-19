@@ -185,9 +185,24 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     }
 
     // An agent joins with Agents left off, and the one already here still talks.
+    // DMs are in no space (K4.17), so it joins in the workspace's own.
     assert!(!modules_on(&world).await.contains(&"agents".to_owned()));
-    let (_wren, _token) =
-        create_agent(&world.app, &world.owner.browser, &space, "Wren", "wren").await;
+    let workspace_space = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM spaces WHERE workspace_id = $1 AND kind = 'workspace'",
+    )
+    .bind(world.organization)
+    .fetch_one(world.pool())
+    .await
+    .expect("workspace space")
+    .to_string();
+    let (_wren, _token) = create_agent(
+        &world.app,
+        &world.owner.browser,
+        &workspace_space,
+        "Wren",
+        "wren",
+    )
+    .await;
     let hello = rook
         .call(
             &world.app,

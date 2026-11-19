@@ -349,7 +349,7 @@ async fn removing_an_agent_withdraws_its_reply_requests() {
 }
 
 #[tokio::test]
-async fn only_people_add_others_and_agents_can_only_leave() {
+async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let Some(setup) = setup("mcp_groups_agents").await else {
         return;
     };
@@ -374,6 +374,9 @@ async fn only_people_add_others_and_agents_can_only_leave() {
     assert_eq!(thread["outcome"], "ok", "{thread}");
     let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
 
+    // Changing who else is in a group needs conversations.members, which a
+    // viewer's role doesn't hold, whatever kind of account holds it.
+    set_role(&setup.pool, &space, mara, "viewer").await;
     for arguments in [
         json!({"conversationId": group, "add": ["@rook"]}),
         json!({"conversationId": group, "remove": [owner.to_string()]}),
@@ -389,6 +392,17 @@ async fn only_people_add_others_and_agents_can_only_leave() {
         );
     }
     assert!(!visible(&setup.pool, &group, rook).await);
+    // As a member, the same agent can: agents are accounts like any other.
+    set_role(&setup.pool, &space, mara, "member").await;
+    let removed = mara_mcp
+        .call(
+            &setup,
+            "conversation_members",
+            json!({"conversationId": thread_id, "remove": ["@pat"]}),
+        )
+        .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    assert!(!visible(&setup.pool, &group, pat).await);
 
     // A Reader connection can't change anything.
     let reader_token = connect_app(&setup.app, &setup.browser, "Reader", "read").await;
@@ -514,9 +528,8 @@ async fn group_member_cap_holds_for_adds() {
     let Some(setup) = setup("mcp_groups_cap").await else {
         return;
     };
-    let space = direct_space(&setup).await;
     let mut people = Vec::new();
-    // People who never sign in: a member of the Messages space is enough.
+    // People who never sign in: a member of the workspace is enough.
     for index in 0..20 {
         let actor = Uuid::now_v7();
         sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
@@ -534,17 +547,17 @@ async fn group_member_cap_holds_for_adds() {
         .expect("organization membership");
         sqlx::query(
             r#"
-            INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
-            VALUES ($1, $2, $3, 'member', $4, $4)
+            INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle)
+            VALUES ($1, $2, $3, $3)
+            ON CONFLICT (organization_id, actor_id) DO NOTHING
             "#,
         )
-        .bind(Uuid::now_v7())
-        .bind(space.parse::<Uuid>().expect("space"))
+        .bind(setup.organization_id)
         .bind(actor)
         .bind(format!("p{index}"))
         .execute(&setup.pool)
         .await
-        .expect("space membership");
+        .expect("workspace profile");
         people.push(actor);
     }
     // The owner plus 18 people: 19 members.
