@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest'
 
+import { registeredEmbed } from '../../modules/embeds'
 import { collectionEmbed, embedTarget, fileEmbed, sheetEmbed } from './embedModel'
+
+/** What the module that reads a path read from it (M1.5), or a link. */
+function read(href: string) {
+  const found = registeredEmbed(href)
+  return found ? { embed: `${found.module}:${found.registration.id}`, ...found.params } : embedTarget(href)
+}
 
 describe('what an embed shows', () => {
   it('reads a collection and its view from the path, and anything else as a link', () => {
-    expect(embedTarget('/projects/p%201/collections/c?view=v')).toEqual({ kind: 'collection', projectId: 'p 1', collectionId: 'c', viewId: 'v' })
-    expect(embedTarget('/projects/p/collections/c/')).toEqual({ kind: 'collection', projectId: 'p', collectionId: 'c', viewId: null })
-    expect(embedTarget('/projects/p/collections')).toEqual({ kind: 'link' })
-    expect(embedTarget('/projects/p/collections/c/records')).toEqual({ kind: 'link' })
-    expect(embedTarget('//elsewhere.example/projects/p/collections/c')).toEqual({ kind: 'link' })
-    expect(embedTarget('/projects/%E0%A4%A/collections/c')).toEqual({ kind: 'link' })
+    const view = 'collections:collection-view'
+    expect(read('/projects/p%201/collections/c?view=v')).toEqual({ embed: view, projectId: 'p 1', collectionId: 'c', viewId: 'v' })
+    expect(read('/projects/p/collections/c/')).toEqual({ embed: view, projectId: 'p', collectionId: 'c', viewId: null })
+    expect(read('/projects/p/collections')).toEqual({ kind: 'link' })
+    expect(read('/projects/p/collections/c/records')).toEqual({ kind: 'link' })
+    expect(read('//elsewhere.example/projects/p/collections/c')).toEqual({ kind: 'link' })
+    expect(read('/projects/%E0%A4%A/collections/c')).toEqual({ kind: 'link' })
   })
 
   it('names a view after its collection, and the view when there are others', () => {
@@ -20,16 +28,17 @@ describe('what an embed shows', () => {
   })
 
   it('reads a sheet, its tab and range from the path, and names them', () => {
-    expect(embedTarget('/projects/p/sheets/s?tab=t&range=A1%3AC4')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: 't', range: 'A1:C4', name: null })
-    expect(embedTarget('/projects/p/sheets/s')).toEqual({ kind: 'sheet', projectId: 'p', sheetId: 's', tabId: null, range: null, name: null })
-    expect(embedTarget('/projects/p/sheets')).toEqual({ kind: 'link' })
+    const range = 'sheets:sheet-range'
+    expect(read('/projects/p/sheets/s?tab=t&range=A1%3AC4')).toEqual({ embed: range, projectId: 'p', sheetId: 's', tabId: 't', range: 'A1:C4', name: null })
+    expect(read('/projects/p/sheets/s')).toEqual({ embed: range, projectId: 'p', sheetId: 's', tabId: null, range: null, name: null })
+    expect(read('/projects/p/sheets')).toEqual({ kind: 'link' })
     const sheet = { id: 's', name: 'Budget' }
     expect(sheetEmbed('p', sheet, { id: 't', name: 'Q1' }, 2, 'A1:C4')).toEqual({ href: '/projects/p/sheets/s?tab=t&range=A1%3AC4', label: 'Budget · Q1 A1:C4' })
     expect(sheetEmbed('p', sheet, { id: 't', name: 'Q1' }, 1, null)).toEqual({ href: '/projects/p/sheets/s?tab=t', label: 'Budget' })
-    expect(embedTarget(sheetEmbed('p', sheet, null, 1, 'B2').href)).toMatchObject({ kind: 'sheet', range: 'B2' })
+    expect(read(sheetEmbed('p', sheet, null, 1, 'B2').href)).toMatchObject({ embed: range, range: 'B2' })
     // A named range is kept by its name alone, so the embed follows it.
     expect(sheetEmbed('p', sheet, { id: 't', name: 'Q1' }, 2, 'A1:C4', 'Totals')).toEqual({ href: '/projects/p/sheets/s?name=Totals', label: 'Budget · Totals' })
-    expect(embedTarget('/projects/p/sheets/s?name=Totals')).toMatchObject({ kind: 'sheet', name: 'Totals', tabId: null })
+    expect(read('/projects/p/sheets/s?name=Totals')).toMatchObject({ embed: range, name: 'Totals', tabId: null })
   })
 
   it('reads a file of the page from its path', () => {

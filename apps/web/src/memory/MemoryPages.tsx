@@ -530,12 +530,10 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       ) : live ? (
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
           <LivePage
-            collections={experience.shows('area.collections')}
             discussion={liveDiscussion}
             fallback={read}
             pageId={pageId}
             projectId={projectId}
-            sheets={experience.shows('area.sheets')}
             title={current.title}
           />
         </Suspense>

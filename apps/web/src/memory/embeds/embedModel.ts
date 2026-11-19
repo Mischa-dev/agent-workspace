@@ -1,20 +1,13 @@
 /**
- * What an embed in a page shows, from its path (AWD-90). A collection's view
- * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
- * saved view other than the first. A sheet's range (AWD-54) is
- * `/projects/{projectId}/sheets/{sheetId}`, with `?tab=` and `?range=` (such
- * as `A1:D9`). A file of the page (C1.33), such as a pasted picture, is
- * `/files/{fileId}`. Any other path in the app shows as a link to it.
+ * What an embed in a page shows, from its path. A file of the page (C1.33),
+ * such as a pasted picture, is `/files/{fileId}`. Modules read their own
+ * paths through their embed registrations (M1.5: a collection's view, a
+ * sheet's range); any other path in the app shows as a link to it. The
+ * paths a collection's or sheet's picker keeps are built here.
  */
-export type EmbedTarget =
-  | { kind: 'collection'; projectId: string; collectionId: string; viewId: string | null }
-  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null; name: string | null }
-  | { kind: 'file'; fileId: string }
-  | { kind: 'link' }
+export type EmbedTarget = { kind: 'file'; fileId: string } | { kind: 'link' }
 
 const FILE = /^\/files\/([0-9a-f-]{36})\/?$/i
-const COLLECTION = /^\/projects\/([^/]+)\/collections\/([^/]+)\/?$/
-const SHEET = /^\/projects\/([^/]+)\/sheets\/([^/]+)\/?$/
 
 export function embedTarget(href: string): EmbedTarget {
   let url: URL
@@ -25,28 +18,8 @@ export function embedTarget(href: string): EmbedTarget {
   }
   if (url.origin !== 'https://app.invalid') return { kind: 'link' }
   try {
-    const collection = COLLECTION.exec(url.pathname)
-    if (collection) {
-      return {
-        kind: 'collection',
-        projectId: decodeURIComponent(collection[1]),
-        collectionId: decodeURIComponent(collection[2]),
-        viewId: url.searchParams.get('view') || null,
-      }
-    }
     const file = FILE.exec(url.pathname)
     if (file) return { kind: 'file', fileId: file[1].toLowerCase() }
-    const sheet = SHEET.exec(url.pathname)
-    if (sheet) {
-      return {
-        kind: 'sheet',
-        projectId: decodeURIComponent(sheet[1]),
-        sheetId: decodeURIComponent(sheet[2]),
-        tabId: url.searchParams.get('tab') || null,
-        range: url.searchParams.get('range') || null,
-        name: url.searchParams.get('name') || null,
-      }
-    }
   } catch {
     return { kind: 'link' }
   }
