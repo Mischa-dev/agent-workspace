@@ -35,6 +35,7 @@ import { useReplyTarget } from '../conversations/replyTarget'
 import { OriginMessage } from '../conversations/OriginMessage'
 import { useConversationTools } from '../later/useConversationTools'
 import { PinnedBar } from '../memory/ConversationMemory'
+import { LazyMakePageDialog } from '../memory/LazyMakePageDialog'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import {
@@ -91,6 +92,7 @@ export function ThreadPage() {
   const detailsOpen = detailsFor === threadId
   const setDetailsOpen = (open: boolean) => setDetailsFor(open ? threadId : null)
   const [statusFor, setStatusFor] = useState<string | null>(null)
+  const [makingFor, setMakingFor] = useState<string | null>(null)
   const [modeFor, setModeFor] = useState<{ threadId: string; mode: 'message' | 'run' }>({ threadId, mode: 'message' })
   const composerMode = modeFor.threadId === threadId ? modeFor.mode : 'message'
   const setComposerMode = (mode: 'message' | 'run') => setModeFor({ threadId, mode })
@@ -387,7 +389,10 @@ export function ThreadPage() {
             ? [
                 { label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', icon: 'arrow-left', onSelect: () => navigate(channelRoute) },
                 ...(verifiedTimeline.capabilities.sendMessage && !archived
-                  ? [{ label: 'Rename or set status…', icon: 'pencil' as const, onSelect: () => setStatusFor(threadId) }]
+                  ? [
+                      { label: 'Rename or set status…', icon: 'pencil' as const, onSelect: () => setStatusFor(threadId) },
+                      { label: 'Make a page from this thread…', icon: 'compose' as const, onSelect: () => setMakingFor(threadId) },
+                    ]
                   : []),
                 { separator: true },
                 ...tools.levelMenu,
@@ -546,6 +551,14 @@ export function ThreadPage() {
       {messageActions.dialogs}
       {statusFor === threadId && verifiedTimeline ? (
         <ThreadStatusDialog onClose={() => setStatusFor(null)} onSaved={() => void thread.timeline.refetch()} thread={statusThread} />
+      ) : null}
+      {makingFor === threadId ? (
+        <LazyMakePageDialog
+          onClose={() => setMakingFor(null)}
+          projectId={projectId}
+          source={{ kind: 'thread', threadId }}
+          suggestedTitle={threadName}
+        />
       ) : null}
     </>
   )

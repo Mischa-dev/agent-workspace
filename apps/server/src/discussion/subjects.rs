@@ -40,9 +40,6 @@ pub enum AnchorShape {
 /// One row of the table.
 pub struct Subject {
     pub kind: SubjectKind,
-    /// Takes comments through `comment_create` now. Tasks and pages keep
-    /// their own comment paths until C1.4 and C1.5 move them here.
-    pub open: bool,
     pub anchor: AnchorShape,
     /// `$1` the thing, `$2` the viewer: its workspace, its project (none for
     /// a board outside any project) and whether it takes new comments,
@@ -57,7 +54,6 @@ pub struct Subject {
 pub const SUBJECTS: &[Subject] = &[
     Subject {
         kind: SubjectKind::Page,
-        open: false,
         anchor: AnchorShape::Text,
         home_sql: "SELECT project.organization_id, page.project_id, page.archived_at IS NULL \
              FROM project_pages page JOIN projects project ON project.id = page.project_id \
@@ -68,7 +64,6 @@ pub const SUBJECTS: &[Subject] = &[
     },
     Subject {
         kind: SubjectKind::Sheet,
-        open: true,
         anchor: AnchorShape::Cells,
         home_sql: "SELECT project.organization_id, sheet.project_id, sheet.archived_at IS NULL \
              FROM sheets sheet JOIN projects project ON project.id = sheet.project_id \
@@ -79,7 +74,6 @@ pub const SUBJECTS: &[Subject] = &[
     },
     Subject {
         kind: SubjectKind::Whiteboard,
-        open: true,
         anchor: AnchorShape::Elements,
         home_sql: "SELECT board.organization_id, board.project_id, board.deleted_at IS NULL \
              FROM whiteboards board \
@@ -90,7 +84,6 @@ pub const SUBJECTS: &[Subject] = &[
     },
     Subject {
         kind: SubjectKind::Record,
-        open: true,
         anchor: AnchorShape::Field,
         home_sql: "SELECT project.organization_id, record.project_id, record.archived_at IS NULL \
              FROM collection_records record JOIN projects project ON project.id = record.project_id \
@@ -101,16 +94,13 @@ pub const SUBJECTS: &[Subject] = &[
     },
     Subject {
         kind: SubjectKind::Task,
-        open: false,
         anchor: AnchorShape::Field,
         home_sql: "SELECT project.organization_id, item.project_id, item.archived_at IS NULL \
              FROM task_rows item JOIN projects project ON project.id = item.project_id \
              WHERE item.id = $1 AND subject_visible_to('task', item.id, $2)",
-        followers_sql: "SELECT assignee_actor_id FROM work_items \
-                 WHERE id = $1 AND assignee_actor_id IS NOT NULL \
-             UNION SELECT created_by_actor_id FROM work_items \
-                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
-             UNION SELECT actor_id FROM work_item_watchers WHERE work_item_id = $1",
+        // A task's watchers (its maker and assignee watch it until they
+        // stop), so not watching quiets its comments too.
+        followers_sql: "SELECT actor_id FROM work_item_watchers WHERE work_item_id = $1",
     },
 ];
 

@@ -427,6 +427,36 @@
     "title": "Press a button"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "change_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List recent changes"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "change_undo",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Undo a change"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1327,7 +1357,8 @@
     "destructive": false,
     "emits": [
       "page.version_restored",
-      "whiteboard.version_restored"
+      "whiteboard.version_restored",
+      "sheet.version_restored"
     ],
     "idempotent": true,
     "kind": "change",
@@ -2030,6 +2061,22 @@
     "title": "Remove a package"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_make",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a page from messages or blocks"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2177,6 +2224,38 @@
     "preview": false,
     "proposable": false,
     "title": "List spaces"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.discussion.updated",
+      "sheet.proposals_changed",
+      "whiteboard.proposals_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "proposal_decide",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Decide a proposal"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "proposal_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List proposals"
   },
   {
     "automation": true,
@@ -2797,6 +2876,98 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.ranges_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_range_set",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Name a sheet range"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Find in a sheet"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save a sheet view"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a sheet view"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a sheet's views"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a sheet view"
   },
   {
     "automation": false,
@@ -3459,6 +3630,22 @@
     "title": "Link whiteboard"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.proposals_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_propose",
+    "permission": "whiteboards.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Propose a whiteboard change"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -3492,14 +3679,15 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "whiteboard.updated"
+      "whiteboard.updated",
+      "whiteboard.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
     "module": "whiteboards",
     "name": "whiteboard_update_elements",
-    "permission": "whiteboards.edit",
+    "permission": "whiteboards.suggest",
     "preview": false,
     "proposable": false,
     "title": "Draw on whiteboard"

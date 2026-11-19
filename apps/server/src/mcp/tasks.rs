@@ -2044,18 +2044,21 @@ pub(crate) async fn task_open(
         .await?;
         let mut comments = sqlx::query_as::<_, CommentItem>(
             r#"
+            -- visibility: the task's comment stream, which whoever may see the task may read
             SELECT comment.id::text AS id,
                    COALESCE(author.display_name, 'Former member') AS author,
                    comment.plain_text AS text, comment.created_at::text AS at,
                    via_client.client_name AS via,
-                   comment.reply_to_comment_id::text AS reply_to_comment_id
-            FROM work_item_comments comment
+                   comment.reply_to_message_id::text AS reply_to_comment_id
+            FROM conversations comments
+            JOIN messages comment ON comment.conversation_id = comments.id
             LEFT JOIN project_memberships author
               ON author.project_id = comment.project_id AND author.actor_id = comment.author_actor_id
             LEFT JOIN mcp_oauth_grants via_grant
               ON via_grant.id = comment.via_oauth_grant_id AND via_grant.show_via
             LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-            WHERE comment.work_item_id = $1 AND comment.removed_at IS NULL
+            WHERE comments.kind = 'comments' AND comments.subject_kind = 'task'
+              AND comments.subject_id = $1 AND comment.removed_at IS NULL
             ORDER BY comment.created_at DESC
             LIMIT 10
             "#,

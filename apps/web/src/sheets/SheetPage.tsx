@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { opQuery } from '../api/ops'
+import { opPrefix, opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
 import { useProjectExperience } from '../experience/layout'
 import { useAuthenticatedSession } from '../auth/session'
@@ -31,11 +31,16 @@ import {
   type MenuEntry,
 } from '../ui'
 import { usePhoneWidth } from '../ui/useCoarsePointer'
-import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type SheetBody, type SheetChange, type SheetTab } from './api'
+import { changeSheet, proposeCells, sheetExportHref, sheetKeys, updateSheet, useSheet, type LookChange, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
-import { SheetGrid, type GridEdit } from './SheetGrid'
+import { SheetGrid, type GridEdit, type GridShown } from './SheetGrid'
+import { SheetProposalsDialog } from './SheetProposals'
+import { SheetRangesDialog } from './SheetRanges'
+import { proposedOn, useSheetProposals } from './sheetProposals'
+import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
+import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
-import { bounds, cards, cellKey, cellMap, cellName, extent, patched, type Selection } from './sheetModel'
+import { bounds, cards, cellKey, cellMap, cellName, columnName, columnNumber, extent, patched, viewRows, type Selection } from './sheetModel'
 import { spaceHref } from '../app/href'
 
 type Dialogs =
@@ -58,6 +63,16 @@ const START: Selection = {
   anchor: { row: 1, column: 1 },
   focus: { row: 1, column: 1 },
 }
+
+/** Fills offered in the format menu: soft colors that read in light and dark themes. */
+const FILLS: [string, string][] = [
+  ['No fill', ''],
+  ['Yellow', '#FFF3B0'],
+  ['Green', '#D3F2D8'],
+  ['Blue', '#D6E8FF'],
+  ['Red', '#FFD8D6'],
+  ['Gray', '#E6E6E6'],
+]
 
 /** One sheet: a grid you edit in place (cards on a phone), its tabs under it. */
 export function SheetPage() {
@@ -98,11 +113,37 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const cells = useMemo(() => cellMap(body?.cells ?? []), [body?.cells])
   // Comments on cells (C1.19): marks in the grid, and a panel for the
   // thread about the selected cell or range.
-  const showComments = useProjectExperience(projectId).shows('thing.comments')
+  const experience = useProjectExperience(projectId)
+  const showComments = experience.shows('thing.comments')
   const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
   // The open discussion: by its thread's id once it has one, since rows and
   // columns moving around it move its anchor.
   const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string; threadId?: string } | null>(null)
+  // Find and replace, and the filter view on screen (C1.16).
+  const [finding, setFinding] = useState(false)
+  const [viewId, setViewId] = useState<string | null>(null)
+  const [viewDialog, setViewDialog] = useState<{ view: SheetView | null } | null>(null)
+  const [editingRules, setEditingRules] = useState(false)
+  const [naming, setNaming] = useState(false)
+  const views = useSheetViews(sheetId, body?.tab, !phone)
+  // Proposals (C1.11): a role that only suggests edits a draft, sent as one
+  // proposal; editors see the waiting ones outlined and decide them.
+  const [draft, setDraft] = useState<Map<string, SheetChange>>(() => new Map())
+  const [sendingDraft, setSendingDraft] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const proposals = useSheetProposals(sheetId, Boolean(body?.canEdit || body?.canSuggest))
+  const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
+  const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
+  const frozenRows = shownTab?.frozenRows ?? 0
+  const usedRows = shownTab?.rows ?? 0
+  const shown = useMemo<GridShown | null>(() => {
+    if (!activeView) return null
+    const spec = viewSpec(activeView)
+    return {
+      rows: viewRows(cells, spec, frozenRows + 1, usedRows),
+      hiddenColumns: new Set(spec.hiddenColumns.map(columnNumber).filter(Boolean)),
+    }
+  }, [activeView, cells, frozenRows, usedRows])
 
   if (sheet.isPending) {
     return (
@@ -136,6 +177,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const tabs = [...body.tabs].sort((left, right) => left.position - right.position)
   const tab = tabs.find((entry) => entry.id === body.tab) ?? tabs[0]
   const editable = body.canEdit && !project.archivedAt
+  const suggesting = !body.canEdit && body.canSuggest && !project.archivedAt && !body.sheet.archived
   const used = extent({ rows: tab?.rows ?? 0, columns: tab?.columns ?? 0 })
   const size = {
     rows: Math.max(used.rows, selection.focus.row + 20),
@@ -165,6 +207,8 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   }
   const prefix = `${tab?.id ?? ''}:`
   const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
+  for (const [at, change] of draft) if (at.startsWith(prefix) && change.type === 'cell') tabPending.set(at.slice(prefix.length), change.input)
+  const proposedHere = tab && body.canEdit ? proposedOn(proposals, tab.id) : undefined
   const scope = sheetKeys.one(projectId, sheetId)
   const key = sheetKeys.tab(projectId, sheetId, tabParam)
 
@@ -246,6 +290,34 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
     }
   }
 
+  /** A suggest-only edit: kept in the draft until it's sent as a proposal. */
+  const suggestEdit = (edits: GridEdit[]) => {
+    if (!tab || !edits.length) return
+    setDraft((current) => {
+      const next = new Map(current)
+      for (const entry of edits) next.set(`${tab.id}:${cellKey(entry.row, entry.column)}`, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input })
+      return next
+    })
+  }
+
+  const sendDraft = async () => {
+    setSendingDraft(true)
+    try {
+      const sent = await proposeCells(projectId, sheetId, [...draft.values()])
+      setDraft(new Map())
+      void client.invalidateQueries({ queryKey: opPrefix('proposal_list') })
+      showToast(
+        sent.proposalId
+          ? { tone: 'success', title: 'Suggestion sent', description: 'Someone who edits this sheet can accept it.' }
+          : { title: 'Nothing to suggest', description: 'Those cells already hold what you typed.' },
+      )
+    } catch (error) {
+      showToast({ tone: 'danger', title: 'That suggestion wasn’t sent', description: describeError(error).message })
+    } finally {
+      setSendingDraft(false)
+    }
+  }
+
   const structural = async (changes: SheetChange[], done?: () => void) => {
     setBusy(true)
     const saved = await send(changes)
@@ -255,6 +327,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
 
   const chooseTab = (id: string) => {
     setSelection(START)
+    setViewId(null)
     setParams(
       (current) => {
         const next = new URLSearchParams(current)
@@ -292,8 +365,20 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const rowCount = box.bottom - box.top + 1
   const columnCount = box.right - box.left + 1
   const plural = (count: number, one: string) => (count === 1 ? one : `${count} ${one}s`)
+  // Sorting moves the data: the selected rows, or every row under the frozen ones.
+  const sortBlock = (descending: boolean) => {
+    if (!tab) return
+    const whole = rowCount === 1
+    const rows: [number, number] = whole ? [tab.frozenRows + 1, Math.max(tab.frozenRows + 1, used.rows)] : [box.top, box.bottom]
+    const columns: [number, number] = whole ? [1, Math.max(1, used.columns)] : [Math.min(box.left, selection.focus.column), Math.max(box.right, selection.focus.column)]
+    void structural([{ type: 'sort', tab: tab.id, rows, columns, by: [[selection.focus.column, descending]] }])
+  }
+  const sortTarget = rowCount === 1 ? 'the sheet' : `${plural(rowCount, 'row')}`
   const gridItems: MenuEntry[] = tab
     ? [
+        { label: `Sort ${sortTarget} by column ${columnName(selection.focus.column)}, A to Z`, icon: 'arrow-down', onSelect: () => sortBlock(false) },
+        { label: `Sort ${sortTarget} by column ${columnName(selection.focus.column)}, Z to A`, icon: 'arrow-up', onSelect: () => sortBlock(true) },
+        { separator: true },
         {
           label: `Insert ${plural(rowCount, 'row')} above`,
           icon: 'arrow-up',
@@ -388,6 +473,80 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
         },
       ]
     : []
+  // Formats and styles reach the whole selection; toggles follow the focused cell.
+  const look = (change: LookChange) => {
+    if (!tab) return
+    void send([{ type: 'format', tab: tab.id, rows: [box.top, box.bottom], columns: [box.left, box.right], look: change }])
+  }
+  const focusStyle = focusCell?.style ?? {}
+  const NUMBER_FORMATS: [string, string][] = [
+    ['Automatic', ''],
+    ['Number', '#,##0.00'],
+    ['Percent', '0.0%'],
+    ['Currency', '$#,##0.00'],
+    ['Date', 'yyyy-mm-dd'],
+    ['Plain text', '@'],
+  ]
+  const formatItems: MenuEntry[] = tab
+    ? [
+        { label: 'Bold', shortcut: 'Ctrl B', checked: focusStyle.bold === true, onSelect: () => look({ bold: !focusStyle.bold }) },
+        { label: 'Italic', shortcut: 'Ctrl I', checked: focusStyle.italic === true, onSelect: () => look({ italic: !focusStyle.italic }) },
+        { label: 'Underline', shortcut: 'Ctrl U', checked: focusStyle.underline === true, onSelect: () => look({ underline: !focusStyle.underline }) },
+        { label: 'Strikethrough', checked: focusStyle.strike === true, onSelect: () => look({ strike: !focusStyle.strike }) },
+        { label: 'Wrap text', checked: focusStyle.wrap === true, onSelect: () => look({ wrap: !focusStyle.wrap }) },
+        { separator: true },
+        { heading: 'Number format' },
+        ...NUMBER_FORMATS.map(([label, code]): MenuEntry => ({
+          label,
+          checked: (focusCell?.format ?? '') === code,
+          onSelect: () => look({ numberFormat: code }),
+        })),
+        { separator: true },
+        { heading: 'Align' },
+        ...(['left', 'center', 'right'] as const).map((align): MenuEntry => ({
+          label: align[0].toUpperCase() + align.slice(1),
+          checked: focusStyle.align === align,
+          onSelect: () => look({ align: focusStyle.align === align ? '' : align }),
+        })),
+        { separator: true },
+        { heading: 'Fill' },
+        ...FILLS.map(([label, fill]): MenuEntry => ({
+          label,
+          checked: (focusStyle.fill ?? '') === fill,
+          onSelect: () => look({ fill }),
+        })),
+        { separator: true },
+        { label: 'Conditional formatting', onSelect: () => setEditingRules(true) },
+        { label: 'Clear formatting', onSelect: () => look({ clear: true }) },
+      ]
+    : []
+  const mayChange = (view: SheetView) => !view.shared || editable
+  const viewItems: MenuEntry[] = tab
+    ? [
+        { label: 'All rows', checked: !activeView, onSelect: () => setViewId(null) },
+        ...(views.data?.views ?? []).map((view): MenuEntry => ({
+          label: view.shared ? view.name : `${view.name} (only you)`,
+          checked: activeView?.id === view.id,
+          onSelect: () => setViewId(view.id),
+        })),
+        { separator: true },
+        { label: 'New filter view', icon: 'plus', onSelect: () => setViewDialog({ view: null }) },
+        ...(activeView && mayChange(activeView)
+          ? [
+              { label: 'Edit this view', icon: 'pencil' as const, onSelect: () => setViewDialog({ view: activeView }) },
+              {
+                label: 'Remove this view',
+                icon: 'trash' as const,
+                danger: true,
+                onSelect: () =>
+                  void deleteSheetView(client, activeView)
+                    .then(() => setViewId(null))
+                    .catch((error: unknown) => showToast({ tone: 'danger', title: 'That view wasn’t removed', description: describeError(error).message })),
+              },
+            ]
+          : []),
+      ]
+    : []
   const download = (format: 'xlsx' | 'csv') => {
     const link = document.createElement('a')
     link.href = sheetExportHref(projectId, sheetId, format, body.tab)
@@ -400,6 +559,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const sheetItems: MenuEntry[] = [
     { label: 'Download as Excel (.xlsx)', icon: Download, onSelect: () => download('xlsx') },
     { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
+    { label: body.ranges.length ? `Named ranges and links (${body.ranges.length})` : 'Named ranges and links', onSelect: () => setNaming(true) },
     ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
       ? [
@@ -472,7 +632,16 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
 
   return (
     <>
-      <div className="aw-page aw-page--full aw-sheet">
+      <div
+        className="aw-page aw-page--full aw-sheet"
+        onKeyDown={(event) => {
+          // Ctrl or Cmd with F finds in the sheet rather than the page.
+          if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'f' && !phone) {
+            event.preventDefault()
+            setFinding(true)
+          }
+        }}
+      >
         <PageHeader
           actions={sheetItems.length ? <Menu items={sheetItems} label="Sheet actions" placement="bottom-end" trigger={<IconButton icon="more" label="Sheet actions" />} /> : null}
           icon="table"
@@ -490,6 +659,23 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
             ) : null}
           </Banner>
         ) : null}
+        {suggesting ? (
+          <div className="aw-sheet__suggesting">
+            <Banner tone="info" title={draft.size ? `${draft.size === 1 ? 'One cell' : `${draft.size} cells`} to suggest` : 'You’re suggesting changes'}>
+              {draft.size ? 'Send them as one suggestion for someone who edits this sheet.' : 'Type in cells as usual; nothing changes until someone who edits this sheet accepts.'}
+            </Banner>
+            {draft.size ? (
+              <>
+                <Button busy={sendingDraft} onClick={() => void sendDraft()} size="sm" variant="primary">
+                  Send suggestion
+                </Button>
+                <Button disabled={sendingDraft} onClick={() => setDraft(new Map())} size="sm" variant="ghost">
+                  Discard
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {phone ? (
           <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
@@ -504,6 +690,38 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
                   {focusThread ? 'Comments' : 'Comment'}
                 </Button>
               ) : null}
+              <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
+                Find
+              </Button>
+              {proposals.length ? (
+                <Button onClick={() => setReviewing(true)} size="sm" variant="ghost">
+                  {`Proposals (${proposals.length})`}
+                </Button>
+              ) : null}
+              {viewItems.length ? (
+                <Menu
+                  items={viewItems}
+                  label="Filter views"
+                  placement="bottom-end"
+                  trigger={
+                    <Button size="sm" variant="ghost">
+                      {activeView ? activeView.name : 'All rows'}
+                    </Button>
+                  }
+                />
+              ) : null}
+              {writable && formatItems.length ? (
+                <Menu
+                  items={formatItems}
+                  label="Format"
+                  placement="bottom-end"
+                  trigger={
+                    <Button disabled={busy} size="sm" variant="ghost">
+                      Format
+                    </Button>
+                  }
+                />
+              ) : null}
               {writable && gridItems.length ? (
                 <Menu
                   items={gridItems}
@@ -517,18 +735,39 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
                 />
               ) : null}
             </div>
+            {finding ? (
+              <SheetFind
+                editable={writable}
+                onClose={() => setFinding(false)}
+                onGo={(tabId, row, column) => {
+                  if (tabId !== tab?.id) chooseTab(tabId)
+                  else if (shown && row > tab.frozenRows && !shown.rows.includes(row)) setViewId(null)
+                  setSelection({ anchor: { row, column }, focus: { row, column } })
+                }}
+                onReplace={async (changes) => {
+                  const saved = await send(changes)
+                  if (saved) void refresh()
+                  return saved
+                }}
+                sheetId={sheetId}
+                tabs={tabs}
+              />
+            ) : null}
             {tab ? (
               <SheetGrid
                 cells={cells}
                 commented={marks}
-                editable={writable}
+                editable={writable || suggesting}
                 key={tab.id}
-                onEdits={edit}
-                onResize={(column, width) => void send([{ type: 'columnWidth', tab: tab.id, column, width }])}
+                onEdits={suggesting ? suggestEdit : edit}
+                onResize={(column, width) => (writable ? void send([{ type: 'columnWidth', tab: tab.id, column, width }]) : undefined)}
                 onSelect={setSelection}
+                onStyle={writable ? (style) => look({ [style]: !focusStyle[style] }) : undefined}
                 pending={tabPending}
+                proposed={proposedHere}
                 revision={body.sheet.revision}
                 selection={selection}
+                shown={shown}
                 size={size}
                 tab={tab}
               />
@@ -562,6 +801,50 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
             viewerId={user.actorId}
           />
         </SidePanel>
+      ) : null}
+      {reviewing ? (
+        <SheetProposalsDialog
+          canDecide={body.canEdit && !body.sheet.archived}
+          onClose={() => setReviewing(false)}
+          onDecided={() => void refresh()}
+          proposals={proposals}
+          userId={user.actorId}
+        />
+      ) : null}
+      {editingRules && tab ? (
+        <SheetRulesDialog
+          onClose={() => setEditingRules(false)}
+          onSave={async (rules) => {
+            const saved = await send([{ type: 'conditionalFormats', tab: tab.id, rules }])
+            if (saved) void refresh()
+            return saved
+          }}
+          selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          tab={tab}
+        />
+      ) : null}
+      {naming && tab ? (
+        <SheetRangesDialog
+          canEdit={editable && !body.sheet.archived}
+          onChanged={() => void refresh()}
+          onClose={() => setNaming(false)}
+          ranges={body.ranges}
+          references={experience.shows('page.references')}
+          selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          sheetId={sheetId}
+          tab={tab.name}
+        />
+      ) : null}
+      {viewDialog && tab ? (
+        <SheetViewDialog
+          canShare={editable}
+          columns={Math.max(used.columns, 1)}
+          onClose={() => setViewDialog(null)}
+          onSaved={(view) => setViewId(view.id)}
+          sheetId={sheetId}
+          tabId={tab.id}
+          view={viewDialog.view}
+        />
       ) : null}
       {dialog?.kind === 'details' ? (
         <SheetDetailsDialog

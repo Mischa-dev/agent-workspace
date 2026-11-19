@@ -5,13 +5,16 @@ import { legacyPathOf, spaceHref } from '../../app/href'
  * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
  * saved view other than the first. A sheet's range (AWD-54) is
  * `/projects/{projectId}/sheets/{sheetId}`, with `?tab=` and `?range=` (such
- * as `A1:D9`). Any other path in the app shows as a link to it.
+ * as `A1:D9`). A file of the page (C1.33), such as a pasted picture, is
+ * `/files/{fileId}`. Any other path in the app shows as a link to it.
  */
 export type EmbedTarget =
   | { kind: 'collection'; projectId: string; collectionId: string; viewId: string | null }
-  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null }
+  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null; name: string | null }
+  | { kind: 'file'; fileId: string }
   | { kind: 'link' }
 
+const FILE = /^\/files\/([0-9a-f-]{36})\/?$/i
 const COLLECTION = /^\/projects\/([^/]+)\/collections\/([^/]+)\/?$/
 const SHEET = /^\/projects\/([^/]+)\/sheets\/([^/]+)\/?$/
 
@@ -35,6 +38,8 @@ export function embedTarget(href: string): EmbedTarget {
         viewId: url.searchParams.get('view') || null,
       }
     }
+    const file = FILE.exec(path)
+    if (file) return { kind: 'file', fileId: file[1].toLowerCase() }
     const sheet = SHEET.exec(path)
     if (sheet) {
       return {
@@ -43,6 +48,7 @@ export function embedTarget(href: string): EmbedTarget {
         sheetId: decodeURIComponent(sheet[2]),
         tabId: url.searchParams.get('tab') || null,
         range: url.searchParams.get('range') || null,
+        name: url.searchParams.get('name') || null,
       }
     }
   } catch {
@@ -60,16 +66,28 @@ export function collectionEmbed(projectId: string, collection: { id: string; nam
   }
 }
 
-/** The path an embed of a sheet's tab (and range, if one) keeps, and its label. */
-export function sheetEmbed(projectId: string, sheet: { id: string; name: string }, tab: { id: string; name: string } | null, tabs: number, range: string | null) {
+/**
+ * The path an embed of a sheet's tab (and range, if one) keeps, and its
+ * label. A named range (C1.20) is kept by its name, so the embed follows it
+ * when it moves.
+ */
+export function sheetEmbed(projectId: string, sheet: { id: string; name: string }, tab: { id: string; name: string } | null, tabs: number, range: string | null, name: string | null = null) {
   const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
   const query = new URLSearchParams()
-  if (tab) query.set('tab', tab.id)
-  if (range) query.set('range', range)
+  if (name) query.set('name', name)
+  else {
+    if (tab) query.set('tab', tab.id)
+    if (range) query.set('range', range)
+  }
   const search = query.toString()
-  const where = [tab && tabs > 1 ? tab.name : '', range ?? ''].filter(Boolean).join(' ')
+  const where = name ?? [tab && tabs > 1 ? tab.name : '', range ?? ''].filter(Boolean).join(' ')
   return {
     href: search ? `${path}?${search}` : path,
     label: where ? `${sheet.name} · ${where}` : sheet.name,
   }
+}
+
+/** The path a file of the page keeps, and its label (the file's name). */
+export function fileEmbed(file: { id: string; name: string }) {
+  return { href: `/files/${encodeURIComponent(file.id)}`, label: file.name }
 }

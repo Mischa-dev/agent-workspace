@@ -3,14 +3,17 @@ import { describe, expect, it } from 'vitest'
 import type { TileEntry } from '../api/generated/operations'
 import { additive, figurePoints, measureWords, moveTile, stepHeight, stepWidth, tileHref, tileInputs } from './dashboardModel'
 
-const view: TileEntry = { id: 't1', kind: 'view', title: '', text: '', view: 'v1', collection: 'c1', width: 6, height: 2, figures: null }
-const note: TileEntry = { id: 't2', kind: 'text', title: 'Read me', text: 'Ship Friday', width: 12, height: 1 }
+const view: TileEntry = { id: 't1', kind: 'view', title: '', text: '', range: '', view: 'v1', collection: 'c1', width: 6, height: 2, figures: null }
+const note: TileEntry = { id: 't2', kind: 'text', title: 'Read me', text: 'Ship Friday', range: '', width: 12, height: 1 }
+const sheet: TileEntry = { id: 't3', kind: 'sheet', title: '', text: '', sheet: 's1', range: 'Totals', style: 'donut', width: 6, height: 2 }
 
 describe('dashboard tiles', () => {
-  it('writes tiles back as they were, a view by its view and a note by its text', () => {
-    expect(tileInputs([view, note])).toEqual([
-      { id: 't1', kind: 'view', title: null, view: 'v1', text: null, width: 6, height: 2 },
-      { id: 't2', kind: 'text', title: 'Read me', view: null, text: 'Ship Friday', width: 12, height: 1 },
+  it('writes tiles back as they were: a view by its view, a sheet by its range, a note by its text', () => {
+    const none = { sheet: null, range: null, style: null }
+    expect(tileInputs([view, note, sheet])).toEqual([
+      { id: 't1', kind: 'view', title: null, view: 'v1', text: null, ...none, width: 6, height: 2 },
+      { id: 't2', kind: 'text', title: 'Read me', view: null, text: 'Ship Friday', ...none, width: 12, height: 1 },
+      { id: 't3', kind: 'sheet', title: null, view: null, text: null, sheet: 's1', range: 'Totals', style: 'donut', width: 6, height: 2 },
     ])
   })
 
@@ -32,6 +35,7 @@ describe('dashboard tiles', () => {
   it('leads a view tile to its collection, opened on its view', () => {
     expect(tileHref('p1', view)).toBe('/w/-/s/p1/collections/c1?view=v1')
     expect(tileHref('p1', { collection: null, view: null })).toBeNull()
+    expect(tileHref('p1', sheet)).toBe('/w/-/s/p1/sheets/s1')
   })
 
   it('reads a chart’s figures as points, counting or measuring', () => {

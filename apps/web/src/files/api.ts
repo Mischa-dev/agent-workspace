@@ -24,6 +24,8 @@ function record(value: unknown): Record<string, unknown> | null {
 export type UploadTarget =
   | { kind: 'conversation'; conversationId: string }
   | { kind: 'task'; projectId: string; workItemId: string; forComment?: boolean }
+  /** A thing's own file, such as a picture in a page (C1.33). */
+  | { kind: 'thing'; thingKind: 'page'; thingId: string }
 
 export type Uploader = (file: File, onProgress: (fraction: number) => void, signal: AbortSignal) => Promise<FileAttachment>
 
@@ -31,6 +33,9 @@ function uploadPath(target: UploadTarget, name: string) {
   const query = `name=${encodeURIComponent(name)}`
   if (target.kind === 'conversation') {
     return `/api/v1/conversations/${encodeURIComponent(target.conversationId)}/files?${query}`
+  }
+  if (target.kind === 'thing') {
+    return `/api/v1/things/${encodeURIComponent(target.thingKind)}/${encodeURIComponent(target.thingId)}/files?${query}`
   }
   return `/api/v1/projects/${encodeURIComponent(target.projectId)}/work-items/${encodeURIComponent(target.workItemId)}/files?${query}${
     target.forComment ? '&for=comment' : ''
@@ -106,8 +111,20 @@ export function uploadFile(target: UploadTarget): Uploader {
   }
 }
 
+/** One file's own address: read it, or remove it. */
+function fileRequest(id: string, init?: { method: 'DELETE' }) {
+  return requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`, init)
+}
+
 export async function removeFile(id: string) {
-  await requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  await fileRequest(id, { method: 'DELETE' })
+}
+
+/** One file, if the session may see it. */
+export async function getFile(id: string): Promise<FileAttachment> {
+  const file = normalizeFile(await fileRequest(id))
+  if (!file) throw new ApiError({ status: 500, code: 'invalid_response', message: 'The server returned an invalid response.' })
+  return file
 }
 
 export async function listTaskFiles(projectId: string, workItemId: string): Promise<FileAttachment[]> {

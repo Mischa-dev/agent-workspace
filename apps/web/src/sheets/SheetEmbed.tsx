@@ -12,14 +12,15 @@ import { spaceHref } from '../app/href'
 const ROWS = 20
 const COLUMNS = 8
 
-export type SheetEmbedProps = { projectId: string; sheetId: string; tabId: string | null; range: string | null; label: string }
+export type SheetEmbedProps = { projectId: string; sheetId: string; tabId: string | null; range: string | null; label: string; name?: string | null }
 
 /**
  * A sheet's range inside a page (AWD-54): the values, read only, opening the
  * sheet. It loads as whoever reads the page, and refetches when the sheet
- * changes (`sheet.updated`). Without a range it shows the tab from A1.
+ * changes (`sheet.updated`). Without a range it shows the tab from A1. A
+ * named range (C1.20) is found by its name, wherever it has moved to.
  */
-export default function SheetEmbed({ label, projectId, range, sheetId, tabId }: SheetEmbedProps) {
+export default function SheetEmbed({ label, name: wanted, projectId, range: given, sheetId, tabId }: SheetEmbedProps) {
   const sheet = useSheet(projectId, sheetId, tabId ?? '')
   const body = sheet.data
   const name = label || 'A sheet'
@@ -40,6 +41,22 @@ export default function SheetEmbed({ label, projectId, range, sheetId, tabId }: 
     )
   }
 
+  const named = wanted ? body.ranges.find((entry) => entry.name.toLowerCase() === wanted.toLowerCase()) : null
+  if (wanted && !named) {
+    return (
+      <p className="aw-cembed__problem">
+        <Icon name="table" size={16} />
+        <span>
+          {body.sheet.name} has no range called “{wanted}” any more.
+        </span>
+      </p>
+    )
+  }
+  // The named range is on another tab than the one that loaded: read that one.
+  if (named && named.tabId !== body.tab) {
+    return <SheetEmbed label={label} name={wanted} projectId={projectId} range={named.range} sheetId={sheetId} tabId={named.tabId} />
+  }
+  const range = named ? named.range : given
   const tab = body.tabs.find((entry) => entry.id === body.tab) ?? null
   const asked = range ? parseRange(range) : null
   const whole: Range = { top: 1, left: 1, bottom: Math.max(tab?.rows ?? 0, 1), right: Math.max(tab?.columns ?? 0, 1) }
@@ -63,7 +80,7 @@ export default function SheetEmbed({ label, projectId, range, sheetId, tabId }: 
           {body.sheet.name}
         </Link>
         {tab && body.tabs.length > 1 ? <span className="aw-cembed__view">{tab.name}</span> : null}
-        {range ? <span className="aw-cembed__count">{asked ? rangeName(asked) : `“${range}” isn’t a range`}</span> : null}
+        {named ? <span className="aw-cembed__count">{named.name}</span> : range ? <span className="aw-cembed__count">{asked ? rangeName(asked) : `“${range}” isn’t a range`}</span> : null}
       </div>
       {empty && !header ? (
         <p className="aw-cembed__empty">Nothing here yet.</p>

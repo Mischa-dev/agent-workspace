@@ -5,8 +5,9 @@ import { projectAreaHref } from '../projects/locations'
 export const dashboardsHref = (projectId: string) => projectAreaHref(projectId, 'dashboards')
 export const dashboardHref = (projectId: string, id: string) => projectAreaHref(projectId, 'dashboards', id)
 
-/** Where a view tile leads: its collection, opened on its view. */
-export function tileHref(projectId: string, tile: Pick<TileEntry, 'collection' | 'view'>) {
+/** Where a tile leads: a view tile's collection, opened on its view; a sheet tile's sheet. */
+export function tileHref(projectId: string, tile: Pick<TileEntry, 'collection' | 'view' | 'sheet'>) {
+  if (tile.sheet) return projectAreaHref(projectId, 'sheets', tile.sheet)
   return tile.collection ? projectAreaHref(projectId, 'collections', tile.collection, tile.view ? { view: tile.view } : undefined) : null
 }
 
@@ -23,6 +24,9 @@ export function tileInputs(tiles: readonly TileEntry[]): TileInput[] {
     title: tile.title || null,
     view: tile.kind === 'view' ? (tile.view ?? null) : null,
     text: tile.kind === 'text' ? tile.text : null,
+    sheet: tile.kind === 'sheet' ? (tile.sheet ?? null) : null,
+    range: tile.kind === 'sheet' ? tile.range : null,
+    style: tile.kind === 'sheet' ? (tile.style ?? null) : null,
     width: tile.width,
     height: tile.height,
   }))

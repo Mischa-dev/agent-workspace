@@ -48,6 +48,8 @@ export type WhiteboardDetail = {
   whiteboard: Whiteboard
   links: WhiteboardLink[]
   canEdit: boolean
+  /** The role only suggests here: drawing is sent as a proposal (C1.11). */
+  canSuggest?: boolean
   revisions: WhiteboardRevision[]
 }
 

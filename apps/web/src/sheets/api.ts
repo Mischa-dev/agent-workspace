@@ -29,21 +29,72 @@ export type SheetTab = {
   frozenRows: number
   /** Widths in pixels by column number, for columns not at the default. */
   columnWidths: Record<number, number>
+  /** Its conditional formats, the first that applies winning. */
+  conditionalFormats: ConditionalRule[]
   /** The last row and column holding something (0 when empty). */
   rows: number
   columns: number
 }
 
+/** A conditional format: cells, when it applies, and how they look then (C1.17). */
+export type ConditionalRule = {
+  range: string
+  when: string
+  value?: string | number
+  value2?: string | number
+  text?: string
+  formula?: string
+  rank?: number
+  percent?: boolean
+  low?: string
+  high?: string
+  mid?: string
+  style?: Pick<CellStyle, 'bold' | 'italic' | 'underline' | 'strike' | 'color' | 'fill'>
+}
+
 export type CellKind = 'empty' | 'number' | 'text' | 'boolean' | 'error'
+
+/** How a cell's text is drawn; colors are `#RRGGBB`. */
+export type CellStyle = {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  color?: string
+  fill?: string
+  align?: 'left' | 'center' | 'right'
+  wrap?: boolean
+}
 
 export type SheetCell = {
   row: number
   column: number
-  /** What was typed, such as `12` or `=SUM(B2:B9)`. */
+  /** What was typed, such as `12` or `=SUM(B2:B9)`; empty for a cell that only has a format or style. */
   input: string
   kind: CellKind
   value: string | number | boolean | null
   revision: number
+  /** Its number format, an Excel code such as `0.0%`. */
+  format?: string
+  style?: CellStyle
+  /** The value as its number format shows it, such as `10%`. */
+  display?: string
+  /** How it looks once its tab's conditional formats apply, when that differs. */
+  conditional?: CellStyle
+}
+
+/** A change to how cells look; text fields take '' to go back to plain. */
+export type LookChange = {
+  numberFormat?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  color?: string
+  fill?: string
+  align?: '' | 'left' | 'center' | 'right'
+  wrap?: boolean
+  clear?: boolean
 }
 
 export type SheetBody = {
@@ -53,7 +104,14 @@ export type SheetBody = {
   tab: string
   cells: SheetCell[]
   canEdit: boolean
+  /** The role only suggests here: cell changes wait as a proposal (C1.11). */
+  canSuggest: boolean
+  /** The sheet's named ranges, by name (C1.20). */
+  ranges: NamedRange[]
 }
+
+/** A block of one tab with a name, such as Totals for Costs!A1:B9 (C1.20). */
+export type NamedRange = { name: string; tabId: string; tab: string; range: string }
 
 /** One change from the grid, as the server takes it. */
 export type SheetChange =
@@ -83,6 +141,11 @@ export type SheetChange =
   | { type: 'moveTab'; tab: string; position: number }
   | { type: 'freezeRows'; tab: string; rows: number }
   | { type: 'columnWidth'; tab: string; column: number; width: number | null }
+  | { type: 'format'; tab: string; rows: [number, number]; columns: [number, number]; look: LookChange }
+  /** Sorts a block's rows by its columns (`[column, descending]`, most important first); formulas follow the rows. */
+  | { type: 'sort'; tab: string; rows: [number, number]; columns: [number, number]; by: [number, boolean][] }
+  /** Replaces a tab's conditional formats. */
+  | { type: 'conditionalFormats'; tab: string; rules: ConditionalRule[] }
 
 export type ChangedCell = {
   tab: string
@@ -91,6 +154,10 @@ export type ChangedCell = {
   input: string | null
   kind: CellKind
   value: SheetCell['value']
+  format?: string
+  style?: CellStyle
+  display?: string
+  conditional?: CellStyle
 }
 
 export type ChangeResult = {
@@ -112,6 +179,23 @@ const asNumber = (value: unknown, fallback = 0) => (typeof value === 'number' &&
 const asArray = (value: unknown) => (Array.isArray(value) ? value : [])
 const KINDS: readonly CellKind[] = ['empty', 'number', 'text', 'boolean', 'error']
 const asKind = (value: unknown): CellKind => (KINDS.includes(value as CellKind) ? (value as CellKind) : 'empty')
+const COLOR = /^#[0-9A-Fa-f]{6}$/
+const ALIGNS = ['left', 'center', 'right'] as const
+/** Only the style fields the grid knows, in the shapes it expects. */
+export function asStyle(value: unknown): CellStyle | undefined {
+  const raw = asRecord(value)
+  const style: CellStyle = {}
+  for (const flag of ['bold', 'italic', 'underline', 'strike', 'wrap'] as const) if (raw[flag] === true) style[flag] = true
+  for (const paint of ['color', 'fill'] as const) if (typeof raw[paint] === 'string' && COLOR.test(raw[paint] as string)) style[paint] = raw[paint] as string
+  if (ALIGNS.includes(raw.align as (typeof ALIGNS)[number])) style.align = raw.align as CellStyle['align']
+  return Object.keys(style).length ? style : undefined
+}
+const asLook = (raw: Wire) => ({
+  ...(typeof raw.format === 'string' && raw.format ? { format: raw.format } : {}),
+  ...(asStyle(raw.style) ? { style: asStyle(raw.style) } : {}),
+  ...(typeof raw.display === 'string' ? { display: raw.display } : {}),
+  ...(raw.conditional && typeof raw.conditional === 'object' ? { conditional: asStyle(raw.conditional) ?? {} } : {}),
+})
 const asValue = (value: unknown): SheetCell['value'] =>
   typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ? value : null
 
@@ -143,6 +227,7 @@ function normalizeTab(value: unknown): SheetTab {
     structureRevision: asNumber(raw.structureRevision, 1),
     frozenRows: asNumber(raw.frozenRows, 1),
     columnWidths: widths,
+    conditionalFormats: asArray(raw.conditionalFormats).filter((rule): rule is ConditionalRule => typeof asRecord(rule).range === 'string' && typeof asRecord(rule).when === 'string'),
     rows: asNumber(raw.rows),
     columns: asNumber(raw.columns),
   }
@@ -157,6 +242,7 @@ function normalizeCell(value: unknown): SheetCell {
     kind: asKind(raw.kind),
     value: asValue(raw.value),
     revision: asNumber(raw.revision, 1),
+    ...asLook(raw),
   }
 }
 
@@ -168,6 +254,13 @@ export function normalizeBody(value: unknown): SheetBody {
     tab: asString(raw.tab),
     cells: asArray(raw.cells).map(normalizeCell),
     canEdit: raw.canEdit === true,
+    canSuggest: raw.canSuggest === true,
+    ranges: asArray(raw.ranges).flatMap((entry) => {
+      const range = asRecord(entry)
+      return typeof range.name === 'string' && typeof range.tabId === 'string' && typeof range.range === 'string'
+        ? [{ name: range.name, tabId: range.tabId, tab: asString(range.tab), range: range.range }]
+        : []
+    }),
   }
 }
 
@@ -187,6 +280,7 @@ function normalizeResult(value: unknown): ChangeResult {
         input: typeof cell.input === 'string' ? cell.input : null,
         kind: asKind(cell.kind),
         value: asValue(cell.value),
+        ...asLook(cell),
       }
     }),
   }
@@ -243,14 +337,23 @@ export async function updateSheet(
   )
 }
 
+/** Sends cell changes; the server writes them, or keeps them as a proposal. */
+function postChanges(projectId: string, sheetId: string, changes: SheetChange[]) {
+  return requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
+    method: 'POST',
+    idempotencyKey: crypto.randomUUID(),
+    json: { changes },
+  })
+}
+
 export async function changeSheet(projectId: string, sheetId: string, changes: SheetChange[]) {
-  return normalizeResult(
-    await requestJson<unknown>(`${sheetPath(projectId, sheetId)}/changes`, {
-      method: 'POST',
-      idempotencyKey: crypto.randomUUID(),
-      json: { changes },
-    }),
-  )
+  return normalizeResult(await postChanges(projectId, sheetId, changes))
+}
+
+/** Cell changes from someone whose role only suggests: kept as one proposal. */
+export async function proposeCells(projectId: string, sheetId: string, changes: SheetChange[]) {
+  const raw = asRecord(await postChanges(projectId, sheetId, changes))
+  return { proposalId: typeof raw.proposalId === 'string' ? raw.proposalId : null, cells: asArray(raw.proposed).length }
 }
 
 /** The file types a sheet can be made from. */
