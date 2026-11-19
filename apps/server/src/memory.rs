@@ -1812,7 +1812,8 @@ async fn update_page_http(
     .map_err(|_| AppError::NotFound("page"))?
     .mode;
     if mode == crate::access::WriteMode::Propose {
-        let suggestion_id = suggest_from_browser(&mut transaction, writer, page_id, &input).await?;
+        let suggestion_id =
+            suggest_from_browser(&mut transaction, writer, project_id, page_id, &input).await?;
         if let Some(id) = suggestion_id {
             audit(
                 &mut transaction,
@@ -1858,6 +1859,7 @@ async fn update_page_http(
 async fn suggest_from_browser(
     transaction: &mut Transaction<'_, Postgres>,
     writer: Writer,
+    in_space: Uuid,
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Option<Uuid>, AppError> {
@@ -1905,6 +1907,7 @@ async fn suggest_from_browser(
     match suggest_text(
         transaction,
         writer,
+        in_space,
         page_id,
         &markdown,
         input.expected_version,

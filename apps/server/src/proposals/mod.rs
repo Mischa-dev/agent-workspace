@@ -247,6 +247,7 @@ pub async fn decide(
                 transaction,
                 writer,
                 may_edit,
+                space_id,
                 thing_id,
                 proposal_id,
                 decision,

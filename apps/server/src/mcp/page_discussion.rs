@@ -606,6 +606,7 @@ pub(super) async fn page_suggestion_decide(
             &mut transaction,
             writer(principal),
             may_edit,
+            project_id,
             page_id,
             suggestion_id,
             decision,

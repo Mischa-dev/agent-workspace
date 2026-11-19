@@ -295,6 +295,7 @@ pub async fn decide_suggestion(
         &mut transaction,
         writer,
         may_edit,
+        project_id,
         page_id,
         suggestion_id,
         request.decision,

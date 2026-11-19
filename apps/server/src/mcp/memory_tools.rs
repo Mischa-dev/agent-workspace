@@ -777,7 +777,9 @@ pub(crate) async fn page_write(
                     ));
                 }
                 if changes_text && mode == Some(access::WriteMode::Propose) {
-                    match suggest_text(&mut transaction, principal, page_id, &input).await? {
+                    match suggest_text(&mut transaction, principal, project_id, page_id, &input)
+                        .await?
+                    {
                         Ok(made) => suggestion = made,
                         Err(refused) => return Ok(refused),
                     }
@@ -874,6 +876,7 @@ pub(crate) async fn page_write(
 async fn suggest_text(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &McpPrincipal,
+    in_space: Uuid,
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Result<Option<SuggestionMade>, ToolResult<PageValue>>, AppError> {
@@ -897,6 +900,7 @@ async fn suggest_text(
     let (id, edits_count, from_version) = match suggestions::suggest_text(
         transaction,
         writer(principal),
+        in_space,
         page_id,
         &markdown,
         input.expected_version,

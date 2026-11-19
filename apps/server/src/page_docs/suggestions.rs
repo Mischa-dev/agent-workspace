@@ -464,10 +464,13 @@ pub enum Suggested {
 /// Keeps `markdown`, offered by `author` as the whole of a page's text, as
 /// a suggestion of the block edits that turn the page into it: the one way
 /// both the web editor's save and `page_write` route a `Propose` grant
-/// (C1.8). Locks the page; `expected_version` refuses a page that moved on.
+/// (C1.8). Locks the page; `expected_version` refuses a page that moved on,
+/// and a page no longer in `in_space` (where the author was allowed) reads
+/// as missing.
 pub async fn suggest_text(
     transaction: &mut Transaction<'_, Postgres>,
     author: Writer,
+    in_space: Uuid,
     page_id: Uuid,
     markdown: &str,
     expected_version: Option<i64>,
@@ -476,6 +479,9 @@ pub async fn suggest_text(
     let Some(page) = store::lock_page(transaction, page_id).await? else {
         return Err(AppError::NotFound("page"));
     };
+    if page.project_id != in_space {
+        return Err(AppError::NotFound("page"));
+    }
     if let Some(expected) = expected_version
         && expected != page.version
     {
@@ -579,6 +585,7 @@ pub async fn decide(
     transaction: &mut Transaction<'_, Postgres>,
     decider: Writer,
     may_edit: bool,
+    in_space: Uuid,
     page_id: Uuid,
     suggestion_id: Uuid,
     decision: Decision,
@@ -586,6 +593,11 @@ pub async fn decide(
     let Some(page) = store::lock_page(transaction, page_id).await? else {
         return Ok(Err(Refusal::NotFound));
     };
+    // `may_edit` was decided in `in_space`; a page moved out since is
+    // another space's to decide.
+    if page.project_id != in_space {
+        return Ok(Err(Refusal::NotFound));
+    }
     let Some(suggestion) = sqlx::query_as::<
         _,
         (
