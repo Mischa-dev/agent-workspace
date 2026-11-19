@@ -8,6 +8,7 @@ use std::path::Path;
 
 use std::sync::Arc;
 
+use agent_workspace_builtin_host::runtime::commands::{self, refused};
 use agent_workspace_host_protocol::{Ack, AckOutcome, Command, CommandKind, HostClient};
 use serde_json::json;
 use sqlx::{FromRow, Postgres, Transaction};
@@ -57,6 +58,35 @@ pub(crate) struct ClaimedRun {
     claim_id: Uuid,
 }
 
+/// The built-in host's work for each command, over the server's database
+/// until the host has a store of its own (A1.17 phase B); the reading and
+/// acknowledging is the crate's (`runtime::commands`).
+struct BuiltinCommands<'a> {
+    state: &'a AppState,
+}
+
+impl commands::CommandHost for BuiltinCommands<'_> {
+    async fn start(&self, client: &HostClient, command: &Command) -> Ack {
+        if super::assistant::is_assistant_start(command) {
+            super::assistant::accept_start(self.state, command).await
+        } else {
+            start(self.state, client, command).await
+        }
+    }
+
+    async fn inspect(&self, command: &Command) -> Ack {
+        inspect(self.state, command).await
+    }
+
+    async fn answered(&self, command: &Command) -> Ack {
+        answered(self.state, command).await
+    }
+
+    async fn cancelled(&self, command: &Command) -> Ack {
+        cancelled(self.state, command).await
+    }
+}
+
 /// Carry out every command the built-in hosts have waiting. The lease holder
 /// calls it on each tick; tests call it through `scheduler::drain_now`.
 pub async fn pump(state: &AppState) -> Result<usize, AppError> {
@@ -65,26 +95,7 @@ pub async fn pump(state: &AppState) -> Result<usize, AppError> {
 
 /// [`pump`] with a client already made (the lease holder keeps one).
 pub async fn pump_with(state: &AppState, client: &HostClient) -> Result<usize, AppError> {
-    let mut handled = 0;
-    loop {
-        let listed = client
-            .commands(0, 0)
-            .await
-            .map_err(|_| AppError::Internal("read the built-in host's commands"))?;
-        if listed.commands.is_empty() {
-            return Ok(handled);
-        }
-        for summary in listed.commands {
-            let Ok(command) = client.command(summary.command_id).await else {
-                // Closed since it was listed: nothing to do.
-                continue;
-            };
-            if let Some(ack) = carry_out(state, client, &command).await {
-                let _ = client.ack(command.command_id, &ack).await;
-            }
-            handled += 1;
-        }
-    }
+    Ok(commands::pump(&BuiltinCommands { state }, client).await?)
 }
 
 /// Carry out at once what the built-in host has waiting for one run, of
@@ -96,49 +107,7 @@ pub async fn hear_now(
     kinds: &[CommandKind],
 ) -> Result<(), AppError> {
     let client = super::transport::client(state);
-    let listed = client
-        .commands(0, 0)
-        .await
-        .map_err(|_| AppError::Internal("read the built-in host's commands"))?;
-    for summary in listed.commands {
-        if summary.run_id != Some(run_id) || !kinds.contains(&summary.kind) {
-            continue;
-        }
-        let Ok(command) = client.command(summary.command_id).await else {
-            continue;
-        };
-        if let Some(ack) = carry_out(state, &client, &command).await {
-            let _ = client.ack(command.command_id, &ack).await;
-        }
-    }
-    Ok(())
-}
-
-async fn carry_out(state: &AppState, client: &HostClient, command: &Command) -> Option<Ack> {
-    match command.kind {
-        CommandKind::Start if super::assistant::is_assistant_start(command) => {
-            Some(super::assistant::accept_start(state, command).await)
-        }
-        CommandKind::Start => Some(start(state, client, command).await),
-        CommandKind::Inspect => Some(inspect(state, command).await),
-        CommandKind::Answer => Some(answered(state, command).await),
-        CommandKind::Cancel => Some(cancelled(state, command).await),
-        CommandKind::Steer => Some(refused(
-            "unsupported",
-            "The built-in host takes a new message as a new run.",
-        )),
-        CommandKind::Action => Some(refused(
-            "unknown_action",
-            "The built-in host has no actions.",
-        )),
-    }
-}
-
-fn refused(reason: &str, message: &str) -> Ack {
-    let mut ack = Ack::new(AckOutcome::Refused);
-    ack.reason = Some(reason.to_owned());
-    ack.message = Some(message.to_owned());
-    ack
+    Ok(commands::hear_now(&BuiltinCommands { state }, &client, run_id, kinds).await?)
 }
 
 /// The built-in host's own state for a run, from its detail row.
