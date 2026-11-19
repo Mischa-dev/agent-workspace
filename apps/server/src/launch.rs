@@ -2892,15 +2892,15 @@ pub(crate) async fn queue_tag_launches(
     mentioned_actor_ids: &[Uuid],
     hosts_only: bool,
 ) -> Result<(), AppError> {
+    let author =
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(message_id)
+            .fetch_one(&mut **transaction)
+            .await?;
     // A DM or group is in no space (K4.17): its run is launched in the
     // space the author's decisions from it are kept in.
     let direct = project_id == crate::spaces::DIRECT;
     let project_id = if direct {
-        let author =
-            sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
-                .bind(message_id)
-                .fetch_one(&mut **transaction)
-                .await?;
         match crate::memory::direct_home_space(transaction, author, conversation_id).await? {
             Some(space) => space,
             None => return Ok(()),
@@ -2946,11 +2946,6 @@ pub(crate) async fn queue_tag_launches(
     // This runs inside the call that sent the message: an author's app whose
     // agent limit leaves out "start runs" doesn't launch one by tagging, as
     // the launch job later runs without that limit.
-    let author =
-        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
-            .bind(message_id)
-            .fetch_one(&mut **transaction)
-            .await?;
     if crate::access::limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
         return Ok(());
     }
