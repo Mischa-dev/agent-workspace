@@ -2668,6 +2668,18 @@ async fn a_shared_page_opens_only_itself() {
     )
     .await;
     assert_eq!(shared["outcome"], "ok", "{shared}");
+    // Sharing tells the space (ids only), in the same transaction.
+    let signalled: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM events WHERE type = 'thing.share_changed' \
+                 AND thing_id = $1) \
+              + (SELECT count(*) FROM event_staging WHERE type = 'thing.share_changed' \
+                 AND thing_id = $1)",
+    )
+    .bind(plan.parse::<Uuid>().expect("page"))
+    .fetch_one(world.pool())
+    .await
+    .expect("share events");
+    assert_eq!(signalled, 1, "sharing a page sends no thing.share_changed");
     let (status, page) = send(
         &world.app,
         read(&lena.browser, format!("/api/v1/pages/{plan}")),

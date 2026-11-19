@@ -1754,6 +1754,13 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
         "a token listed another workspace's DM: {listed}"
     );
 
+    // Nor can it open the kept DM with a call that needs no permission.
+    let files = call("conversation_file_list", json!({"conversationId": kept})).await;
+    assert_ne!(
+        files["outcome"], "ok",
+        "a token listed another workspace's DM's files: {files}"
+    );
+
     // Nor does the briefing bring the kept DM's mention.
     let briefing = call("briefing", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
