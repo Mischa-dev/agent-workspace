@@ -182,7 +182,7 @@ pub struct GridMove {
 /// A span `[start, end]` on one axis after a move on that axis, or `None`
 /// when the move deleted all of it. An insert inside a span widens it; a
 /// delete that takes part of it narrows it.
-fn follow_span(start: i64, end: i64, step: &GridMove) -> Option<(i64, i64)> {
+pub(crate) fn follow_span(start: i64, end: i64, step: &GridMove) -> Option<(i64, i64)> {
     let (at, count) = (step.at, step.count);
     if step.insert {
         let shift = |place: i64| if place >= at { place + count } else { place };

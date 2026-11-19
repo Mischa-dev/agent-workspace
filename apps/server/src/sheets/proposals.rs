@@ -436,6 +436,25 @@ fn move_cells(
     moves: &[crate::discussion::anchors::GridMove],
 ) -> bool {
     let mut moved = false;
+    // A proposed formula's references move too, so accepting it later reads
+    // the cells it meant: on its own tab, and on others where it names the
+    // moved tab.
+    let tab_name = cells
+        .iter()
+        .find(|cell| cell.tab_id == tab_id)
+        .map(|cell| cell.tab.clone());
+    if let Some(tab_name) = &tab_name {
+        for cell in cells.iter_mut().filter(|cell| !cell.gone) {
+            if !cell.after.starts_with('=') {
+                continue;
+            }
+            let shifted = shift_formula(&cell.after, tab_name, cell.tab_id == tab_id, moves);
+            if shifted != cell.after {
+                cell.after = shifted;
+                moved = true;
+            }
+        }
+    }
     for cell in cells
         .iter_mut()
         .filter(|cell| cell.tab_id == tab_id && !cell.gone)
@@ -465,6 +484,205 @@ fn move_cells(
         }
     }
     moved
+}
+
+/// A cell reference in a formula: `$A$2` as its parts, and where it ends.
+struct CellRef {
+    column_fixed: bool,
+    column: i64,
+    row_fixed: bool,
+    row: i64,
+    end: usize,
+}
+
+/// Reads a cell reference (`A2`, `$B$10`) at `at`, if one is there.
+fn cell_ref(chars: &[char], at: usize) -> Option<CellRef> {
+    let mut index = at;
+    let column_fixed = chars.get(index) == Some(&'$');
+    if column_fixed {
+        index += 1;
+    }
+    let letters = chars[index..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .count();
+    if !(1..=3).contains(&letters) {
+        return None;
+    }
+    let column = chars[index..index + letters].iter().fold(0_i64, |sum, c| {
+        sum * 26 + i64::from(c.to_ascii_uppercase() as u8 - b'A' + 1)
+    });
+    index += letters;
+    let row_fixed = chars.get(index) == Some(&'$');
+    if row_fixed {
+        index += 1;
+    }
+    let digits = chars[index..]
+        .iter()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
+    if !(1..=7).contains(&digits) {
+        return None;
+    }
+    let row = chars[index..index + digits]
+        .iter()
+        .collect::<String>()
+        .parse::<i64>()
+        .ok()?;
+    index += digits;
+    // A function name such as LOG10( or a longer word isn't a reference.
+    if chars
+        .get(index)
+        .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '(' | '!'))
+    {
+        return None;
+    }
+    Some(CellRef {
+        column_fixed,
+        column,
+        row_fixed,
+        row,
+        end: index,
+    })
+}
+
+/// A sheet name before `!` at `at` (`Plan!` or `'Q3 plan'!`): the name and
+/// where the reference after it starts.
+fn sheet_prefix(chars: &[char], at: usize) -> Option<(String, usize)> {
+    if chars.get(at) == Some(&'\'') {
+        let mut name = String::new();
+        let mut index = at + 1;
+        loop {
+            match chars.get(index)? {
+                '\'' if chars.get(index + 1) == Some(&'\'') => {
+                    name.push('\'');
+                    index += 2;
+                }
+                '\'' => break,
+                c => {
+                    name.push(*c);
+                    index += 1;
+                }
+            }
+        }
+        return (chars.get(index + 1) == Some(&'!')).then_some((name, index + 2));
+    }
+    let length = chars[at..]
+        .iter()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+        .count();
+    (length > 0 && chars.get(at + length) == Some(&'!'))
+        .then(|| (chars[at..at + length].iter().collect(), at + length + 1))
+}
+
+fn ref_text(fixed_column: bool, column: i64, fixed_row: bool, row: i64) -> String {
+    format!(
+        "{}{}{}{}",
+        if fixed_column { "$" } else { "" },
+        super::address::column_name(i32::try_from(column).unwrap_or(i32::MAX)),
+        if fixed_row { "$" } else { "" },
+        row
+    )
+}
+
+/// A formula with its references to `tab` moved by `moves` (rows or
+/// columns inserted or deleted); a reference whose cells were all deleted
+/// becomes `#REF!`, as the engine writes it. Unprefixed references are on
+/// `tab` when `own_tab`. Text in quotes is left alone.
+fn shift_formula(
+    formula: &str,
+    tab: &str,
+    own_tab: bool,
+    moves: &[crate::discussion::anchors::GridMove],
+) -> String {
+    use crate::discussion::anchors::follow_span;
+    let chars = formula.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(formula.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let c = chars[index];
+        if c == '"' {
+            // A string literal, with "" for a quote inside it.
+            out.push(c);
+            index += 1;
+            while index < chars.len() {
+                out.push(chars[index]);
+                if chars[index] == '"' {
+                    if chars.get(index + 1) == Some(&'"') {
+                        out.push('"');
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                    break;
+                }
+                index += 1;
+            }
+            continue;
+        }
+        let boundary = index == 0 || {
+            let before = chars[index - 1];
+            !(before.is_alphanumeric() || matches!(before, '_' | '.' | '$' | '\''))
+        };
+        if boundary {
+            let (sheet, start) = match sheet_prefix(&chars, index) {
+                Some((name, start)) => (Some(name), start),
+                None => (None, index),
+            };
+            if let Some(first) = cell_ref(&chars, start) {
+                let second = (chars.get(first.end) == Some(&':'))
+                    .then(|| cell_ref(&chars, first.end + 1))
+                    .flatten();
+                let end = second.as_ref().map_or(first.end, |second| second.end);
+                let applies = match &sheet {
+                    Some(name) => name.eq_ignore_ascii_case(tab),
+                    None => own_tab,
+                };
+                if !applies {
+                    out.extend(&chars[index..end]);
+                    index = end;
+                    continue;
+                }
+                let last = second.as_ref().unwrap_or(&first);
+                // Spans count from 0, as moves do.
+                let mut rows = Some((first.row.min(last.row) - 1, first.row.max(last.row) - 1));
+                let mut columns = Some((
+                    first.column.min(last.column) - 1,
+                    first.column.max(last.column) - 1,
+                ));
+                for step in moves {
+                    let span = if step.rows { &mut rows } else { &mut columns };
+                    *span = span.and_then(|(from, to)| follow_span(from, to, step));
+                }
+                out.extend(&chars[index..start]);
+                match (rows, columns) {
+                    (Some(rows), Some(columns)) => {
+                        out.push_str(&ref_text(
+                            first.column_fixed,
+                            columns.0 + 1,
+                            first.row_fixed,
+                            rows.0 + 1,
+                        ));
+                        if let Some(second) = &second {
+                            out.push(':');
+                            out.push_str(&ref_text(
+                                second.column_fixed,
+                                columns.1 + 1,
+                                second.row_fixed,
+                                rows.1 + 1,
+                            ));
+                        }
+                    }
+                    _ => out.push_str("#REF!"),
+                }
+                index = end;
+                continue;
+            }
+        }
+        out.push(c);
+        index += 1;
+    }
+    out
 }
 
 /// Tells the sheet's readers its proposals changed (ids only).
@@ -505,6 +723,50 @@ mod tests {
             after: "x".to_owned(),
             gone: false,
         }
+    }
+
+    #[test]
+    fn proposed_formulas_follow_moved_rows_and_columns() {
+        let insert_row = |at, count| GridMove {
+            rows: true,
+            insert: true,
+            at,
+            count,
+        };
+        let delete_column = |at, count| GridMove {
+            rows: false,
+            insert: false,
+            at,
+            count,
+        };
+        // A row inserted above row 2 (index 1): A2 is now A3.
+        assert_eq!(
+            shift_formula("=A2*2", "Plan", true, &[insert_row(1, 1)]),
+            "=A3*2"
+        );
+        assert_eq!(
+            shift_formula("=SUM($A$1:B4)+LOG10(C9)", "Plan", true, &[insert_row(1, 2)]),
+            "=SUM($A$1:B6)+LOG10(C11)"
+        );
+        // Text in quotes and other tabs stay; this tab named outright moves.
+        assert_eq!(
+            shift_formula(
+                "=\"A2\"&Other!A2&Plan!A2&'Plan'!B2",
+                "Plan",
+                true,
+                &[insert_row(0, 1)]
+            ),
+            "=\"A2\"&Other!A2&Plan!A3&'Plan'!B3"
+        );
+        assert_eq!(
+            shift_formula("=A2", "Plan", false, &[insert_row(0, 1)]),
+            "=A2"
+        );
+        // A deleted column: what was in it is gone, what was after it moves left.
+        assert_eq!(
+            shift_formula("=B1+C1+SUM(A1:C1)", "Plan", true, &[delete_column(1, 1)]),
+            "=#REF!+B1+SUM(A1:B1)"
+        );
     }
 
     #[test]
