@@ -25,6 +25,7 @@ impl CoreModule for Module {
         module.operations(crate::roles::ops::register_ops);
         module.operations(crate::settings::ops::register_ops);
         module.operations(crate::workspace::admin_ops::register_ops);
+        module.operations(crate::notifications::ops::register_ops);
         module.routes(crate::profiles::router);
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::modules::connected::ops::register_ops);

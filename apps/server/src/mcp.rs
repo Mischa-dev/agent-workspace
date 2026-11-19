@@ -81,7 +81,7 @@ pub(crate) mod groups;
 mod history;
 pub(crate) mod invitation_tools;
 pub(crate) mod labels;
-mod later_tools;
+pub(crate) mod later_tools;
 pub(crate) mod launch_tools;
 pub(crate) mod layout_preset_tools;
 pub(crate) mod memory_tools;
@@ -90,7 +90,7 @@ pub(crate) mod messaging;
 pub(crate) use common::string_or_number;
 mod model_catalog_tools;
 pub(crate) mod module_tools;
-mod notifications;
+pub(crate) mod notifications;
 mod oauth;
 pub(crate) mod page_discussion;
 pub(crate) mod planning;
@@ -448,100 +448,7 @@ impl McpServer {
         file_tools::file_read(&self.state, principal, arguments).await
     }
 
-    #[tool(
-        description = "Your notifications, newest first: @mentions in messages and task comments, tasks assigned to you, approvals waiting on you, your runs finishing, failing or waiting, and failing checks or review requests on pull requests. Repeats collapse into one with a count. view: inbox (default), unread, snoozed or archived; category: all, mentions, tasks, runs or pull_requests. briefing lists the unread ones too.",
-        annotations(
-            title = "List notifications",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn notification_list(
-        &self,
-        Parameters(arguments): Parameters<notifications::NotificationListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<notifications::NotificationListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(notifications::notification_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread), snooze_until_activity (back unread when something new happens on it) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
-        annotations(
-            title = "Update notifications",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn notification_update(
-        &self,
-        Parameters(arguments): Parameters<notifications::NotificationUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<notifications::NotificationUpdateValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(notifications::notification_update(&self.state, principal, arguments).await)
-    }
-
     // -- Later, reminders and scheduled messages (W21) -------------------------
-
-    #[tool(
-        description = "List your Later list: messages and tasks you saved and reminders you set (view open, the default, with reminders due soonest first; or done), or view scheduled for your messages waiting to send. Agents have their own list; a due reminder reaches an agent as a reminder.due event.",
-        annotations(
-            title = "List Later",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn later_list(
-        &self,
-        Parameters(arguments): Parameters<later_tools::LaterListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::LaterListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::later_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Save a message (messageId) or task for later, or set yourself a reminder: text and at (RFC 3339, up to a year ahead). With at, you're reminded then: people in their inbox, on their phone and by email; agents by a reminder.due event. Saving the same message or task again updates it.",
-        annotations(
-            title = "Save for later or remind",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn later_save(
-        &self,
-        Parameters(arguments): Parameters<later_tools::ReminderSetArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::LaterItemValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::later_save(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change an item on your Later list: mark it done (or open again), move its reminder (at, or \"none\"), change its text, or remove it.",
-        annotations(
-            title = "Update Later item",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn later_update(
-        &self,
-        Parameters(arguments): Parameters<later_tools::LaterUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::LaterUpdateValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::later_update(&self.state, principal, arguments).await)
-    }
 
     #[tool(
         description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
@@ -554,19 +461,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<agents::AgentListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(agents::agent_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Find people and agents by name or @handle, with the projects they're in. Use their handle to mention them or start a conversation.",
-        annotations(title = "Find people", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn people_search(
-        &self,
-        Parameters(arguments): Parameters<talk::PeopleSearchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::PeopleValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::people_search(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------

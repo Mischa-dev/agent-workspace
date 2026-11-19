@@ -246,6 +246,8 @@ export type LastMessage = { at: string; author: string; removed?: boolean; text:
 
 export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
+export type LaterLine = { done: boolean; id: string; kind: string; messageId?: string | null; note?: string; preview?: string | null; project: string; remindAt?: string | null; task?: string | null; url: string }
+
 export type Layer = { scope: Scope; updatedAt: string; updatedByActorId?: string | null; value: unknown; version: number }
 
 export type LayoutLine = { fromWorkspace: boolean; preset: string; tone: string; words?: WordLine[] }
@@ -316,7 +318,7 @@ export type NewSpace = { key: string; name: string }
 
 export type NewTask = { acceptanceCriteria?: string[]; assignee?: string | null; blockedByRefs?: string[] | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; labels?: string[]; milestone?: string | null; parentId?: string | null; parentRef?: string | null; priority?: string | null; ref?: string | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
 
-export type NotificationLine = { at: string; count: number; id: string; kind: string; preview?: string | null; project: string; read: boolean; snoozedUntil?: string | null; subject: string; subjectId: string; subjectKind: string; title: string; untilActivity: boolean; url: string }
+export type NotificationLine = { at: string; count: number; id: string; kind: string; preview?: string | null; project: string; read: boolean; snoozedUntil?: string | null; subject: string; subjectId: string; subjectKind: string; title: string; untilActivity?: boolean; url: string }
 
 export type Offer = { hostId: string; hostName: string; offer: Record<string, unknown> }
 
@@ -363,6 +365,8 @@ export type PartRef = { id: string; kind: string }
 export type PartView = { id: string; kind: string; name?: string | null }
 
 export type PermissionEntry = { builtIn: string[]; key: string; label: string; level?: string | null; meaning: string; module: string; required: boolean; scope: string; thingKind?: string | null }
+
+export type Person = { handle: string; id: string; kind: string; name: string; projects: string[] }
 
 export type Piece = { actions?: string[]; fields?: string[]; groupBy?: string | null; thing: string; type: PieceType }
 
@@ -1120,15 +1124,15 @@ export type InboxViewSetInput = { delete?: boolean | null; density?: Density | n
 
 export type InboxViewSetOutput = { views: InboxViewItem[] }
 
-export type InvitationCreateInput = { expectedVersion?: number | null; expiresInHours?: number | null; invitation?: string | null; note?: string | null; projectId: string; replace?: boolean | null; revoke?: boolean | null; role?: string | null; workspace?: boolean | null }
+export type InvitationCreateInput = { expectedVersion?: number | null; expiresInHours?: number | null; invitation?: string | null; note?: string | null; projectId: string; replace?: boolean | null; revoke?: boolean | null; role?: string | null; wholeWorkspace?: boolean | null }
 
 export type InvitationCreateOutput = { done: string; invitation: InvitationLine; joinUrl?: string | null }
 
-export type InvitationListInput = { projectId: string; workspace?: boolean | null }
+export type InvitationListInput = { projectId: string; wholeWorkspace?: boolean | null }
 
 export type InvitationListOutput = { invitations: InvitationLine[] }
 
-export type InvitationUpdateInput = { expectedVersion?: number | null; expiresInHours?: number | null; invitation?: string | null; note?: string | null; projectId: string; replace?: boolean | null; revoke?: boolean | null; role?: string | null; workspace?: boolean | null }
+export type InvitationUpdateInput = { expectedVersion?: number | null; expiresInHours?: number | null; invitation?: string | null; note?: string | null; projectId: string; replace?: boolean | null; revoke?: boolean | null; role?: string | null; wholeWorkspace?: boolean | null }
 
 export type InvitationUpdateOutput = { done: string; invitation: InvitationLine; joinUrl?: string | null }
 
@@ -1160,6 +1164,18 @@ export type LabelUpdateInput = { archived?: boolean | null; color?: string | nul
 
 export type LabelUpdateOutput = { changedFields: string[]; created: boolean; label: LabelLine; note?: string | null }
 
+export type LaterListInput = { view?: string | null }
+
+export type LaterListOutput = { items?: LaterLine[]; openCount: number; scheduled?: ScheduledLine[] }
+
+export type LaterSaveInput = { at?: string | null; messageId?: string | null; task?: string | null; text?: string | null }
+
+export type LaterSaveOutput = { item: LaterLine }
+
+export type LaterUpdateInput = { at?: string | null; done?: boolean | null; id: string; remove?: boolean | null; text?: string | null }
+
+export type LaterUpdateOutput = { item?: LaterLine | null; removed: boolean }
+
 export type LayoutPresetCreateInput = { base?: string | null; description?: string | null; expectedVersion?: number | null; name?: string | null; preset?: string | null; projectId: string; remove?: boolean | null; show?: Record<string, boolean> | null; words?: Record<string, PresetWord> | null }
 
 export type LayoutPresetCreateOutput = { done: string; id: string; name: string; preset?: LayoutPresetLine | null }
@@ -1168,7 +1184,7 @@ export type LayoutPresetUpdateInput = { base?: string | null; description?: stri
 
 export type LayoutPresetUpdateOutput = { done: string; id: string; name: string; preset?: LayoutPresetLine | null }
 
-export type LayoutUpdateInput = { expectedVersion?: number | null; preset?: string | null; projectId: string; rules?: LayoutRuleArgument[] | null; workspace?: boolean | null }
+export type LayoutUpdateInput = { expectedVersion?: number | null; preset?: string | null; projectId: string; rules?: LayoutRuleArgument[] | null; wholeWorkspace?: boolean | null }
 
 export type LayoutUpdateOutput = { layout?: LayoutLine | null; projectId: string; rules?: number | null; version: number }
 
@@ -1284,6 +1300,14 @@ export type NotificationKeywordSetInput = { keywords: string[] }
 
 export type NotificationKeywordSetOutput = { keywords: string[]; limit: number }
 
+export type NotificationListInput = { category?: string | null; cursor?: string | null; limit?: number | null; projectId?: string | null; view?: string | null }
+
+export type NotificationListOutput = { nextCursor?: string | null; notifications: NotificationLine[]; unreadCount: number }
+
+export type NotificationUpdateInput = { action: string; all?: boolean | null; ids?: string[] | null; projectId?: string | null; snoozeUntil?: string | null }
+
+export type NotificationUpdateOutput = { unreadCount: number; updated: string[] }
+
 export type PackageExportInput = { includePages?: boolean; includeSkills?: boolean; module?: string | null; spaceId?: string | null; wholeWorkspace?: boolean }
 
 export type PackageExportOutput = { digest: string; package: Package }
@@ -1355,6 +1379,10 @@ export type PageUpdateOutput = { archived: boolean; body: string; history: Revis
 export type PageUpdateBlocksInput = { edits: PageEditInput[]; expectedVersion?: number | null; note?: string | null; pageId: string; suggest?: boolean | null; threadId?: string | null }
 
 export type PageUpdateBlocksOutput = { blocks: BlockLine[]; markdown?: string | null; outline: OutlineLine[]; pageId: string; projectId: string; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; url: string; version: number }
+
+export type PeopleSearchInput = { limit?: number | null; projectId?: string | null; query?: string | null }
+
+export type PeopleSearchOutput = { people: Person[] }
 
 export type PermissionsGetInput = { account?: string | null; spaceId?: string | null }
 
@@ -2098,6 +2126,9 @@ export type Operations = {
   label_create: { input: LabelCreateInput; output: LabelCreateOutput }
   label_list: { input: LabelListInput; output: LabelListOutput }
   label_update: { input: LabelUpdateInput; output: LabelUpdateOutput }
+  later_list: { input: LaterListInput; output: LaterListOutput }
+  later_save: { input: LaterSaveInput; output: LaterSaveOutput }
+  later_update: { input: LaterUpdateInput; output: LaterUpdateOutput }
   layout_preset_create: { input: LayoutPresetCreateInput; output: LayoutPresetCreateOutput }
   layout_preset_update: { input: LayoutPresetUpdateInput; output: LayoutPresetUpdateOutput }
   layout_update: { input: LayoutUpdateInput; output: LayoutUpdateOutput }
@@ -2129,6 +2160,8 @@ export type Operations = {
   my_work_get: { input: MyWorkGetInput; output: MyWorkGetOutput }
   notification_keyword_list: { input: NotificationKeywordListInput; output: NotificationKeywordListOutput }
   notification_keyword_set: { input: NotificationKeywordSetInput; output: NotificationKeywordSetOutput }
+  notification_list: { input: NotificationListInput; output: NotificationListOutput }
+  notification_update: { input: NotificationUpdateInput; output: NotificationUpdateOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   package_install: { input: PackageInstallInput; output: PackageInstallOutput }
   package_list: { input: PackageListInput; output: PackageListOutput }
@@ -2147,6 +2180,7 @@ export type Operations = {
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   page_update: { input: PageUpdateInput; output: PageUpdateOutput }
   page_update_blocks: { input: PageUpdateBlocksInput; output: PageUpdateBlocksOutput }
+  people_search: { input: PeopleSearchInput; output: PeopleSearchOutput }
   permissions_get: { input: PermissionsGetInput; output: PermissionsGetOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   pin_set: { input: PinSetInput; output: PinSetOutput }

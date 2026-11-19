@@ -53,6 +53,32 @@ fn enveloped(_canonical: &str, value: Value, _replayed: bool) -> Value {
     serde_json::json!({ "outcome": "ok", "value": value })
 }
 
+/// The layout and invitation tools said `workspace: true` for the whole
+/// workspace; `workspace` now names one, so the flag is `wholeWorkspace`.
+fn whole_workspace_in(mut arguments: JsonObject) -> JsonObject {
+    // The argument named the whole workspace when it was a bool; a string
+    // still names which workspace, and the edge reads it.
+    const OLD: &str = "workspace";
+    match arguments.remove(OLD) {
+        Some(Value::Bool(flag)) => {
+            arguments.insert("wholeWorkspace".to_owned(), Value::Bool(flag));
+        }
+        Some(named) => {
+            arguments.insert(OLD.to_owned(), named);
+        }
+        None => {}
+    }
+    arguments
+}
+
+/// `page_write` marked a retried create in its value.
+fn page_written(_canonical: &str, mut value: Value, replayed: bool) -> Value {
+    if replayed && let Some(object) = value.as_object_mut() {
+        object.insert("idempotentReplay".to_owned(), Value::Bool(true));
+    }
+    serde_json::json!({ "outcome": "ok", "value": value })
+}
+
 /// The old task tools took the project as `projectId`; the operations find
 /// it from the task.
 fn without_project(mut arguments: JsonObject) -> JsonObject {
@@ -321,7 +347,20 @@ pub const ALIASES: &[Alias] = &[
     run_renamed!("search" => "workspace_search"),
     renamed!("conversation_open" => "conversation_get"),
     renamed!("thing_open" => "thing_get"),
-    written!("page_write", "pageId" => "page_create", "page_update"),
+    Alias {
+        name: "page_write",
+        canonical: |arguments| {
+            if arguments.contains_key("pageId") {
+                "page_update"
+            } else {
+                "page_create"
+            }
+        },
+        runs: &["page_create", "page_update"],
+        adapt_in: same_in,
+        adapt_out: page_written,
+        sunset: None,
+    },
     // K2.10: the page tools answered in the envelope.
     run_renamed!("page_edit" => "page_update_blocks"),
     run_renamed!("page_blocks" => "page_blocks_get"),
@@ -464,8 +503,28 @@ pub const ALIASES: &[Alias] = &[
     },
     renamed!("project_member_set" => "member_update"),
     // K2.17: the layout tool answered in the envelope.
-    run_renamed!("project_layout_set" => "layout_update"),
-    written!("invitation_write", "invitation" => "invitation_create", "invitation_update"),
+    Alias {
+        name: "project_layout_set",
+        canonical: |_| "layout_update",
+        runs: &["layout_update"],
+        adapt_in: whole_workspace_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    Alias {
+        name: "invitation_write",
+        canonical: |arguments| {
+            if arguments.contains_key("invitation") {
+                "invitation_update"
+            } else {
+                "invitation_create"
+            }
+        },
+        runs: &["invitation_create", "invitation_update"],
+        adapt_in: whole_workspace_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
     written!("project_template_write", "template" => "project_template_create", "project_template_update"),
     written!("layout_preset_write", "preset" => "layout_preset_create", "layout_preset_update"),
     renamed!("ai_summarize" => "conversation_summarize"),

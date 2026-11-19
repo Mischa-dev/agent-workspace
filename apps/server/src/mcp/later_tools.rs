@@ -28,9 +28,9 @@ use crate::{
     scheduled_messages::{self, ScheduledMessageView},
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LaterListArguments {
+pub(crate) struct LaterListArguments {
     /// open (default: saved and not done, reminders due soonest first),
     /// done, or scheduled (your messages waiting to send).
     pub view: Option<String>,
@@ -38,7 +38,7 @@ pub(super) struct LaterListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterLine {
+pub(crate) struct LaterLine {
     pub id: String,
     /// message, work_item or reminder
     pub kind: String,
@@ -75,7 +75,7 @@ pub struct ScheduledLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterListValue {
+pub(crate) struct LaterListValue {
     // `default` keeps each optional in the output schema: an empty list is
     // left out, and clients reject a result missing a required field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -179,7 +179,7 @@ async fn inbox_within(
     )
 }
 
-pub(super) async fn later_list(
+pub(crate) async fn later_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LaterListArguments,
@@ -239,9 +239,9 @@ pub(super) async fn later_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "later_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReminderSetArguments {
+pub(crate) struct ReminderSetArguments {
     /// What to be reminded of. Needed unless you save a message or task.
     pub text: Option<String>,
     /// When, as RFC 3339 (2026-10-18T09:00:00+02:00), up to a year ahead.
@@ -255,13 +255,13 @@ pub(super) struct ReminderSetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterItemValue {
+pub(crate) struct LaterItemValue {
     pub item: LaterLine,
 }
 
 /// `later_save`: save a message or task for later, or set a reminder, for
 /// yourself.
-pub(super) async fn later_save(
+pub(crate) async fn later_save(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReminderSetArguments,
@@ -379,9 +379,9 @@ pub(super) async fn later_save(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "later_save"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LaterUpdateArguments {
+pub(crate) struct LaterUpdateArguments {
     /// The item's ID, from later_list or later_save.
     pub id: String,
     /// true: mark it done. false: back to open.
@@ -396,13 +396,13 @@ pub(super) struct LaterUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterUpdateValue {
+pub(crate) struct LaterUpdateValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<LaterLine>,
     pub removed: bool,
 }
 
-pub(super) async fn later_update(
+pub(crate) async fn later_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LaterUpdateArguments,

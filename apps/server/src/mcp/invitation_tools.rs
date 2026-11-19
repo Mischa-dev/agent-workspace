@@ -95,6 +95,7 @@ pub(crate) struct InvitationListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// List the invitations to the project's workspace instead.
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
 }
 
@@ -154,6 +155,7 @@ pub(crate) struct InvitationWriteArguments {
     /// Invite to (or revoke an invitation to) the project's workspace
     /// instead: role admin or member, or a custom role. Workspace
     /// invitations can't be replaced; revoke and send a new one.
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
     /// A note for a new workspace invitation, up to 200 characters.
     pub note: Option<String>,

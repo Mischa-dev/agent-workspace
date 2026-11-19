@@ -5,7 +5,9 @@
 //! into their modules.
 
 /// One operation over a tool's command: its constants and its `run`.
-/// `audited: true` says the command writes its own audit row.
+/// `audited: true` says the command writes its own audit row (or that the
+/// write is someone's own state, which keeps none); `spans: true` lets a
+/// read naming no workspace list across all the caller reaches.
 macro_rules! tool_op {
     (
         $op:ident {
@@ -15,6 +17,7 @@ macro_rules! tool_op {
             permission: $perm:expr,
             idempotency: $idem:ident,
             $(destructive: $destructive:literal,)?
+            $(spans: $spans:literal,)?
             $(audited: $audited:literal,)?
             title: $title:literal,
             description: $description:expr,
@@ -33,6 +36,7 @@ macro_rules! tool_op {
             const PERMISSION: Option<crate::ops::Perm> = $perm;
             const IDEMPOTENCY: crate::ops::Idempotency = crate::ops::Idempotency::$idem;
             $(const DESTRUCTIVE: bool = $destructive;)?
+            $(const SPANS_WORKSPACES: bool = $spans;)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -68,6 +72,12 @@ macro_rules! run_tool {
                 "Say which space (see project_list).",
             ));
         }
+        crate::mcp::task_commands::tool_answer($command($call.state, &principal, $arguments).await)
+    }};
+    // As the hand-written tool was called: in the connection's own space,
+    // and across every space the caller reaches unless the call named one.
+    ($call:ident, as_tool, $command:path, $arguments:expr) => {{
+        let principal = crate::work_items::ops::reads::reader($call.state, $call.ctx).await?;
         crate::mcp::task_commands::tool_answer($command($call.state, &principal, $arguments).await)
     }};
     ($call:ident, $command:path, $arguments:expr) => {

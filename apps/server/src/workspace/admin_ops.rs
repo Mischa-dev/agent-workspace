@@ -4,7 +4,10 @@
 //! membership is K4.8's (`space_member_*`).
 //!
 //! Most run the command their hand-written tool ran (`ops::wrapped`), as
-//! the caller the dispatcher checked. The `_write` tools became a create
+//! the caller the dispatcher checked. The workspace-wide ones name a space
+//! only to find the workspace, so the command checks the caller's
+//! workspace role itself (as it did) rather than the dispatcher checking
+//! their role in that space. The `_write` tools became a create
 //! and an update each; their old names stay as aliases (`ops::aliases`).
 
 use uuid::Uuid;
@@ -137,11 +140,15 @@ impl Operation for ModuleList {
             },
             None => None,
         };
-        let workspace = call.ctx.workspace_id;
         let space = call.ctx.space_id;
         let account = call.account_id();
         let reader = modules::built::Reader::of(&call.ctx.caller);
-        let tx = call.tx().await?;
+        // Its own read, as the tool's was.
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        let tx = &mut connection;
+        let workspace = call.ctx.workspace_id;
         let switches = state::switches(tx, workspace).await?;
         // In a space, the caller's role there narrows the workspace's
         // switches, as calls there are checked; otherwise their workspace
@@ -194,7 +201,7 @@ tool_op!(WorkspaceUpdate {
     name: "workspace_update",
     module: "workspace",
     kind: Change,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Change workspace",
@@ -237,7 +244,7 @@ tool_op!(WorkspaceTemplateApply {
     name: "workspace_template_apply",
     module: "workspace",
     kind: Change,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Use workspace template",
@@ -260,7 +267,7 @@ tool_op!(WorkspaceTemplateSave {
     name: "workspace_template_save",
     module: "workspace",
     kind: Create,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Save workspace template",
@@ -343,10 +350,10 @@ tool_op!(InvitationList {
     name: "invitation_list",
     module: "projects",
     kind: Query,
-    permission: Some(Perm::MembersInvite),
+    permission: None,
     idempotency: None,
     title: "List invitations",
-    description: "A space's invitations (or, with workspace: true, its workspace's), newest \
+    description: "A space's invitations (or, with wholeWorkspace: true, its workspace's), newest \
         first, with each one's role, status and version, never its link.",
     emits: [],
     input: invitation_tools::InvitationListArguments,
@@ -358,12 +365,12 @@ tool_op!(InvitationCreate {
     name: "invitation_create",
     module: "projects",
     kind: Create,
-    permission: Some(Perm::MembersInvite),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Invite",
     description: "Invite someone to a space with a join link (role admin, member, viewer or a \
-        custom role, never above yours), or to its workspace (workspace: true, with a note). \
+        custom role, never above yours), or to its workspace (wholeWorkspace: true, with a note). \
         The link is returned once, to pass on privately.",
     emits: ["space.member.changed"],
     input: invitation_tools::InvitationWriteArguments,
@@ -378,7 +385,7 @@ tool_op!(InvitationUpdate {
     name: "invitation_update",
     module: "projects",
     kind: Change,
-    permission: Some(Perm::MembersInvite),
+    permission: None,
     idempotency: Dispatcher,
     destructive: true,
     audited: true,
@@ -401,13 +408,13 @@ tool_op!(LayoutUpdate {
     name: "layout_update",
     module: "projects",
     kind: Change,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Set layout",
     description: "Set a space's layout preset (such as Software team), which decides the \
         parts people see there and words like \"to-dos\" for tasks; leave preset out to follow \
-        the workspace's default. With workspace: true, set the workspace's default; with \
+        the workspace's default. With wholeWorkspace: true, set the workspace's default; with \
         rules, which preset each role or person gets. Visual only.",
     emits: ["space.updated"],
     input: admin::ProjectLayoutSetArguments,
@@ -419,7 +426,7 @@ tool_op!(LayoutPresetCreate {
     name: "layout_preset_create",
     module: "projects",
     kind: Create,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     audited: true,
     title: "Save layout preset",
@@ -439,7 +446,7 @@ tool_op!(LayoutPresetUpdate {
     name: "layout_preset_update",
     module: "projects",
     kind: Change,
-    permission: Some(Perm::SettingsManage),
+    permission: None,
     idempotency: Dispatcher,
     destructive: true,
     audited: true,

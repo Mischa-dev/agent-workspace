@@ -7,7 +7,6 @@ src/conversations.rs: 1
 src/events/route.rs: 2
 # mcp.rs: a JSON-RPC error's "code" field, not the Code module.
 src/mcp.rs: 1
-src/mcp/admin.rs: 2
 src/mcp/agents.rs: 1
 src/mcp/briefing.rs: 2
 src/mcp/bug_report_tools.rs: 1

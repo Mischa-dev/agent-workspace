@@ -291,7 +291,14 @@ async fn members_never_read_what_they_are_not_in() {
         }
     }
 
-    for case in mcp_cases(a, b) {
+    let mut tool_cases = mcp_cases(a, b);
+    for (tool, extra) in extra_tool_calls(a) {
+        match tool_cases.iter_mut().find(|case| case.tool == tool) {
+            Some(case) => case.own.extend(extra),
+            None => panic!("extra_tool_calls names {tool}, which has no isolation case"),
+        }
+    }
+    for case in tool_cases {
         if case.own.is_empty() {
             unwalked.push(case.tool);
             continue;
@@ -459,6 +466,28 @@ fn extra_requests(a: &World, task: &str) -> Vec<(&'static str, Vec<String>)> {
                 "/api/v1/projects/{}/work-items/{task}/project-move?targetProjectId={}",
                 a.project, a.space
             )],
+        ),
+    ]
+}
+
+/// Tool calls walked here that the isolation net can't make as A's own,
+/// because A's call there has to succeed: a connected module's panels and
+/// files are asked of the module live, and no module answers in this world.
+/// Walking them still checks the gate in front of the module.
+fn extra_tool_calls(a: &World) -> Vec<(&'static str, Vec<Value>)> {
+    let module = a.module.to_string();
+    vec![
+        (
+            "module_panel_open",
+            vec![
+                json!({"moduleId": module, "panel": "main"}),
+                json!({"moduleId": module, "panel": "main", "spaceId": a.project}),
+            ],
+        ),
+        ("file_source_list", vec![json!({"moduleId": module})]),
+        (
+            "file_source_get",
+            vec![json!({"moduleId": module, "ref": "f1"})],
         ),
     ]
 }

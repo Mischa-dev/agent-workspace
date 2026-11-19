@@ -16,5 +16,6 @@ impl CoreModule for Module {
         module.routes(crate::notifications::router);
         module.routes(crate::later::router);
         module.operations(crate::notifications::views::register_ops);
+        module.operations(crate::notifications::ops::register_later_ops);
     }
 }

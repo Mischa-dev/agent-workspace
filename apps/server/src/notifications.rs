@@ -56,6 +56,7 @@ const MAX_CHANGE_EVENTS: usize = 50;
 // ---------------------------------------------------------------------------
 // Kinds
 
+pub mod ops;
 pub mod views;
 
 pub mod kind {

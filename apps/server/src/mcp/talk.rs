@@ -159,9 +159,9 @@ pub(super) struct MarkReadArguments {
     pub from_message_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PeopleSearchArguments {
+pub(crate) struct PeopleSearchArguments {
     /// Part of a name or handle. Leave it out to list everyone.
     pub query: Option<String>,
     // Read by the MCP middleware, which scopes the call to this project.
@@ -487,7 +487,7 @@ pub struct ReadMark {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Person {
+pub(crate) struct Person {
     pub id: String,
     pub name: String,
     pub handle: String,
@@ -498,7 +498,7 @@ pub(super) struct Person {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PeopleValue {
+pub(crate) struct PeopleValue {
     pub people: Vec<Person>,
 }
 
@@ -2029,7 +2029,7 @@ struct PersonRow {
     projects: Vec<String>,
 }
 
-pub(super) async fn people_search(
+pub(crate) async fn people_search(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PeopleSearchArguments,

@@ -624,7 +624,7 @@ pub(crate) struct ProjectLayoutSetArguments {
     pub expected_version: Option<i64>,
     /// Set the workspace's default layout (with preset, or without it for
     /// none) instead of this project's: the workspace's owners and admins.
-    #[serde(default)]
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
     /// Instead of the project's layout, set which preset each role or
     /// person here gets: every rule the project should have (others are

@@ -33,13 +33,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("file_list", None),
     ("file_read", None),
     ("file_delete", None),
-    ("notification_list", None),
-    ("notification_update", None),
-    ("later_list", None),
-    ("later_save", None),
-    ("later_update", None),
     ("agent_list", None),
-    ("people_search", None),
     ("inbox_list", None),
     ("session_bind", None),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them

@@ -1898,7 +1898,7 @@
     "long": false,
     "module": "projects",
     "name": "invitation_create",
-    "permission": "members.invite",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Invite"
@@ -1912,7 +1912,7 @@
     "long": false,
     "module": "projects",
     "name": "invitation_list",
-    "permission": "members.invite",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "List invitations"
@@ -1928,7 +1928,7 @@
     "long": false,
     "module": "projects",
     "name": "invitation_update",
-    "permission": "members.invite",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Revoke or replace invitation"
@@ -2040,6 +2040,52 @@
     "title": "Update label"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "inbox",
+    "name": "later_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List Later"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "later.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "inbox",
+    "name": "later_save",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save for later"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "later.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "inbox",
+    "name": "later_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update Later item"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -2050,7 +2096,7 @@
     "long": false,
     "module": "projects",
     "name": "layout_preset_create",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Save layout preset"
@@ -2066,7 +2112,7 @@
     "long": false,
     "module": "projects",
     "name": "layout_preset_update",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Update layout preset"
@@ -2082,7 +2128,7 @@
     "long": false,
     "module": "projects",
     "name": "layout_update",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Set layout"
@@ -2523,6 +2569,36 @@
     "emits": [],
     "idempotent": false,
     "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "notification_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List notifications"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "notification.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "notification_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update notifications"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
     "long": true,
     "module": "workspace",
     "name": "package_export",
@@ -2786,6 +2862,20 @@
     "preview": false,
     "proposable": false,
     "title": "Edit page blocks"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "people_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Find people"
   },
   {
     "automation": false,
@@ -5076,7 +5166,7 @@
     "long": false,
     "module": "workspace",
     "name": "workspace_template_apply",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Use workspace template"
@@ -5106,7 +5196,7 @@
     "long": false,
     "module": "workspace",
     "name": "workspace_template_save",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Save workspace template"
@@ -5138,7 +5228,7 @@
     "long": false,
     "module": "workspace",
     "name": "workspace_update",
-    "permission": "settings.manage",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Change workspace"

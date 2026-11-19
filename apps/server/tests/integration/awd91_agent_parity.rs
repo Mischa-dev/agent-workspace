@@ -1634,7 +1634,7 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     let workspace_invitation = string(&to_workspace, "/value/invitation/id");
     let workspace_list = person(
         "invitation_list",
-        json!({"projectId": project, "workspace": true}),
+        json!({"projectId": project, "wholeWorkspace": true}),
     )
     .await;
     assert_eq!(
