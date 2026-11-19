@@ -3,16 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
+import { appearanceQueryKey, getAppearance, type StoredAppearance } from './accountAppearance'
 import { normalizeAppearancePreferences, type AppearancePreferences } from './preferences'
 import { useTheme } from './themeContext'
-
-type StoredAppearance = { appearance: unknown; version: number }
-
-const appearanceQueryKey = ['account', 'appearance'] as const
-
-function getAppearance() {
-  return requestJson<StoredAppearance>('/api/v1/account/appearance')
-}
 
 function putAppearance(appearance: AppearancePreferences, expectedVersion: number) {
   return requestJson<StoredAppearance>('/api/v1/account/appearance', {

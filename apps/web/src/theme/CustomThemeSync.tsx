@@ -5,7 +5,9 @@ import { isApiError } from '../api/errors'
 import { callOp, opQuery } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import type { ThemeDocument } from '../api/generated/operations'
+import { appearanceQueryKey, getAppearance } from './accountAppearance'
 import { CONTRACT_VERSION } from './contract'
+import { normalizeAppearancePreferences } from './preferences'
 import { isDarkScheme } from './slots'
 import { useTheme } from './themeContext'
 
@@ -40,12 +42,23 @@ export default function CustomThemeSync() {
     if (customTheme && isApiError(current.error) && GONE.has(current.error.code)) setTheme(theme.theme)
   }, [current.error, customTheme, setTheme, theme.theme])
 
-  // One-time: the old colour overrides become "My colors", on the theme they were made for.
+  // One-time: the old colour overrides become "My colors", on the theme they
+  // were made for. Only once the account's saved appearance has arrived and
+  // this browser shows it: a newer choice made on another device wins over
+  // this browser's old colours. And only if nothing was chosen meanwhile.
+  const account = useQuery({ queryKey: appearanceQueryKey, queryFn: getAppearance, retry: false, staleTime: 60_000 })
+  const stored = account.data?.appearance && typeof account.data.appearance === 'object' ? normalizeAppearancePreferences(account.data.appearance) : null
+  const settled = account.isError || (account.isSuccess && (stored === null || selection(stored) === selection(theme)))
+  const latest = useRef(theme)
+  useEffect(() => {
+    latest.current = theme
+  })
   const converting = useRef(false)
   const overrides = theme.overrides
   useEffect(() => {
-    if (converting.current || customTheme || !workspaceId || !Object.keys(overrides).length || theme.theme === 'system') return
+    if (!settled || converting.current || customTheme || !workspaceId || !Object.keys(overrides).length || theme.theme === 'system') return
     converting.current = true
+    const before = selection(theme)
     const dark = isDarkScheme(theme.theme)
     const document: ThemeDocument = {
       format: CONTRACT_VERSION,
@@ -55,13 +68,21 @@ export default function CustomThemeSync() {
     }
     void callOp('theme_create', { name: 'My colors', document }, { workspaceId })
       .then((created) => {
+        // Chosen elsewhere while it was being made: keep that choice (the
+        // theme stays in the list).
+        if (selection(latest.current) !== before) return
         setCustomTheme({ id: created.id, workspaceId, version: created.version, name: created.name, document: created.document })
         theme.setMode(dark ? 'dark' : 'light')
       })
       .catch(() => {
         // Leave the colours as they are; the next visit tries again.
       })
-  }, [customTheme, overrides, setCustomTheme, theme, workspaceId])
+  }, [customTheme, overrides, setCustomTheme, settled, theme, workspaceId])
 
   return null
+}
+
+/** What's chosen: the theme, a custom theme and the old colours. */
+function selection(chosen: { theme: string; customTheme: { id: string } | null; overrides: Record<string, string> }) {
+  return JSON.stringify([chosen.theme, chosen.customTheme?.id ?? null, chosen.overrides])
 }

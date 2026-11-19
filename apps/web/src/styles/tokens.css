@@ -363,8 +363,8 @@
   --shadow-card: none;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --t-headline: 650 calc(22px * var(--text-scale)) / calc(30px * var(--text-scale)) var(--font-sans);
-  --t-display: 680 calc(30px * var(--text-scale)) / calc(38px * var(--text-scale)) var(--font-sans);
+  --t-headline: 650 calc(22px * var(--text-scale)) / calc(30px * var(--text-scale)) var(--font-display);
+  --t-display: 680 calc(30px * var(--text-scale)) / calc(38px * var(--text-scale)) var(--font-display);
 }
 
 [data-theme="quiet-dark"] {
