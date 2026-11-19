@@ -80,13 +80,36 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     let (transactions, rows) = counts(pool).await;
     let before = tables(pool).await;
     let maintenance_before = maintenance(pool).await;
-    tokio::time::sleep(WINDOW).await;
+    let sessions_before = sessions(pool).await;
+    // What the other connections to the database are doing, sampled each
+    // second, so a failure names the statements behind its transactions
+    // even when they read no table.
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for _ in 0..WINDOW.as_secs() {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        for statement in activity(pool).await {
+            *seen.entry(statement).or_default() += 1;
+        }
+    }
     // Busy connections report their statistics within a second of going
     // idle; let the last of them land.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (transactions_after, rows_after) = counts(pool).await;
     let after = tables(pool).await;
     let maintenance = maintenance(pool).await - maintenance_before;
+    let (rollbacks, connections) = sessions(pool).await;
+    let (rollbacks, connections) = (
+        rollbacks - sessions_before.0,
+        connections - sessions_before.1,
+    );
+    let mut seen = seen.into_iter().collect::<Vec<_>>();
+    seen.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let seen = seen
+        .iter()
+        .take(10)
+        .map(|(statement, times)| format!("{times}x {statement}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
     // What the server did in the window: jobs it ran, consumers it moved.
     let work = sqlx::query_scalar::<_, Option<String>>(
         "SELECT concat_ws('; ', \
@@ -106,10 +129,42 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
         transactions_after - transactions,
         rows_after - rows,
         format!(
-            "{}; autovacuum passes {maintenance}; {work}",
+            "{}; autovacuum passes {maintenance}; rollbacks {rollbacks}; \
+             new sessions {connections}; {work}; sampled: {seen}",
             busiest(&before, &after)
         ),
     )
+}
+
+/// Rolled back transactions and sessions opened on the test database so
+/// far.
+async fn sessions(pool: &PgPool) -> (i64, i64) {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("SELECT pg_stat_clear_snapshot()")
+        .execute(&mut *connection)
+        .await
+        .expect("clear snapshot");
+    sqlx::query_as::<_, (i64, i64)>(
+        "SELECT xact_rollback::bigint, sessions::bigint \
+         FROM pg_stat_database WHERE datname = current_database()",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("session statistics")
+}
+
+/// The other connections to the test database: their kind, state and the
+/// start of their current or last statement.
+async fn activity(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT concat_ws(' ', backend_type, state, \
+                left(regexp_replace(query, '\\s+', ' ', 'g'), 90)) \
+         FROM pg_stat_activity \
+         WHERE datname = current_database() AND pid <> pg_backend_pid()",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("activity")
 }
 
 /// Autovacuum and autoanalyze passes over the test database's tables so
