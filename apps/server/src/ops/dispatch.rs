@@ -242,12 +242,16 @@ async fn task_keys_to_ids(
             .filter(|(_, preference)| Some(*preference) == best)
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
+        // A list's later tasks are the command's to report one by one: a
+        // key this caller can't resolve stays as it was.
+        let later_in_list = field.starts_with("/taskIds/") && field != "/taskIds/0";
         match found.as_slice() {
             [id] => {
                 if let Some(slot) = input.pointer_mut(&field) {
                     *slot = Value::String(id.to_string());
                 }
             }
+            _ if later_in_list => {}
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(

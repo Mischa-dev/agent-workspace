@@ -154,6 +154,18 @@ const KINDS: &[(&str, &str)] = &[
          WHERE dashboard.id = $1 \
            AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
     ),
+    // Outside data (T1.34): a connection, and a saved query. Who sees which
+    // is the operation's to say (data.connect, or a shared query).
+    (
+        "data_connection",
+        "SELECT connection.workspace_id, connection.space_id FROM data_connections connection \
+         WHERE connection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "data_query",
+        "SELECT query.workspace_id, query.space_id FROM data_queries query \
+         WHERE query.id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
     // it) only when the viewer may see that conversation. Those are checked

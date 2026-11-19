@@ -1247,8 +1247,33 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            KindDecl {
+                kind: "data_connections",
+                table: "data_connections",
+                references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],
+                text_references: &[],
+                // The address with its password is a secret, set again
+                // after import.
+                exclude: &["secret_id"],
+            },
+            KindDecl {
+                kind: "data_queries",
+                table: "data_queries",
+                references: &[
+                    ("space_id", "projects"),
+                    ("connection_id", "data_connections"),
+                    ("reviewed_by_actor_id", "actors"),
+                    ("created_by_actor_id", "actors"),
+                    ("updated_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "data_query_results",
+            "answers stored from a database outside the workspace; run the query again after import",
+        )],
     },
     ExportDecl {
         module: "dashboards",

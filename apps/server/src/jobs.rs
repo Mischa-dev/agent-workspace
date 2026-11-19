@@ -379,6 +379,7 @@ pub fn default_registry() -> JobRegistry {
     crate::work_items::triage::register_jobs(&mut registry);
     crate::work_items::cycles::register_jobs(&mut registry);
     crate::collections::computed::register_jobs(&mut registry);
+    crate::outside_data::run::register_jobs(&mut registry);
     registry.register(PRUNE_KIND, |context| async move {
         prune_finished(&context.state.pool).await?;
         Ok(())

@@ -1025,6 +1025,194 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_create",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Connect outside data"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_delete",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove an outside data connection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_list",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "List outside data connections"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_update",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Change an outside data connection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_create",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Save an outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "data_query.changed",
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_delete",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read a saved outside data query"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved outside data queries"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_review",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Review a saved outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a saved outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed",
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_share",
+    "permission": "data.share",
+    "preview": false,
+    "proposable": false,
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_update",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a saved outside data query"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [],
     "idempotent": false,
     "kind": "query",

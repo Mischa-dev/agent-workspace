@@ -3348,3 +3348,128 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     );
     world.finish().await;
 }
+
+/// Outside data (T1.34, T1.35) keeps to the roles that connect it: someone
+/// without data.connect doesn't see connections, draft queries or any
+/// query's SQL, and can't change, review, run or remove a draft; a role
+/// that connects data but doesn't share it can't share an answer.
+#[tokio::test]
+async fn outside_data_keeps_to_roles_that_connect_it() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("mara", "member")
+        .custom_role_on("Connects data", "admin", &["projects.view", "data.connect"])
+        .person("cleo", "member")
+        .build("privacy_outside_data")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Connects data"]).expect("role id"))
+    .bind(work)
+    .bind(world.people["cleo"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow");
+    let owner = &world.owner.browser;
+    let (_, made) = op(
+        owner,
+        "data_connection_create",
+        json!({"spaceId": work, "name": "Warehouse",
+               "address": "postgresql://reader:hunter2@db.example.com/sales"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert!(!made.to_string().contains("hunter2"), "{made}");
+    let connection = made["value"]["id"].clone();
+    let (_, saved) = op(
+        owner,
+        "data_query_create",
+        json!({"spaceId": work, "connection": connection, "name": "Secret sauce",
+               "statement": "SELECT 'secret-sauce-sql' AS recipe"}),
+    )
+    .await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    let query = saved["value"]["id"].clone();
+
+    let mara = &world.people["mara"].browser;
+    let (_, listed) = op(mara, "data_query_list", json!({"spaceId": work})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("Secret sauce"), "{listed}");
+    for (name, input) in [
+        ("data_connection_list", json!({"spaceId": work})),
+        (
+            "data_connection_update",
+            json!({"connection": connection, "name": "Mine"}),
+        ),
+        ("data_connection_delete", json!({"connection": connection})),
+        ("data_query_get", json!({"query": query})),
+        (
+            "data_query_update",
+            json!({"query": query, "statement": "SELECT 2"}),
+        ),
+        (
+            "data_query_review",
+            json!({"query": query, "state": "reviewed"}),
+        ),
+        ("data_query_run", json!({"query": query})),
+        ("data_query_delete", json!({"query": query})),
+    ] {
+        let (status, body) = op(mara, name, input).await;
+        assert_ne!(body["outcome"], "ok", "mara {name}: {status} {body}");
+        assert!(!body.to_string().contains("secret-sauce-sql"), "{body}");
+    }
+
+    // Cleo connects data but doesn't share it.
+    let cleo = &world.people["cleo"].browser;
+    let (_, reviewed) = op(
+        cleo,
+        "data_query_review",
+        json!({"query": query, "state": "reviewed"}),
+    )
+    .await;
+    assert_eq!(reviewed["outcome"], "ok", "{reviewed}");
+    let (_, refused) = op(
+        cleo,
+        "data_query_share",
+        json!({"query": query, "shared": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // Shared by the owner, its answer is mara's to see, its SQL still not.
+    let (_, shared) = op(
+        owner,
+        "data_query_share",
+        json!({"query": query, "shared": true}),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (_, seen) = op(mara, "data_query_get", json!({"query": query})).await;
+    assert_eq!(seen["outcome"], "ok", "{seen}");
+    assert!(!seen.to_string().contains("secret-sauce-sql"), "{seen}");
+    let (_, still) = op(
+        mara,
+        "data_query_update",
+        json!({"query": query, "name": "Mara's"}),
+    )
+    .await;
+    assert_ne!(still["outcome"], "ok", "{still}");
+    world.finish().await;
+}

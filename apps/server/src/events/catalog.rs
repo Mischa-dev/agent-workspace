@@ -509,6 +509,21 @@ pub static DASHBOARD_UPDATED: EventType = fact(
 )
 .legacy(&["dashboard.updated"]);
 
+// --- outside data (T1.34) ---------------------------------------------------
+pub static DATA_CONNECTION_CHANGED: EventType = fact(
+    "data_connection.changed",
+    "collections",
+    Some("data_connection"),
+    "An outside data connection was made, changed or removed",
+);
+pub static DATA_QUERY_CHANGED: EventType = fact(
+    "data_query.changed",
+    "collections",
+    Some("data_query"),
+    "A saved outside data query was made, changed, reviewed, shared or removed, or a run of \
+     it stored its answer",
+);
+
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
     "whiteboard.scene_changed",
@@ -771,6 +786,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_RANGES_CHANGED,
         &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
+        &DATA_CONNECTION_CHANGED,
+        &DATA_QUERY_CHANGED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,

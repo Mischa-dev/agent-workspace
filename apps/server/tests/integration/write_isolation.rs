@@ -511,6 +511,15 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "dashboard_create",
     "dashboard_delete",
     "dashboard_update",
+    "data_connection_create",
+    "data_connection_delete",
+    "data_connection_update",
+    "data_query_create",
+    "data_query_delete",
+    "data_query_review",
+    "data_query_run",
+    "data_query_share",
+    "data_query_update",
     "decision_record",
     "page_make",
     "environment_archive",
@@ -2221,6 +2230,9 @@ struct Spares {
     collection_view: Uuid,
     /// A second dashboard in A's project, removed by dashboard_delete.
     dashboard: Uuid,
+    /// A connection nothing runs on, and a query, removed (T1.34).
+    data_connection: Uuid,
+    data_query: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2845,6 +2857,27 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("spare dashboard");
+    let data_connection = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/data_connection_create", a.organization),
+        json!({"spaceId": a.project, "name": "Net spare connection",
+               "address": "postgresql://reader:spare@db.example.com/spare"}),
+    )
+    .await;
+    let data_connection =
+        Uuid::parse_str(&string_at(&data_connection, "/value/id")).expect("spare connection");
+    let data_query = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/data_query_create", a.organization),
+        json!({"spaceId": a.project, "connection": a.data_connection,
+               "name": "Net spare query", "statement": "SELECT 1"}),
+    )
+    .await;
+    let data_query = Uuid::parse_str(&string_at(&data_query, "/value/id")).expect("spare query");
 
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
@@ -2894,6 +2927,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         provider_account,
         collection_view,
         dashboard,
+        data_connection,
+        data_query,
     }
 }
 
@@ -7409,6 +7444,61 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "dashboard_delete",
             json!({"dashboard": sp.dashboard}),
             vec![json!({"dashboard": b.dashboard})],
+        ),
+        // Outside data (T1.34, T1.35): connections and queries are made in
+        // the project named, over A's own connections; B's can't be
+        // changed, reviewed, shared, run or removed from A.
+        mcp_case(
+            "data_connection_create",
+            json!({"spaceId": a.project, "name": "Net mcp connection",
+                   "address": "postgresql://reader:net@db.example.com/net"}),
+            vec![json!({"spaceId": b.project, "name": "Net mcp connection",
+                        "address": "postgresql://reader:net@db.example.com/net"})],
+        ),
+        mcp_case(
+            "data_connection_update",
+            json!({"connection": a.data_connection, "name": "Net renamed connection"}),
+            vec![json!({"connection": b.data_connection, "name": "Net"})],
+        ),
+        mcp_case(
+            "data_connection_delete",
+            json!({"connection": sp.data_connection}),
+            vec![json!({"connection": b.data_connection})],
+        ),
+        mcp_case(
+            "data_query_create",
+            json!({"spaceId": a.project, "connection": a.data_connection,
+                   "name": "Net mcp query", "statement": "SELECT 1"}),
+            vec![json!({"spaceId": b.project, "connection": b.data_connection,
+                        "name": "Net mcp query", "statement": "SELECT 1"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "connection": b.data_connection,
+                               "name": "Net over B", "statement": "SELECT 1"})]),
+        mcp_case(
+            "data_query_update",
+            json!({"query": a.data_query, "name": "Net renamed query"}),
+            vec![json!({"query": b.data_query, "name": "Net"})],
+        )
+        .rejecting(vec![json!({"query": a.data_query, "connection": b.data_connection})]),
+        mcp_case(
+            "data_query_review",
+            json!({"query": a.data_query, "state": "reviewed"}),
+            vec![json!({"query": b.data_query, "state": "reviewed"})],
+        ),
+        mcp_case(
+            "data_query_share",
+            json!({"query": a.data_query, "shared": false}),
+            vec![json!({"query": b.data_query, "shared": false})],
+        ),
+        mcp_case(
+            "data_query_run",
+            json!({"query": a.data_query}),
+            vec![json!({"query": b.data_query})],
+        ),
+        mcp_case(
+            "data_query_delete",
+            json!({"query": sp.data_query}),
+            vec![json!({"query": b.data_query})],
         ),
         mcp_case(
             "label_create",

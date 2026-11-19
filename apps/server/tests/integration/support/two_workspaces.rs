@@ -100,6 +100,9 @@ pub(crate) struct World {
     pub(crate) collection_view: Uuid,
     /// A shared dashboard (T1.32) with a tile over `collection_view`.
     pub(crate) dashboard: Uuid,
+    /// An outside data connection (T1.34) and a saved query on it.
+    pub(crate) data_connection: Uuid,
+    pub(crate) data_query: Uuid,
     /// An internal form (T1.28) on `collection`.
     pub(crate) form: Uuid,
     /// A record template (T1.30) on `collection`, made daily.
@@ -800,6 +803,30 @@ async fn build_workspace(
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
+    let data_connection = call(
+        "data_connection_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Warehouse{m}"),
+            "address": format!("postgresql://reader:secret{m}@db.example.com/warehouse"),
+            "clientRequestId": "data-connection-1",
+        }),
+    )
+    .await;
+    let data_connection =
+        Uuid::parse_str(&string_at(&data_connection, "/value/id")).expect("data connection id");
+    let data_query = call(
+        "data_query_create",
+        json!({
+            "spaceId": project,
+            "connection": data_connection.to_string(),
+            "name": format!("Orders{m}"),
+            "statement": format!("SELECT 'Orders{m}' AS team"),
+            "clientRequestId": "data-query-1",
+        }),
+    )
+    .await;
+    let data_query = Uuid::parse_str(&string_at(&data_query, "/value/id")).expect("data query id");
     let form = call(
         "form_create",
         json!({
@@ -1906,6 +1933,8 @@ async fn build_workspace(
         collection_button,
         collection_view,
         dashboard,
+        data_connection,
+        data_query,
         form,
         record_template,
         recurring_record,

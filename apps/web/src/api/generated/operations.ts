@@ -30,6 +30,8 @@ export type AgentUsageLine = { accountId: string; cachedInputTokens: number; con
 
 export type Aggregate = ("sum" | "average" | "min" | "max") | "count" | "count_values" | "count_unique" | "earliest" | "latest" | "percent_checked" | "percent_empty" | "list"
 
+export type AnswerEntry = { columns: string[]; durationMs?: number | null; error?: string | null; parameters: unknown; ranAt?: string | null; reviewed: boolean; rowCount: number; rows: unknown[]; running: boolean; truncated: boolean }
+
 export type ArchiveParts = "archive" | "keep"
 
 export type AssigneeProjection = { actorId: string; displayName: string; handle: string }
@@ -81,6 +83,8 @@ export type CommentItem = { at: string; author: string; files?: FileSummary[]; i
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
+
+export type ConnectionEntry = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
 
 export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
@@ -160,7 +164,7 @@ export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | nul
 
 export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
 
-export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
+export type Figures = { collectionName: string; columns?: string[]; error?: string | null; groups: FigureGroup[]; measure?: string | null; ranAt?: string | null; records: string[]; rows?: unknown[]; running?: boolean; style?: string | null; total: number; truncated?: boolean; value?: number | null; viewName: string; viewType: string }
 
 export type FileSummary = { commentId?: string | null; contentType: string; fileId: string; height?: number | null; idempotentReplay?: boolean; name: string; size: number; width?: number | null }
 
@@ -324,6 +328,10 @@ export type PageLine = { id: string; stale: boolean; title: string; updatedAt: s
 
 export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
 
+export type Parameter = { default?: unknown; name: string; type: ParameterKind }
+
+export type ParameterKind = ("text" | "number" | "boolean") | "date"
+
 export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
@@ -361,6 +369,8 @@ export type PullRequest = { baseRef: string; checksState: string; draft: boolean
 export type PullRequestLine = { checksState: string; draft: boolean; failingChecks?: string[]; id: string; lastSyncedAt?: string | null; mergeabilityState: string; needsYou?: string[]; number: number; pendingChecks?: number; project: string; projectId: string; projectKey: string; repository: string; repositoryId: string; requestedReviewers?: string[]; reviewState: string; runId?: string | null; state: string; syncState: string; tasks?: LinkedTask[]; thread?: LinkedThread | null; title: string; updatedAt: string; url: string; version: number }
 
 export type PullRequestProjection = { baseRef: string; canonicalUrl: string; checksState: string; draft: boolean; headRef: string; headSha: string; id: string; mergeabilityState: string; number: number; projectId: string; repositoryId: string; reviewState: string; state: string; suggested?: boolean; syncState: string; title: string; url: string; version: number }
+
+export type QueryEntry = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
@@ -403,6 +413,8 @@ export type Resolution = { action: ResolutionAction; issue: string; targetField?
 export type ResolutionAction = "leave" | "set"
 
 export type ResultType = "number" | "text" | "boolean" | "date" | "list"
+
+export type ReviewState = "draft" | "reviewed"
 
 export type RevisionItem = { redacted?: boolean; revision: number; text: string; truncated?: boolean; via?: string | null; writtenAt: string; writtenBy: string }
 
@@ -502,11 +514,11 @@ export type ThreadRef = { id: string; name: string; status: string }
 
 export type ThreadUpdate = { changedAt: string; changedBy?: string | null; name: string; outcome?: string | null; status: string; threadId: string; under: string }
 
-export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; range?: string; sheet?: string | null; style?: ChartStyle | null; text?: string; title?: string; unseen?: string | null; view?: string | null; width: number }
+export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; query?: string | null; range?: string; sheet?: string | null; style?: ChartStyle | null; text?: string; title?: string; unseen?: string | null; view?: string | null; width: number }
 
-export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; range?: string | null; sheet?: string | null; style?: ChartStyle | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
+export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; query?: string | null; range?: string | null; sheet?: string | null; style?: ChartStyle | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
 
-export type TileKind = "view" | "text" | "sheet"
+export type TileKind = "view" | "text" | "sheet" | "query"
 
 export type TriageAction = "accept" | "decline" | "duplicate" | "snooze"
 
@@ -807,6 +819,54 @@ export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntr
 export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean | null; tiles?: TileInput[] | null }
 
 export type DashboardUpdateOutput = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DataConnectionCreateInput = { address: string; name: string; spaceId: string }
+
+export type DataConnectionCreateOutput = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
+
+export type DataConnectionDeleteInput = { connection: string }
+
+export type DataConnectionDeleteOutput = { id: string; removed: boolean }
+
+export type DataConnectionListInput = { spaceId: string }
+
+export type DataConnectionListOutput = { connections: ConnectionEntry[] }
+
+export type DataConnectionUpdateInput = { address?: string | null; connection: string; expectedVersion?: number | null; name?: string | null }
+
+export type DataConnectionUpdateOutput = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
+
+export type DataQueryCreateInput = { connection: string; description?: string | null; name: string; parameters?: Parameter[]; rowCap?: number | null; spaceId: string; statement: string }
+
+export type DataQueryCreateOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryDeleteInput = { query: string }
+
+export type DataQueryDeleteOutput = { id: string; removed: boolean }
+
+export type DataQueryGetInput = { query: string }
+
+export type DataQueryGetOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryListInput = { spaceId: string }
+
+export type DataQueryListOutput = { canConnect: boolean; canShare: boolean; queries: QueryEntry[] }
+
+export type DataQueryReviewInput = { expectedVersion?: number | null; query: string; state: ReviewState }
+
+export type DataQueryReviewOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryRunInput = { parameters?: Record<string, unknown> | null; query: string }
+
+export type DataQueryRunOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryShareInput = { query: string; shared: boolean }
+
+export type DataQueryShareOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryUpdateInput = { connection?: string | null; description?: string | null; expectedVersion?: number | null; name?: string | null; parameters?: Parameter[] | null; query: string; rowCap?: number | null; statement?: string | null }
+
+export type DataQueryUpdateOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -1680,6 +1740,18 @@ export type Operations = {
   dashboard_get: { input: DashboardGetInput; output: DashboardGetOutput }
   dashboard_list: { input: DashboardListInput; output: DashboardListOutput }
   dashboard_update: { input: DashboardUpdateInput; output: DashboardUpdateOutput }
+  data_connection_create: { input: DataConnectionCreateInput; output: DataConnectionCreateOutput }
+  data_connection_delete: { input: DataConnectionDeleteInput; output: DataConnectionDeleteOutput }
+  data_connection_list: { input: DataConnectionListInput; output: DataConnectionListOutput }
+  data_connection_update: { input: DataConnectionUpdateInput; output: DataConnectionUpdateOutput }
+  data_query_create: { input: DataQueryCreateInput; output: DataQueryCreateOutput }
+  data_query_delete: { input: DataQueryDeleteInput; output: DataQueryDeleteOutput }
+  data_query_get: { input: DataQueryGetInput; output: DataQueryGetOutput }
+  data_query_list: { input: DataQueryListInput; output: DataQueryListOutput }
+  data_query_review: { input: DataQueryReviewInput; output: DataQueryReviewOutput }
+  data_query_run: { input: DataQueryRunInput; output: DataQueryRunOutput }
+  data_query_share: { input: DataQueryShareInput; output: DataQueryShareOutput }
+  data_query_update: { input: DataQueryUpdateInput; output: DataQueryUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   dependency_graph_get: { input: DependencyGraphGetInput; output: DependencyGraphGetOutput }
