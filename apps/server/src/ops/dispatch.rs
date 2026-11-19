@@ -124,7 +124,7 @@ async fn space_keys_to_ids(
                 let space = if make {
                     crate::spaces::personal::personal(&mut tx, workspace, caller.account_id).await
                 } else {
-                    crate::spaces::personal::existing(&mut *tx, workspace, caller.account_id).await
+                    crate::spaces::personal::existing(&mut tx, workspace, caller.account_id).await
                 }
                 .map_err(|error| OpError::logged("personal space", &error))?;
                 tx.commit()

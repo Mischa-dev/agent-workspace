@@ -942,7 +942,7 @@ impl ProjectAccess {
     }
 
     /// Whether they manage the project's settings (`manages`).
-    fn manages(&self) -> bool {
+    fn manages_settings(&self) -> bool {
         self.grant()
             .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
     }
@@ -954,7 +954,7 @@ async fn project_view(
     project_id: Uuid,
 ) -> Result<ProjectLayoutView, AppError> {
     let access = project_access(connection, principal, project_id).await?;
-    let manager = access.manages();
+    let manager = access.manages_settings();
     let stored = Stored::load(
         connection,
         access.organization_id,
