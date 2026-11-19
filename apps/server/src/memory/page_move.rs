@@ -75,6 +75,7 @@ impl Operation for PageMove {
         let workspace_id = call.ctx.workspace_id;
         let writer = Writer::from(call.ctx);
         let caller = call.ctx.caller.clone();
+        let authorized = call.ctx.space_id;
         let tx = call.tx().await?;
         // Where it goes is checked as where it is: the whole caller, with
         // edit on pages there. A space the caller can't reach reads as
@@ -124,6 +125,12 @@ impl Operation for PageMove {
             .await
             .map_err(AppError::from)?
             .ok_or_else(|| OpError::not_found("That page"))?;
+        // The call was allowed in the space the page was in when it was
+        // resolved; a move of a page above it that landed since (which
+        // carries this one along without a new version) leaves it no say.
+        if authorized != Some(from) {
+            return Err(OpError::not_found("That page"));
+        }
         if version != input.expected_version {
             return Err(AppError::VersionConflict {
                 resource: "page",
