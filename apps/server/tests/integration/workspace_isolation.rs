@@ -2129,6 +2129,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "package_export",
     "package_list",
     "package_preview",
+    "package_upgrade_preview",
     "page_blocks_get",
     "page_comment_list",
     "page_get",
@@ -2686,6 +2687,15 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({})],
             vec![],
             vec![json!({}), json!({"query": "lists"})],
+        ),
+        // M1.10: another workspace's install is never planned against.
+        case(
+            "package_upgrade_preview",
+            vec![],
+            vec![json!({"installId": b.package_install, "package": {
+                "format": "agent-workspace-package/1", "id": "fixture", "version": "2.0.0",
+                "name": "Fixture", "target": "space", "contents": []}})],
+            vec![],
         ),
         case(
             "package_preview",

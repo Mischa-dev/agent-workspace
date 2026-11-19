@@ -74,6 +74,8 @@ export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; st
 
 export type ChipTone = "muted" | "agent" | "warning" | "success" | "danger"
 
+export type Choice = "keep_mine" | "take_theirs"
+
 export type ClaimRun = { runId: string; state: string }
 
 export type ClaimSession = { externalRef: string; harness: string; state: string; url?: string | null }
@@ -1370,6 +1372,14 @@ export type PackageRemoveInput = { installId: string; parts: RemoveParts }
 
 export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
 
+export type PackageUpgradeInput = { choices?: Record<string, Choice>; entry?: string | null; fileId?: string | null; installId: string; package?: Record<string, unknown> | null; planHash: string }
+
+export type PackageUpgradeOutput = { added: string[]; changes: string[]; detached: string[]; installId: string; kept: string[]; skipped: string[]; updated: string[]; upgradedFrom: string; version: string }
+
+export type PackageUpgradePreviewInput = { entry?: string | null; fileId?: string | null; installId: string; package?: Record<string, unknown> | null }
+
+export type PackageUpgradePreviewOutput = { fromVersion: string; items: PlanItem[]; leaves: string[]; major: boolean; planHash: string; roles: unknown; toVersion: string; turnsOff: string[]; turnsOn: string[] }
+
 export type PageBlocksGetInput = { from?: string | null; includeMarkdown?: boolean | null; pageId: string; section?: string | null; to?: string | null; version?: number | null }
 
 export type PageBlocksGetOutput = { blocks: BlockLine[]; markdown?: string | null; outline: OutlineLine[]; pageId: string; projectId: string; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; url: string; version: number }
@@ -2267,6 +2277,8 @@ export type Operations = {
   package_list: { input: PackageListInput; output: PackageListOutput }
   package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
+  package_upgrade: { input: PackageUpgradeInput; output: PackageUpgradeOutput }
+  package_upgrade_preview: { input: PackageUpgradePreviewInput; output: PackageUpgradePreviewOutput }
   page_blocks_get: { input: PageBlocksGetInput; output: PageBlocksGetOutput }
   page_comment_create: { input: PageCommentCreateInput; output: PageCommentCreateOutput }
   page_comment_list: { input: PageCommentListInput; output: PageCommentListOutput }

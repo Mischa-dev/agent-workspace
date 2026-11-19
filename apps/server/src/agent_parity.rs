@@ -1029,6 +1029,13 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/modules/{module_id}/frames/redeem",
+            Plumbing(
+                "a connected module redeeming a framed panel's launch token, signed with its install's secret",
+            ),
+        ),
+        (
+            Post,
             "/api/v1/host/describe",
             Plumbing("a host describing itself with its own credential"),
         ),

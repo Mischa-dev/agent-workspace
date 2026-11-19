@@ -1408,6 +1408,63 @@ pub(crate) async fn insert(
     Ok(id)
 }
 
+/// A package upgrade (M1.10) giving a rule the new version's definition,
+/// checked by [`prepare_in`]. Only its maker's: it acts as them. False when
+/// the rule is gone or someone else's.
+pub(crate) async fn replace_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    rule_id: Uuid,
+    prepared: &PreparedRule,
+) -> Result<bool, AppError> {
+    let PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    } = prepared;
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE automation_rules
+        SET name = $4, trigger_kind = $5, trigger = $6, view_id = $7, conditions = $8,
+            actions = $9, enabled = $10, next_run_at = $11,
+            disabled_reason = CASE WHEN $10 THEN NULL ELSE disabled_reason END,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND owner_actor_id = $3
+        RETURNING organization_id
+        "#,
+    )
+    .bind(project_id)
+    .bind(rule_id)
+    .bind(caller.actor_id)
+    .bind(name)
+    .bind(request.trigger.kind())
+    .bind(serde_json::to_value(&request.trigger).map_err(|_| AppError::Validation("trigger"))?)
+    .bind(request.conditions.view_id)
+    .bind(json!(request.conditions.filters))
+    .bind(serde_json::to_value(&request.actions).map_err(|_| AppError::Validation("actions"))?)
+    .bind(enabled)
+    .bind(next_run_at)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization_id) = organization_id else {
+        return Ok(false);
+    };
+    events::audit(
+        &mut **transaction,
+        caller,
+        organization_id,
+        Some(project_id),
+        "automation.updated",
+        "automation_rule",
+        rule_id,
+        json!({ "enabled": enabled }),
+    )
+    .await?;
+    Ok(true)
+}
+
 pub(crate) async fn update(
     state: &AppState,
     caller: &Caller,

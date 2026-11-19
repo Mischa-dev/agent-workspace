@@ -614,6 +614,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "notification_keyword_set",
     "notification_update",
     "package_install",
+    "package_upgrade",
     "package_remove",
     "directory_source_create",
     "directory_source_remove",
@@ -7741,6 +7742,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
         )
         .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        // M1.10: another workspace's install is never upgraded.
+        mcp_case(
+            "package_upgrade",
+            json!({}),
+            vec![json!({"installId": b.package_install, "package": tiny_package(), "planHash": "sha256:0", "clientRequestId": "net-package-upgrade-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_upgrade.rs covers upgrading"),
         mcp_case(
             "package_remove",
             json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),

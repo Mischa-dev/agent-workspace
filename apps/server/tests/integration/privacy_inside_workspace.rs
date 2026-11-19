@@ -485,6 +485,13 @@ fn extra_tool_calls(a: &World) -> Vec<(&'static str, Vec<Value>)> {
             ],
         ),
         ("file_source_list", vec![json!({"moduleId": module})]),
+        // M1.10: an upgrade's plan, walked against the fixture install.
+        (
+            "package_upgrade_preview",
+            vec![json!({"installId": a.package_install, "package": {
+                "format": "agent-workspace-package/1", "id": "fixture", "version": "2.0.0",
+                "name": "Fixture", "target": "space", "contents": []}})],
+        ),
         (
             "file_source_get",
             vec![json!({"moduleId": module, "ref": "f1"})],

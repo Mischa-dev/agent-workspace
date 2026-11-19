@@ -106,6 +106,8 @@
     "package_export": "query",
     "package_preview": "query",
     "package_install": "create",
+    "package_upgrade_preview": "query",
+    "package_upgrade": "change",
     "package_list": "query",
     "package_remove": "change",
     "directory_list": "query",

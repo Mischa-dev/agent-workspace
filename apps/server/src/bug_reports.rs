@@ -537,6 +537,51 @@ pub(crate) async fn insert_link(
     Ok((link_id, token))
 }
 
+/// A package upgrade (M1.10) giving a form its new name and questions.
+/// Only its maker's: its answers become records as them. False when the
+/// form is gone or someone else's.
+pub(crate) async fn replace_form_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    link_id: Uuid,
+    name: &str,
+    collection_id: Uuid,
+    form: &FormConfig,
+) -> Result<bool, AppError> {
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE bug_report_links
+        SET name = $4, collection_id = $5, form = $6, version = version + 1, updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND owner_actor_id = $3
+        RETURNING organization_id
+        "#,
+    )
+    .bind(link_id)
+    .bind(project_id)
+    .bind(caller.actor_id)
+    .bind(name)
+    .bind(collection_id)
+    .bind(serde_json::to_value(form).map_err(|_| AppError::Internal("serialize form"))?)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization_id) = organization_id else {
+        return Ok(false);
+    };
+    events::audit(
+        &mut **transaction,
+        caller,
+        organization_id,
+        Some(project_id),
+        "bug_report_link.update",
+        "bug_report_link",
+        link_id,
+        json!({ "name": name, "form": true }),
+    )
+    .await?;
+    Ok(true)
+}
+
 pub(crate) async fn update(
     state: &AppState,
     caller: &Caller,

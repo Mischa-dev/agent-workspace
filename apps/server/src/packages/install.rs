@@ -118,11 +118,12 @@ impl Place {
     }
 }
 
-/// One line of the plan.
+/// One line of the plan (an install's, or an upgrade's).
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanItem {
-    /// create, reuse, update or skip.
+    /// create, reuse, update or skip; an upgrade also plans keep, conflict
+    /// (changed here and upstream) and detach (dropped upstream).
     pub action: String,
     /// The part's kind: switches, layout, role, space, channel, collection,
     /// form, automation, page, skill, agent or module.

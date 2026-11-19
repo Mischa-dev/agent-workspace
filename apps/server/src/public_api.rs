@@ -699,11 +699,11 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
         // The result, a refusal (the same result with its `outcome`) and
         // the shared `Error` body (401, 413 and 429, the same for every
-        // operation) are one response that 200 and every other status
-        // (`default`) point at, shared by every operation with that result,
-        // so an operation adds no responses of its own and the document
-        // stays small as operations are added. The introduction says what
-        // each status means.
+        // operation) are one response that every status (`default`, 200
+        // included) points at, shared by every operation with that result,
+        // so an operation adds one reference and no responses of its own,
+        // and the document stays small as operations are added. The
+        // introduction says what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
                 "description": "The result, a refusal (see `outcome`), or an `Error`.",
@@ -712,8 +712,8 @@ pub(crate) fn document() -> Value {
                 } } },
             })
         });
-        let own = json!({ "$ref": format!("#/components/responses/{result}") });
-        let responses = json!({ "200": own.clone(), "default": own });
+        let responses =
+            json!({ "default": { "$ref": format!("#/components/responses/{result}") } });
         let mut post = json!({
             "operationId": name,
             "summary": title,

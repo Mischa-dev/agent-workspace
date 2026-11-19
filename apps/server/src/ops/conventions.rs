@@ -77,6 +77,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // A connected module's framed page says it's done; the app is
             // asked for the result (M1.15).
             "finish",
+            // An install takes a newer version of its package (M1.10).
+            "upgrade",
             // A group's agents take more turns (K2.8).
             "continue",
             // An agent passes on, or a person stops, a reply request (K2.9).

@@ -2760,6 +2760,36 @@
     "title": "Remove a package"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "package.installed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "package_upgrade",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Upgrade a package"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "package_upgrade_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a package upgrade"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

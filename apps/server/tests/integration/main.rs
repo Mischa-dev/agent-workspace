@@ -132,6 +132,7 @@ mod ops_messages;
 mod package_directory;
 mod packages;
 mod packages_install;
+mod packages_upgrade;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;
