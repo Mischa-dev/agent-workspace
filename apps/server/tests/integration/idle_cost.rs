@@ -14,6 +14,8 @@ use crate::cluster_support::cluster;
 
 /// How long each idle stretch is counted for.
 const WINDOW: Duration = Duration::from_secs(20);
+/// The longest PostgreSQL holds back a backend's statistics, and a margin.
+const STATISTICS_LAG: Duration = Duration::from_secs(65);
 /// How often the other connections' statements are sampled in a window.
 const SAMPLE: Duration = Duration::from_millis(100);
 /// The workspaces added for the second count.
@@ -84,6 +86,13 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
 /// What the database did over one idle window, and the tables it read
 /// most.
 async fn idle(pool: &PgPool) -> (i64, i64, String) {
+    // A busy backend that can't take a statistics lock at once keeps its
+    // counts and tries again later, for up to a minute (PostgreSQL's
+    // PGSTAT_MAX_INTERVAL). The database's own entry, which every
+    // connection to it writes, is the one most often busy, so on a loaded
+    // machine the transactions of the catch-up just finished land here
+    // without the table reads that came with them. Let them land first.
+    tokio::time::sleep(STATISTICS_LAG).await;
     let (transactions, rows) = counts(pool).await;
     let before = tables(pool).await;
     let maintenance_before = maintenance(pool).await;
