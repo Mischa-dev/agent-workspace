@@ -25,7 +25,7 @@ export type UploadTarget =
   | { kind: 'conversation'; conversationId: string }
   | { kind: 'task'; projectId: string; workItemId: string; forComment?: boolean }
   /** A thing's own file, such as a picture in a page (C1.33). */
-  | { kind: 'thing'; thingKind: 'page'; thingId: string }
+  | { kind: 'thing'; thingKind: 'page' | 'record'; thingId: string }
 
 export type Uploader = (file: File, onProgress: (fraction: number) => void, signal: AbortSignal) => Promise<FileAttachment>
 

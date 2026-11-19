@@ -168,7 +168,9 @@ pub fn askable(field_type: FieldType) -> bool {
 /// see the space's people and records, so an internal form asks for them
 /// too.
 pub fn askable_on(field_type: FieldType, audience: Audience) -> bool {
-    if field_type.is_read_only() {
+    // Files are off on every form: nothing uploads before the record is
+    // made, and a public form's sender has no account to upload with.
+    if field_type.is_read_only() || field_type == FieldType::File {
         return false;
     }
     match audience {
@@ -223,6 +225,10 @@ pub fn check_for(
         };
         if !askable_on(field.field_type, audience) {
             return Err(match audience {
+                _ if field.field_type == FieldType::File => format!(
+                    "\"{}\" holds files, which forms don't take yet.",
+                    field.name
+                ),
                 Audience::Public => format!(
                     "\"{}\" can't be on a public form: people and links would show who and what is in the project.",
                     field.name
@@ -268,6 +274,12 @@ pub fn check_for(
         if field.field_type.is_read_only() {
             return Err(format!(
                 "Nobody sets \"{}\": it fills itself in.",
+                field.name
+            ));
+        }
+        if field.field_type == FieldType::File {
+            return Err(format!(
+                "\"{}\" holds files, which forms don't take yet.",
                 field.name
             ));
         }
@@ -622,6 +634,9 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
         | FieldType::Formula
         | FieldType::Rollup
         | FieldType::Button => return Err(wrong("nothing on a form")),
+        // Forms take no files (T1.20): one is never asked, and an answer
+        // naming one is refused.
+        FieldType::File => return Err(wrong("files, which forms don't take")),
     })
 }
 
@@ -702,6 +717,22 @@ pub fn record_from_answer_for(
         .unwrap_or_default();
     if title.is_empty() {
         return Err(format!("Fill in {}.", collection.title_name));
+    }
+    // Files are off on forms: an answer that names a file field is refused,
+    // never quietly dropped.
+    if let Some(field) = definitions.iter().find(|field| {
+        field.field_type == FieldType::File
+            && !field.archived
+            && answer.iter().any(|(key, value)| {
+                !is_blank(value)
+                    && (key.trim() == field.id.to_string()
+                        || key.trim().eq_ignore_ascii_case(field.name.trim()))
+            })
+    }) {
+        return Err(format!(
+            "\"{}\" holds files, which this form doesn't take.",
+            field.name
+        ));
     }
     let mut values = Map::new();
     // The answers so far by field, as given: conditions read them. A hidden
@@ -911,6 +942,45 @@ mod tests {
         .expect("json");
         assert!(record_from_answer(&collection(), &form, &fields, &wordy).is_err());
         assert!(parse_answer(None, b"plain words").is_err());
+    }
+
+    #[test]
+    fn a_form_never_takes_a_file() {
+        let notes = field("Notes", FieldType::Text);
+        let files = field("Screenshots", FieldType::File);
+        let fields = vec![notes.clone(), files.clone()];
+        let ask = |ids: &[Uuid]| FormConfig {
+            fields: ids
+                .iter()
+                .map(|id| FormField {
+                    field: *id,
+                    required: false,
+                    show_if: None,
+                })
+                .collect(),
+            ..FormConfig::default()
+        };
+        // Not asked, on a public form or an internal one.
+        assert_eq!(
+            check(&ask(&[files.id]), &fields),
+            Err("\"Screenshots\" holds files, which forms don't take yet.".to_owned())
+        );
+        assert!(super::check_for(&ask(&[files.id]), &fields, super::Audience::Internal).is_err());
+        // An answer naming it, by name or ID, is refused, not dropped.
+        let form = ask(&[notes.id]);
+        for key in ["Screenshots".to_owned(), files.id.to_string()] {
+            let mut answer = Map::new();
+            answer.insert("title".to_owned(), json!("Crash"));
+            answer.insert(key, json!([Uuid::now_v7().to_string()]));
+            assert_eq!(
+                record_from_answer(&collection(), &form, &fields, &answer),
+                Err("\"Screenshots\" holds files, which this form doesn't take.".to_owned())
+            );
+        }
+        let mut plain = Map::new();
+        plain.insert("title".to_owned(), json!("Crash"));
+        plain.insert("Notes".to_owned(), json!("On start"));
+        assert!(record_from_answer(&collection(), &form, &fields, &plain).is_ok());
     }
 
     #[test]

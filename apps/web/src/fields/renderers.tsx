@@ -105,6 +105,24 @@ export function RelationRenderer({ field, references, value }: RendererProps) {
   )
 }
 
+/** A record's files: their names, as chips (the cell sits in a button; its editor opens each). A removed file drops out. */
+export function FileRenderer({ field, references, value }: RendererProps) {
+  const ids = Array.isArray(value) ? value : []
+  return (
+    <ul aria-label={field.name} className="aw-labels">
+      {ids.map((id) => {
+        const name = references.find((entry) => entry.id === id && entry.kind === 'file')?.label
+        if (name === undefined) return null
+        return (
+          <li className="aw-label" key={id}>
+            <span className="aw-label__name">{name}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 /** A formula's or rollup's result, by what it gives; an error for this record says so, with its message. */
 export function FormulaRenderer({ field, references, value }: RendererProps) {
   if (isFormulaError(value)) {

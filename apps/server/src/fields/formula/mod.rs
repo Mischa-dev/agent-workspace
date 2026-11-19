@@ -84,9 +84,11 @@ fn field_ty(field: &FieldDefinition) -> Result<Ty, String> {
         FieldType::Number | FieldType::AutoId => Ty::Number,
         FieldType::Date | FieldType::CreatedTime | FieldType::EditedTime => Ty::Date,
         FieldType::Checkbox => Ty::Boolean,
-        FieldType::MultipleChoice | FieldType::People | FieldType::Labels | FieldType::Relation => {
-            Ty::List
-        }
+        FieldType::MultipleChoice
+        | FieldType::People
+        | FieldType::Labels
+        | FieldType::Relation
+        | FieldType::File => Ty::List,
         FieldType::Formula | FieldType::Rollup => match field.result() {
             Some(result) => result.ty(),
             None => Ty::Any,
@@ -382,7 +384,7 @@ impl Reader<'_> {
             FieldType::Person | FieldType::Link => {
                 stored.as_str().map_or(V::Blank, |id| self.label(id))
             }
-            FieldType::Relation => V::List(
+            FieldType::Relation | FieldType::File => V::List(
                 stored
                     .as_array()
                     .map(|ids| {

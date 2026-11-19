@@ -3572,7 +3572,30 @@ async fn record_changes_keep_to_roles_that_edit_records() {
         )
         .await;
         assert_ne!(restored["outcome"], "ok", "{who}: {restored}");
+        // Nor upload a file to it (T1.20): that's editing.
+        let (status, uploaded) = send(
+            app,
+            browser.request(
+                "POST",
+                &format!(
+                    "/api/v1/things/record/{}/files?name=sneaky.txt",
+                    record.as_str().expect("id")
+                ),
+                None,
+                json!("sneaky"),
+            ),
+        )
+        .await;
+        assert_eq!(status.as_u16(), 404, "{who}: {uploaded}");
     }
+    let files = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM files WHERE thing_kind = 'record' AND thing_id = $1::uuid",
+    )
+    .bind(record.as_str().expect("id"))
+    .fetch_one(pool)
+    .await
+    .expect("files");
+    assert_eq!(files, 0);
     let tier: Value =
         sqlx::query_scalar("SELECT field_values FROM collection_records WHERE id = $1::uuid")
             .bind(record.as_str().expect("id"))

@@ -156,7 +156,7 @@ export type FieldFilterArgument = { field: string; op: FieldOp; values?: string[
 
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
 
-export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "relation" | "rollup" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id" | "formula" | "button"
+export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "relation" | "rollup" | "file" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id" | "formula" | "button"
 
 export type FieldView = { archived: boolean; button?: ButtonView | null; collection?: string | null; description?: string; formula?: FormulaView | null; id: string; inverse?: string | null; name: string; options?: OptionView[]; position: number; rollup?: RollupView | null; rules?: RulesInput | null; target?: LinkTarget | null; type: FieldType; version: number }
 

@@ -415,7 +415,9 @@ pub(super) struct FileUploadArguments {
     pub for_comment: Option<bool>,
     /// Or keep the file on another thing you can edit, such as a page:
     /// {"kind": "page", "id": "<page ID>"}. Show it in the page with a block
-    /// of its own: `[name](/files/<fileId> "embed")` in page_write.
+    /// of its own: `[name](/files/<fileId> "embed")` in page_write. On a
+    /// record ({"kind": "record", "id": "<record ID>"}), then name its
+    /// fileId in one of the record's file fields with record_write.
     pub thing: Option<ThingArgument>,
     /// The file name people see, such as report.md or screenshot.png.
     pub name: String,
@@ -435,7 +437,7 @@ pub(super) struct FileUploadArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ThingArgument {
-    /// "page".
+    /// "page" or "record".
     pub kind: String,
     /// Its ID.
     pub id: String,
@@ -484,10 +486,13 @@ pub(super) async fn file_upload(
     ) {
         (None, None, Some(thing)) => {
             let Some(kind) = files::ThingKind::parse(thing.kind.trim()) else {
-                return ToolResult::invalid("thing", "Files can be kept on a page: kind \"page\".");
+                return ToolResult::invalid(
+                    "thing",
+                    "Files can be kept on a page or a record: kind \"page\" or \"record\".",
+                );
             };
             let Some(thing_id) = parse_id(&thing.id) else {
-                return ToolResult::invalid("thing", "Pass the page's ID.");
+                return ToolResult::invalid("thing", "Pass the page's or record's ID.");
             };
             thing_upload_destination(state, principal, kind, thing_id).await
         }
@@ -707,12 +712,12 @@ async fn thing_upload_destination(
     )
     .await?;
     let project_id = destination.project_id();
-    if !can_write_in(state, principal, project_id, Action::PageEdit).await?
+    if !can_write_in(state, principal, project_id, thing.edit_action()).await?
         || !accessible_project_ids(state, principal)
             .await?
             .contains(&project_id)
     {
-        return Err(AppError::NotFound("page"));
+        return Err(AppError::NotFound(thing.name()));
     }
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let limit = files::upload_limit(&mut connection, project_id).await?;

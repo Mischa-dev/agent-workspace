@@ -44,9 +44,9 @@ export function dailyLimitProblem(draft: FormDraft): string | null {
   return Number.isInteger(limit) && limit >= 1 && limit <= MAX_DAILY_LIMIT ? null : `Answers a day is a whole number from 1 to ${MAX_DAILY_LIMIT.toLocaleString()}.`
 }
 
-/** Fields a form can ask. A public one: not people (they're this workspace's) or links (they point inside the project). An internal one asks for people too. */
+/** Fields a form can ask. A public one: not people (they're this workspace's) or links (they point inside the project). An internal one asks for people too. Neither takes files. */
 export function askableFields(fields: FieldDefinition[], audience: FormAudience = 'public'): FieldDefinition[] {
-  const never = audience === 'internal' ? ['link', 'relation'] : ['person', 'people', 'link', 'relation']
+  const never = audience === 'internal' ? ['link', 'relation', 'file'] : ['person', 'people', 'link', 'relation', 'file']
   return fields.filter((field) => !field.archived && !never.includes(field.type))
 }
 

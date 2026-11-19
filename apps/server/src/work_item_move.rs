@@ -766,6 +766,8 @@ async fn carry_value(
         // Worked out where it lands, never carried; relations name records
         // of the old project's collections.
         FieldType::Formula | FieldType::Rollup | FieldType::Relation => None,
+        // A record's files stay with the record.
+        FieldType::File => None,
         // A button has no value.
         FieldType::Button => None,
         FieldType::Text

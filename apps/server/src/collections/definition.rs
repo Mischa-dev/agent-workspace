@@ -51,8 +51,8 @@ pub struct FieldWrite {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// For a new field: text, long_text, number, date, single_choice,
-    /// multiple_choice, status, person, url, email, phone, checkbox or link;
-    /// created_time, edited_time, created_by, edited_by or auto_id, which
+    /// multiple_choice, status, person, url, email, phone, checkbox, link or
+    /// file (the record's own files, uploaded to it first); created_time, edited_time, created_by, edited_by or auto_id, which
     /// show the record's own and take no values; formula, worked out from
     /// the record's other fields (give `formula`); or button, which runs
     /// operations when pressed (give `button`). It never changes.
@@ -940,7 +940,7 @@ pub async fn apply(
                     ProblemKind::Invalid,
                     format!("{at}.type"),
                     format!(
-                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by, auto_id, formula or button."
+                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, file, created_time, edited_time, created_by, edited_by, auto_id, formula or button."
                     ),
                 ));
             };

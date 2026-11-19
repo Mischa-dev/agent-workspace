@@ -2713,6 +2713,11 @@
             "type": "string"
           },
           {
+            "const": "file",
+            "description": "Files kept with the record, by ID, up to `MAX_FIELD_FILES` (T1.20).\nEach is uploaded to the record first (a file of the thing `record`).",
+            "type": "string"
+          },
+          {
             "const": "created_time",
             "description": "When the record was made (system).",
             "type": "string"
@@ -2975,7 +2980,7 @@
             ]
           },
           "type": {
-            "description": "For a new field: text, long_text, number, date, single_choice,\nmultiple_choice, status, person, url, email, phone, checkbox or link;\ncreated_time, edited_time, created_by, edited_by or auto_id, which\nshow the record's own and take no values; formula, worked out from\nthe record's other fields (give `formula`); or button, which runs\noperations when pressed (give `button`). It never changes.",
+            "description": "For a new field: text, long_text, number, date, single_choice,\nmultiple_choice, status, person, url, email, phone, checkbox, link or\nfile (the record's own files, uploaded to it first); created_time, edited_time, created_by, edited_by or auto_id, which\nshow the record's own and take no values; formula, worked out from\nthe record's other fields (give `formula`); or button, which runs\noperations when pressed (give `button`). It never changes.",
             "type": [
               "string",
               "null"

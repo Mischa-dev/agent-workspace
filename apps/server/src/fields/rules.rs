@@ -101,12 +101,13 @@ impl From<&FieldRules> for RulesInput {
 }
 
 /// Whether a field of this type takes rules at all: one whose value
-/// someone writes.
+/// someone writes. Not files, which are added once the record is made, so
+/// they can't be required or have a default.
 pub fn takes_rules(field_type: FieldType) -> bool {
     !field_type.is_read_only()
         && !matches!(
             field_type,
-            FieldType::Button | FieldType::People | FieldType::Labels
+            FieldType::Button | FieldType::People | FieldType::Labels | FieldType::File
         )
 }
 

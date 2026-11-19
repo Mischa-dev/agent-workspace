@@ -650,8 +650,10 @@ pub async fn resolve_values(
     definitions: &[FieldDefinition],
     argument: &str,
     written: &[(String, Value)],
-    current: Option<&Value>,
+    current: Option<(Uuid, &Value)>,
 ) -> Result<Result<FieldValueChanges, work_item_fields::ValueProblem>, AppError> {
+    let record_id = current.map(|(id, _)| id);
+    let current = current.map(|(_, values)| values);
     if written.len() > work_item_fields::MAX_VALUES_PER_CHANGE {
         return Ok(Err(problem(
             argument,
@@ -769,6 +771,48 @@ pub async fn resolve_values(
                         Value::Array(ids.iter().map(|id| Value::String(id.to_string())).collect())
                     }),
                     shown: Value::Array(shown),
+                }
+            }
+            Normalized::Files(ids) => {
+                let Some(record_id) = record_id else {
+                    return Ok(Err(problem(
+                        &at,
+                        format!(
+                            "\"{}\" holds files uploaded to the record, so set it once the record is made: upload each file to the record (thing kind \"record\"), then name it here.",
+                            field.name
+                        ),
+                    )));
+                };
+                let found = sqlx::query_as::<_, (Uuid, String)>(
+                    "SELECT id, name FROM files WHERE id = ANY($1) AND project_id = $2 \
+                       AND thing_kind = 'record' AND thing_id = $3 AND removed_at IS NULL",
+                )
+                .bind(&ids)
+                .bind(project_id)
+                .bind(record_id)
+                .fetch_all(&mut *connection)
+                .await?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+                if let Some(missing) = ids.iter().find(|id| !found.contains_key(id)) {
+                    return Ok(Err(problem(
+                        &at,
+                        format!(
+                            "\"{}\" holds this record's own files. {missing} isn't one: upload it to the record first (thing kind \"record\").",
+                            field.name
+                        ),
+                    )));
+                }
+                FieldValueChange {
+                    field: field.clone(),
+                    shown: Value::Array(
+                        ids.iter()
+                            .map(|id| Value::String(found[id].clone()))
+                            .collect(),
+                    ),
+                    value: Some(Value::Array(
+                        ids.iter().map(|id| Value::String(id.to_string())).collect(),
+                    )),
                 }
             }
             Normalized::Link(written) => {
@@ -1151,7 +1195,7 @@ pub async fn write(
             definitions,
             values_argument,
             &input.values,
-            Some(&current.field_values),
+            Some((current.id, &current.field_values)),
         )
         .await?
         {

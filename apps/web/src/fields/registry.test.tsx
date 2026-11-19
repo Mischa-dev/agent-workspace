@@ -42,6 +42,7 @@ const options = [
 const references: FieldReference[] = [
   { id: 'p1', kind: 'person', label: 'Ana Lee', key: '@ana' },
   { id: 't1', kind: 'task', label: 'Fix the login', key: 'AWD-1' },
+  { id: 'fl1', kind: 'file', label: 'brief.pdf', key: null },
 ]
 
 function fieldOf(type: FieldType, extra: Partial<FieldDefinition> = {}): FieldDefinition {
@@ -78,6 +79,7 @@ const SAMPLES: Record<FieldType, FieldValue> = {
   checkbox: true,
   link: 't1',
   relation: ['r9'],
+  file: ['fl1'],
   rollup: 3,
   // A button has no value; drawn as text if one ever arrives.
   button: 'Ship it',
@@ -140,6 +142,14 @@ function editOf(field: FieldDefinition): Edit | null {
           : { act: pickOption(/Fix the login/), expected: 't1' }
     case 'relation':
       return { act: pickOption(/Crash on start/), expected: ['r9', 'r1'] }
+    case 'file':
+      // Taking its one file out clears it.
+      return {
+        act: () => {
+          fireEvent.click(screen.getByRole('button', { name: `Take brief.pdf out of ${field.name}` }))
+        },
+        expected: null,
+      }
     default:
       return null
   }

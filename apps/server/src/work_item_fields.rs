@@ -314,6 +314,16 @@ pub async fn resolve_for(
             Err(message) => return Ok(Err(value_problem(&at, message))),
         };
         let entry = match normalized {
+            // Tasks keep their own files, never in a field.
+            Normalized::Files(_) => {
+                return Ok(Err(value_problem(
+                    &at,
+                    format!(
+                        "\"{}\" holds files, which tasks keep as their own files instead.",
+                        field.name
+                    ),
+                )));
+            }
             Normalized::Clear => FieldValueChange {
                 field: field.clone(),
                 value: None,
@@ -562,7 +572,7 @@ pub async fn find_link(
 #[serde(rename_all = "camelCase")]
 pub struct ValueReference {
     pub id: Uuid,
-    /// "person", "task", "page" or "record".
+    /// "person", "task", "page", "record" or "file".
     pub kind: &'static str,
     /// A person's name, a task's title or a page's title.
     pub label: String,
@@ -583,6 +593,7 @@ pub async fn references<'a>(
     let mut tasks = HashSet::new();
     let mut pages = HashSet::new();
     let mut records = HashSet::new();
+    let mut files = HashSet::new();
     let by_id = definitions
         .iter()
         .map(|field| (field.id.to_string(), field))
@@ -599,6 +610,7 @@ pub async fn references<'a>(
                 match (field.behaves_as(), field.config.target) {
                     (FieldType::Person, _) => people.insert(id),
                     (FieldType::Relation, _) => records.insert(id),
+                    (FieldType::File, _) => files.insert(id),
                     (FieldType::Link, Some(LinkTarget::Page)) => pages.insert(id),
                     (FieldType::Link, Some(LinkTarget::Record)) => records.insert(id),
                     _ => tasks.insert(id),
@@ -698,6 +710,29 @@ pub async fn references<'a>(
                     kind: "record",
                     label,
                     key: Some(format!("#{number}")),
+                },
+            );
+        }
+    }
+    if !files.is_empty() {
+        let ids = files.into_iter().collect::<Vec<_>>();
+        // A record's files: whoever reads the record reads them.
+        for (id, label) in sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT id, name FROM files WHERE project_id = $1 AND id = ANY($2) \
+               AND thing_kind = 'record' AND removed_at IS NULL",
+        )
+        .bind(project_id)
+        .bind(&ids)
+        .fetch_all(&mut *executor)
+        .await?
+        {
+            found.insert(
+                id,
+                ValueReference {
+                    id,
+                    kind: "file",
+                    label,
+                    key: None,
                 },
             );
         }

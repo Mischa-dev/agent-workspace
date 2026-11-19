@@ -6686,6 +6686,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"conversationId": b.channel, "name": "net.txt", "text": "Net"}),
                 json!({"taskId": b.task, "name": "net.txt", "text": "Net"}),
+                json!({"thing": {"kind": "record", "id": b.record}, "name": "net.txt", "text": "Net"}),
             ],
         ),
         mcp_case(

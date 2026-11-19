@@ -206,6 +206,7 @@ export function RecordPanel({
           }}
           onSet={(value) => set(editing.field, value)}
           projectId={projectId}
+          recordId={current.id}
           references={references}
           value={current.values[editing.field.id]}
         />

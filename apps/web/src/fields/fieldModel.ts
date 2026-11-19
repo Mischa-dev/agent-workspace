@@ -120,7 +120,7 @@ export function isFormulaError(value: unknown): value is FormulaError {
 
 export type LinkTarget = 'task' | 'page' | 'record'
 
-export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record'; label: string; key: string | null }
+export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record' | 'file'; label: string; key: string | null }
 
 /** One field filter, with stored values (option IDs, actor IDs, "true", numbers, dates). */
 export type FieldClause = { field: string; op: FieldOp; values?: string[] }
@@ -296,7 +296,7 @@ export function normalizeReferences(value: unknown): FieldReference[] {
   return (Array.isArray(value) ? value : []).flatMap((entry) => {
     const reference = asRecord(entry)
     const kind = reference.kind
-    if (kind !== 'person' && kind !== 'task' && kind !== 'page' && kind !== 'record') return []
+    if (kind !== 'person' && kind !== 'task' && kind !== 'page' && kind !== 'record' && kind !== 'file') return []
     return [
       {
         id: asString(reference.id),
@@ -381,6 +381,11 @@ export function displayText(
     case 'relation': {
       const ids = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
       return ids.map((id) => references.find((entry) => entry.id === id)?.label ?? 'An archived record').join(', ')
+    }
+    case 'file': {
+      // A removed file drops out.
+      const ids = Array.isArray(value) ? value : []
+      return ids.flatMap((id) => references.find((entry) => entry.id === id && entry.kind === 'file')?.label ?? []).join(', ')
     }
     case 'number':
       return typeof value === 'number' ? formatNumber(value) : String(value)

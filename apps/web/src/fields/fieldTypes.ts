@@ -26,6 +26,7 @@ export const FIELD_TYPE_LIST = [
   'link',
   'relation',
   'rollup',
+  'file',
   'formula',
   'button',
   'created_time',
@@ -114,6 +115,17 @@ export const FIELD_TYPE_INFO: Record<FieldType, FieldTypeInfo> = {
     sort: A_TO_Z,
     grouping: null,
     width: 240,
+  }),
+  // Files are uploaded to a record once it's made: collections only.
+  file: info({
+    label: 'Files',
+    hint: 'Files kept with the record',
+    tasks: false,
+    behavesAs: 'file',
+    ops: ['notEmpty', 'empty'],
+    sort: { asc: 'fewest first', desc: 'most first' },
+    grouping: null,
+    width: 220,
   }),
   // Like a formula, a rollup filters, sorts and groups as its result does.
   rollup: info({ label: 'Rollup', hint: 'A sum, count, latest date or list over related records', tasks: false, behavesAs: 'text', ops: ['empty', 'notEmpty'], sort: A_TO_Z, grouping: null, width: 140 }),

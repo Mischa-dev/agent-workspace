@@ -120,6 +120,9 @@ pub enum FieldType {
     /// Worked out from the records a relation names (T1.18, `rollup`); kept
     /// in `computed_values`, never written.
     Rollup,
+    /// Files kept with the record, by ID, up to `MAX_FIELD_FILES` (T1.20).
+    /// Each is uploaded to the record first (a file of the thing `record`).
+    File,
     /// When the record was made (system).
     CreatedTime,
     /// When the record last changed (system).
@@ -139,7 +142,7 @@ pub enum FieldType {
 }
 
 impl FieldType {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -155,6 +158,7 @@ impl FieldType {
         Self::Link,
         Self::Relation,
         Self::Rollup,
+        Self::File,
         Self::CreatedTime,
         Self::EditedTime,
         Self::CreatedBy,
@@ -167,7 +171,7 @@ impl FieldType {
     /// Every type, with the ones only module manifests name: the list the
     /// web app's field registry is checked against (T1.13a,
     /// `apps/web/src/fields/fieldTypes.generated.json`).
-    pub const EVERY: [Self; 24] = [
+    pub const EVERY: [Self; 25] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -183,6 +187,7 @@ impl FieldType {
         Self::Link,
         Self::Relation,
         Self::Rollup,
+        Self::File,
         Self::CreatedTime,
         Self::EditedTime,
         Self::CreatedBy,
@@ -256,6 +261,7 @@ impl FieldType {
             Self::Link => "link",
             Self::Relation => "relation",
             Self::Rollup => "rollup",
+            Self::File => "file",
             Self::CreatedTime => "created_time",
             Self::EditedTime => "edited_time",
             Self::CreatedBy => "created_by",
@@ -293,6 +299,7 @@ impl FieldType {
             "link" | "reference" => Self::Link,
             "relation" | "relations" | "linkedrecords" | "records" => Self::Relation,
             "rollup" | "lookup" | "aggregate" => Self::Rollup,
+            "file" | "files" | "attachment" | "attachments" => Self::File,
             "createdtime" | "createdat" | "created" | "createdon" => Self::CreatedTime,
             "editedtime" | "lasteditedtime" | "updatedat" | "updated" | "edited" | "lastedited"
             | "modified" => Self::EditedTime,
@@ -314,7 +321,12 @@ impl FieldType {
             && !self.is_system()
             && !matches!(
                 self,
-                Self::Status | Self::Formula | Self::Button | Self::Relation | Self::Rollup
+                Self::Status
+                    | Self::Formula
+                    | Self::Button
+                    | Self::Relation
+                    | Self::Rollup
+                    | Self::File
             )
     }
 
@@ -359,6 +371,7 @@ impl FieldType {
             | Self::Link
             | Self::Relation => &[Is, IsNot, Empty, NotEmpty],
             Self::Checkbox => &[Is, Empty, NotEmpty],
+            Self::File => &[Empty, NotEmpty],
             Self::CreatedTime
             | Self::EditedTime
             | Self::CreatedBy
@@ -1146,10 +1159,16 @@ pub enum Normalized {
     /// Records of a relation's collection, each as written (an ID, a
     /// #number, a title, a link), at most `MAX_RELATED`.
     Relation(Vec<String>),
+    /// Files by ID, at most `MAX_FIELD_FILES`; the record's module checks
+    /// each is one of the record's own files.
+    Files(Vec<Uuid>),
 }
 
 /// Records one relation field names on one record.
 pub const MAX_RELATED: usize = 100;
+
+/// Files one file field holds on one record.
+pub const MAX_FIELD_FILES: usize = 20;
 
 fn text_is_clean(value: &str) -> bool {
     !value
@@ -1347,6 +1366,39 @@ pub fn normalize_value_keeping(
                 return Err(format!("\"{name}\" names at most {MAX_RELATED} records."));
             }
             Ok(Normalized::Relation(written))
+        }
+        FieldType::File => {
+            let wrong = || {
+                format!(
+                    "\"{name}\" takes files: a list of file IDs, each uploaded to the record first."
+                )
+            };
+            let items = match input {
+                Value::Array(items) => items.clone(),
+                Value::String(_) => vec![input.clone()],
+                _ => return Err(wrong()),
+            };
+            let mut ids = Vec::new();
+            for item in &items {
+                let Some(text) = item.as_str() else {
+                    return Err(wrong());
+                };
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                let id = text.parse::<Uuid>().map_err(|_| wrong())?;
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            if ids.is_empty() {
+                return Ok(Normalized::Clear);
+            }
+            if ids.len() > MAX_FIELD_FILES {
+                return Err(format!("\"{name}\" holds at most {MAX_FIELD_FILES} files."));
+            }
+            Ok(Normalized::Files(ids))
         }
         FieldType::Button => Err(format!(
             "\"{name}\" is a button: it runs when pressed and has no value to write."
@@ -1561,6 +1613,18 @@ pub fn display_value(
                 })
                 .unwrap_or_default(),
         ),
+        // A removed file drops out.
+        FieldType::File => Value::Array(
+            value
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(|id| name_of(id).map(Value::String))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
         _ => value.clone(),
     }
 }
@@ -1590,7 +1654,7 @@ pub fn referenced_ids(field: &FieldDefinition, value: &Value) -> Vec<Uuid> {
             .and_then(|id| id.parse().ok())
             .into_iter()
             .collect(),
-        FieldType::Relation => value
+        FieldType::Relation | FieldType::File => value
             .as_array()
             .map(|ids| {
                 ids.iter()
@@ -1794,6 +1858,8 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
                 value.parse::<Uuid>().is_ok()
             }
             FieldType::Checkbox => value == "true",
+            // Filtered only by whether it holds any.
+            FieldType::File => false,
             FieldType::Text
             | FieldType::LongText
             | FieldType::Url
@@ -2482,6 +2548,14 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         | FieldType::Button => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
+        ),
+        // By how many files it holds.
+        FieldType::File => key(
+            format!(
+                "COALESCE(jsonb_array_length({}), 0)",
+                value_at(column, field.id)
+            ),
+            "integer",
         ),
         // By the first related record's title.
         FieldType::Relation => key(
