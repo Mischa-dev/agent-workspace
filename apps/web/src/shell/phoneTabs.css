@@ -48,7 +48,14 @@
   }
 
   .aw-phonetabs__tab[aria-current='page'] {
-    color: var(--sidebar-fg-strong);
+    color: var(--sidebar-active-fg);
+  }
+
+  /* The current tab's icon sits on a pill, so where you are reads without colour alone. */
+  .aw-phonetabs__tab[aria-current='page'] > svg:first-child {
+    border-radius: var(--radius-full);
+    background: var(--sidebar-active-bg);
+    box-shadow: 0 0 0 var(--space-1) var(--sidebar-active-bg);
   }
 
   .aw-phonetabs__badge {
@@ -70,8 +77,8 @@
   display: none;
 }
 
-/* On a phone a detail (a thread, a task) opens as a full-screen sheet; back closes it. */
-@media (max-width: 600px) {
+/* On a phone (640px, the phone breakpoint) a detail (a thread, a task) opens as a full-screen sheet; back closes it. */
+@media (max-width: 640px) {
   .aw-shell > .aw-panel {
     width: 100vw;
   }

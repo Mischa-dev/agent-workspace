@@ -7,6 +7,7 @@ import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
 import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
+import { useProjectExperience } from '../../experience/layout'
 import { roleLabel } from '../../projects/format'
 import { useArchiveProject, useProject } from '../../projects/hooks'
 import { ProjectInitials } from '../../projects/ProjectInitials'
@@ -26,6 +27,7 @@ const renameProject = (projectId: string, name: string, expectedVersion: number)
 export default function GeneralPage({ project: given, workspace }: SettingsPageProps) {
   const projectId = given?.id ?? ''
   const project = useProject(projectId)
+  const experience = useProjectExperience(projectId)
   const archive = useArchiveProject()
   const navigate = useNavigate()
   const errorRef = useRef<HTMLDivElement>(null)
@@ -84,7 +86,7 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
       {current.capabilities.manage && !current.archivedAt && <RenameSection project={current} />}
       {current.capabilities.archive && !current.archivedAt && (
         <Section
-          description="Archiving takes it out of everyone’s sidebar and stops new messages, tasks and runs. Everything already in it is kept and stays readable."
+          description={`Archiving takes it out of everyone’s sidebar and stops new ${stopped(experience.moduleOn)}. Everything already in it is kept and stays readable.`}
           id="archive-project-heading"
           title="Archive this project"
         >
@@ -120,7 +122,14 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
 }
 
 /** The project's name. Its key stays, so task numbers and links keep working. */
+/** What archiving stops, in the words of the modules that are on (W1.39). */
+function stopped(moduleOn: (module: string) => boolean) {
+  const things = ['messages', moduleOn('tasks') ? 'tasks' : null, moduleOn('runs') ? 'runs' : null].filter((thing): thing is string => thing !== null)
+  return things.length > 1 ? `${things.slice(0, -1).join(', ')} and ${things[things.length - 1]}` : things[0]
+}
+
 function RenameSection({ project }: { project: Project }) {
+  const tasksOn = useProjectExperience(project.id).moduleOn('tasks')
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -151,7 +160,7 @@ function RenameSection({ project }: { project: Project }) {
   }
   return (
     <Section
-      description={`Everyone in the project sees this name. Its key, ${project.key}, stays the same, so task numbers and links keep working.`}
+      description={`Everyone in the project sees this name. Its key, ${project.key}, stays the same, so ${tasksOn ? 'task numbers and links' : 'links'} keep working.`}
       id="rename-project-heading"
       title="Name"
     >

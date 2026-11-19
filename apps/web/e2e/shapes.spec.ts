@@ -39,7 +39,7 @@ const MODULE_WORDS: Record<string, string[]> = {
  * on (Modules, Templates, Layout), what roles may do in each (Roles), and the
  * server's and the audit log's records.
  */
-const CONFIGURATION = /\/settings\/(modules|templates|project-templates|layout|roles|server|audit-log|harnesses|hosts|github)$/
+const CONFIGURATION = /\/settings\/(?:spaces\/[^/]+\/)?(modules|templates|project-templates|layout|roles|server|audit-log|harnesses|hosts|github)$/
 
 function shapeOff(shape: string): string[] {
   const file = path.join(repoRoot, 'modules/packages/shapes', shape, 'package.json')

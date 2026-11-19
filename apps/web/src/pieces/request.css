@@ -18,12 +18,13 @@
 
 .aw-request--inline .aw-request__question {
   padding-inline-start: var(--space-3);
-  border-inline-start: 2px solid var(--content-border);
+  border-inline-start: 3px solid var(--content-border);
 }
 
 .aw-request__detail {
   margin: 0;
   color: var(--content-fg-muted);
+  font: var(--t-ui);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

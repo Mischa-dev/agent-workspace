@@ -35,6 +35,7 @@
 
 .aw-toast {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--space-3);
   width: min(380px, calc(100vw - 2 * var(--space-4)));
@@ -71,8 +72,9 @@
 }
 
 .aw-toast__text {
-  flex: 1;
-  min-width: 0;
+  /* Room for a title to read on one or two lines; actions that don't fit beside it go under it. */
+  flex: 1 1 0;
+  min-width: calc(var(--space-12) * 3);
 }
 
 .aw-toast__title,
@@ -96,6 +98,7 @@
   align-items: center;
   gap: var(--space-1);
   flex: none;
+  margin-inline-start: auto;
 }
 
 .aw-toast__action {
@@ -157,7 +160,7 @@
   .aw-toasts {
     right: var(--space-3);
     left: var(--space-3);
-    bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+    bottom: calc(var(--space-3) + var(--toast-offset, 0px) + env(safe-area-inset-bottom));
   }
 
   .aw-toasts__list {

@@ -391,7 +391,8 @@ export function CommandPalette() {
     const found = (projectSearch.data?.projects ?? []).filter(
       (project) => !project.archivedAt && !listed.has(project.id),
     )
-    for (const project of [...projects, ...found]) {
+    // Only the workspace you're in: another workspace's projects open from its own menu (W1.39).
+    for (const project of [...projects, ...found].filter((project) => !homeId || project.organizationId === homeId)) {
       list.push({
         id: `pr:${project.id}`,
         project: project.id,
@@ -506,7 +507,7 @@ export function CommandPalette() {
             <>
               <span>↑↓ to move</span>
               <span>↵ to open</span>
-              <span>Type a task key, like {current?.key ?? 'AWD'}-12</span>
+              {(current ? projectExperience : homeExperience).moduleOn('tasks') ? <span>Type a task key, like {current?.key ?? 'AWD'}-12</span> : null}
             </>
           }
           items={visibleItems}
