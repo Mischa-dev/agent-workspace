@@ -330,7 +330,12 @@ async fn tail_until(
     while !ids.iter().all(|id| seen.iter().any(|(_, seen)| seen == id)) {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, receiver.recv()).await {
-            Ok(Ok(Tailed::Event(event))) => seen.push((event.position, event.id)),
+            // Only what the test staged: making its project stages its
+            // own events (a membership's access signal) first.
+            Ok(Ok(Tailed::Event(event))) if event.event_type == catalog::TASK_UPDATED.name => {
+                seen.push((event.position, event.id));
+            }
+            Ok(Ok(Tailed::Event(_))) => {}
             Ok(Ok(Tailed::Resync)) => panic!("the tail jumped"),
             Ok(Err(error)) => panic!("tail: {error}"),
             Err(_) => panic!(
@@ -1230,6 +1235,15 @@ async fn api_only_instance_runs_no_jobs() {
     .await
     .expect("leases");
     assert_eq!(held, 0, "an api instance took a lease");
+    // A run started through it wakes the lease holder rather than being
+    // admitted here: it knows its cluster though it isn't the host.
+    let known = cluster
+        .instance(0)
+        .state()
+        .supervisors
+        .cluster()
+        .map(|known| known.instance_id().0);
+    assert_eq!(known, Some(cluster.instance(0).cluster().instance_id().0));
     // It still serves the app.
     let browser = cluster.instance(0).login("owner").await;
     let (status, _) = cluster
@@ -1277,5 +1291,1129 @@ async fn recovery_writes_nothing_once_the_host_is_lost() {
     let result =
         agent_workspace_server::recovery::reconcile_owned(&state, &old_holder, &lease).await;
     assert!(matches!(result, Err(AppError::LeaseLost)), "{result:?}");
+    cluster.finish().await;
+}
+
+/// A second project with a channel, made on A by the owner, with `people`
+/// added as members.
+async fn side_channel(
+    cluster: &crate::cluster_support::Cluster,
+    browser: &crate::agent_interface::Browser,
+    people: &[Uuid],
+) -> (Uuid, Uuid) {
+    let a = cluster.instance(0);
+    let (status, project) = a
+        .send(browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("k5-8-side"),
+            json!({"organizationId": cluster.organization_id, "key": "SIDE", "name": "Side"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project: Uuid = project["id"]
+        .as_str()
+        .expect("project")
+        .parse()
+        .expect("id");
+    for person in people {
+        sqlx::query(
+            "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+             SELECT $1, $2, actor_id, 'member', display_name, handle FROM project_memberships \
+             WHERE actor_id = $3 LIMIT 1",
+        )
+        .bind(Uuid::now_v7())
+        .bind(project)
+        .bind(person)
+        .execute(&cluster.pool)
+        .await
+        .expect("side membership");
+    }
+    let (status, channel) = a
+        .send(browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("k5-8-side-channel"),
+            json!({"name": "Side"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .parse()
+        .expect("id");
+    (project, channel)
+}
+
+/// Messages a socket hears, by conversation, until one in `last` arrives.
+async fn heard_until(socket: &mut crate::cluster_support::Socket, last: Uuid) -> Vec<Value> {
+    let mut heard = Vec::new();
+    loop {
+        match next_frame(socket, Duration::from_secs(3)).await {
+            Frame::Json(frame) => {
+                let event = if frame["type"] == "event" {
+                    frame["event"].clone()
+                } else {
+                    frame.clone()
+                };
+                let done = event["type"] == "conversation.message.created"
+                    && event["conversationId"] == last.to_string();
+                heard.push(frame);
+                if done {
+                    return heard;
+                }
+            }
+            other => panic!("{other:?} before the message in {last}; heard {heard:?}"),
+        }
+    }
+}
+
+/// K5.8: access is decided at subscribe time and again when it changes. A
+/// member taken out of a project through one instance hears nothing more
+/// from it on the other, and still hears the projects they are in.
+#[tokio::test]
+async fn removed_member_stops_hearing_at_once() {
+    let Some(cluster) = cluster("k5_8_removed", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, side) = side_channel(&cluster, &owner, &[mara]).await;
+    let mut on_b = cluster.instance(1).socket(&mara_browser).await;
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(mara)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("version");
+    let (status, body) = cluster
+        .instance(0)
+        .send(owner.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{mara}"),
+            Some("k5-8-disable"),
+            json!({"expectedVersion": version, "enabled": false}),
+        ))
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    say(cluster.instance(0), &owner, channel, "k5-8-after").await;
+    say(cluster.instance(0), &owner, side, "k5-8-side").await;
+    let heard = heard_until(&mut on_b, side).await;
+    assert!(
+        !heard
+            .iter()
+            .any(|frame| frame["conversationId"] == channel.to_string()),
+        "Mara heard the project she left: {heard:?}"
+    );
+    cluster.finish().await;
+}
+
+/// K5.8: a private group made after a socket opened is heard by its
+/// members at once, and by nobody else.
+#[tokio::test]
+async fn added_to_private_conversation_starts_hearing() {
+    let Some(cluster) = cluster("k5_8_added", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let mut mara_on_b = cluster.instance(1).socket(&mara_browser).await;
+    let mut rook_on_b = cluster.instance(1).socket(&rook).await;
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-8-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group: Uuid = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .parse()
+        .expect("id");
+    say(cluster.instance(0), &owner, group, "k5-8-in-group").await;
+    say(cluster.instance(0), &owner, channel, "k5-8-in-channel").await;
+    let heard = heard_until(&mut mara_on_b, channel).await;
+    assert!(
+        heard.iter().any(|frame| {
+            frame["type"] == "conversation.message.created"
+                && frame["conversationId"] == group.to_string()
+        }),
+        "Mara never heard the group she was added to: {heard:?}"
+    );
+    let heard = heard_until(&mut rook_on_b, channel).await;
+    assert!(
+        !heard
+            .iter()
+            .any(|frame| frame.to_string().contains(&group.to_string())),
+        "Rook heard {heard:?}"
+    );
+    cluster.finish().await;
+}
+
+/// The `ready` frame a protocol 2 socket gets, skipping what comes first.
+async fn ready_of(socket: &mut crate::cluster_support::Socket) -> (Vec<Value>, Value) {
+    let mut before = Vec::new();
+    loop {
+        match next_frame(socket, Duration::from_secs(3)).await {
+            Frame::Json(frame) if frame["type"] == "ready" => return (before, frame),
+            Frame::Json(frame) => before.push(frame),
+            other => panic!("{other:?} before ready; got {before:?}"),
+        }
+    }
+}
+
+/// K5.9: a protocol 2 socket that comes back with where it stopped is sent
+/// exactly what it missed and may see, in order, then `ready` with
+/// `resumed`, on whichever instance it reaches.
+#[tokio::test]
+async fn resume_replays_what_was_missed() {
+    let Some(cluster) = cluster("k5_9_resume", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let mut first = cluster.instance(1).socket_v2(&rook, None).await;
+    let (_, ready) = ready_of(&mut first).await;
+    assert_eq!(ready["resumed"], false, "{ready}");
+    let stopped: i64 = ready["position"]
+        .as_str()
+        .expect("positions are strings")
+        .parse()
+        .expect("position");
+    drop(first);
+
+    // While Rook is away: a group he isn't in, and three channel messages.
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-9-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    say(
+        cluster.instance(0),
+        &owner,
+        group.parse().expect("id"),
+        "k5-9-secret",
+    )
+    .await;
+    let mut missed = Vec::new();
+    for key in ["k5-9-one", "k5-9-two", "k5-9-three"] {
+        missed.push(
+            say(cluster.instance(0), &owner, channel, key)
+                .await
+                .to_string(),
+        );
+    }
+
+    let mut back = cluster.instance(0).socket_v2(&rook, Some(stopped)).await;
+    let (replayed, ready) = ready_of(&mut back).await;
+    assert_eq!(ready["resumed"], true, "{ready}");
+    assert_eq!(
+        ready["replayed"].as_u64(),
+        Some(
+            replayed
+                .iter()
+                .filter(|frame| frame["type"] == "event")
+                .count() as u64
+        ),
+        "{ready}"
+    );
+    let messages = replayed
+        .iter()
+        .filter(|frame| frame["event"]["type"] == "conversation.message.created")
+        .map(|frame| {
+            frame["event"]["payload"]["messageId"]
+                .as_str()
+                .expect("message")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages, missed, "exactly the missed messages, in order");
+    assert!(
+        !replayed
+            .iter()
+            .any(|frame| frame.to_string().contains(&group)),
+        "the group's events stay private on replay: {replayed:?}"
+    );
+    let mut positions = replayed
+        .iter()
+        .filter(|frame| frame["type"] == "event")
+        .map(|frame| {
+            frame["position"]
+                .as_str()
+                .expect("position")
+                .parse::<i64>()
+                .expect("n")
+        });
+    let mut previous = stopped;
+    assert!(
+        positions.all(|position| {
+            let ordered = position > previous;
+            previous = position;
+            ordered
+        }),
+        "in position order, after where it stopped"
+    );
+    // Then live, with nothing repeated.
+    let live = say(cluster.instance(0), &owner, channel, "k5-9-live").await;
+    let heard = heard_until(&mut back, channel).await;
+    let messages = heard
+        .iter()
+        .filter(|frame| frame["event"]["type"] == "conversation.message.created")
+        .map(|frame| frame["event"]["payload"]["messageId"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(messages, vec![json!(live.to_string())], "{heard:?}");
+
+    // A position the server can't resume from (ahead of the log) asks the
+    // client to refetch.
+    let ahead = ready["position"]
+        .as_str()
+        .expect("p")
+        .parse::<i64>()
+        .expect("n")
+        + 1_000;
+    let mut lost = cluster.instance(1).socket_v2(&rook, Some(ahead)).await;
+    let (replayed, ready) = ready_of(&mut lost).await;
+    assert_eq!(ready["resumed"], false, "{ready}");
+    assert!(replayed.is_empty(), "{replayed:?}");
+    cluster.finish().await;
+}
+
+/// The next protocol 2 ephemeral frame of `kind`, or None within `within`.
+async fn ephemeral_of(
+    socket: &mut crate::cluster_support::Socket,
+    kind: &str,
+    within: Duration,
+) -> Option<Value> {
+    let deadline = Instant::now() + within;
+    loop {
+        match next_frame(socket, deadline.saturating_duration_since(Instant::now())).await {
+            Frame::Json(frame) if frame["type"] == "ephemeral" && frame["kind"] == kind => {
+                return Some(frame);
+            }
+            Frame::Json(_) => {}
+            Frame::Closed | Frame::Nothing => return None,
+        }
+    }
+}
+
+async fn send_frame(socket: &mut crate::cluster_support::Socket, frame: Value) {
+    use futures_util::SinkExt;
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            frame.to_string().into(),
+        ))
+        .await
+        .expect("client frame");
+}
+
+/// K5.10: typing on one instance shows on the other, only to those who can
+/// see the conversation.
+#[tokio::test]
+async fn typing_on_one_instance_shows_on_the_other() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("typing crosses instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_typing", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-10-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let mut typist = cluster.instance(0).socket_v2(&owner, None).await;
+    ready_of(&mut typist).await;
+    let mut mara_on_b = cluster.instance(1).socket_v2(&mara_browser, None).await;
+    ready_of(&mut mara_on_b).await;
+    let mut rook_on_b = cluster.instance(1).socket_v2(&rook, None).await;
+    ready_of(&mut rook_on_b).await;
+
+    send_frame(
+        &mut typist,
+        json!({"type": "typing", "conversationId": group}),
+    )
+    .await;
+    let typing = ephemeral_of(&mut mara_on_b, "typing", Duration::from_secs(3))
+        .await
+        .expect("Mara saw the owner typing in their group");
+    assert_eq!(typing["conversationId"], group.as_str(), "{typing}");
+    assert!(typing["until"].is_string(), "{typing}");
+    // Rook sees typing in the channel (after the rate limit), never the group.
+    tokio::time::sleep(Duration::from_millis(3_100)).await;
+    send_frame(
+        &mut typist,
+        json!({"type": "typing", "conversationId": channel.to_string()}),
+    )
+    .await;
+    let seen = ephemeral_of(&mut rook_on_b, "typing", Duration::from_secs(3))
+        .await
+        .expect("Rook saw typing in the channel");
+    assert_eq!(
+        seen["conversationId"],
+        channel.to_string(),
+        "Rook saw {seen}"
+    );
+    cluster.finish().await;
+}
+
+/// K5.10: someone is online while any instance holds one of their
+/// connections, and their workspace hears when that changes; a connection
+/// left behind by a stopped instance stops counting once its heartbeat
+/// lapses.
+#[tokio::test]
+async fn presence_follows_connections_across_instances() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("presence frames cross instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_presence", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, _) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let owner_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&cluster.pool)
+            .await
+            .expect("owner");
+    let online = |instance: usize| {
+        let pool = cluster.instance(instance).state().pool.clone();
+        let workspace = cluster.organization_id;
+        async move {
+            agent_workspace_server::realtime::presence::online_in(&pool, workspace)
+                .await
+                .expect("online")
+        }
+    };
+    let mut watcher = cluster.instance(1).socket_v2(&mara_browser, None).await;
+    ready_of(&mut watcher).await;
+    let mut on_a = cluster.instance(0).socket_v2(&owner, None).await;
+    ready_of(&mut on_a).await;
+    let came = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
+        .await
+        .expect("Mara heard the owner come online");
+    assert_eq!(came["accountId"], owner_id.to_string(), "{came}");
+    assert_eq!(came["online"], true, "{came}");
+    assert!(online(1).await.contains(&owner_id), "counted on B too");
+    assert!(online(0).await.contains(&mara));
+
+    drop(on_a);
+    let went = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
+        .await
+        .expect("Mara heard the owner go offline");
+    assert_eq!(went["online"], false, "{went}");
+    assert!(!online(1).await.contains(&owner_id));
+
+    // A row an aborted instance never closed, its heartbeat lapsed.
+    sqlx::query(
+        "INSERT INTO realtime_connections (id, account_id, instance_id, opened_at, seen_at) \
+         VALUES ($1, $2, $3, now() - interval '5 minutes', now() - interval '2 minutes')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(owner_id)
+    .bind(Uuid::now_v7())
+    .execute(&cluster.pool)
+    .await
+    .expect("stale row");
+    assert!(
+        !online(0).await.contains(&owner_id),
+        "a lapsed heartbeat isn't online"
+    );
+    cluster.finish().await;
+}
+
+/// K5.10: a live document's change reaches the connections watching it,
+/// and no one else: not a connection that isn't watching, and not one
+/// that asked to watch a document it can't see.
+#[tokio::test]
+async fn document_update_reaches_watchers_only() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("document changes cross instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_documents", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, _) = work_channel(&cluster, &owner).await;
+    let (mara_id, mara) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    let (side, _) = side_channel(&cluster, &owner, &[]).await;
+    let mut pages = Vec::new();
+    for (space, title) in [(project, "Plan"), (side, "Side plan")] {
+        let (status, page) = cluster
+            .instance(0)
+            .send(owner.request(
+                "POST",
+                &format!("/api/v1/projects/{space}/pages"),
+                None,
+                json!({"title": title, "body": ""}),
+            ))
+            .await;
+        assert!(status.is_success(), "{page}");
+        pages.push(
+            page["id"]
+                .as_str()
+                .expect("page")
+                .parse::<Uuid>()
+                .expect("id"),
+        );
+    }
+    let (plan, side_plan) = (pages[0], pages[1]);
+    let watch = |id: Uuid| json!({"type": "watch", "document": {"kind": "page", "id": id}});
+    let mut watcher = cluster.instance(1).socket_v2(&mara, None).await;
+    ready_of(&mut watcher).await;
+    send_frame(&mut watcher, watch(plan)).await;
+    let mut idle = cluster.instance(1).socket_v2(&rook, None).await;
+    ready_of(&mut idle).await;
+    // Rook isn't in SIDE: watching its page is refused.
+    let mut prying = cluster.instance(0).socket_v2(&rook, None).await;
+    ready_of(&mut prying).await;
+    send_frame(&mut prying, watch(side_plan)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    use agent_workspace_server::realtime::{
+        documents::{DocumentKind, DocumentRef},
+        ephemeral::{EphemeralFrame, publish},
+    };
+    for (id, update) in [(side_plan, "U0lERQ=="), (plan, "UExBTg==")] {
+        publish(
+            cluster.instance(0).state(),
+            EphemeralFrame::DocumentUpdate {
+                document: DocumentRef {
+                    kind: DocumentKind::Page,
+                    id,
+                },
+                generation: Uuid::now_v7(),
+                version: 2,
+                update: update.to_owned(),
+            },
+        )
+        .await;
+    }
+    let heard = ephemeral_of(&mut watcher, "document.update", Duration::from_secs(3))
+        .await
+        .expect("the watcher heard the change");
+    assert_eq!(heard["document"]["id"], plan.to_string(), "{heard}");
+    assert_eq!(heard["update"], "UExBTg==", "{heard}");
+    for socket in [&mut idle, &mut prying] {
+        assert!(
+            ephemeral_of(socket, "document.update", Duration::from_millis(800))
+                .await
+                .is_none(),
+            "only watchers who may see the page hear it"
+        );
+    }
+    // Mara leaves the project: the page she watched stops reaching her.
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(mara_id)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("version");
+    let (status, body) = cluster
+        .instance(0)
+        .send(owner.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{mara_id}"),
+            Some("k5-10-leave"),
+            json!({"expectedVersion": version, "enabled": false}),
+        ))
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    frame_of(&mut watcher, "access", Duration::from_secs(5))
+        .await
+        .expect("Mara's access changed");
+    publish(
+        cluster.instance(0).state(),
+        EphemeralFrame::DocumentUpdate {
+            document: DocumentRef {
+                kind: DocumentKind::Page,
+                id: plan,
+            },
+            generation: Uuid::now_v7(),
+            version: 3,
+            update: "QUZURVI=".to_owned(),
+        },
+    )
+    .await;
+    assert!(
+        ephemeral_of(&mut watcher, "document.update", Duration::from_millis(800))
+            .await
+            .is_none(),
+        "a watcher who left the project still hears its page"
+    );
+    cluster.finish().await;
+}
+
+/// K5.9 `follow`: an account's stream catches up from a position and goes
+/// on live with no gap and no repeat while writers keep writing on both
+/// instances; it carries only what the account may hear; a start too far
+/// back asks for a resync.
+#[tokio::test]
+async fn follow_catches_up_then_goes_live_without_gaps() {
+    use agent_workspace_server::realtime::follow::{FollowItem, FollowSpec, follow};
+    use futures_util::StreamExt;
+
+    let Some(cluster) = cluster("k5_9_follow", 2).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1",
+    )
+    .bind(project)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    // A project the owner has left: its events never reach the stream.
+    let a = cluster.instance(0);
+    let browser = a.login("owner").await;
+    let (status, other) = a
+        .send(browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("cluster-else"),
+            json!({"organizationId": cluster.organization_id, "key": "ELSE", "name": "Elsewhere"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let elsewhere: Uuid = other["id"].as_str().expect("project").parse().expect("id");
+    sqlx::query("UPDATE project_memberships SET enabled = false WHERE project_id = $1")
+        .bind(elsewhere)
+        .execute(&cluster.pool)
+        .await
+        .expect("leave");
+    let write = |instance: usize, project: Uuid, count: usize| {
+        let pool = cluster.instance(instance).state().pool.clone();
+        async move {
+            let mut ids = Vec::new();
+            for _ in 0..count {
+                let mut transaction = pool.begin().await.expect("begin");
+                ids.push(stage(&mut transaction, project).await);
+                transaction.commit().await.expect("commit");
+            }
+            ids
+        }
+    };
+    // Some before the stream starts, after the position it starts from.
+    let start = {
+        let mut connection = cluster.pool.acquire().await.expect("connection");
+        events::head(&mut connection).await.expect("head")
+    };
+    let mut written = write(0, project, 50).await;
+    let task_updates = std::sync::Arc::new(|event: &events::LoggedEvent| {
+        event.event_type == catalog::TASK_UPDATED.name
+    });
+    let mut stream = Box::pin(follow(
+        cluster.instance(1).state().clone(),
+        FollowSpec::everything(owner, "human", task_updates.clone()),
+        start,
+    ));
+    // The rest while it catches up, on both instances, with others' events
+    // mixed in.
+    let writers = join_all([
+        write(0, project, 100),
+        write(1, project, 100),
+        write(0, elsewhere, 50),
+    ]);
+    let reader = async {
+        let mut seen = Vec::new();
+        while seen.len() < 250 {
+            match tokio::time::timeout(Duration::from_secs(30), stream.next()).await {
+                Ok(Some(Ok(FollowItem::Event(event)))) => {
+                    assert_eq!(event.space_id, Some(project), "only its own project");
+                    seen.push((event.position, event.id));
+                }
+                Ok(Some(Ok(FollowItem::Heartbeat | FollowItem::Live(_)))) => {}
+                other => panic!("the stream stopped: {other:?} after {}", seen.len()),
+            }
+        }
+        seen
+    };
+    let (more, seen) = tokio::join!(writers, reader);
+    written.extend(more.into_iter().take(2).flatten());
+    let ids = seen.iter().map(|(_, id)| *id).collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 250, "no repeats");
+    assert_eq!(ids, written.into_iter().collect::<HashSet<_>>(), "no gaps");
+    assert!(
+        seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "in log order"
+    );
+
+    // Too far back: refetch, then follow from the head.
+    let mut stale = Box::pin(follow(
+        cluster.instance(0).state().clone(),
+        FollowSpec::everything(owner, "human", task_updates),
+        -1,
+    ));
+    match stale.next().await {
+        Some(Ok(FollowItem::Resync { position })) => assert!(position > start),
+        other => panic!("expected a resync: {other:?}"),
+    }
+    assert!(stale.next().await.is_none(), "the stream ends after it");
+    cluster.finish().await;
+}
+
+/// K3.24: one cursor walks every workspace a stream asks for, in the log's
+/// one order, each event naming its workspace; the direct scope's events
+/// come only to a stream that asks for DMs and groups; and the log refuses
+/// a direct-scope event a workspace or a space would hear.
+#[tokio::test]
+async fn one_stream_walks_several_workspaces_and_the_direct_scope() {
+    use agent_workspace_server::{
+        events::{Audience, DIRECT_SCOPE_ID},
+        realtime::follow::{FollowItem, FollowSpec, follow},
+        workspace::lifecycle::{self, NewWorkspace},
+    };
+    use futures_util::StreamExt;
+
+    let Some(cluster) = cluster("k3_24_streams", 1).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let first = cluster.organization_id;
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1",
+    )
+    .bind(project)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    let (second, third) = {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        let mut made = Vec::new();
+        for name in ["Second", "Third"] {
+            let workspace = NewWorkspace {
+                name: name.into(),
+                slug: None,
+                id: None,
+            };
+            made.push(
+                lifecycle::create(&mut transaction, owner, workspace)
+                    .await
+                    .expect("workspace"),
+            );
+        }
+        let (second, third) = (made[0], made[1]);
+        transaction.commit().await.expect("commit");
+        (second, third)
+    };
+    let start = {
+        let mut connection = cluster.pool.acquire().await.expect("connection");
+        events::head(&mut connection).await.expect("head")
+    };
+    let to = |workspace: Uuid, audience: Audience| NewEvent {
+        workspace_id: Some(workspace),
+        space_id: None,
+        audience,
+        ..NewEvent::thing(&catalog::TASK_UPDATED, project, "task", Uuid::now_v7())
+    };
+    // One of each, in one order: the first workspace's space, the second
+    // and third workspaces, the owner's direct scope, then the first again.
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    let in_first = stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+    let mut written = vec![in_first];
+    for event in [
+        to(second, Audience::Workspace),
+        to(third, Audience::Workspace),
+        to(DIRECT_SCOPE_ID, Audience::Account(owner)),
+    ] {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        written.push(events::emit(&mut transaction, event).await.expect("emit"));
+        transaction.commit().await.expect("commit");
+    }
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    written.push(stage(&mut transaction, project).await);
+    transaction.commit().await.expect("commit");
+    let last = written[4];
+
+    let task_updates = std::sync::Arc::new(|event: &events::LoggedEvent| {
+        event.event_type == catalog::TASK_UPDATED.name
+    });
+    let heard = |spec: FollowSpec| {
+        let state = cluster.instance(0).state().clone();
+        async move {
+            let mut stream = Box::pin(follow(state, spec, start));
+            let mut seen = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(30), stream.next()).await {
+                    Ok(Some(Ok(FollowItem::Event(event)))) => {
+                        seen.push((event.position, event.id, event.workspace_id));
+                        if event.id == last {
+                            return seen;
+                        }
+                    }
+                    Ok(Some(Ok(FollowItem::Heartbeat | FollowItem::Live(_)))) => {}
+                    other => panic!("the stream stopped: {other:?} after {seen:?}"),
+                }
+            }
+        }
+    };
+    let ids = |seen: &[(i64, Uuid, Uuid)]| seen.iter().map(|(_, id, _)| *id).collect::<Vec<_>>();
+    let in_order = |seen: &[(i64, Uuid, Uuid)]| seen.windows(2).all(|pair| pair[0].0 < pair[1].0);
+
+    // Two workspaces, no DMs: the first and second only, in log order.
+    let two = heard(FollowSpec {
+        workspaces: Some(HashSet::from([first, second])),
+        direct: false,
+        ..FollowSpec::everything(owner, "human", task_updates.clone())
+    })
+    .await;
+    assert_eq!(ids(&two), vec![written[0], written[1], written[4]]);
+    assert!(in_order(&two), "in log order");
+    assert_eq!(
+        two.iter()
+            .map(|(_, _, workspace)| *workspace)
+            .collect::<Vec<_>>(),
+        vec![first, second, first],
+        "each names its workspace"
+    );
+
+    // Everything: all three workspaces and the direct scope, one order.
+    let all = heard(FollowSpec::everything(owner, "human", task_updates.clone())).await;
+    assert_eq!(ids(&all), written);
+    assert!(in_order(&all), "in log order");
+    assert_eq!(all[3].2, DIRECT_SCOPE_ID, "the direct scope names itself");
+
+    // DMs and the first workspace only.
+    let direct = heard(FollowSpec {
+        workspaces: Some(HashSet::from([first])),
+        ..FollowSpec::everything(owner, "human", task_updates)
+    })
+    .await;
+    assert_eq!(ids(&direct), vec![written[0], written[3], written[4]]);
+
+    // Nobody's workspace or space hears the direct scope.
+    for event in [
+        to(DIRECT_SCOPE_ID, Audience::Workspace),
+        NewEvent {
+            space_id: Some(project),
+            ..to(DIRECT_SCOPE_ID, Audience::Space)
+        },
+    ] {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        let error = events::emit(&mut transaction, event)
+            .await
+            .expect_err("refused");
+        assert!(
+            format!("{error:?}").contains("event_staging_direct_scope_audience"),
+            "{error:?}"
+        );
+        transaction.rollback().await.expect("rollback");
+    }
+    cluster.finish().await;
+}
+
+/// K5.14: a provider sign-in started through one instance is answered by
+/// the other: its poll sees the code, a retried start replays it, a second
+/// start is refused, and a cancel there ends it for both.
+#[tokio::test]
+async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
+    use agent_workspace_server::provider::{
+        LoginCeremonyError, LoginReservation,
+        adapter::{LoginKind, LoginStart},
+        ceremonies,
+    };
+
+    let Some(cluster) = cluster("k5_14_sign_in", 2).await else {
+        return;
+    };
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 LIMIT 1",
+    )
+    .bind(cluster.organization_id)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    let account = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO provider_accounts (id, organization_id, owner_actor_id, adapter_kind, name, home_path)
+        VALUES ($1, $2, $3, 'demo', 'Demo', '/tmp/k5-14-' || $1::text)
+        "#,
+    )
+    .bind(account)
+    .bind(cluster.organization_id)
+    .bind(owner)
+    .execute(&cluster.pool)
+    .await
+    .expect("provider account");
+    let (a, b) = (
+        cluster.instance(0).state().pool.clone(),
+        cluster.instance(1).state().pool.clone(),
+    );
+    let session = Uuid::now_v7();
+    let reserve = |pool: sqlx::PgPool, session: Uuid, key: &'static str| async move {
+        ceremonies::reserve_login(&pool, account, owner, session, key, LoginKind::DeviceCode).await
+    };
+    let Ok(LoginReservation::Reserved(ceremony)) = reserve(a.clone(), session, "start").await
+    else {
+        panic!("the first start reserves");
+    };
+    // Not answered yet: a second start, anywhere, is refused.
+    assert!(matches!(
+        reserve(b.clone(), session, "start").await,
+        Err(LoginCeremonyError::Active)
+    ));
+    ceremonies::complete_login(
+        &a,
+        account,
+        ceremony,
+        LoginStart::DeviceCode {
+            login_id: "login-1".to_owned(),
+            verification_url: "https://example.com/device".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+        },
+    )
+    .await
+    .unwrap_or_else(|_| panic!("complete"));
+    // The page's poll lands on B and sees the code.
+    let seen = ceremonies::login_ceremony(&b, account, owner, session)
+        .await
+        .expect("read")
+        .expect("open on B");
+    assert_eq!(seen.ceremony_id, ceremony);
+    assert!(matches!(
+        seen.response,
+        Some(LoginStart::DeviceCode { ref user_code, .. }) if user_code == "ABCD-EFGH"
+    ));
+    // Another session doesn't see it; a retried start on B replays it.
+    assert!(
+        ceremonies::login_ceremony(&b, account, owner, Uuid::now_v7())
+            .await
+            .expect("read")
+            .is_none()
+    );
+    assert!(matches!(
+        reserve(b.clone(), session, "start").await,
+        Ok(LoginReservation::Replay(replayed)) if replayed.ceremony_id == ceremony
+    ));
+    assert!(matches!(
+        reserve(b.clone(), Uuid::now_v7(), "other").await,
+        Err(LoginCeremonyError::Active)
+    ));
+    // Cancelled on B, it is gone on A, and a new start may begin.
+    ceremonies::clear_login(&b, account, Some(ceremony))
+        .await
+        .expect("cancel");
+    assert!(
+        ceremonies::login_ceremony(&a, account, owner, session)
+            .await
+            .expect("read")
+            .is_none()
+    );
+    assert!(matches!(
+        reserve(a.clone(), session, "again").await,
+        Ok(LoginReservation::Reserved(_))
+    ));
+    cluster.finish().await;
+}
+
+/// K5.18: with the work loop off, a queued job, a consumer batch and a due
+/// scheduled message all wait for the tick, and one tick does them all.
+/// The tick answers only with its token.
+#[tokio::test]
+async fn ticks_drive_work_with_the_loop_off() {
+    use std::os::unix::fs::PermissionsExt;
+    let secrets = tempfile::tempdir().expect("secrets");
+    let token_path = secrets.path().join("tick-token");
+    std::fs::write(&token_path, "tick-token-for-tests\n").expect("token");
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))
+        .expect("owner only");
+    let token_path = token_path.to_string_lossy().into_owned();
+    let settings: &[(&str, &str)] = &[
+        ("AGENT_WORKSPACE_WORK_LOOP", "off"),
+        ("AGENT_WORKSPACE_WORK_TICK_SECRET_PATH", &token_path),
+    ];
+    let Some(cluster) = cluster_with("k5_18_tick", 1, settings).await else {
+        return;
+    };
+    let pool = cluster.pool.clone();
+    let a = cluster.instance(0);
+    let browser = a.login("owner").await;
+    let (project, channel) = work_channel(&cluster, &browser).await;
+
+    // The consumers' cursors start at the head, then fall behind.
+    events::catch_up(&pool).await.expect("catch up");
+    let send_at = (chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339();
+    let (status, scheduled) = a
+        .send(browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/scheduled-messages"),
+            Some("k5-18-scheduled"),
+            json!({
+                "content": {"version": 1, "nodes": [{"type": "text", "text": "Ticked"}]},
+                "sendAt": send_at,
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
+    let scheduled: Uuid = scheduled["scheduledMessage"]["id"]
+        .as_str()
+        .or_else(|| scheduled["id"].as_str())
+        .expect("scheduled id")
+        .parse()
+        .expect("id");
+    let job = match agent_workspace_server::jobs::enqueue(
+        &pool,
+        agent_workspace_server::jobs::NewJob::new("jobs.prune_finished"),
+    )
+    .await
+    .expect("enqueue")
+    {
+        agent_workspace_server::jobs::Enqueued::Created(id) => id,
+        agent_workspace_server::jobs::Enqueued::Duplicate => panic!("no other job"),
+    };
+    let mut transaction = pool.begin().await.expect("begin");
+    stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+
+    let job_state = async || {
+        sqlx::query_scalar::<_, String>("SELECT state FROM background_jobs WHERE id = $1")
+            .bind(job)
+            .fetch_one(&pool)
+            .await
+            .expect("job")
+    };
+    let sent = async || {
+        sqlx::query_scalar::<_, String>("SELECT status FROM scheduled_messages WHERE id = $1")
+            .bind(scheduled)
+            .fetch_one(&pool)
+            .await
+            .expect("scheduled")
+    };
+    // Positions still come (the live role sequences), so the browser's
+    // updates don't wait for a tick; the consumers do.
+    let behind = async || {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM event_consumers \
+             WHERE position < (SELECT next_position - 1 FROM event_position_counter)",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("consumers")
+    };
+    let started = Instant::now();
+    while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_staging")
+        .fetch_one(&pool)
+        .await
+        .expect("staging")
+        > 0
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "never sequenced"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(job_state().await, "queued");
+    assert_eq!(sent().await, "scheduled");
+    assert_eq!(behind().await, 3, "every consumer waits");
+
+    let tick = |token: Option<&str>| {
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/internal/work/tick");
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        request.body(axum::body::Body::empty()).expect("tick")
+    };
+    for token in [None, Some("wrong"), Some("")] {
+        let (status, _) = a.send(tick(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{token:?}");
+    }
+    assert_eq!(job_state().await, "queued", "a refused tick does nothing");
+
+    let (status, ticked) = a.send(tick(Some("tick-token-for-tests"))).await;
+    assert_eq!(status, StatusCode::OK, "{ticked}");
+    assert!(ticked["jobs"].as_u64().expect("jobs") >= 2, "{ticked}");
+    assert!(ticked["events"].as_u64().expect("events") >= 1, "{ticked}");
+    assert_eq!(job_state().await, "succeeded");
+    assert_eq!(sent().await, "sent");
+    assert_eq!(behind().await, 0, "{ticked}");
+    cluster.finish().await;
+}
+
+/// K5.18: an `api` instance does nothing at start but connect, so it
+/// answers within a second of starting.
+#[tokio::test]
+async fn api_answers_within_a_second_of_starting() {
+    let Some(mut cluster) = cluster("k5_18_cold_api", 0).await else {
+        return;
+    };
+    let started = Instant::now();
+    let api = cluster.start(&[("AGENT_WORKSPACE_ROLES", "api")]).await;
+    let (status, ready) = api.ready().await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "{ready}");
+    assert!(elapsed < Duration::from_secs(1), "took {elapsed:?}");
+    let held = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM leases WHERE expires_at > now()")
+        .fetch_one(&cluster.pool)
+        .await
+        .expect("leases");
+    assert_eq!(held, 0, "an api instance took a lease at start");
     cluster.finish().await;
 }

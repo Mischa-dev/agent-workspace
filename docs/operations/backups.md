@@ -46,6 +46,26 @@ The scripts refuse to run if the two recipients match, or if one remote path
 sits inside the other on the same host. A dump next to its key defeats the
 encryption.
 
+## Uploaded files in an object store
+
+When uploads live in an S3-compatible store (`AGENT_WORKSPACE_FILE_STORE=object`),
+the data archive no longer holds them. Back them up in the store instead:
+turn on bucket versioning with a lifecycle rule that expires old versions
+after the backup retention, so a deleted file stays recoverable that long
+while the app still deletes at once. Take the database dump first: files are
+written once under unique keys, so every row in a dump has its file unless it
+was deleted in between.
+
+To move existing files from disk into the store, make it the primary
+(`AGENT_WORKSPACE_FILE_STORE=object`), restart, then run
+`agent-workspace-server files-move --to object` (add
+`--workspace-id <id>` for one workspace). A running server copies 100 files
+per job, checks each one's length and SHA-256, and switches it over; a
+restart picks up where it stopped, and files are served from wherever they
+are meanwhile. The copies on disk stay until
+`agent-workspace-server files-prune-source`, so moving back (`--to local`)
+needs no restore until then.
+
 ## Where it goes
 
 - Local copies: `/var/backups/agent-workspace/encrypted/<set>/`.

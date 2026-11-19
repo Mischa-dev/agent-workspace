@@ -21,6 +21,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(crate::auth::router())
+        .merge(crate::setup::router())
         .merge(crate::projects::router())
         .merge(crate::execution::router())
         .merge(crate::external_execution::router())
@@ -39,6 +40,21 @@ pub fn router() -> Router<AppState> {
             post(http::acknowledge_run_failure),
         )
         .route("/api/v1/realtime", get(crate::realtime::websocket))
+        // The live contract (K5.19): tickets and resume on `api`, the
+        // connection and publishes on `live`.
+        .route(
+            "/api/v2/live/ticket",
+            get(crate::realtime::contract::http::ticket),
+        )
+        .route(
+            "/api/v2/live/resume",
+            get(crate::realtime::contract::http::resume),
+        )
+        .route(
+            "/api/v2/live/key",
+            get(crate::realtime::contract::http::key),
+        )
+        .merge(crate::realtime::contract::live::router())
 }
 
 #[derive(Serialize)]

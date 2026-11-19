@@ -23,6 +23,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "import",
             "record",
             "start",
+            // The second step of a two-step create (a direct upload).
+            "finish",
             "schedule",
             "duplicate",
             "forward",

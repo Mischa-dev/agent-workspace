@@ -129,6 +129,20 @@ pub(crate) const RULES: &[Rule] = &[
         count: notification_detail_text,
     },
     Rule {
+        id: "audit_inserts",
+        agents_rule: "rule 6, \"Links and events are shared pieces\" (a change to a thing \
+                      is a fact in the log; audit rows are for what isn't)",
+        ceiling: AUDIT_INSERTS_CEILING,
+        count: audit_inserts,
+    },
+    Rule {
+        id: "log_readers",
+        agents_rule: "rule 6, \"Links and events are shared pieces\" (the log, links and \
+                      the search index are read where the access filter is applied)",
+        ceiling: LOG_READERS_CEILING,
+        count: log_readers,
+    },
+    Rule {
         id: "hand_built_links",
         agents_rule: "rule 13, \"Addresses are built in one place\"",
         ceiling: HAND_BUILT_LINKS_CEILING,
@@ -195,6 +209,9 @@ const CONVERSATION_LISTINGS_CEILING: usize = 70;
 // suggested batch (usage/alerts.rs).
 const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 10;
+// K3.21 (K3 guards 5 and 7), set from today's counts.
+const AUDIT_INSERTS_CEILING: usize = 54;
+const LOG_READERS_CEILING: usize = 10;
 // K4.18: links into the web app built by hand instead of by the address
 // module. The rest move when links switch to workspace addresses (K4.19).
 const HAND_BUILT_LINKS_CEILING: usize = 82;
@@ -420,6 +437,32 @@ pub(crate) fn conversation_inserts(source: &str) -> usize {
 }
 
 /// A message inserted outside the send pipeline.
+/// An audit row written by hand (K3 guard 5). A change to a thing is a fact
+/// in the log, which the audit trail reads (K3.20); `audit_events` keeps
+/// what isn't one: sign-ins, settings, keys and refused attempts.
+pub(crate) fn audit_inserts(source: &str) -> usize {
+    sql(source)
+        .map(|sql| count_word(&sql, "INSERT INTO audit_events"))
+        .sum()
+}
+
+/// SQL reading the log, the link store or the search index (K3 guard 7)
+/// outside `events/`, `links/` and `search/`, where the access filter is
+/// applied.
+pub(crate) fn log_readers(source: &str) -> usize {
+    sql(source)
+        .map(|sql| {
+            let mut found = 0;
+            for table in ["events", "event_staging", "links", "search_documents"] {
+                for verb in ["FROM", "JOIN"] {
+                    found += count_word(&sql, &format!("{verb} {table}"));
+                }
+            }
+            found
+        })
+        .sum()
+}
+
 pub(crate) fn message_inserts(source: &str) -> usize {
     sql(source)
         .map(|sql| count_word(&sql, "INSERT INTO messages"))
@@ -728,6 +771,14 @@ fn exempt(rule: &str, path: &str) -> bool {
         "agent_runs_sql" | "active_run_states_literal" => {
             path.starts_with("runs/") || path.starts_with("hosts/builtin/")
         }
+        // The log's own module, the link store and the search index read
+        // themselves (K3 guard 7).
+        "log_readers" => {
+            path.starts_with("events/")
+                || path.starts_with("links/")
+                || path.starts_with("search/")
+                || path == "search.rs"
+        }
         // The address module is where links are built (rule 13).
         "hand_built_links" => path == "addresses.rs" || path.starts_with("addresses/"),
         // The one listener (K5.4); its own connection, never the pool's.
@@ -806,8 +857,8 @@ pub(crate) fn new_table_offences() -> Vec<String> {
             if let Some(rule) = table_rule(&table) {
                 offences.push(format!(
                     "{rule}: {name} creates {table}. AGENTS.md, \"{AGENTS_HEADING}\", rule 6, \
-                     \"Links and events are shared pieces\": add a kind to work_item_links or \
-                     thing_references instead"
+                     \"Links and events are shared pieces\": add a kind to the link store \
+                     (`links`) instead"
                 ));
             }
         }

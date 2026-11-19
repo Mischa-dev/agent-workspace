@@ -635,6 +635,12 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         .execute(&t.pool)
         .await
         .expect("set the membership aside");
+    // And the access signals its joining and leaving staged for it in B.
+    sqlx::query("DELETE FROM event_staging WHERE audience_account_id = $1")
+        .bind(traveller)
+        .execute(&t.pool)
+        .await
+        .expect("set the traveller's signals aside");
     let projects_left =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE organization_id = $1")
             .bind(a.organization)

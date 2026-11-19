@@ -1739,7 +1739,8 @@ async fn read_import(
             if row.byte_size > transfer::MAX_IMPORT_BYTES as i64 {
                 return refuse("import.fileId", &transfer::too_large());
             }
-            let bytes = crate::files::FileStore::from_config(&state.config)
+            let bytes = crate::files::FileStore::resolve(state, &row.store_id)
+                .await?
                 .read_all(&row.storage_key, transfer::MAX_IMPORT_BYTES as u64)
                 .await?;
             (format, bytes)

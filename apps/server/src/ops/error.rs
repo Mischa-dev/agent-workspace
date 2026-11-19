@@ -39,7 +39,7 @@ pub enum OpError {
     },
     /// A plan or spend limit (H1).
     LimitReached {
-        limit: Cow<'static, str>,
+        refusal: Box<crate::metering::LimitRefusal>,
     },
     /// A suspended workspace refuses writes (H1).
     WorkspaceSuspended,
@@ -185,9 +185,7 @@ impl OpError {
             Self::RateLimited {
                 retry_after_seconds,
             } => format!("Too many requests. Try again in {retry_after_seconds} seconds.").into(),
-            Self::LimitReached { limit } => {
-                format!("This workspace has reached its {limit} limit.").into()
-            }
+            Self::LimitReached { refusal } => refusal.message.clone().into(),
             Self::WorkspaceSuspended => {
                 "This workspace is suspended, so it can't be changed.".into()
             }
@@ -252,6 +250,11 @@ impl OpError {
             }
             Self::TooLarge { limit_bytes } => {
                 details.insert("limitBytes".into(), (*limit_bytes).into());
+            }
+            Self::LimitReached { refusal } => {
+                if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(refusal) {
+                    details.extend(fields.into_iter().filter(|(key, _)| key != "message"));
+                }
             }
             _ => {}
         }
@@ -334,6 +337,7 @@ impl From<AppError> for OpError {
                 }
             }
             AppError::WorkspaceSuspended => Self::WorkspaceSuspended,
+            AppError::LimitReached(refusal) => Self::LimitReached { refusal },
             AppError::ModuleOff { module } => Self::Denied {
                 reason: DenyReason::ModuleOff {
                     module: module.to_owned(),

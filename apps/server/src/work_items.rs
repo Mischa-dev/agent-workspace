@@ -3969,7 +3969,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     task_ref_json!("linked", "linked_status", "linked_project"),
     r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
                          linked_project.project_key, linked.number)
-            FROM work_item_dependencies dependency
+            FROM task_dependencies dependency
             JOIN task_rows linked
               ON linked.project_id = dependency.blocking_project_id
              AND linked.id = dependency.blocking_work_item_id
@@ -3991,7 +3991,7 @@ const WORK_ITEM_SELECT: &str = concat!(
     task_ref_json!("linked", "linked_status", "linked_project"),
     r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
                          linked_project.project_key, linked.number)
-            FROM work_item_dependencies dependency
+            FROM task_dependencies dependency
             JOIN task_rows linked
               ON linked.project_id = dependency.project_id
              AND linked.id = dependency.blocked_work_item_id
@@ -4017,7 +4017,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                 'task', "#,
     task_ref_json!("linked", "linked_status", "linked_project"),
     r#") ORDER BY relation.created_at, linked.id)
-            FROM work_item_relations relation
+            FROM task_relations relation
             JOIN task_rows linked
               ON linked.id = CASE WHEN relation.work_item_id = item.id
                                   THEN relation.other_work_item_id ELSE relation.work_item_id END
@@ -4100,7 +4100,7 @@ const WORK_ITEM_SELECT: &str = concat!(
           AND status.semantic_category NOT IN ('completed', 'canceled')
           AND NOT EXISTS (
               SELECT 1
-                FROM work_item_dependencies dependency
+                FROM task_dependencies dependency
                 JOIN task_rows blocker
                   ON blocker.project_id = dependency.blocking_project_id
                  AND blocker.id = dependency.blocking_work_item_id

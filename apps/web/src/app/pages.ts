@@ -6,6 +6,7 @@ import { lazy } from 'react'
 
 export const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 export const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
+export const SetupPage = lazy(() => import('../setup/SetupPage').then((module) => ({ default: module.SetupPage })))
 export const ForgotPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ForgotPasswordPage })))
 export const ResetPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ResetPasswordPage })))
 export const VerifyEmailPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.VerifyEmailPage })))

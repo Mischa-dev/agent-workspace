@@ -380,6 +380,37 @@ async fn roles_narrow_modules_and_never_widen_them() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
+    // Narrowing the role tells every holder's live connections their access
+    // changed, as a membership change does.
+    let signals = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT (SELECT count(*) FROM event_staging \
+                     WHERE type = 'account.access_changed' AND audience_account_id = $1) \
+                  + (SELECT count(*) FROM events \
+                     WHERE type = 'account.access_changed' AND audience_account_id = $1)",
+        )
+        .bind(bea)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("signals")
+    };
+    let before = signals().await;
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("{roles_path}/{}", made["id"].as_str().expect("id")),
+            None,
+            json!({"modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert!(
+        signals().await > before,
+        "narrowing a role signals its holders"
+    );
+
     // A role can't turn on what the workspace has off.
     let (status, _) = send(
         app,

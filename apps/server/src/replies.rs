@@ -1423,9 +1423,7 @@ pub(crate) async fn stop_for_run(
 /// (`crate::delivery`).
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     loop {
-        if let Err(error) = expire_leases(&state.pool).await {
-            tracing::warn!(category = error.log_category(), "reply lease sweep failed");
-        }
+        round(&state).await;
         tokio::select! {
             _ = tokio::time::sleep(WORKER_INTERVAL) => {}
             _ = shutdown.changed() => return,
@@ -1433,6 +1431,14 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
         if *shutdown.borrow() {
             return;
         }
+    }
+}
+
+/// One pass: expire lapsed claims. A failure is logged; the next pass
+/// tries again.
+pub async fn round(state: &AppState) {
+    if let Err(error) = expire_leases(&state.pool).await {
+        tracing::warn!(category = error.log_category(), "reply lease sweep failed");
     }
 }
 

@@ -22,6 +22,8 @@ pub enum LeaseName {
     Consumer(&'static str),
     /// One partition of a partitioned consumer.
     Partition(&'static str, u16),
+    /// Publishes the log to an outside live service (K5.19).
+    LivePublisher,
 }
 
 impl fmt::Display for LeaseName {
@@ -31,6 +33,7 @@ impl fmt::Display for LeaseName {
             Self::StartupMaintenance => formatter.write_str("server.startup"),
             Self::Consumer(name) => write!(formatter, "consumer:{name}"),
             Self::Partition(name, number) => write!(formatter, "partition:{name}.{number}"),
+            Self::LivePublisher => formatter.write_str("live.publisher"),
         }
     }
 }
@@ -264,6 +267,7 @@ mod tests {
             LeaseName::StartupMaintenance,
             LeaseName::Consumer("webhooks"),
             LeaseName::Partition("deliveries", 3),
+            LeaseName::LivePublisher,
         ]
         .map(|name| name.to_string());
         assert_eq!(
@@ -272,7 +276,8 @@ mod tests {
                 "builtin-host",
                 "server.startup",
                 "consumer:webhooks",
-                "partition:deliveries.3"
+                "partition:deliveries.3",
+                "live.publisher"
             ]
         );
         assert!(names.iter().all(|name| well_formed(name)));
