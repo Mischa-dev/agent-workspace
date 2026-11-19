@@ -304,6 +304,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/scheduled-messages/{id}/send-now",
     "PUT /api/v1/settings/values/{key}",
     "POST /api/v1/settings/values/{key}/reset",
+    "POST /api/v1/things/{kind}/{id}/files",
     "PATCH /api/v1/threads/{id}",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
@@ -484,6 +485,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_delete",
     "automation_run_start",
     "automation_update",
+    "change_undo",
     "channel_create",
     "channel_join",
     "channel_leave",
@@ -504,6 +506,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "dashboard_delete",
     "dashboard_update",
     "decision_record",
+    "page_make",
     "environment_archive",
     "environment_check",
     "environment_create",
@@ -537,11 +540,16 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_create",
     "bug_report_link_update",
     "collection_write",
+    "proposal_decide",
     "record_write",
     "record_create",
     "conversation_tab_set",
     "button_press",
     "sheet_write",
+    "sheet_view_create",
+    "sheet_view_update",
+    "sheet_view_delete",
+    "sheet_range_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -664,6 +672,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
+    "whiteboard_propose",
     "whiteboard_link",
     "whiteboard_update",
     "whiteboard_trash_empty",
@@ -1391,6 +1400,8 @@ struct Targets {
     custom_emoji: Uuid,
     /// A thread in the sheet's comments (C1.3).
     comment_thread: Uuid,
+    /// A shared filter view of the sheet (C1.16).
+    sheet_view: Uuid,
 }
 
 /// The smallest PNG header a custom emoji passes with (C2.19).
@@ -1935,10 +1946,29 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("comments");
     }
+    // C1.16: a shared filter view of the sheet's first tab.
+    let sheet_view = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO sheet_views (id, workspace_id, space_id, sheet_id, tab_id, name, created_by_actor_id)
+        SELECT $1, $2, sheet.project_id, sheet.id,
+               (SELECT tab.id FROM sheet_tabs tab WHERE tab.sheet_id = sheet.id ORDER BY tab.position LIMIT 1),
+               'Net view', $3
+        FROM sheets sheet WHERE sheet.id = $4
+        "#,
+    )
+    .bind(sheet_view)
+    .bind(organization)
+    .bind(owner)
+    .bind(world.sheet)
+    .execute(pool)
+    .await
+    .expect("sheet view");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         connection,
+        sheet_view,
         schedule,
         custom_emoji,
         comment_thread,
@@ -4047,6 +4077,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             |_| Payload::Bytes("text/plain", b"Net file".to_vec()),
         )
         .query("?name=net.txt"),
+        path_case(
+            "POST /api/v1/things/{kind}/{id}/files",
+            &[same("page"), id(&a.page, &b.page)],
+            |_| Payload::Bytes("image/png", tiny_png()),
+        )
+        .query("?name=net.png"),
         path_case(
             "POST /api/v1/conversations/{id}/mark-seen",
             &[channel()],
@@ -7227,6 +7263,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
         ),
+        // C1.16: a sheet's filter views live on its tabs; B's sheet and
+        // B's views can't be reached from A.
+        mcp_case(
+            "sheet_view_create",
+            json!({"sheetId": a.sheet, "name": "Net mcp view", "clientRequestId": "net-sheet-view"}),
+            vec![json!({"sheetId": b.sheet, "name": "Net taken", "clientRequestId": "net-sheet-view-b"})],
+        ),
+        mcp_case(
+            "sheet_view_update",
+            json!({"viewId": ax.sheet_view, "name": "Net renamed view"}),
+            vec![json!({"viewId": bx.sheet_view, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "sheet_view_delete",
+            json!({"viewId": ax.sheet_view}),
+            vec![json!({"viewId": bx.sheet_view})],
+        ),
+        // C1.20: B's sheet can't be given a named range from A.
+        mcp_case(
+            "sheet_range_set",
+            json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
+            vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
         // and a filter can't name B's things.
@@ -7383,6 +7442,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
+            "change_undo",
+            json!({"changeSetId": a.page_change}),
+            vec![json!({"changeSetId": b.page_change})],
+        ),
+        mcp_case(
+            "proposal_decide",
+            json!({"proposalId": a.page_suggestions[2], "decision": "reject"}),
+            vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
+        ),
+        mcp_case(
             "page_write",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),
             vec![
@@ -7414,6 +7483,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
+        ),
+        // C1.11: a proposal goes only on a board the caller can see.
+        mcp_case(
+            "whiteboard_propose",
+            json!({"whiteboardId": a.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]}),
+            vec![json!({"whiteboardId": b.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]})],
         ),
         mcp_case(
             "whiteboard_update",
@@ -7537,6 +7614,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "title": "Net mcp decision", "fromMessageId": b.message}),
             json!({"projectId": a.project, "title": "Net mcp decision", "conversationId": b.channel}),
             json!({"projectId": a.project, "title": "Net mcp decision", "supersedes": bx.decision}),
+        ]),
+        // C1.25: a page made from B's message, thread or page can't
+        // happen from A, nor can A's page land in B's space.
+        mcp_case(
+            "page_make",
+            json!({"messages": [a.message], "clientRequestId": "net-page-make"}),
+            vec![json!({"messages": [b.message], "clientRequestId": "net-page-make-b"})],
+        )
+        .rejecting(vec![
+            json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
+            json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
         ]),
         mcp_case(
             "task_link_many",

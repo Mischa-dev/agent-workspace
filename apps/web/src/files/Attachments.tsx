@@ -77,6 +77,7 @@ export function Attachments({ files, onRemove }: { files: FileAttachment[]; onRe
             <Icon name={Download} />
           </a>
           {onRemove ? <IconButton icon="trash" label={`Remove ${file.name}`} onClick={() => onRemove(file)} size="sm" /> : null}
+          {file.preview ? <pre className="aw-file__preview">{file.preview}</pre> : null}
         </div>
       ))}
       {open ? <ImageViewer file={open} images={images} onClose={() => setOpen(null)} onShow={setOpen} /> : null}

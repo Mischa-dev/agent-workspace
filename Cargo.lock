@@ -144,6 +144,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "flate2",
+ "fontdb",
  "fs2",
  "futures-util",
  "hex",

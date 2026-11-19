@@ -14,6 +14,8 @@ export type FileAttachment = {
   height: number | null
   /** The task comment it was posted with. */
   commentId: string | null
+  /** The start of a text or code file, to show before it is opened. */
+  preview: string | null
   uploadedBy: string
   createdAt: string
 }
@@ -52,6 +54,7 @@ export function normalizeFile(value: unknown): FileAttachment | null {
     width: positive(file.width),
     height: positive(file.height),
     commentId: typeof file.commentId === 'string' ? file.commentId : null,
+    preview: typeof file.preview === 'string' ? file.preview.slice(0, 2000) : null,
     uploadedBy: typeof file.uploadedBy === 'string' ? file.uploadedBy : '',
     createdAt: typeof file.createdAt === 'string' ? file.createdAt : '',
   }

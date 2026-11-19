@@ -5,6 +5,7 @@
 //! Markdown exactly as the web app does, so a page keeps its look when it
 //! turns into a document.
 
+pub mod change_sets;
 pub mod comments;
 pub mod discussion;
 pub mod docx;

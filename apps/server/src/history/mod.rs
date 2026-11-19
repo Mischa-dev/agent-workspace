@@ -4,8 +4,8 @@
 //! What a kind can't do yet says so with a reason, never silently.
 //!
 //! Adapters at the start: pages and whiteboards (list, show, restore),
-//! messages (list, show), records, tasks and sheets (list). C1 fills the
-//! rest (record and task field revert, sheet snapshots).
+//! messages (list, show), records and tasks (list); sheets (list, show,
+//! restore) since C1.13. C1 fills the rest (record and task field revert).
 
 pub mod ops;
 
@@ -69,12 +69,12 @@ pub const ADAPTERS: &[Adapter] = &[
         show: Support::Not("a task's history keeps each change, not whole versions"),
         restore: Support::Not("reverting a task's fields comes later"),
     },
+    // C1.13: snapshots and each revision's inputs reach every revision
+    // since snapshots began (the deploy that added them).
     Adapter {
         kind: "sheet",
-        show: Support::Not("a sheet's history keeps only the cells each edit changed"),
-        restore: Support::Not(
-            "a sheet's history keeps only the cells each edit changed; snapshots come later",
-        ),
+        show: Support::Yes,
+        restore: Support::Yes,
     },
 ];
 
@@ -204,7 +204,7 @@ fn list_sql(kind: &str) -> Option<String> {
             SELECT entry.sequence AS version, {at} AS at,
                    COALESCE(activity.actor_id, comment.author_actor_id) AS actor_id,
                    NULL::uuid AS via_id,
-                   CASE WHEN entry.comment_id IS NOT NULL THEN 'Commented'
+                   CASE WHEN entry.message_id IS NOT NULL THEN 'Commented'
                         ELSE initcap(replace(COALESCE(activity.kind, entry.kind), '_', ' ')) END
                        AS summary,
                    ARRAY(SELECT jsonb_object_keys(
@@ -212,7 +212,8 @@ fn list_sql(kind: &str) -> Option<String> {
                             THEN activity.payload->'changes' ELSE '{{}}'::jsonb END)) AS changed
             FROM work_item_timeline_entries entry
             LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
-            LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+            -- visibility: the author of a comment on a task the reader may see
+            LEFT JOIN messages comment ON comment.id = entry.message_id
             WHERE entry.work_item_id = $1
             "#,
             at = at("entry.created_at")
@@ -220,9 +221,14 @@ fn list_sql(kind: &str) -> Option<String> {
         "sheet" => format!(
             r#"
             SELECT revision AS version, {at} AS at, actor_id, via_oauth_grant_id AS via_id,
-                   CASE WHEN jsonb_typeof(summary->'cells') = 'object'
-                        THEN 'Edited ' || (SELECT count(*) FROM jsonb_object_keys(summary->'cells'))
-                             || ' cells'
+                   CASE WHEN summary ? 'restoredRevision'
+                        THEN 'Restored revision ' || (summary->>'restoredRevision')
+                        WHEN summary ? 'created' THEN 'Created'
+                        WHEN summary->>'cells' = '0' AND jsonb_typeof(summary->'formats') = 'number'
+                             AND summary->>'formats' <> '0'
+                        THEN 'Formatted ' || (summary->>'formats') || ' cells'
+                        WHEN jsonb_typeof(summary->'cells') = 'number'
+                        THEN 'Edited ' || (summary->>'cells') || ' cells'
                         ELSE 'Edited' END AS summary,
                    ARRAY(SELECT key FROM jsonb_object_keys(
                        CASE WHEN jsonb_typeof(summary->'cells') = 'object'
@@ -296,6 +302,9 @@ pub async fn show(
             json!({ "elements": elements, "elementCount": count, "sceneSeq": scene_seq })
         }),
         // A removed message's versions are gone with its text.
+        "sheet" => crate::sheets::history::state_at(connection, id, version)
+            .await?
+            .map(|state| state.to_json(version)),
         "message" => sqlx::query_as::<_, (Option<String>, Option<Value>)>(
             "SELECT plain_text, content FROM message_revisions \
              WHERE message_id = $1 AND revision = $2",
@@ -372,6 +381,59 @@ pub async fn restore(
             )
             .await?;
             (&catalog::WHITEBOARD_VERSION_RESTORED, outcome.scene_seq)
+        }
+        "sheet" => {
+            let space =
+                sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM sheets WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&mut **transaction)
+                    .await?
+                    .ok_or(AppError::NotFound("sheet"))?;
+            let sheet = crate::sheets::lock(transaction, space, id)
+                .await?
+                .ok_or(AppError::NotFound("sheet"))?;
+            if sheet.revision != expected_version {
+                return Err(AppError::VersionConflict {
+                    resource: "sheet",
+                    current_version: sheet.revision,
+                });
+            }
+            if sheet.archived {
+                return Err(AppError::Conflict("sheet", "archived"));
+            }
+            let applied = match crate::sheets::history::restore(
+                transaction,
+                &sheet,
+                restorer.actor_id,
+                version,
+            )
+            .await?
+            {
+                Ok(applied) => applied,
+                Err(crate::sheets::history::Refusal::NotKept) => {
+                    return Err(AppError::Refused {
+                        field: "version",
+                        message: "That revision is from before the sheet's history was kept; restore a later one.",
+                    });
+                }
+                Err(crate::sheets::history::Refusal::Problem(_)) => {
+                    return Err(AppError::Refused {
+                        field: "version",
+                        message: "That revision can't be put back as the sheet is now (a tab name or a limit is in the way).",
+                    });
+                }
+            };
+            sqlx::query(
+                "UPDATE sheet_revisions SET summary = summary || jsonb_build_object('restoredRevision', $3::bigint) \
+                 WHERE sheet_id = $1 AND revision = $2",
+            )
+            .bind(id)
+            .bind(applied.revision)
+            .bind(version)
+            .execute(&mut **transaction)
+            .await?;
+            crate::outbox::enqueue_sheet_updated(transaction, space, id, applied.revision).await?;
+            (&catalog::SHEET_VERSION_RESTORED, applied.revision)
         }
         _ => return Err(AppError::Internal("restore on a kind that has none")),
     };

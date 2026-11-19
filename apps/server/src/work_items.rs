@@ -26,13 +26,13 @@ use crate::{
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
         CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
         CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
-        MAX_BLOCKED_REASON_CHARACTERS, NewTaskComment, NewTaskFields, PlacementProblem,
-        ProjectMembership, PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges,
-        ThreadLinkOutcome, UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
-        change_criteria, change_pull_request_link, change_repository_link, change_thread_link,
-        conflict_kind, create_work_item as execute_create_work_item, finalize_change,
-        insert_task_comment, lock_membership, lock_work_item, set_archived,
-        update_locked_work_item, update_work_item_by_id, valid_estimate,
+        MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
+        PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
+        change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
+        create_work_item as execute_create_work_item, finalize_change, lock_membership,
+        lock_work_item, set_archived, update_locked_work_item, update_work_item_by_id,
+        valid_estimate,
     },
     work_item_labels::LabelDelta,
 };
@@ -2985,149 +2985,41 @@ async fn create_work_item_comment(
     ApiJson(request): ApiJson<CreateCommentRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
+    MessageContent::from_json(request.content.clone()).map_err(message_content_error)?;
     let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("work_items", work_item_id, "comment_create")?;
-    let request_hash = if request.attachments.is_empty() && request.reply_to_comment_id.is_none() {
-        RequestHash::for_value(&content)?
-    } else {
-        let mut hashed = serde_json::json!({
-            "content": &content,
-            "attachments": &request.attachments,
-        });
-        if let Some(reply_to) = request.reply_to_comment_id {
-            hashed["replyToCommentId"] = serde_json::json!(reply_to);
-        }
-        RequestHash::for_value(&hashed)?
-    };
+    // Commenting takes "edit tasks" on an open task in an active project;
+    // the send pipeline checks the rest (C1.4).
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let mut body: CommentAppendResponse = replay.decode()?;
-            // Someone who can no longer see tasks gets no more from a replay
-            // than from a new comment.
-            if !crate::conversations::sees_tasks_in(
-                &mut *transaction,
-                principal.actor_id,
-                project_id,
-            )
-            .await?
-            {
-                hide_reference_details(&mut body.comment);
-            }
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(body)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = fetch_work_item_for_update(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::NotFound("work_item"))?;
-    if current.archived_at.is_some() {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    if let Some(reply_to) = request.reply_to_comment_id
-        && !comment_can_be_answered(&mut transaction, project_id, work_item_id, reply_to).await?
-    {
-        return Err(AppError::Validation("replyToCommentId"));
-    }
-    // One path with the agent tool (C1.1).
-    let inserted = insert_task_comment(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        NewTaskComment {
-            work_item_id,
-            version: current.version,
-            content,
-            reply_to: request.reply_to_comment_id,
-            attachments: &request.attachments,
-            audit_action: "work_item.comment_created",
-        },
-    )
-    .await?;
-    let comment_id = inserted.comment_id;
-    let sequence = inserted.sequence;
-    let mention_rows =
-        fetch_comment_actor_rows(&mut transaction, project_id, &inserted.mentioned_actor_ids)
-            .await?;
-    let reference_rows = fetch_work_item_reference_rows(
-        &mut transaction,
-        project_id,
-        &inserted.referenced_work_item_ids,
-    )
-    .await?;
-    let (content_json, plain_text, created_at) = (
-        inserted.content_json,
-        inserted.plain_text,
-        inserted.created_at,
-    );
-    let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(AppError::Internal("comment author unavailable"))?;
-    // Commenting takes "edit tasks"; the referenced tasks' titles and
-    // statuses also take "see tasks" here (an app's limit included).
-    let sees_tasks =
-        crate::conversations::sees_tasks_in(&mut *transaction, principal.actor_id, project_id)
-            .await?;
-    let mut body = CommentAppendResponse {
-        work_item_id,
-        sequence,
-        comment: WorkItemCommentView {
-            id: comment_id,
-            author,
-            content: content_json,
-            plain_text,
-            mentioned_actors: mention_rows,
-            referenced_work_items: reference_rows
-                .into_iter()
-                .map(|row| work_item_reference_view(project_id, row))
-                .collect(),
-            created_at,
-            via: None,
-            revision: 1,
-            edited_at: None,
-            removed: None,
-            reply_to: match request.reply_to_comment_id {
-                Some(reply_to) => {
-                    fetch_comment_reply(&mut transaction, project_id, work_item_id, reply_to)
-                        .await?
-                }
-                None => None,
-            },
-        },
-    };
-    if !sees_tasks {
-        hide_reference_details(&mut body.comment);
-    }
-    complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
+    authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
     transaction.commit().await?;
+    let (actor, creator) = comments::browser_poster(&principal, &headers)?;
+    let posted = comments::post(
+        &state,
+        actor,
+        creator,
+        work_item_id,
+        request.content,
+        &request.attachments,
+        request.reply_to_comment_id,
+        key,
+        (
+            &browser_actor(&headers, &principal, project_id)?,
+            "work_item.comment_created",
+        ),
+    )
+    .await?;
+    let body = CommentAppendResponse {
+        work_item_id,
+        sequence: posted.sequence,
+        comment: comments::comment_view(
+            &state.pool,
+            principal.actor_id,
+            project_id,
+            work_item_id,
+            posted.message_id,
+        )
+        .await?,
+    };
     Ok((StatusCode::CREATED, Json(body)).into_response())
 }
 
@@ -3234,7 +3126,7 @@ pub(crate) async fn fetch_comment_timeline_row(
         r#"
         {TIMELINE_SELECT}
         WHERE entry.project_id = $1 AND entry.work_item_id = $2
-          AND entry.comment_id = $3
+          AND entry.message_id = $3
         "#
     ))
     .bind(project_id)
@@ -3270,15 +3162,15 @@ const TIMELINE_SELECT: &str = r#"
                via_client.client_name AS via
         FROM work_item_timeline_entries entry
         LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
-        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+        -- visibility: the comments of a task the reader may see, which is the rule
+        LEFT JOIN messages comment ON comment.id = entry.message_id
         LEFT JOIN project_memberships remover
           ON remover.project_id = comment.project_id
          AND remover.actor_id = comment.removed_by_actor_id
         LEFT JOIN actors remover_actor ON remover_actor.id = remover.actor_id
-        LEFT JOIN work_item_comments quoted
-          ON quoted.project_id = comment.project_id
-         AND quoted.work_item_id = comment.work_item_id
-         AND quoted.id = comment.reply_to_comment_id
+        LEFT JOIN messages quoted
+          ON quoted.conversation_id = comment.conversation_id
+         AND quoted.id = comment.reply_to_message_id
         LEFT JOIN project_memberships quoted_author
           ON quoted_author.project_id = quoted.project_id
          AND quoted_author.actor_id = quoted.author_actor_id
@@ -3290,127 +3182,6 @@ const TIMELINE_SELECT: &str = r#"
          AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
 "#;
-
-/// Whether a new comment on this task may answer `comment_id`: it's on the
-/// same task and not deleted.
-async fn comment_can_be_answered(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM work_item_comments
-            WHERE project_id = $1 AND work_item_id = $2 AND id = $3
-              AND removed_at IS NULL
-        )
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(comment_id)
-    .fetch_one(&mut **transaction)
-    .await?)
-}
-
-async fn fetch_comment_reply(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<Option<CommentReplyView>, AppError> {
-    Ok(
-        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, bool)>(
-            r#"
-        SELECT quoted.id, author.display_name,
-               CASE WHEN quoted.removed_at IS NULL THEN left(quoted.plain_text, 300) END,
-               quoted.removed_at IS NOT NULL
-        FROM work_item_comments quoted
-        LEFT JOIN project_memberships author
-          ON author.project_id = quoted.project_id AND author.actor_id = quoted.author_actor_id
-        WHERE quoted.project_id = $1 AND quoted.work_item_id = $2 AND quoted.id = $3
-        "#,
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .map(
-            |(comment_id, author_name, text, removed)| CommentReplyView {
-                comment_id,
-                author_name,
-                text,
-                removed,
-            },
-        ),
-    )
-}
-
-async fn fetch_comment_actor_rows(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    actor_ids: &[Uuid],
-) -> Result<Vec<ActorView>, AppError> {
-    if actor_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(sqlx::query_as::<_, (Uuid, String, String, String)>(
-        r#"
-        SELECT actor.id, actor.kind, membership.display_name, membership.handle
-        FROM project_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.project_id = $1
-          AND membership.actor_id = ANY($2)
-          AND membership.enabled AND actor.status = 'active'
-        ORDER BY lower(membership.display_name), actor.id
-        FOR SHARE OF membership, actor
-        "#,
-    )
-    .bind(project_id)
-    .bind(actor_ids)
-    .fetch_all(&mut **transaction)
-    .await?
-    .into_iter()
-    .map(|(id, kind, display_name, handle)| ActorView {
-        id,
-        kind,
-        display_name,
-        handle,
-        avatar_url: None,
-    })
-    .collect())
-}
-
-async fn fetch_work_item_reference_rows(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_ids: &[Uuid],
-) -> Result<Vec<WorkItemReferenceRow>, AppError> {
-    if work_item_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(sqlx::query_as::<_, WorkItemReferenceRow>(
-        r#"
-        SELECT item.id, project.project_key || '-' || item.number::text AS key,
-               item.title, status.semantic_category AS status_category,
-               item.archived_at::text AS archived_at
-        FROM task_rows item
-        JOIN projects project ON project.id = item.project_id
-        JOIN work_item_statuses status
-          ON status.project_id = item.project_id AND status.id = item.status_id
-        WHERE item.project_id = $1 AND item.id = ANY($2)
-        ORDER BY item.number, item.id
-        FOR SHARE OF item
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_ids)
-    .fetch_all(&mut **transaction)
-    .await?)
-}
 
 fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> WorkItemReferenceView {
     WorkItemReferenceView {
@@ -3442,7 +3213,7 @@ fn hide_reference_details(comment: &mut WorkItemCommentView) {
 async fn timeline_entry_view(
     pool: &PgPool,
     project_id: Uuid,
-    work_item_id: Uuid,
+    _work_item_id: Uuid,
     row: WorkItemTimelineRow,
 ) -> Result<WorkItemTimelineEntryView, AppError> {
     let actor = ActorView {
@@ -3482,19 +3253,15 @@ async fn timeline_entry_view(
             let mentioned_actors = sqlx::query_as::<_, (Uuid, String, String, String)>(
                 r#"
                 SELECT actor.id, actor.kind, membership.display_name, membership.handle
-                FROM work_item_comment_mentions mention
+                FROM message_mentions mention
                 JOIN actors actor ON actor.id = mention.actor_id
                 JOIN project_memberships membership
                   ON membership.project_id = mention.project_id
                  AND membership.actor_id = mention.actor_id
-                WHERE mention.project_id = $1 AND mention.work_item_id = $2
-                  AND mention.comment_id = $3
-                GROUP BY actor.id, actor.kind, membership.display_name, membership.handle
-                ORDER BY min(mention.node_index), actor.id
+                WHERE mention.message_id = $1
+                ORDER BY lower(membership.display_name), actor.id
                 "#,
             )
-            .bind(project_id)
-            .bind(work_item_id)
             .bind(comment_id)
             .fetch_all(crate::db::scoped(pool))
             .await?
@@ -3513,23 +3280,20 @@ async fn timeline_entry_view(
                        project.project_key || '-' || item.number::text AS key,
                        item.title, status.semantic_category AS status_category,
                        item.archived_at::text AS archived_at
-                FROM work_item_comment_references reference
+                FROM message_work_item_references reference
                 JOIN task_rows item
                   ON item.project_id = reference.project_id
-                 AND item.id = reference.referenced_work_item_id
+                 AND item.id = reference.work_item_id
                 JOIN projects project ON project.id = item.project_id
                 JOIN work_item_statuses status
                   ON status.project_id = item.project_id AND status.id = item.status_id
-                WHERE reference.project_id = $1
-                  AND reference.source_work_item_id = $2
-                  AND reference.comment_id = $3
+                WHERE reference.project_id = $1 AND reference.message_id = $2
                 GROUP BY item.id, project.project_key, item.number, item.title,
                          status.semantic_category, item.archived_at
                 ORDER BY min(reference.node_index), item.id
                 "#,
             )
             .bind(project_id)
-            .bind(work_item_id)
             .bind(comment_id)
             .fetch_all(crate::db::scoped(pool))
             .await?

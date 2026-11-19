@@ -594,3 +594,291 @@ async fn sheet_cell_writes_do_not_wait_for_the_project_lock() {
     assert_eq!(cells["outcome"], "ok", "{cells}");
     holder.rollback().await.expect("release");
 }
+
+/// C1.13: any revision since snapshots began can be shown and put back,
+/// across row moves and tab changes, as a new revision whose values are
+/// worked out again.
+#[tokio::test]
+async fn any_revision_comes_back_as_a_new_one() {
+    let Some(setup) = setup("awd54_sheet_history").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "HIST", "History").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "HIST",
+            "name": "Counter",
+            "cells": [{"cell": "A1", "input": "0"}, {"cell": "B1", "input": "=A1*2"}],
+            "clientRequestId": "hist-0",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    // Forty revisions, more than one snapshot apart, with a row inserted
+    // above the counter and a tab added along the way.
+    let mut revisions = Vec::new();
+    for step in 1..=40 {
+        let mut arguments = json!({
+            "projectId": "HIST",
+            "sheet": "Counter",
+            "cells": [{"cell": if step > 15 { "A2" } else { "A1" }, "input": step.to_string()}],
+            "clientRequestId": format!("hist-{step}"),
+        });
+        if step == 15 {
+            arguments["tabs"] = json!([{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}]);
+            arguments["cells"] = json!([{"cell": "A2", "input": "15"}]);
+        }
+        if step == 30 {
+            arguments["tabs"] = json!([{"add": "Notes"}]);
+        }
+        let written = call("sheet_write", arguments).await;
+        assert_eq!(written["outcome"], "ok", "{step}: {written}");
+        revisions.push(written["value"]["revision"].as_i64().expect("revision"));
+    }
+    let now = *revisions.last().expect("revisions");
+    // Step 12: A1 held 12, before the row moved it and before the tab.
+    let twelve = revisions[11];
+    let shown = call("history_show", json!({"thing": sheet, "version": twelve})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    let tabs = &shown["value"]["content"]["tabs"];
+    assert_eq!(tabs.as_array().map(Vec::len), Some(1), "{shown}");
+    assert_eq!(tabs[0]["cells"]["A1"], "12", "{shown}");
+    assert_eq!(tabs[0]["cells"]["B1"], "=A1*2", "{shown}");
+
+    let stale = call(
+        "history_restore",
+        json!({"thing": sheet, "version": twelve, "expectedVersion": now - 1, "clientRequestId": "hist-stale"}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let restored = call(
+        "history_restore",
+        json!({"thing": sheet, "version": twelve, "expectedVersion": now, "clientRequestId": "hist-restore"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    assert_eq!(restored["value"]["version"], now + 1, "{restored}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(12.0), "{read}");
+    assert_eq!(
+        value_at(&read, "B1"),
+        json!(24.0),
+        "values are worked out again"
+    );
+    assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
+    let tabs = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter", "tab": "Notes"}),
+    )
+    .await;
+    assert_ne!(tabs["outcome"], "ok", "the tab added later is gone: {tabs}");
+
+    // The restore is a revision of its own, so it can be undone the same way.
+    let back = call(
+        "history_restore",
+        json!({"thing": sheet, "version": now, "expectedVersion": now + 1, "clientRequestId": "hist-back"}),
+    )
+    .await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "HIST", "sheet": "Counter"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A2"), json!(40.0), "{read}");
+    let listed = call("history_list", json!({"thing": sheet, "limit": 3})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let _ = Uuid::nil();
+}
+
+/// C1.20: a sheet as a source. A named range follows the rows inserted
+/// above it, agents read it by name, and a dashboard tile over it charts its
+/// rows (same labels added up) and changes when a cell does. A range whose
+/// cells are all deleted goes, and the tile says so instead of failing.
+#[tokio::test]
+async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
+    let Some(setup) = setup("c1_sheet_source").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "SRC", "Source").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "name": "Spend",
+            "tabs": [{"add": "Costs"}],
+            "cells": [
+                {"cell": "A1", "input": "Item"},
+                {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "Rent"},
+                {"cell": "B2", "input": "1200"},
+                {"cell": "A3", "input": "Power"},
+                {"cell": "B3", "input": "80"},
+                {"cell": "A4", "input": "Rent"},
+                {"cell": "B4", "input": "100"},
+            ],
+            "clientRequestId": "spend-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    for bad in ["Q1", "two words"] {
+        let refused = call(
+            "sheet_range_set",
+            json!({"sheetId": sheet, "name": bad, "range": "A1:B4", "clientRequestId": format!("bad-{bad}")}),
+        )
+        .await;
+        assert_eq!(refused["outcome"], "invalid_request", "{bad}: {refused}");
+    }
+    let named = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Totals", "range": "Costs!A1:B4", "clientRequestId": "name-1"}),
+    )
+    .await;
+    assert_eq!(named["outcome"], "ok", "{named}");
+    assert_eq!(
+        named["value"]["ranges"],
+        json!([{"name": "Totals", "tabId": named["value"]["ranges"][0]["tabId"], "tab": "Costs", "range": "A1:B4"}]),
+        "{named}"
+    );
+
+    let made = call(
+        "dashboard_create",
+        json!({
+            "spaceId": project,
+            "name": "Money",
+            "shared": false,
+            "tiles": [{"sheet": sheet, "range": "totals", "style": "donut"}],
+            "clientRequestId": "money-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let dashboard = made["value"]["id"].as_str().expect("dashboard").to_owned();
+    let figures = || async {
+        let read = call("dashboard_get", json!({"dashboard": dashboard})).await;
+        assert_eq!(read["outcome"], "ok", "{read}");
+        read["value"]["tiles"][0].clone()
+    };
+    let tile = figures().await;
+    assert_eq!(tile["kind"], "sheet", "{tile}");
+    let shown = &tile["figures"];
+    assert_eq!(shown["collectionName"], "Spend", "{tile}");
+    assert_eq!(shown["viewName"], "Totals", "{tile}");
+    assert_eq!(shown["style"], "donut", "{tile}");
+    assert_eq!(shown["measure"], "sum of Cost", "{tile}");
+    assert_eq!(shown["value"], json!(1380.0), "{tile}");
+    let groups = |shown: &Value| {
+        shown["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|group| (group["name"].clone(), group["value"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        groups(shown),
+        [
+            (json!("Rent"), json!(1300.0)),
+            (json!("Power"), json!(80.0))
+        ],
+        "{tile}"
+    );
+
+    // A row above moves the range down; agents read it by name.
+    let moved = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "tabs": [{"tab": "Costs", "insertRowsAt": 1, "count": 1}],
+            "cells": [{"tab": "Costs", "cell": "A1", "input": "Spend this month"}],
+            "clientRequestId": "spend-2",
+        }),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "SRC", "sheet": sheet, "range": "TOTALS"}),
+    )
+    .await;
+    assert_eq!(read["value"]["tab"], "Costs", "{read}");
+    assert_eq!(read["value"]["range"], "A2:B5", "{read}");
+    assert_eq!(value_at(&read, "B3"), json!(1200.0), "{read}");
+    assert_eq!(read["value"]["namedRanges"][0]["range"], "A2:B5", "{read}");
+
+    // A cell changing changes the tile.
+    let changed = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "cells": [{"tab": "Costs", "cell": "B4", "input": "90"}],
+            "clientRequestId": "spend-3",
+        }),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let tile = figures().await;
+    assert_eq!(tile["figures"]["value"], json!(1390.0), "{tile}");
+    assert_eq!(
+        groups(&tile["figures"]),
+        [
+            (json!("Rent"), json!(1300.0)),
+            (json!("Power"), json!(90.0))
+        ],
+        "{tile}"
+    );
+
+    // Deleting every row of it removes the name; the tile says so.
+    let gone = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "tabs": [{"tab": "Costs", "deleteRowsAt": 2, "count": 4}],
+            "clientRequestId": "spend-4",
+        }),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "ok", "{gone}");
+    let tile = figures().await;
+    assert!(tile["figures"].is_null(), "{tile}");
+    assert!(
+        tile["unseen"]
+            .as_str()
+            .is_some_and(|text| text.contains("range is gone")),
+        "{tile}"
+    );
+    let removed = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Totals", "remove": true, "clientRequestId": "name-2"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "not_found", "{removed}");
+}

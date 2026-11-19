@@ -1552,7 +1552,6 @@ pub async fn mark_unresponsive(pool: &PgPool) -> Result<(), AppError> {
                 conversation_id: Some(conversation_id),
                 message_id: Some(message_id),
                 work_item_id: None,
-                comment_id: None,
                 agent_run_id: None,
                 pull_request_id: None,
                 detail: serde_json::json!({}),
