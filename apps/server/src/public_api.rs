@@ -405,9 +405,10 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
-            // A paused account's answer (A2.10) is the same for every
-            // operation: shared too.
-            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
+            // A call set aside, by a paused account (A2.10) or a team's
+            // guard (A2.27), is answered the same for every operation:
+            // shared too.
+            Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
             Some("ok") => {
                 share_ok_envelope(branch, components);
                 continue;
@@ -491,6 +492,36 @@ fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
             "$ref": "#/components/schemas/Ok",
             "properties": { "value": value },
         });
+    }
+}
+
+/// An argument left out and one sent as `null` mean the same, so an
+/// optional argument's type is written without `null`: what a client should
+/// send, and a shorter document.
+fn drop_optional_nulls(input: &mut Value) {
+    let required = input
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, property) in properties.iter_mut() {
+        if required.iter().any(|known| known.as_str() == Some(name)) {
+            continue;
+        }
+        let Some(types) = property.get("type").and_then(Value::as_array) else {
+            continue;
+        };
+        let kept: Vec<Value> = types
+            .iter()
+            .filter(|kind| *kind != "null")
+            .cloned()
+            .collect();
+        if kept.len() == 1 && types.len() == 2 {
+            property["type"] = kept[0].clone();
+        }
     }
 }
 
@@ -668,6 +699,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
+        drop_optional_nulls(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()
@@ -699,7 +731,7 @@ pub(crate) fn document() -> Value {
         // means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "The result, or a refusal: see its `outcome`.",
+                "description": "See `outcome`.",
                 "content": { "application/json": { "schema": output } },
             })
         });

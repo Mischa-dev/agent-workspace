@@ -999,6 +999,31 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         }
     }
     assert_eq!(host.started.len(), 1);
+    // A run on another host can't spend the workspace's model (A1.25): only
+    // the built-in assistant's runs may ask it for a turn.
+    let turn = json!({"system": "", "messages": [{"role": "user", "parts": [{"type": "text", "text": "hi"}]}]});
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{run}/model"),
+            credentials.last().map(String::as_str),
+            turn.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{}/model", Uuid::now_v7()),
+            credentials.last().map(String::as_str),
+            turn,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
     let starts = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM host_commands WHERE run_id = $1 AND kind = 'start'",
     )
@@ -1383,4 +1408,76 @@ async fn a_push_host_is_sent_signed_commands_and_its_secrets_are_sealed() {
     .await
     .expect("push job");
     assert_eq!(pushes, 1);
+}
+
+/// A2.26: a run the host started itself is adopted once, as its agent's,
+/// and its start hands the host the run's credential like any other.
+#[tokio::test]
+async fn a_run_the_host_started_itself_is_adopted_once() {
+    let Some(setup) = setup("a2_host_adopts").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (fixer, _) = create_agent(&setup.app, &setup.browser, &work, "Fixer", "fixer").await;
+    let host = bound_host(&setup, fixer, json!({"start": true, "cancel": true})).await;
+
+    let adopt = json!({"hostAgentRef": "fixer", "hostRunRef": "nightly-1", "title": "Nightly digest\nsecond line"});
+    let (status, first) = host
+        .call("POST", "/api/v1/host/runs", Some(adopt.clone()))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["created"], true);
+    let (status, again) = host.call("POST", "/api/v1/host/runs", Some(adopt)).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["created"], false);
+    assert_eq!(again["runId"], first["runId"]);
+    assert_eq!(again["commandId"], first["commandId"]);
+
+    let run = first["runId"]
+        .as_str()
+        .expect("run")
+        .parse::<Uuid>()
+        .expect("uuid");
+    let (status, command) = host.fetch(&first["commandId"]).await;
+    assert_eq!(status, StatusCode::OK, "{command}");
+    assert!(
+        command["workspaceCredential"]["token"]
+            .as_str()
+            .is_some_and(|token| token.starts_with("awr_")),
+        "{command}"
+    );
+    let (account, state, kind, reference, title) =
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
+            "SELECT account_id, state, cause_kind, host_run_ref, title FROM runs WHERE id = $1",
+        )
+        .bind(run)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("run");
+    assert_eq!(
+        (
+            account,
+            state.as_str(),
+            kind.as_str(),
+            reference.as_deref(),
+            title.as_str()
+        ),
+        (
+            fixer,
+            "working",
+            "host_trigger",
+            Some("nightly-1"),
+            "Nightly digest"
+        )
+    );
+
+    // Only for its own bound agents.
+    let (status, refused) = host
+        .call(
+            "POST",
+            "/api/v1/host/runs",
+            Some(json!({"hostAgentRef": "someone", "hostRunRef": "x", "title": "X"})),
+        )
+        .await;
+    assert!(status.is_client_error(), "{status} {refused}");
 }

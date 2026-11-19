@@ -15,6 +15,7 @@ use serde_json::Value;
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
+pub mod assistant;
 pub mod capacity;
 pub mod driver;
 pub mod http;

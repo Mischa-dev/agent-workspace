@@ -25,6 +25,8 @@
     "profile_avatar_list": "query",
     "group_list": "query",
     "saved_search_list": "query",
+    "follow_set": "change",
+    "follow_list": "query",
     "saved_search_set": "change",
     "place_search": "query",
     "custom_emoji_create": "create",
@@ -123,7 +125,7 @@
   ],
   "events": {
     "emits": ["file.attached", "file.removed", "account.status_changed", "account.profile_changed", "custom_emoji.changed",
-      "saved_searches.changed", "workspace.lifecycle_changed"],
+      "saved_searches.changed", "follows.changed", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],

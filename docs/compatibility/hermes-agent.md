@@ -166,3 +166,10 @@ Primary references:
 - <https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.3>
 - <https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/mcp-config-reference.md>
 - <https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/configuration.md>
+
+## Platform plugin
+
+Besides the MCP connection above, `sdks/adapters/hermes/` is a Hermes gateway
+platform plugin built against the same pinned version: Workspace reply
+requests arrive in Hermes as messages, and Hermes's answers go back as the
+replies. Its README says how to install it.

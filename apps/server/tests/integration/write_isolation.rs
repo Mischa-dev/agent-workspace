@@ -385,6 +385,17 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          command is not found (tests/integration/a1_host_protocol.rs)",
     ),
     (
+        "POST /api/v1/host/runs",
+        "a host's own call with its own token, adopting a run it started for an agent bound \
+         to it, in the workspace that owns it; any other agent is refused \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/runs/{run_id}/model",
+        "a run's own credential asking for its next model turn; any run but its own, and any \
+         but the built-in assistant's, is refused (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
         "POST /api/v1/host/describe",
         "a host's own call with its own token, about itself; no session and no workspace ID \
          (tests/integration/a1_host_protocol.rs)",
@@ -503,6 +514,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connection_secret_rotate",
     "connection_test",
     "connection_update",
+    "conversation_agent_settings_set",
     "conversation_continue",
     "conversation_mark_read",
     "conversation_members_update",
@@ -578,6 +590,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "later_update",
     "schedule_create",
     "schedule_update",
+    "follow_set",
+    "guard_set",
+    "memory_page_set",
     "request_create",
     "request_respond",
     "request_cancel",
@@ -6420,6 +6435,41 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "schedule_update",
             json!({"scheduleId": ax.schedule, "note": "Net moved"}),
             vec![json!({"scheduleId": bx.schedule, "cancel": true})],
+        ),
+        // A2.9: following what one can see in A; B's page and task aren't
+        // found from A.
+        mcp_case(
+            "follow_set",
+            json!({"kind": "page", "id": a.page}),
+            vec![
+                json!({"kind": "page", "id": b.page}),
+                json!({"kind": "task", "id": b.task}),
+            ],
+        ),
+        // A2.9: ambient mode in A's channel for an account there; B's
+        // channel isn't found, and B's agent isn't one A can ask.
+        mcp_case(
+            "conversation_agent_settings_set",
+            json!({"conversation": a.channel, "account": a.agent, "ambient": false}),
+            vec![json!({"conversation": b.channel, "account": a.agent, "ambient": true})],
+        )
+        .rejecting(vec![
+            json!({"conversation": a.channel, "account": b.agent, "ambient": true}),
+        ]),
+        // A2.27: a guard in A, or in A's space; B's space isn't found.
+        mcp_case(
+            "guard_set",
+            json!({"name": "Net guard", "action": "deny", "terms": ["zq-net-guard"]}),
+            vec![json!({"space": b.project, "name": "Net guard", "action": "deny"})],
+        ),
+        // A2.16: memory of A's channel or space; B's aren't found from A.
+        mcp_case(
+            "memory_page_set",
+            json!({"conversation": a.channel, "body": "Net memory"}),
+            vec![
+                json!({"conversation": b.channel, "body": "Net memory"}),
+                json!({"space": b.project, "body": "Net memory"}),
+            ],
         ),
         // C2.15: an agent's status is set by those who manage it; B's agent
         // isn't A's to set.

@@ -27,6 +27,47 @@ pub struct Config {
     /// Longer answers are cut, with a note.
     #[serde(default = "default_max_reply_characters")]
     pub max_reply_characters: usize,
+    /// What it offers to set up when someone adds an agent from this host.
+    #[serde(default)]
+    pub offers: Vec<OfferEntry>,
+    /// Agent OS operations beyond tasks; one left out turns its part off.
+    #[serde(default)]
+    pub operations: Operations,
+    /// Seconds between looks for tasks started in Agent OS itself, and for
+    /// usage.
+    #[serde(default = "default_adopt_seconds")]
+    pub adopt_seconds: u64,
+}
+
+/// Something the host offers to set up, as the workspace lists it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OfferEntry {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// The controller operations behind the connector's other parts, by name.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Operations {
+    /// Lists tasks (`{"tasks": [...]}`): ones started in Agent OS itself are
+    /// added to the workspace as runs of their agent.
+    #[serde(default)]
+    pub list_tasks: Option<String>,
+    /// The usage of the accounts Agent OS runs on, by plan window
+    /// (`{"accounts": [{"ref", "name", "plan", "windows": [...]}]}`).
+    #[serde(default)]
+    pub usage: Option<String>,
+    /// Pauses an agent (`agent` names it): the agent's "Pause" action.
+    #[serde(default)]
+    pub pause: Option<String>,
+    /// What an agent remembers, as text (`{"text": ...}`): its "What it
+    /// remembers" action.
+    #[serde(default)]
+    pub memory: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -64,6 +105,9 @@ fn default_task_deadline_seconds() -> u64 {
 }
 fn default_max_reply_characters() -> usize {
     19_500
+}
+fn default_adopt_seconds() -> u64 {
+    30
 }
 fn default_controller_timeout() -> u64 {
     45

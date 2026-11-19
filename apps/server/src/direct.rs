@@ -1222,7 +1222,6 @@ async fn reachable_agents(
         FROM projects space
         JOIN projects project
           ON project.organization_id = space.organization_id
-         AND project.kind NOT IN ('direct', 'workspace')
          AND project.archived_at IS NULL
         JOIN project_memberships mine
           ON mine.project_id = project.id AND mine.actor_id = $2 AND mine.enabled
@@ -1239,11 +1238,23 @@ async fn reachable_agents(
         WHERE space.id = $1
           AND space.kind = 'direct'
           AND ($3::uuid[] IS NULL OR actor.id = ANY($3))
-          AND EXISTS (
-              SELECT 1 FROM external_agent_connections connection
-              WHERE connection.actor_id = actor.id
-                AND connection.status = 'active'
-                AND agent_connection_can_access(connection.id, project.id)
+          -- An agent a host runs is reachable from any space you share
+          -- with it (the workspace's own included); one connected over MCP
+          -- only from a project its connection can reach.
+          AND (
+              EXISTS (
+                  SELECT 1 FROM host_agents binding
+                  WHERE binding.account_id = actor.id AND binding.status = 'active'
+              )
+              OR (
+                  project.kind NOT IN ('direct', 'workspace')
+                  AND EXISTS (
+                      SELECT 1 FROM external_agent_connections connection
+                      WHERE connection.actor_id = actor.id
+                        AND connection.status = 'active'
+                        AND agent_connection_can_access(connection.id, project.id)
+                  )
+              )
           )
           AND NOT EXISTS (
               SELECT 1 FROM project_memberships joined

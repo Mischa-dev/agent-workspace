@@ -87,6 +87,7 @@ pub fn schema(mut output: Value, long: bool) -> Value {
             "replaySafe": { "type": "boolean" },
             "preview": { "type": "boolean" },
             "paused": { "const": false },
+            "pendingReview": { "const": false },
         },
         "required": ["outcome", "value"],
     })];
@@ -126,24 +127,27 @@ pub fn schema(mut output: Value, long: bool) -> Value {
             "required": ["outcome", "value"],
         }));
     }
-    // A paused account's write (A2.10) does nothing and says so: still `ok`,
-    // so a client doesn't retry, but not the operation's value.
+    // A call set aside is still `ok`, so a client doesn't retry, but not the
+    // operation's value: a paused account's write (A2.10) does nothing and
+    // says `paused`; a change a team's guard holds for review (A2.27, R37)
+    // is kept with a request to its reviewers and says `pendingReview`, and
+    // the same call made again once they allow it goes through. One small
+    // branch for both, since every operation's tool repeats it.
     branches.push(json!({
-        "type": "object",
         "properties": {
             "outcome": { "const": "ok" },
-            "paused": { "const": true },
             "value": {
-                "type": "object",
-                "properties": { "status": { "const": "paused" } },
-                "required": ["status"],
+                "properties": {
+                    "status": { "enum": ["paused", "pending_review"] },
+                    "requestId": { "type": "string" },
+                },
             },
-            "requestId": { "type": "string" },
-            "replayed": { "type": "boolean" },
-            "replaySafe": { "type": "boolean" },
-            "preview": { "type": "boolean" },
         },
-        "required": ["outcome", "paused", "value"],
+        "required": ["outcome", "value"],
+        "anyOf": [
+            { "properties": { "paused": { "const": true } }, "required": ["paused"] },
+            { "properties": { "pendingReview": { "const": true } }, "required": ["pendingReview"] },
+        ],
     }));
     let mut schema = json!({ "type": "object", "oneOf": branches });
     for (key, found) in definitions {

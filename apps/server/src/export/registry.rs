@@ -573,6 +573,28 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "follows",
+                table: "follows",
+                references: &[
+                    ("space_id", "projects"),
+                    ("account_id", "actors"),
+                    ("created_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "guards",
+                table: "guards",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_account_id", "actors"),
+                    ("updated_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_harnesses",
                 table: "custom_harnesses",
                 references: &[
@@ -584,6 +606,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "guard_holds",
+                "runtime state of this server (queues, leases, retries)",
+            ),
             (
                 "agent_schedules",
                 "runtime state of this server (queues, leases, retries)",
@@ -692,6 +718,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("origin_message_id", "messages"),
                     ("archived_by_actor_id", "actors"),
                     ("thread_status_changed_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "conversation_agent_settings",
+                table: "conversation_agent_settings",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("account_id", "actors"),
+                    ("set_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1014,17 +1052,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "work_item_types",
                 table: "work_item_types",
                 references: &[("project_id", "projects")],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_watchers",
-                table: "work_item_watchers",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("actor_id", "actors"),
-                ],
                 text_references: &[],
                 exclude: &[],
             },

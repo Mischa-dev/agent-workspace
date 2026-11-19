@@ -974,7 +974,11 @@ pub async fn ensure_default_workflow(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+    // NO KEY UPDATE: it serializes provisioning a space's workflow, but
+    // doesn't block (or deadlock with) a row pointing at the space, such as
+    // a follow written in another transaction, whose key check takes KEY
+    // SHARE.
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR NO KEY UPDATE")
         .bind(project_id)
         .fetch_optional(&mut **transaction)
         .await?
@@ -4065,14 +4069,16 @@ const WORK_ITEM_SELECT: &str = concat!(
             SELECT jsonb_agg("#,
     actor_json!("watcher_actor", "watcher"),
     r#" ORDER BY lower(watcher.display_name), watcher.actor_id)
-            FROM work_item_watchers watching
+            FROM follows watching
             JOIN project_memberships watcher
-              ON watcher.project_id = watching.project_id AND watcher.actor_id = watching.actor_id
-            JOIN actors watcher_actor ON watcher_actor.id = watching.actor_id
-            WHERE watching.work_item_id = item.id AND watcher.enabled
+              ON watcher.project_id = watching.space_id AND watcher.actor_id = watching.account_id
+            JOIN actors watcher_actor ON watcher_actor.id = watching.account_id
+            WHERE watching.target_kind = 'task' AND watching.target_id = item.id
+              AND watcher.enabled
         ), '[]'::jsonb) AS watchers,
-        EXISTS (SELECT 1 FROM work_item_watchers watching
-                 WHERE watching.work_item_id = item.id AND watching.actor_id = $3) AS watching,
+        EXISTS (SELECT 1 FROM follows watching
+                 WHERE watching.target_kind = 'task' AND watching.target_id = item.id
+                   AND watching.account_id = $3) AS watching,
         COALESCE((SELECT settings.estimate_unit FROM project_task_settings settings
                    WHERE settings.project_id = item.project_id), 'points') AS estimate_unit,
 "#,
