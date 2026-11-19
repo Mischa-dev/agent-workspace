@@ -25,6 +25,7 @@
 //! as anyone's is, so a scope that wasn't approved is refused everywhere.
 
 pub mod blocks;
+pub mod files;
 pub mod http;
 pub mod manifest;
 pub mod ops;
@@ -329,6 +330,10 @@ pub struct ConnectedModuleView {
     /// When the install code was last sent to the app.
     pub install_sent_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// For a file source: what its conformance check found,
+    /// `{checkedAt, problems}`; none until it has run.
+    #[schemars(with = "Option<serde_json::Map<String, Value>>")]
+    pub file_check: Option<Value>,
 }
 
 // ------------------------------------------------------------------ rows
@@ -355,13 +360,14 @@ pub(crate) struct AppRow {
     pub state: String,
     pub revoked_at: Option<DateTime<Utc>>,
     pub module_key: String,
+    pub file_check: Option<Value>,
 }
 
 const APP_COLUMNS: &str = "app.module_id, app.workspace_id, app.account_id, app.role_id, \
     app.manifest_url, app.base_url, app.manifest, app.manifest_digest, app.pending_manifest, \
     app.pending_digest, app.scopes_approved, app.outbound_secret_id, app.inbound_secret_id, \
     app.credential_id, app.approved_by_actor_id, app.approved_at, app.install_sent_at, \
-    app.state, app.revoked_at, module.module_key";
+    app.state, app.revoked_at, module.module_key, app.file_check";
 
 impl AppRow {
     pub fn manifest(&self) -> Result<Manifest, AppError> {
@@ -395,6 +401,7 @@ impl AppRow {
             approved_at: self.approved_at,
             install_sent_at: self.install_sent_at,
             revoked_at: self.revoked_at,
+            file_check: self.file_check.clone(),
         })
     }
 }
@@ -1176,6 +1183,28 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             handshake(&context.state, workspace_id, module_id).await
         },
     );
+    registry.register_with_timeout(
+        files::FILE_CHECK_KIND,
+        Duration::from_secs(150),
+        |context: JobContext| async move {
+            let module_id = context
+                .job
+                .payload
+                .get("moduleId")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<Uuid>().ok())
+                .ok_or_else(|| JobError::permanent("payload"))?;
+            let workspace_id = context
+                .job
+                .organization_id
+                .ok_or_else(|| JobError::permanent("workspace"))?;
+            match files::check_and_keep(&context.state, workspace_id, module_id).await? {
+                Some(_) => Ok(()),
+                // It may not hold its signing secret yet: ask again later.
+                None => Err(JobError::retry("the file source didn't answer")),
+            }
+        },
+    );
 }
 
 /// Where people and apps reach this server.
@@ -1311,6 +1340,18 @@ async fn redeem(
     .bind(made.credential.id)
     .execute(&mut *transaction)
     .await?;
+    // A file source runs the conformance suite once it can sign.
+    if row.manifest()?.file_source.is_some() {
+        crate::jobs::enqueue(
+            &mut *transaction,
+            NewJob::new(files::FILE_CHECK_KIND)
+                .payload(json!({ "moduleId": module_id }))
+                .workspace(workspace_id)
+                .unique(format!("{}:{module_id}", files::FILE_CHECK_KIND))
+                .max_attempts(6),
+        )
+        .await?;
+    }
     transaction.commit().await?;
     Ok(Some(Exchanged {
         module_id,

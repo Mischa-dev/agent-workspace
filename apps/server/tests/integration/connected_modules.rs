@@ -31,6 +31,8 @@ struct TestApp {
     manifest: Value,
     installs: Vec<(HeaderMap, String)>,
     calls: Vec<(HeaderMap, String)>,
+    /// The fake file source answers its list outside the contract.
+    broken: bool,
 }
 
 type Shared = Arc<Mutex<TestApp>>;
@@ -77,6 +79,48 @@ async fn panel(
         Some(_) => json!({"close": true}),
     };
     (StatusCode::OK, Json(answer))
+}
+
+/// A fake file source (M1.18): one folder holding one file. Its list
+/// carries a field a store might leak (a token), which must never pass.
+async fn files(
+    State(app): State<Shared>,
+    axum::extract::Path(call): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let sent: Value = serde_json::from_str(&body).unwrap_or_default();
+    let broken = {
+        let mut app = app.lock().expect("app");
+        app.calls.push((headers, body));
+        app.broken
+    };
+    let file = json!({"ref": "f1", "name": "plan.md", "kind": "file", "size": 5,
+                      "mime": "text/markdown", "modifiedAt": "2026-11-19T08:00:00Z",
+                      "webUrl": "https://files.example.com/f1", "accessToken": "store-token-1"});
+    let folder = json!({"ref": "d1", "name": "Plans", "kind": "folder", "modifiedAt": "2026-11-18T08:00:00Z"});
+    let answer = match call.as_str() {
+        "list" if broken => json!({"files": [file]}),
+        "list" if sent["input"]["folder"].is_null() => {
+            json!({"items": [folder, file], "nextCursor": null})
+        }
+        "list" => json!({"items": []}),
+        "get" if sent["input"]["ref"] == "f1" => file,
+        "get" if sent["input"]["ref"] == "d1" => folder,
+        "get" => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "no such file"})),
+            )
+                .into_response();
+        }
+        "content" => return "# Plan".into_response(),
+        "thumbnail" => json!({"url": null}),
+        "changes" => json!({"changes": [{"ref": "f1", "change": "updated"}], "cursor": "c1"}),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    Json(answer).into_response()
 }
 
 /// A declared operation: answers with what it was asked, or refuses an
@@ -144,6 +188,7 @@ async fn test_app() -> Shared {
         .route("/workspace/ops/rerun", post(rerun))
         .route("/workspace/ops/purge", post(rerun))
         .route("/workspace/panels/builds", post(panel))
+        .route("/workspace/files/{call}", post(files))
         .with_state(shared.clone());
     tokio::spawn(async move {
         axum::serve(listener, router).await.expect("serve");
@@ -956,5 +1001,173 @@ async fn a_connected_module_draws_its_panels_and_hears_their_actions() {
     .await;
     assert_eq!(bad["outcome"], "invalid_request", "{bad}");
     assert!(bad.to_string().contains("api_token"), "{bad}");
+    world.finish().await;
+}
+
+#[tokio::test]
+async fn a_file_source_passes_its_check_and_lists_files_by_reference() {
+    let app = test_app().await;
+    let origin = app.lock().expect("app").origin.clone();
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .agent("helper", "member")
+        .config("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", origin.clone())
+        .build("m118_file_sources")
+        .await
+    else {
+        return;
+    };
+    let url = format!("{origin}/manifest.json");
+    let calls = json!({"list": "files/list", "get": "files/get", "content": "files/content",
+                       "thumbnail": "files/thumbnail", "changes": "files/changes"});
+
+    // A source that doesn't answer changes can't be installed, and says why.
+    let mut missing = calls.clone();
+    missing.as_object_mut().expect("calls").remove("changes");
+    app.lock().expect("app").manifest["fileSource"] = json!({"calls": missing});
+    let refused = tool(
+        &world,
+        "desk",
+        "connected_module_install",
+        json!({"url": url, "preview": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert!(
+        refused.to_string().contains("fileSource.calls.changes"),
+        "{refused}"
+    );
+
+    // Installed, it runs the conformance suite once it can sign, and passes.
+    app.lock().expect("app").manifest["fileSource"] = json!({"calls": calls});
+    let connected = connect(&world, &app, &url).await;
+    pump(&world).await;
+    let listed = tool(&world, "desk", "connected_module_list", json!({})).await;
+    let check = &listed["value"]["modules"][0]["fileCheck"];
+    assert_eq!(check["problems"], json!([]), "{listed}");
+    let called: Vec<String> = app
+        .lock()
+        .expect("app")
+        .calls
+        .iter()
+        .filter_map(|(_, body)| serde_json::from_str::<Value>(body).ok())
+        .filter_map(|body| body["call"].as_str().map(str::to_owned))
+        .collect();
+    for call in ["list", "get", "content", "thumbnail", "changes"] {
+        assert!(called.iter().any(|made| made == call), "{call}: {called:?}");
+    }
+
+    // A member lists and gets files; nothing but the contract comes back.
+    let files = tool(
+        &world,
+        "helper",
+        "file_source_list",
+        json!({"moduleId": connected.module}),
+    )
+    .await;
+    assert_eq!(files["outcome"], "ok", "{files}");
+    assert_eq!(files["value"]["items"][1]["name"], "plan.md");
+    assert!(!files.to_string().contains("store-token-1"), "{files}");
+    let file = tool(
+        &world,
+        "helper",
+        "file_source_get",
+        json!({"moduleId": connected.module, "ref": "f1"}),
+    )
+    .await;
+    assert_eq!(
+        file["value"]["webUrl"], "https://files.example.com/f1",
+        "{file}"
+    );
+    let gone = tool(
+        &world,
+        "helper",
+        "file_source_get",
+        json!({"moduleId": connected.module, "ref": "f9"}),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "not_found", "{gone}");
+    let (headers, body) = app
+        .lock()
+        .expect("app")
+        .calls
+        .last()
+        .cloned()
+        .expect("call");
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .expect(name)
+            .to_owned()
+    };
+    assert!(agent_workspace_delivery_contract::webhook::verify_standard(
+        &connected.outbound,
+        &header("webhook-id"),
+        &header("webhook-timestamp"),
+        &header("webhook-signature"),
+        &body,
+    ));
+
+    // A source answering outside the contract fails its check, with the
+    // reason, and is refused until it passes again.
+    app.lock().expect("app").broken = true;
+    let member = tool(
+        &world,
+        "helper",
+        "connected_module_test",
+        json!({"moduleId": connected.module, "clientRequestId": "check-1"}),
+    )
+    .await;
+    assert_eq!(member["outcome"], "permission_denied", "{member}");
+    let checked = tool(
+        &world,
+        "desk",
+        "connected_module_test",
+        json!({"moduleId": connected.module, "clientRequestId": "check-2"}),
+    )
+    .await;
+    assert_eq!(checked["outcome"], "ok", "{checked}");
+    assert_eq!(checked["value"]["problems"][0]["path"], "list", "{checked}");
+    let refused = tool(
+        &world,
+        "helper",
+        "file_source_list",
+        json!({"moduleId": connected.module}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert!(
+        refused.to_string().contains("failed its check"),
+        "{refused}"
+    );
+    app.lock().expect("app").broken = false;
+    let passed = tool(
+        &world,
+        "desk",
+        "connected_module_test",
+        json!({"moduleId": connected.module, "clientRequestId": "check-3"}),
+    )
+    .await;
+    assert_eq!(passed["value"]["problems"], json!([]), "{passed}");
+    let again = tool(
+        &world,
+        "helper",
+        "file_source_list",
+        json!({"moduleId": connected.module}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+
+    // The source's own grant to its store never shows in the log.
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM events WHERE payload::text LIKE '%store-token-1%') \
+              + (SELECT count(*) FROM event_staging WHERE payload::text LIKE '%store-token-1%')",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("events");
+    assert_eq!(logged, 0);
     world.finish().await;
 }

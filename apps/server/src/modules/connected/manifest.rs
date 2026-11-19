@@ -71,10 +71,60 @@ pub struct Manifest {
     pub offers: Vec<Value>,
     #[serde(default)]
     pub frame_origins: Vec<String>,
+    /// A file source (M1.18, ruling R23): an outside store whose files
+    /// appear here by reference, through the calls below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<Value>")]
-    pub file_source: Option<Value>,
+    pub file_source: Option<FileSourceSpec>,
 }
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSourceSpec {
+    /// It takes new files (`calls.put`).
+    #[serde(default)]
+    pub put: bool,
+    /// It searches inside files, not only their names.
+    #[serde(default)]
+    pub content_search: bool,
+    #[serde(default)]
+    pub calls: FileCalls,
+}
+
+/// Each call's path under baseUrl. All but `put` are required.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCalls {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub get: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put: Option<String>,
+}
+
+impl FileCalls {
+    /// The path of a call, by its name in the contract.
+    pub fn path(&self, call: &str) -> Option<&str> {
+        match call {
+            "list" => self.list.as_deref(),
+            "get" => self.get.as_deref(),
+            "content" => self.content.as_deref(),
+            "thumbnail" => self.thumbnail.as_deref(),
+            "changes" => self.changes.as_deref(),
+            "put" => self.put.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+/// The calls every file source answers.
+pub const FILE_CALLS: &[&str] = &["list", "get", "content", "thumbnail", "changes"];
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -180,7 +230,7 @@ impl Scope {
 }
 
 /// One thing wrong with a manifest, and where.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Problem {
     pub path: String,
     pub message: String,
@@ -596,6 +646,28 @@ pub fn check(bytes: &[u8], address: &Url, allow_http: bool) -> Result<Checked, V
         }
     }
 
+    if let Some(source) = &manifest.file_source {
+        for call in FILE_CALLS.iter().chain(source.put.then_some(&"put")) {
+            match source.calls.path(call) {
+                Some(path) if relative_path(path) => {}
+                Some(_) => problems.push(problem(
+                    format!("fileSource.calls.{call}"),
+                    "A call's path is under baseUrl: no scheme, leading slash or \"..\".",
+                )),
+                None => problems.push(problem(
+                    format!("fileSource.calls.{call}"),
+                    format!("A file source answers \"{call}\"; name its path."),
+                )),
+            }
+        }
+        if !source.put && source.calls.put.is_some() {
+            problems.push(problem(
+                "fileSource.put",
+                "Set put to true for a source that takes new files.",
+            ));
+        }
+    }
+
     match (problems.is_empty(), base_url, install_url) {
         (true, Some(base_url), Some(install_url)) => Ok(Checked {
             manifest,
@@ -700,6 +772,30 @@ pub(crate) mod tests {
         ] {
             assert!(found.iter().any(|found| found == path), "{path}: {found:?}");
         }
+    }
+
+    #[test]
+    fn a_file_source_names_every_call() {
+        let mut manifest = sample("https://builds.example.com");
+        manifest["fileSource"] = json!({"calls": {
+            "list": "files/list", "get": "files/get", "content": "files/content",
+            "thumbnail": "/files/thumbnail", "put": "files/put"}});
+        let found = paths(&manifest);
+        assert!(
+            found.contains(&"fileSource.calls.changes".to_owned()),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&"fileSource.calls.thumbnail".to_owned()),
+            "{found:?}"
+        );
+        assert!(found.contains(&"fileSource.put".to_owned()), "{found:?}");
+        manifest["fileSource"] = json!({"put": true, "calls": {
+            "list": "files/list", "get": "files/get", "content": "files/content",
+            "thumbnail": "files/thumbnail", "changes": "files/changes"}});
+        assert_eq!(paths(&manifest), vec!["fileSource.calls.put".to_owned()]);
+        manifest["fileSource"]["calls"]["put"] = json!("files/put");
+        assert!(paths(&manifest).is_empty());
     }
 
     #[test]

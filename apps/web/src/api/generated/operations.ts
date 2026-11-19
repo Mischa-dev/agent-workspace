@@ -78,7 +78,7 @@ export type CommentThreadView = { anchor?: unknown; createdAt: string; id: strin
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
-export type ConnectedModuleView = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleView = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
@@ -163,6 +163,10 @@ export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | nul
 export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
 
 export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
+
+export type FileItem = { kind: FileKind; mime?: string | null; modifiedAt: string; name: string; ref: string; size?: number | null; webUrl?: string | null }
+
+export type FileKind = "file" | "folder"
 
 export type FileSummary = { commentId?: string | null; contentType: string; fileId: string; height?: number | null; idempotentReplay?: boolean; name: string; size: number; width?: number | null }
 
@@ -335,6 +339,8 @@ export type PlannedTask = { id: string; key: string; parentId?: string | null; t
 export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
+
+export type Problem = { message: string; path: string }
 
 export type ProjectHeader = { id: string; key: string; name: string; role: string; url: string }
 
@@ -706,11 +712,11 @@ export type CommentThreadUpdateOutput = { outcome?: string | null; status: strin
 
 export type ConnectedModuleApproveInput = { digest?: string | null; moduleId: string; scopes?: string[] | null }
 
-export type ConnectedModuleApproveOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleApproveOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleInstallInput = { digest?: string | null; scopes?: string[] | null; url: string }
 
-export type ConnectedModuleInstallOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleInstallOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleListInput = { includeRevoked?: boolean; moduleId?: string | null }
 
@@ -722,11 +728,15 @@ export type ConnectedModuleRefreshOutput = { module: ConnectedModuleView; refres
 
 export type ConnectedModuleRevokeInput = { moduleId: string }
 
-export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleRunInput = { input?: Record<string, unknown>; operation: string }
 
 export type ConnectedModuleRunOutput = { moduleId: string; operation: string; result: unknown }
+
+export type ConnectedModuleTestInput = { moduleId: string }
+
+export type ConnectedModuleTestOutput = { moduleId: string; problems: Problem[] }
 
 export type ConnectionCreateInput = { account?: string | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -923,6 +933,14 @@ export type FieldUpdateOutput = { changedFields: string[]; created: boolean; fie
 export type FileLinkGetInput = { fileId: string }
 
 export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
+export type FileSourceGetInput = { moduleId: string; ref: string }
+
+export type FileSourceGetOutput = { kind: FileKind; mime?: string | null; modifiedAt: string; name: string; ref: string; size?: number | null; webUrl?: string | null }
+
+export type FileSourceListInput = { cursor?: string | null; folder?: string | null; moduleId: string }
+
+export type FileSourceListOutput = { items: FileItem[]; nextCursor?: string | null }
 
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
@@ -1747,6 +1765,7 @@ export type Operations = {
   connected_module_refresh: { input: ConnectedModuleRefreshInput; output: ConnectedModuleRefreshOutput }
   connected_module_revoke: { input: ConnectedModuleRevokeInput; output: ConnectedModuleRevokeOutput }
   connected_module_run: { input: ConnectedModuleRunInput; output: ConnectedModuleRunOutput }
+  connected_module_test: { input: ConnectedModuleTestInput; output: ConnectedModuleTestOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
   connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }
@@ -1796,6 +1815,8 @@ export type Operations = {
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  file_source_get: { input: FileSourceGetInput; output: FileSourceGetOutput }
+  file_source_list: { input: FileSourceListInput; output: FileSourceListOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
   github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }

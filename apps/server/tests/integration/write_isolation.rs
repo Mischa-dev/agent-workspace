@@ -593,6 +593,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connected_module_refresh",
     "connected_module_revoke",
     "connected_module_run",
+    "connected_module_test",
     "module_panel_press",
     "module_create",
     "module_part_link",
@@ -7794,6 +7795,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                         "input": {"build": "1"}})],
         )
         .without_own("needs an installed app answering it; connected_modules runs it"),
+        mcp_case(
+            "connected_module_test",
+            json!({"moduleId": a.organization}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization})],
+        )
+        .without_own("needs an installed file source answering it; connected_modules runs it"),
         mcp_case(
             "thing_upsert",
             json!({"kind": "acme.build", "title": "Build 1"}),

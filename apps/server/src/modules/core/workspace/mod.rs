@@ -26,6 +26,7 @@ impl CoreModule for Module {
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::modules::connected::ops::register_ops);
         module.operations(crate::modules::connected::panels::register_ops);
+        module.operations(crate::modules::connected::files::register_ops);
         module.routes(crate::modules::connected::http::router);
         module.operations(crate::history::ops::register_ops);
         module.operations(crate::accounts::claims::register_ops);

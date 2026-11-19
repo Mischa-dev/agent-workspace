@@ -769,6 +769,22 @@
     "title": "Run a connected module's operation"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "module.connected"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_test",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Check a file source"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1513,6 +1529,34 @@
     "preview": false,
     "proposable": false,
     "title": "Link to a file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "file_source_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get a file source's file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "file_source_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a file source's files"
   },
   {
     "automation": false,
