@@ -73,7 +73,7 @@ describe('useRecordEdits', () => {
   it('keeps the open record’s history when a save answers without it', async () => {
     const pending = answers()
     const { client, result } = setup()
-    const added = { id: 'entry-a', action: 'created', actor: 'Ada', via: null, changes: [], version: 1, at: '' }
+    const added = { id: 'entry-a', action: 'created', actor: 'Ada', via: null, acceptedBy: null, changes: [], version: 1, at: '' }
     client.setQueryData<RecordBody>(recordKey, { ...body(record), history: [added] })
 
     act(() => void result.current.save(record, { values: { platform: 'PC' } }))

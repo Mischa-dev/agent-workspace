@@ -127,7 +127,17 @@ export type RecordPage = {
 
 /** One value as it read before and after a change. */
 export type HistoryChange = { field: string; name: string; before: unknown; after: unknown }
-export type HistoryEntry = { id: string; action: string; actor: string; via: string | null; changes: HistoryChange[]; version: number; at: string }
+export type HistoryEntry = {
+  id: string
+  action: string
+  actor: string
+  via: string | null
+  /** Who accepted it, when it was someone's proposal. */
+  acceptedBy: string | null
+  changes: HistoryChange[]
+  version: number
+  at: string
+}
 
 export type RecordBody = { record: CollectionRecord; references: FieldReference[]; history: HistoryEntry[] }
 
@@ -318,6 +328,7 @@ function normalizeRecordBody(value: unknown): RecordBody {
         action: asString(item.action),
         actor: asString(item.actor),
         via: typeof item.via === 'string' && item.via ? item.via : null,
+        acceptedBy: typeof item.acceptedBy === 'string' && item.acceptedBy ? item.acceptedBy : null,
         changes: asArray(item.changes).map((change) => {
           const parts = asRecord(change)
           return { field: asString(parts.field), name: asString(parts.name), before: parts.before ?? null, after: parts.after ?? null }

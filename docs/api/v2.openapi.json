@@ -3653,6 +3653,13 @@
       "HistoryEntry": {
         "description": "One entry in a thing's history, newest first.",
         "properties": {
+          "acceptedBy": {
+            "description": "Who accepted it, when it was someone's proposal (T1.41).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "actor": {
             "description": "Their name where it was made.",
             "type": [
@@ -51521,7 +51528,7 @@
     },
     "/api/v2/w/{workspace}/ops/history_restore": {
       "post": {
-        "description": "Put an earlier version of a page, whiteboard or sheet back, as a new version (nothing is lost: the current one stays in history). Pass expectedVersion from the thing as you read it. Other kinds say why they can't yet.",
+        "description": "Put an earlier version of a page, whiteboard, sheet or record back, as a new version (nothing is lost: the current one stays in history). For a record, the fields changed since that version get the values they had then. Pass expectedVersion from the thing as you read it. Other kinds say why they can't yet.",
         "operationId": "history_restore",
         "parameters": [
           {
@@ -80829,6 +80836,438 @@
           }
         },
         "summary": "Change a record template",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/record_update": {
+      "post": {
+        "description": "Change one record: its title, field values by name (null clears one), or archive it. All of it is one change in the record's history. Pass the version you read as expectedVersion. If your role only suggests on records, the change becomes a proposal (proposalId) that someone who edits the record accepts or rejects, from its request card or with proposal_decide; it is then written as yours. record_write changes many records at once. Needs \"Suggest record changes\" where it acts.",
+        "operationId": "record_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "archived": {
+                    "description": "true archives the record, false restores it (not proposable).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "description": "The version you last read: refused if it changed since.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "fields": {
+                    "additionalProperties": true,
+                    "description": "Values by field name or id; null clears one.",
+                    "type": "object"
+                  },
+                  "note": {
+                    "description": "When it becomes a proposal: a note for whoever decides it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "record": {
+                    "description": "The record: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "A new title.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "record"
+                ],
+                "title": "RecordUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "changed": {
+                              "description": "What changed: \"title\", \"archived\" and field names. Empty for a\nproposal.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "proposalId": {
+                              "description": "Set when your role only suggests here: the change waits as this\nproposal for someone who edits the record (proposal_decide).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The fields the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "description": "The record's version (unchanged when it became a proposal).",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "number",
+                            "title",
+                            "version",
+                            "changed"
+                          ],
+                          "title": "RecordUpdateOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "changed": {
+                              "description": "What changed: \"title\", \"archived\" and field names. Empty for a\nproposal.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "proposalId": {
+                              "description": "Set when your role only suggests here: the change waits as this\nproposal for someone who edits the record (proposal_decide).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The fields the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "description": "The record's version (unchanged when it became a proposal).",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "number",
+                            "title",
+                            "version",
+                            "changed"
+                          ],
+                          "title": "RecordUpdateOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Update a record",
         "tags": [
           "collections"
         ],

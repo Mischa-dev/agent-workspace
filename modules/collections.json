@@ -18,6 +18,7 @@
     "collection_write": "change",
     "record_query": "query",
     "record_create": "create",
+    "record_update": "change",
     "record_write": "change",
     "form_list": "query",
     "form_get": "describe",
@@ -51,7 +52,7 @@
     "data_query_delete": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
-  "events": { "emits": ["collection.updated", "record.created", "record.updated", "view.changed", "data_connection.changed", "data_query.changed"], "listens": [] },
+  "events": { "emits": ["collection.updated", "record.created", "record.updated", "record.proposals_changed", "record.version_restored", "view.changed", "data_connection.changed", "data_query.changed"], "listens": [] },
   "notifications": ["form_paused"],
   "search": ["records"],
   "automations": { "triggers": ["record_created", "record_changed", "record_matches", "field_changed"], "actions": [] },

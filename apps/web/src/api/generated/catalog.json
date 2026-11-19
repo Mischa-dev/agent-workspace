@@ -1652,7 +1652,9 @@
     "emits": [
       "page.version_restored",
       "whiteboard.version_restored",
-      "sheet.version_restored"
+      "sheet.version_restored",
+      "record.version_restored",
+      "record.updated"
     ],
     "idempotent": true,
     "kind": "change",
@@ -2786,6 +2788,24 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "record.updated",
+      "record.proposals_changed",
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "record_update",
+    "permission": "collections.suggest",
+    "preview": false,
+    "proposable": true,
+    "title": "Update a record"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "recurring.created"
     ],
     "idempotent": true,
@@ -3128,7 +3148,9 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "request.answered"
+      "request.answered",
+      "record.updated",
+      "record.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",

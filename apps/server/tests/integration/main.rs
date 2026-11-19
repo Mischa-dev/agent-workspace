@@ -153,6 +153,7 @@ mod t1_outside_data;
 mod t1_page_fields;
 mod t1_project_updates;
 mod t1_record_automations;
+mod t1_record_proposals;
 mod t1_record_templates;
 mod t1_relations;
 mod t1_rules;

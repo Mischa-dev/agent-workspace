@@ -3473,3 +3473,112 @@ async fn outside_data_keeps_to_roles_that_connect_it() {
     assert_ne!(still["outcome"], "ok", "{still}");
     world.finish().await;
 }
+
+/// T1.41: a role without edit on records changes none, a suggest-only role
+/// only proposes, and neither decides a proposal or puts a version back.
+#[tokio::test]
+async fn record_changes_keep_to_roles_that_edit_records() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("nell", "member")
+        .person("sage", "member")
+        .connected_app("Desk")
+        .custom_role("Reads only", &["projects.view", "directory.view"])
+        .custom_role(
+            "Suggests",
+            &[
+                "projects.view",
+                "collections.suggest",
+                "requests.raise",
+                "directory.view",
+            ],
+        )
+        .build("privacy_record_changes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    for (person, role) in [("nell", "Reads only"), ("sage", "Suggests")] {
+        sqlx::query(
+            "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+        )
+        .bind(Uuid::parse_str(&world.roles[role]).expect("role id"))
+        .bind(work)
+        .bind(world.people[person].actor)
+        .execute(pool)
+        .await
+        .expect("narrow");
+    }
+    let desk = &world.apps["Desk"];
+    let tool = |name: &'static str, arguments: Value| async move {
+        desk.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let made = tool(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Accounts", "fields": [{"name": "Tier", "type": "text"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let written = tool(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Accounts", "clientRequestId": "acct",
+               "records": [{"title": "Globex", "fields": {"Tier": "gold"}}]}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let record = written["value"]["records"][0]["id"].clone();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let (nell, sage) = (&world.people["nell"].browser, &world.people["sage"].browser);
+    let (_, refused) = op(
+        nell,
+        "record_update",
+        json!({"record": record, "fields": {"Tier": "lead"}}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let (_, proposed) = op(
+        sage,
+        "record_update",
+        json!({"record": record, "fields": {"Tier": "platinum"}}),
+    )
+    .await;
+    assert_eq!(proposed["outcome"], "ok", "{proposed}");
+    let proposal = proposed["value"]["proposalId"].clone();
+    assert!(proposal.is_string(), "{proposed}");
+    for (who, browser) in [("nell", nell), ("sage", sage)] {
+        let (_, decided) = op(
+            browser,
+            "proposal_decide",
+            json!({"proposalId": proposal, "decision": "accept"}),
+        )
+        .await;
+        assert_ne!(decided["outcome"], "ok", "{who}: {decided}");
+        let (_, restored) = op(
+            browser,
+            "history_restore",
+            json!({"thing": record, "version": 1, "expectedVersion": 1}),
+        )
+        .await;
+        assert_ne!(restored["outcome"], "ok", "{who}: {restored}");
+    }
+    let tier: Value =
+        sqlx::query_scalar("SELECT field_values FROM collection_records WHERE id = $1::uuid")
+            .bind(record.as_str().expect("id"))
+            .fetch_one(pool)
+            .await
+            .expect("record");
+    assert!(tier.to_string().contains("gold"), "{tier}");
+    world.finish().await;
+}

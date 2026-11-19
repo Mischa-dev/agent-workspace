@@ -558,6 +558,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "proposal_decide",
     "record_write",
     "record_create",
+    "record_update",
     "form_create",
     "form_update",
     "form_answer_send",
@@ -7275,6 +7276,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "template": b.record_template,
                    "clientRequestId": "net-from-template-cross"}),
         ]),
+        // T1.41: a record changed (or a change proposed) only here.
+        mcp_case(
+            "record_update",
+            json!({"record": a.record, "title": "Net record renamed"}),
+            vec![json!({"record": b.record, "title": "Net record renamed"})],
+        )
+        .rejecting(vec![json!({"record": a.record, "fields": {"Tester": b.rook}})]),
         // T1.28: forms only on, and answered in, the caller's own space.
         mcp_case(
             "form_create",

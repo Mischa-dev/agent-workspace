@@ -578,6 +578,20 @@ pub static RECORD_UPDATED: EventType = fact(
 )
 .automatable();
 
+pub static RECORD_PROPOSALS_CHANGED: EventType = fact(
+    "record.proposals_changed",
+    "collections",
+    Some("record"),
+    "A change to a record was proposed, or a proposal on it decided",
+);
+
+pub static RECORD_VERSION_RESTORED: EventType = fact(
+    "record.version_restored",
+    "collections",
+    Some("record"),
+    "An earlier version of a record was put back",
+);
+
 // --- code ------------------------------------------------------------------
 pub static PULL_REQUEST_CHECKS_FAILED: EventType = fact(
     "pull_request.checks_failed",
@@ -795,6 +809,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
         &RECORD_UPDATED,
+        &RECORD_PROPOSALS_CHANGED,
+        &RECORD_VERSION_RESTORED,
         &PULL_REQUEST_CHECKS_FAILED,
         &PULL_REQUEST_CHECKS_PASSED,
         &PULL_REQUEST_MERGED,

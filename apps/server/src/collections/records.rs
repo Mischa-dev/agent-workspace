@@ -453,6 +453,9 @@ pub struct HistoryEntry {
     /// The app they made it through, when it shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Who accepted it, when it was someone's proposal (T1.41).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_by: Option<String>,
     /// [{"field", "name", "before", "after"}], each value as it read then.
     pub changes: Value,
     /// The record's version after the change.
@@ -470,11 +473,18 @@ pub async fn history(
         r#"
         SELECT history.id, history.action, history.actor_id,
                COALESCE(member.display_name, '') AS actor,
-               via_client.client_name AS via,
-               history.changes, history.version, history.created_at::text AS at
+               via_client.client_name AS via, accepter.display_name AS accepted_by,
+               -- How values read; the stored ones are for putting back.
+               COALESCE((SELECT jsonb_agg(change - 'was' - 'is')
+                         FROM jsonb_array_elements(history.changes) change), '[]'::jsonb)
+                   AS changes,
+               history.version, history.created_at::text AS at
         FROM collection_record_history history
         LEFT JOIN project_memberships member
           ON member.project_id = history.project_id AND member.actor_id = history.actor_id
+        LEFT JOIN project_memberships accepter
+          ON accepter.project_id = history.project_id
+         AND accepter.actor_id = history.accepted_by_actor_id
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = history.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -519,8 +529,31 @@ fn kept(value: Value) -> Value {
     }
 }
 
-fn change_entry(field: &str, name: &str, before: Value, after: Value) -> Value {
-    json!({ "field": field, "name": name, "before": kept(before), "after": kept(after) })
+/// The most a stored value kept beside a change takes, as JSON; a larger
+/// one is left out, and that version can't be put back.
+const MAX_KEPT_STORED_BYTES: usize = 16 * 1024;
+
+/// One change in a record's history: how the value read before and after
+/// (`before`, `after`, for people) and, when small enough, the stored
+/// values themselves (`was`, `is`, for showing and putting back a version;
+/// T1.41). A stored value of null is a cleared field.
+fn change_entry(
+    field: &str,
+    name: &str,
+    before: Value,
+    after: Value,
+    stored: (Option<&Value>, Option<&Value>),
+) -> Value {
+    let mut entry =
+        json!({ "field": field, "name": name, "before": kept(before), "after": kept(after) });
+    let fits = |value: Option<&Value>| {
+        value.is_none_or(|value| value.to_string().len() <= MAX_KEPT_STORED_BYTES)
+    };
+    if fits(stored.0) && fits(stored.1) {
+        entry["was"] = stored.0.cloned().unwrap_or(Value::Null);
+        entry["is"] = stored.1.cloned().unwrap_or(Value::Null);
+    }
+    entry
 }
 
 /// The record's history entry and its fact in the event log (K3.7): the
@@ -1053,6 +1086,7 @@ pub async fn write(
                     &collection.title_name,
                     Value::Null,
                     Value::String(title.clone()),
+                    (None, Some(&Value::String(title.clone()))),
                 ));
             }
             for entry in changes.entries.iter().filter(|entry| entry.value.is_some()) {
@@ -1061,6 +1095,7 @@ pub async fn write(
                     &entry.field.name,
                     Value::Null,
                     entry.shown.clone(),
+                    (None, entry.value.as_ref()),
                 ));
             }
             insert_history(
@@ -1140,6 +1175,10 @@ pub async fn write(
                 &collection.title_name,
                 Value::String(current.title.clone()),
                 Value::String(title.clone()),
+                (
+                    Some(&Value::String(current.title.clone())),
+                    Some(&Value::String(title.clone())),
+                ),
             ));
         }
         for entry in &changes.entries {
@@ -1155,6 +1194,7 @@ pub async fn write(
                 work_item_fields::shown_before(connection, project_id, &entry.field, before)
                     .await?,
                 entry.shown.clone(),
+                (before, entry.value.as_ref()),
             ));
         }
         if restoring || archiving {

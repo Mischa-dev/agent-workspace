@@ -1145,6 +1145,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("record_id", "collection_records"),
                     ("actor_id", "actors"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("accepted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],

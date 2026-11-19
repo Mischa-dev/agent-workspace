@@ -198,7 +198,7 @@ export type HandoffNote = { at: string; by: string; note: string; via?: string |
 
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
-export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+export type HistoryEntry = { acceptedBy?: string | null; actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -1280,6 +1280,10 @@ export type RecordTemplateUpdateInput = { archived?: boolean | null; expectedVer
 
 export type RecordTemplateUpdateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
 
+export type RecordUpdateInput = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown>; note?: string | null; record: string; title?: string | null }
+
+export type RecordUpdateOutput = { changed: string[]; collectionId: string; id: string; number: number; proposalId?: string | null; proposed?: unknown[]; title: string; version: number }
+
 export type RecurringCreateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
 export type RecurringCreateOutput = { created: boolean; deleted: boolean; recurring?: unknown }
@@ -1855,6 +1859,7 @@ export type Operations = {
   record_template_create: { input: RecordTemplateCreateInput; output: RecordTemplateCreateOutput }
   record_template_list: { input: RecordTemplateListInput; output: RecordTemplateListOutput }
   record_template_update: { input: RecordTemplateUpdateInput; output: RecordTemplateUpdateOutput }
+  record_update: { input: RecordUpdateInput; output: RecordUpdateOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
   recurring_record_create: { input: RecurringRecordCreateInput; output: RecurringRecordCreateOutput }
   recurring_record_delete: { input: RecurringRecordDeleteInput; output: RecurringRecordDeleteOutput }

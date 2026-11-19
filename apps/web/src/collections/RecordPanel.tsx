@@ -273,7 +273,8 @@ function History({ entries, types }: { entries: HistoryEntry[]; types: ReadonlyM
           <li className="aw-recordpanel__entry" key={entry.id}>
             <p className="aw-recordpanel__who">
               <strong>{entry.actor || 'Someone'}</strong> {ACTIONS[entry.action] ?? entry.action}
-              {entry.via ? <span className="aw-recordpanel__via"> through {entry.via}</span> : null} · <When at={entry.at} />
+              {entry.via ? <span className="aw-recordpanel__via"> through {entry.via}</span> : null}
+              {entry.acceptedBy ? <span className="aw-recordpanel__via">, accepted by {entry.acceptedBy}</span> : null} · <When at={entry.at} />
             </p>
             {entry.changes.length ? (
               <ul className="aw-recordpanel__changes">
