@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 
+import { projectAreaHref } from '../projects/locations'
 import { Icon } from '../ui'
 import { SheetChartFigure } from './SheetCharts'
 
@@ -13,7 +14,7 @@ export default function SheetChartEmbed({ chartId, label, projectId, sheetId }: 
   return (
     <figure className="aw-sheet-chart aw-sheet-chart--embed">
       <figcaption className="aw-sheet-chart__head">
-        <Link to={`/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheetId)}`}>
+        <Link to={projectAreaHref(projectId, 'sheets', sheetId)}>
           <Icon name="chart" size={16} />
           <span>{label || 'A chart'}</span>
         </Link>

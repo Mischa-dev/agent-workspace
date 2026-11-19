@@ -49,6 +49,7 @@ export const PART_IDS = [
   'page.import_export',
   'page.nesting',
   'page.recent_edits',
+  'page.move',
   'sheet.charts',
   'sheet.validation',
   'page.references',

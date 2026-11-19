@@ -397,6 +397,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   const viewerId = useAuthenticatedSession().user.actorId
   const [allEdits, setAllEdits] = useState(false)
   const showsRecent = experience.shows('page.recent_edits')
+  const showsMove = experience.shows('page.move')
   const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits, enabled: showsRecent })
   const editedBlocks = useMemo(() => [...recent.shown].map(([blockId, outline]) => ({ blockId, title: outlineTitle(outline) })), [recent.shown])
   const [draft, setDraft] = useState<CommentAnchor | null>(null)
@@ -477,7 +478,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   return (
     <>
       <RememberPlace location={{ kind: 'page', pageId }} project={project} />
-      {moving ? (
+      {moving && showsMove ? (
         <Suspense fallback={null}>
           <MovePageDialog onClose={() => setMoving(false)} page={current} projectId={projectId} />
         </Suspense>
@@ -488,7 +489,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
             <>
               {live && showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
-              {canEdit && !current.archived && !current.isGuide ? (
+              {showsMove && canEdit && !current.archived && !current.isGuide ? (
                 <Button icon={FolderInput} onClick={() => setMoving(true)}>
                   Move
                 </Button>
