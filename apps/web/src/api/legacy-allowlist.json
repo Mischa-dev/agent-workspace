@@ -24,7 +24,7 @@
   "github/api.ts": 8,
   "inbox/api.ts": 3,
   "invitations/api.ts": 3,
-  "later/api.ts": 12,
+  "later/api.ts": 8,
   "launch/api.ts": 11,
   "memory/api.ts": 11,
   "memory/discussion/api.ts": 5,
