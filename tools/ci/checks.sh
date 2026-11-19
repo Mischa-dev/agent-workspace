@@ -310,6 +310,7 @@ if has web; then
     console.log(`Node ${process.version}`);
   '
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
+  step "web licences" node tools/licenses/web-licenses.mjs --check
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
   step "runner SDK tests (TypeScript)" node --test 'sdks/runner-typescript/test/*.test.ts'
