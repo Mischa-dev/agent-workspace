@@ -504,10 +504,24 @@ pub async fn search(
             query = query.bind(&board_workspaces[..]);
         }
         let rows = query.fetch_all(crate::db::scoped(pool)).await?;
-        hits.extend(rows.into_iter().map(|mut hit| {
-            hit.link(addresses);
-            hit
-        }));
+        // A DM or group is in no space, so a credential's limit can't narrow
+        // it by `projects`: a kept one follows its workspace's limit, as
+        // opening it would (`access::direct_grant_allows`).
+        hits.extend(
+            rows.into_iter()
+                .filter(|hit| {
+                    hit.project_id != Some(crate::spaces::DIRECT)
+                        || !crate::policy::agent_limit_hides_direct(
+                            viewer,
+                            hit.workspace_id,
+                            crate::policy::Permission::ProjectsView,
+                        )
+                })
+                .map(|mut hit| {
+                    hit.link(addresses);
+                    hit
+                }),
+        );
     }
     hits.sort_by(|left, right| {
         right

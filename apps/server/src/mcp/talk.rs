@@ -1902,10 +1902,12 @@ pub(super) async fn conversation_start(
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>(),
-                Err(person) => {
+                Err(unresolved) => {
                     return Ok(ToolResult::invalid(
                         "people",
-                        format!("{person} isn't someone you can message. Try people_search."),
+                        unresolved.explain(|person| {
+                            format!("{person} isn't someone you can message. Try people_search.")
+                        }),
                     ));
                 }
             };

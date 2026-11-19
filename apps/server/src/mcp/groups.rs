@@ -240,12 +240,12 @@ pub(crate) async fn conversation_members(
         };
         let add_ids = match resolve_direct_people(state, principal.actor_id, &add).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
-            Err(who) => {
+            Err(unresolved) => {
                 return Ok(ToolResult::invalid(
                     "add",
-                    format!(
+                    unresolved.explain(|who| format!(
                         "{who} isn't someone you can add: they need to share a workspace with you. Try people_search."
-                    ),
+                    )),
                 ));
             }
         };

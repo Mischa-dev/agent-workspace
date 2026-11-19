@@ -1259,12 +1259,16 @@ pub async fn set_pin(
         }
         "decision" => {
             sqlx::query_scalar::<_, bool>(
-                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1 AND project_id = $2
+                // A DM or group is in no space: it pins the decisions made
+                // from it, which are kept in a workspace's own space.
+                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1
+                   AND (project_id = $2 OR ($2::uuid IS NULL AND source_conversation_id = $4))
                    AND (source_conversation_id IS NULL OR conversation_visible_to(source_conversation_id, $3)))"#,
             )
             .bind(target_id)
             .bind(conversation.project_id)
             .bind(writer.actor_id)
+            .bind(conversation_id)
             .fetch_one(&mut **transaction)
             .await?
         }
