@@ -36,9 +36,10 @@ export function pickToBulk(result: PickResult): BulkChanges | null {
 }
 
 /**
- * The task the server sent back with a version conflict, if it did: the old
- * routes' `version_conflict` carries it as `details.current`, an operation's
- * `conflict` (reason `version`) as `details.current.task`.
+ * The whole task as it is now, from a version conflict, if the refusal has it:
+ * the old routes' `version_conflict` carries it as `details.current`; a task
+ * operation's `conflict` (reason `version`) has it under `details.current.task`
+ * once `api.ts` has read it (the server's own sends only a few fields).
  */
 export function conflictCurrent(error: unknown): WorkItem | null {
   if (!isApiError(error)) return null
@@ -46,8 +47,8 @@ export function conflictCurrent(error: unknown): WorkItem | null {
   if (!details || typeof details !== 'object' || !details.current) return null
   if (error.code === 'version_conflict') return normalizeWorkItem(details.current)
   if (error.code !== 'conflict' || details.reason !== 'version') return null
-  const current = details.current as { task?: unknown }
-  return current.task ? normalizeWorkItem(current.task) : null
+  const current = details.current as { task?: unknown; whole?: unknown }
+  return current.task && current.whole === true ? normalizeWorkItem(current.task) : null
 }
 
 export function bulkProblems(error: unknown): BulkProblem[] {

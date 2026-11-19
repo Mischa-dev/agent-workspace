@@ -57,9 +57,10 @@ function OrTurnedOff({ page, children }: { page: PageModuleState; children: Reac
   )
 }
 
-function hrefFor(entry: SettingsPage, projectId: string | null) {
+/** A settings page's address; a workspace page opens in the workspace whose settings are shown. */
+function hrefFor(entry: SettingsPage, projectId: string | null, workspaceSlug: string | undefined) {
   if (entry.group === 'account') return accountSettingsHref(entry.id)
-  if (entry.group === 'workspace') return workspaceSettingsHref(entry.id)
+  if (entry.group === 'workspace') return workspaceSettingsHref(entry.id, workspaceSlug)
   return projectId ? projectSettingsHref(projectId, entry.id) : null
 }
 
@@ -179,7 +180,7 @@ export default function SettingsArea() {
       content = <SettingsSkeleton label="Loading settings" />
     } else if (!entry || !(entry.visible?.(context) ?? true)) {
       const first = pagesIn(group, context)[0]
-      return <Navigate replace to={first ? (hrefFor(first, null) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
+      return <Navigate replace to={first ? (hrefFor(first, null, viewedWorkspace?.slug) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
     } else {
       // A new page for each workspace, so nothing typed for one is saved to the next.
       content = (
@@ -315,7 +316,7 @@ function SettingsNav({
   const searching = query.trim().length > 0
 
   const link = (entry: SettingsPage) => {
-    const href = hrefFor(entry, pickerProject?.id ?? null)
+    const href = hrefFor(entry, pickerProject?.id ?? null, workspace?.slug)
     if (!href) return null
     const current = entry.group === currentGroup && entry.id === currentSection
     return (
@@ -426,13 +427,13 @@ function SettingsSearch({
       (entry) =>
         (entry.visible?.(contexts[entry.group]) ?? true) &&
         pageModule(contexts[entry.group], entry.group, entry.id)?.state !== 'off' &&
-        hrefFor(entry, pickerProjectId),
+        hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug),
     )
     const found: SearchResult[] = visible
       .filter((entry) => matches([entry.label, GROUP_LABELS[entry.group], ...entry.keywords].join(' '), terms))
       .map((entry) => ({
         id: `page:${entry.group}:${entry.id}`,
-        href: hrefFor(entry, pickerProjectId) ?? '',
+        href: hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug) ?? '',
         title: entry.label,
         detail: GROUP_LABELS[entry.group],
         icon: entry.icon,
@@ -445,7 +446,7 @@ function SettingsSearch({
         if (!definition.scopes.includes(scope)) continue
         found.push({
           id: `setting:${entry.group}:${definition.key}`,
-          href: `${hrefFor(entry, pickerProjectId)}#setting-${definition.key}`,
+          href: `${hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug)}#setting-${definition.key}`,
           title: definition.label,
           detail: `${GROUP_LABELS[entry.group]} · ${entry.label}`,
           icon: entry.icon,

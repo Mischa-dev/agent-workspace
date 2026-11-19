@@ -8,8 +8,8 @@ export function accountSettingsHref(section: string) {
 }
 
 /** A page of the workspace's settings, in the workspace in view unless `ws` names another. */
-export function workspaceSettingsHref(section: string, ws: string = currentWorkspaceSlug()) {
-  return workspaceSettingsPageHref(section, ws)
+export function workspaceSettingsHref(section: string, ws?: string) {
+  return workspaceSettingsPageHref(section, ws ?? currentWorkspaceSlug())
 }
 
 /** A space's settings page, in the workspace in view (a space in another one is replaced with its own). */

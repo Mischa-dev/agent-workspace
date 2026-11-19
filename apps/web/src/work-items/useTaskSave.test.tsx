@@ -36,9 +36,9 @@ const task: WorkItem = {
   ...EMPTY_PLANNING,
 }
 
-// `task_update`'s refusal as the op client reads it (W1.9a).
+// `task_update`'s refusal once `updateWorkItem` has read the whole task (W1.9a).
 const conflict = (current: WorkItem) =>
-  new ApiError({ status: 409, code: 'conflict', message: 'The task changed.', details: { reason: 'version', currentVersion: current.version, current: { task: current, changedFields: ['title'] } } })
+  new ApiError({ status: 409, code: 'conflict', message: 'The task changed.', details: { reason: 'version', currentVersion: current.version, current: { task: current, whole: true } } })
 
 function setup(mutateAsync: ReturnType<typeof vi.fn>) {
   vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useUpdateWorkItem>)
