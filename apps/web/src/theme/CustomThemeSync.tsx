@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { skipToken, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
 import { isApiError } from '../api/errors'
 import { callOp, opQuery } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import type { ThemeDocument } from '../api/generated/operations'
-import { appearanceQueryKey, getAppearance } from './accountAppearance'
+import { appearanceQueryKey, type StoredAppearance } from './accountAppearance'
 import { CONTRACT_VERSION } from './contract'
 import { normalizeAppearancePreferences } from './preferences'
 import { isDarkScheme } from './slots'
@@ -46,7 +46,8 @@ export default function CustomThemeSync() {
   // were made for. Only once the account's saved appearance has arrived and
   // this browser shows it: a newer choice made on another device wins over
   // this browser's old colours. And only if nothing was chosen meanwhile.
-  const account = useQuery({ queryKey: appearanceQueryKey, queryFn: getAppearance, retry: false, staleTime: 60_000 })
+  // AppearanceSync, mounted beside this, fetches it; this only reads the shared copy.
+  const account = useQuery<StoredAppearance>({ queryKey: appearanceQueryKey, queryFn: skipToken })
   const stored = account.data?.appearance && typeof account.data.appearance === 'object' ? normalizeAppearancePreferences(account.data.appearance) : null
   const settled = account.isError || (account.isSuccess && (stored === null || selection(stored) === selection(theme)))
   const latest = useRef(theme)
