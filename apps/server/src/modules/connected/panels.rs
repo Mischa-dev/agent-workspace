@@ -70,6 +70,28 @@ async fn drawable(
     .await?)
 }
 
+/// Whether `module` may be drawn in `workspace` and declares `panel` (one
+/// it answers for, not a frame-only one).
+pub(crate) async fn declares(
+    connection: &mut sqlx::PgConnection,
+    workspace_id: Uuid,
+    module_id: Uuid,
+    panel: &str,
+) -> Result<bool, AppError> {
+    let Some(install) = drawable(connection, workspace_id, None, Some(module_id))
+        .await?
+        .into_iter()
+        .next()
+    else {
+        return Ok(false);
+    };
+    Ok(install
+        .manifest()?
+        .panels
+        .iter()
+        .any(|spec| spec.id == panel && spec.entry.is_some() && !spec.frame_only))
+}
+
 /// Whether a panel in `slot` is drawn where the call is: a space's tab
 /// needs a space, a thing's side a thing of its kind.
 fn slot_fits(slot: &str, space: Option<Uuid>, thing: Option<&PanelThingInput>) -> bool {
@@ -460,7 +482,7 @@ pub(super) async fn round_trip(
             .unwrap_or_default();
         refused(format!("The app's panel can't be drawn ({first})."))
     })?;
-    let answer = match answer {
+    let mut answer = match answer {
         Answer::Panel(panel) => PanelAnswer::Panel { panel },
         Answer::Errors(errors) => PanelAnswer::Errors { errors },
         Answer::Done { message, result } => PanelAnswer::Done { message, result },
@@ -491,6 +513,18 @@ pub(super) async fn round_trip(
             }
         }
     };
+    // M1.16: an agent a host's panel says it made is handed on only
+    // beside the waiting proposal it names.
+    if let PanelAnswer::Done {
+        result: Some(result),
+        ..
+    } = &mut answer
+    {
+        let tx = call.tx().await?;
+        super::hosts::checked_result(tx, workspace, install.module_id, account, result)
+            .await
+            .map_err(|error| OpError::logged("module_panel_open", &error))?;
+    }
     Ok(PanelView {
         module_id: install.module_id,
         panel: request.panel.to_owned(),

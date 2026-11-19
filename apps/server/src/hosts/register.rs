@@ -22,6 +22,7 @@ use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{HostRow, Owner as HostOwner, protocol::HostError};
+use crate::modules::connected::hosts::{ModulePanelRef, host_panel};
 use crate::{
     access::{self, Caller, Scope},
     accounts::{NewAgent, Owner, create_agent},
@@ -760,6 +761,10 @@ pub struct OfferStarted {
     /// The host's page to carry on at, when the offer names one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<String>,
+    /// The host's module panel to carry on in, when the offer starts on
+    /// one (M1.16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel: Option<ModulePanelRef>,
 }
 
 impl Operation for AgentOfferStart {
@@ -814,10 +819,15 @@ impl Operation for AgentOfferStart {
         )
         .await?;
         mark_invoker(tx, command.id, caller).await?;
+        let panel = match offer["start"]["panel"].as_str() {
+            Some(panel) => host_panel(tx, workspace_id, host.id, panel).await?,
+            None => None,
+        };
         call.audit_target("host", host.id, json!({"offer": offer["id"]}));
         Ok(OfferStarted {
             command_id: command.id,
             page: offer_page(&host, &offer, command.id),
+            panel,
         })
     }
 }
@@ -875,6 +885,9 @@ pub struct ActionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Map<String, Value>>")]
     pub reply: Option<Value>,
+    /// The host's module panel to open, when its reply names one (M1.16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel: Option<ModulePanelRef>,
 }
 
 fn declared(actions: &Value, action_id: &str) -> bool {
@@ -982,6 +995,7 @@ impl Operation for AgentActionRun {
             command_id: command.id,
             state: command.state,
             reply: None,
+            panel: None,
         })
     }
 }
@@ -1018,9 +1032,9 @@ impl Operation for AgentActionGet {
         let caller = call.account_id();
         let tx = call.tx().await?;
         // Only the caller's own.
-        let row = sqlx::query_as::<_, (Uuid, String, Option<Value>)>(
+        let row = sqlx::query_as::<_, (Uuid, String, Option<Value>, Uuid)>(
             r#"
-            SELECT command.id, command.state, command.ack
+            SELECT command.id, command.state, command.ack, command.host_id
             FROM host_commands command
             WHERE command.id = $1 AND command.workspace_id = $2 AND command.kind = 'action'
               AND command.invoked_by_account_id = $3
@@ -1033,10 +1047,21 @@ impl Operation for AgentActionGet {
         .await
         .map_err(AppError::from)?
         .ok_or_else(|| OpError::not_found("That action"))?;
+        // An action that needs a panel answers with the one to open, by
+        // its id in the host's module.
+        let panel = match row
+            .2
+            .as_ref()
+            .and_then(|ack| ack["result"]["panel"].as_str())
+        {
+            Some(panel) => host_panel(tx, workspace_id, row.3, panel).await?,
+            None => None,
+        };
         Ok(ActionView {
             command_id: row.0,
             state: row.1,
             reply: row.2,
+            panel,
         })
     }
 }

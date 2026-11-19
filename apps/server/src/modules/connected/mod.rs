@@ -27,6 +27,7 @@
 pub mod blocks;
 pub mod files;
 pub mod frames;
+pub mod hosts;
 pub mod http;
 pub mod manifest;
 pub mod ops;

@@ -310,6 +310,8 @@ export type ModuleEntry = { key: string; name: string }
 
 export type ModuleKind = "core" | "built" | "connected"
 
+export type ModulePanelRef = { moduleId: string; panel: string }
+
 export type ModuleView = { description: string; embeds: string[]; events: string[]; id: string; kind: ModuleKind; name: string; needs: string[]; offBecause?: string | null; on: boolean; switchable: boolean; switchedOn: boolean; things: string[]; tools: Record<string, string[]>; version: number; worksWith: string[] }
 
 export type MoveIssue = { candidates?: CandidateField[]; field: string; fieldId: string; fieldType: FieldType; id: string; linkTarget?: LinkTarget | null; message: string; reason: IssueReason; taskId: string; taskKey: string; value: unknown }
@@ -674,11 +676,11 @@ export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string 
 
 export type AgentActionGetInput = { commandId: string }
 
-export type AgentActionGetOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+export type AgentActionGetOutput = { commandId: string; panel?: ModulePanelRef | null; reply?: Record<string, unknown> | null; state: string }
 
 export type AgentActionRunInput = { account?: string | null; actionId: string; host?: string | null; input?: Record<string, unknown> | null }
 
-export type AgentActionRunOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+export type AgentActionRunOutput = { commandId: string; panel?: ModulePanelRef | null; reply?: Record<string, unknown> | null; state: string }
 
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
@@ -694,7 +696,7 @@ export type AgentOfferListOutput = { offers: Offer[] }
 
 export type AgentOfferStartInput = { host: string; offerId: string }
 
-export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+export type AgentOfferStartOutput = { commandId: string; page?: string | null; panel?: ModulePanelRef | null }
 
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 

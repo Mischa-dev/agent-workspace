@@ -90,6 +90,11 @@ async fn panel(
             json!({"done": {"message": "Keys saved.", "result": {"saved": true}}})
         }
         Some("aw.frame_done") => json!({"errors": {"keys": "Nothing was saved."}}),
+        // M1.16: a host's create panel says which agent it made (and tries
+        // to name the proposal itself, which only Workspace may).
+        Some("create_agent") => json!({"done": {"message": "Created.", "result": {
+            "agentRef": sent["action"]["values"]["ref"], "proposalId": "forged",
+            "displayName": "Fixer"}}}),
         Some(_) => json!({"close": true}),
     };
     (StatusCode::OK, Json(answer))
@@ -1435,4 +1440,217 @@ async fn a_file_source_passes_its_check_and_lists_files_by_reference() {
     .expect("events");
     assert_eq!(logged, 0);
     world.finish().await;
+}
+
+/// M1.16: an agent host draws its steps as its connected module's panels.
+/// The silent failures: an offer or action opening a panel of a module the
+/// host isn't joined to, and a panel's `done` handing on an agent the host
+/// never proposed here (or naming the proposal itself).
+#[tokio::test]
+async fn a_hosts_offer_opens_its_module_panel_and_hands_on_only_its_own_agent() {
+    use super::support::test_host::TestHost;
+
+    let app = test_app().await;
+    let origin = app.lock().expect("app").origin.clone();
+    app.lock().expect("app").manifest["panels"]
+        .as_array_mut()
+        .expect("panels")
+        .push(
+            json!({"id": "create", "slot": "agents.create", "title": "Create an agent",
+                     "entry": "panels/builds"}),
+        );
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .config("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", origin.clone())
+        .build("m116_host_panels")
+        .await
+    else {
+        return;
+    };
+    let connected = connect(&world, &app, &format!("{origin}/manifest.json")).await;
+    // A host may only describe an https address; the test app serves http,
+    // so its install takes the address the host describes.
+    let address = "https://agents.example.test/aw/manifest.json";
+    sqlx::query("UPDATE module_apps SET manifest_url = $2 WHERE module_id = $1::uuid")
+        .bind(&connected.module)
+        .bind(address)
+        .execute(world.pool())
+        .await
+        .expect("address");
+    let owner = &world.owner;
+    let op = |name: &'static str, input: Value| {
+        let request = owner.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            input,
+        );
+        async { send(&world.app, request).await.1 }
+    };
+    let describe = |manifest: &str| {
+        json!({
+            "software": {"name": "test-host", "version": "1.0"},
+            "capabilities": {"start": true},
+            "reportIntervalSeconds": 60,
+            "issuer": "https://host.example",
+            "module": {"manifestUrl": manifest},
+            "offers": [
+                {"id": "new", "title": "New agent", "start": {"panel": "create"}},
+                {"id": "unknown", "title": "Other", "start": {"panel": "nowhere"}},
+            ],
+            "actions": [{"id": "settings", "label": "Settings", "needs": "panel"}],
+        })
+    };
+    let mut host = TestHost::enrol(
+        &world.app,
+        &owner.browser,
+        world.organization,
+        "Agent host",
+        json!({"connection": "dial_out"}),
+    )
+    .await;
+    let (status, described) = host
+        .call("POST", "/api/v1/host/describe", Some(describe(address)))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{described}");
+    let other = TestHost::enrol(
+        &world.app,
+        &owner.browser,
+        world.organization,
+        "Another host",
+        json!({"connection": "dial_out"}),
+    )
+    .await;
+    let (status, described) = other
+        .call(
+            "POST",
+            "/api/v1/host/describe",
+            Some(describe("https://other.example.test/aw/manifest.json")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{described}");
+
+    // The offer opens the panel of the host's own module, and only one it
+    // declares; another host's same offer opens nothing of this module.
+    let started = op(
+        "agent_offer_start",
+        json!({"host": host.id, "offerId": "new"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    assert_eq!(
+        started["value"]["panel"],
+        json!({"moduleId": connected.module, "panel": "create"}),
+        "{started}"
+    );
+    let undeclared = op(
+        "agent_offer_start",
+        json!({"host": host.id, "offerId": "unknown"}),
+    )
+    .await;
+    assert_eq!(undeclared["outcome"], "ok", "{undeclared}");
+    assert!(undeclared["value"]["panel"].is_null(), "{undeclared}");
+    let elsewhere = op(
+        "agent_offer_start",
+        json!({"host": other.id, "offerId": "new"}),
+    )
+    .await;
+    assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
+    assert!(elsewhere["value"]["panel"].is_null(), "{elsewhere}");
+
+    // The host proposes the agent it made; the panel's done hands it on
+    // beside that proposal, by its name or its outside reference.
+    let (status, proposed) = host
+        .call(
+            "POST",
+            "/api/v1/host/agents/register",
+            Some(json!({
+                "workspaceId": world.organization,
+                "hostAgentRef": "fixer-1",
+                "profile": {"name": "Fixer", "handle": "fixer", "summary": "Fixes builds"},
+                "ref": {"issuer": "https://host.example", "id": "agt_91", "lineage": "l-01"},
+                "requestedBy": owner.actor,
+                "clientRequestId": "m116-fixer",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{proposed}");
+    let proposal = proposed["proposalId"]
+        .as_str()
+        .expect("proposal")
+        .to_owned();
+    let finish = |agent_ref: Value| {
+        tool(
+            &world,
+            "desk",
+            "module_panel_press",
+            json!({"moduleId": connected.module, "panel": "create",
+                   "action": {"id": "create_agent", "values": {"ref": agent_ref}}}),
+        )
+    };
+    for agent_ref in [
+        json!("fixer-1"),
+        json!({"issuer": "https://host.example", "id": "agt_91"}),
+    ] {
+        let done = finish(agent_ref.clone()).await;
+        assert_eq!(done["outcome"], "ok", "{done}");
+        let result = &done["value"]["answer"]["result"];
+        assert_eq!(result["agentRef"], agent_ref, "{done}");
+        assert_eq!(result["proposalId"], proposal.as_str(), "{done}");
+        assert_eq!(result["requestId"], proposed["requestId"], "{done}");
+        assert_eq!(result["displayName"], "Fixer", "{done}");
+    }
+    // An agent the host never proposed here is dropped, and so is the
+    // module's own claim to a proposal.
+    for agent_ref in [
+        json!("someone-else"),
+        json!({"issuer": "https://elsewhere.example", "id": "agt_91"}),
+    ] {
+        let done = finish(agent_ref).await;
+        assert_eq!(done["outcome"], "ok", "{done}");
+        let result = &done["value"]["answer"]["result"];
+        assert!(result["agentRef"].is_null(), "{done}");
+        assert!(result["proposalId"].is_null(), "{done}");
+        assert_eq!(result["displayName"], "Fixer", "{done}");
+    }
+
+    // An action that needs a panel: the host's reply names it, and it
+    // opens only when the host's module declares it.
+    let mut opened = Vec::new();
+    for named in ["create", "nowhere"] {
+        let ran = op(
+            "agent_action_run",
+            json!({"host": host.id, "actionId": "settings"}),
+        )
+        .await;
+        assert_eq!(ran["outcome"], "ok", "{ran}");
+        let command_id = ran["value"]["commandId"].clone();
+        let commands = host.poll().await;
+        assert!(
+            commands
+                .iter()
+                .any(|command| command["commandId"] == command_id),
+            "{commands:?}"
+        );
+        let (status, fetched) = host.fetch(&command_id).await;
+        assert_eq!(status, StatusCode::OK, "{fetched}");
+        let (status, acked) = host
+            .ack(
+                &command_id,
+                json!({"outcome": "done", "result": {"panel": named}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{acked}");
+        let reply = op("agent_action_get", json!({"commandId": command_id})).await;
+        assert_eq!(reply["outcome"], "ok", "{reply}");
+        opened.push(reply["value"]["panel"].clone());
+    }
+    assert_eq!(
+        opened,
+        vec![
+            json!({"moduleId": connected.module, "panel": "create"}),
+            Value::Null
+        ]
+    );
 }

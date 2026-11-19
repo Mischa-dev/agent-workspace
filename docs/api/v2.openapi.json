@@ -5644,6 +5644,23 @@
           }
         ]
       },
+      "ModulePanelRef": {
+        "description": "A connected module's panel to open.",
+        "properties": {
+          "moduleId": {
+            "description": "Open it with module_panel_open.",
+            "type": "string"
+          },
+          "panel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "moduleId",
+          "panel"
+        ],
+        "type": "object"
+      },
       "ModuleView": {
         "description": "One module as a settings screen and an agent read it.",
         "properties": {
@@ -14688,6 +14705,17 @@
                               "description": "Read its reply with agent_action_get.",
                               "type": "string"
                             },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to open, when its reply names one (M1.16)."
+                            },
                             "reply": {
                               "additionalProperties": true,
                               "description": "The host's reply (a result or a panel), once it answered.",
@@ -14833,6 +14861,17 @@
                             "commandId": {
                               "description": "Read its reply with agent_action_get.",
                               "type": "string"
+                            },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to open, when its reply names one (M1.16)."
                             },
                             "reply": {
                               "additionalProperties": true,
@@ -15059,6 +15098,17 @@
                               "description": "Read its reply with agent_action_get.",
                               "type": "string"
                             },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to open, when its reply names one (M1.16)."
+                            },
                             "reply": {
                               "additionalProperties": true,
                               "description": "The host's reply (a result or a panel), once it answered.",
@@ -15204,6 +15254,17 @@
                             "commandId": {
                               "description": "Read its reply with agent_action_get.",
                               "type": "string"
+                            },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to open, when its reply names one (M1.16)."
                             },
                             "reply": {
                               "additionalProperties": true,
@@ -16479,6 +16540,17 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to carry on in, when the offer starts on\none (M1.16)."
                             }
                           },
                           "required": [
@@ -16619,6 +16691,17 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "panel": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ModulePanelRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The host's module panel to carry on in, when the offer starts on\none (M1.16)."
                             }
                           },
                           "required": [
