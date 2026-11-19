@@ -310,7 +310,15 @@ export type PageLine = { id: string; stale: boolean; title: string; updatedAt: s
 
 export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
 
+export type PanelActionInput = { id: string; values?: Record<string, unknown> | null }
+
+export type PanelAnswer = { kind: "panel"; panel: Record<string, unknown> } | { errors: Record<string, unknown>; kind: "errors" } | ({ kind: "done"; message?: string | null; result?: Record<string, unknown> | null }) | { kind: "close" }
+
+export type PanelEntry = { moduleId: string; moduleKey: string; panel: string; part: string; slot: string; title: string }
+
 export type PanelSummary = { id: string; slot: string; title: string }
+
+export type PanelThingInput = { id: string; kind: string }
 
 export type PartRef = { id: string; kind: string }
 
@@ -492,7 +500,7 @@ export type TileInput = { height?: number | null; id?: string | null; kind?: Til
 
 export type TileKind = "view" | "text" | "sheet"
 
-export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
+export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ eventType?: string | null; kind: "module_event" }) | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
@@ -715,6 +723,10 @@ export type ConnectedModuleRefreshOutput = { module: ConnectedModuleView; refres
 export type ConnectedModuleRevokeInput = { moduleId: string }
 
 export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+
+export type ConnectedModuleRunInput = { input?: Record<string, unknown>; operation: string }
+
+export type ConnectedModuleRunOutput = { moduleId: string; operation: string; result: unknown }
 
 export type ConnectionCreateInput = { account?: string | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -1083,6 +1095,18 @@ export type ModuleCreateOutput = { archived: boolean; archivedParts?: string | n
 export type ModuleOpenInput = { moduleId: string }
 
 export type ModuleOpenOutput = { archived: boolean; archivedParts?: string | null; description: string; icon?: string | null; id: string; key: string; name: string; nav: NavView[]; on: boolean; parts: PartView[]; revision: number; spaceId?: string | null }
+
+export type ModulePanelListInput = { slot?: string | null; spaceId?: string | null }
+
+export type ModulePanelListOutput = { panels: PanelEntry[] }
+
+export type ModulePanelOpenInput = { moduleId: string; panel: string; spaceId?: string | null; state?: string | null; thing?: PanelThingInput | null }
+
+export type ModulePanelOpenOutput = { answer: PanelAnswer; moduleId: string; panel: string }
+
+export type ModulePanelPressInput = { action: PanelActionInput; moduleId: string; panel: string; spaceId?: string | null; state?: string | null; thing?: PanelThingInput | null }
+
+export type ModulePanelPressOutput = { answer: PanelAnswer; moduleId: string; panel: string }
 
 export type ModulePartLinkInput = { moduleId: string; part: PartRef }
 
@@ -1580,6 +1604,10 @@ export type ThingShareRemoveInput = { account?: string | null; id: string; kind:
 
 export type ThingShareRemoveOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
 
+export type ThingUpsertInput = { archived?: boolean | null; fields?: Record<string, unknown> | null; id?: string | null; kind: string; spaceId?: string | null; status?: string | null; title: string; url?: string | null }
+
+export type ThingUpsertOutput = { archived: boolean; existed: boolean; fields: Record<string, unknown>; id: string; kind: string; spaceId?: string | null; status?: string | null; title: string; url?: string | null; version: number }
+
 export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolean }
 
 export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
@@ -1718,6 +1746,7 @@ export type Operations = {
   connected_module_list: { input: ConnectedModuleListInput; output: ConnectedModuleListOutput }
   connected_module_refresh: { input: ConnectedModuleRefreshInput; output: ConnectedModuleRefreshOutput }
   connected_module_revoke: { input: ConnectedModuleRevokeInput; output: ConnectedModuleRevokeOutput }
+  connected_module_run: { input: ConnectedModuleRunInput; output: ConnectedModuleRunOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
   connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }
@@ -1810,6 +1839,9 @@ export type Operations = {
   module_archive: { input: ModuleArchiveInput; output: ModuleArchiveOutput }
   module_create: { input: ModuleCreateInput; output: ModuleCreateOutput }
   module_open: { input: ModuleOpenInput; output: ModuleOpenOutput }
+  module_panel_list: { input: ModulePanelListInput; output: ModulePanelListOutput }
+  module_panel_open: { input: ModulePanelOpenInput; output: ModulePanelOpenOutput }
+  module_panel_press: { input: ModulePanelPressInput; output: ModulePanelPressOutput }
   module_part_link: { input: ModulePartLinkInput; output: ModulePartLinkOutput }
   module_part_unlink: { input: ModulePartUnlinkInput; output: ModulePartUnlinkOutput }
   module_restore: { input: ModuleRestoreInput; output: ModuleRestoreOutput }
@@ -1934,6 +1966,7 @@ export type Operations = {
   thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
   thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
   thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
+  thing_upsert: { input: ThingUpsertInput; output: ThingUpsertOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
   thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }

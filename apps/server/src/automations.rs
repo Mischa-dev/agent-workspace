@@ -194,6 +194,14 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         whiteboard_id: Option<Uuid>,
     },
+    /// A connected module sends in an event its manifest declares, about
+    /// one of its things in the project. eventType narrows it to one
+    /// declared type (`acme.build.finished`); left out, any. Takes no task
+    /// conditions; its actions notify or post a message.
+    ModuleEvent {
+        #[serde(default)]
+        event_type: Option<String>,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -224,6 +232,7 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "page_changed",
     "sheet_changed",
     "whiteboard_changed",
+    "module_event",
     "schedule",
     "capacity_window",
 ];
@@ -251,6 +260,7 @@ impl Trigger {
             Self::PageChanged { .. } => "page_changed",
             Self::SheetChanged { .. } => "sheet_changed",
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
+            Self::ModuleEvent { .. } => "module_event",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
@@ -266,6 +276,7 @@ impl Trigger {
                 | Self::PageChanged { .. }
                 | Self::SheetChanged { .. }
                 | Self::WhiteboardChanged { .. }
+                | Self::ModuleEvent { .. }
         )
     }
 
@@ -564,6 +575,20 @@ fn check_shape(
                 return Err(AppError::Invalid(
                     "a page, sheet or board rule has no task conditions: name the one it watches instead",
                 ));
+            }
+        }
+        Trigger::ModuleEvent { event_type } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a connected module rule has no task conditions: name its event type instead",
+                ));
+            }
+            if let Some(name) = event_type {
+                let name = name.trim().to_owned();
+                if name.is_empty() || name.len() > 100 {
+                    return Err(AppError::Validation("trigger.eventType"));
+                }
+                *event_type = Some(name);
             }
         }
         Trigger::TaskMatches {} => {
@@ -1698,6 +1723,10 @@ fn summary_for(event: &Event) -> String {
         ),
         "pull_request.checks_failed" => "Checks failed on a pull request".to_owned(),
         "message.created" => "A message was posted".to_owned(),
+        "module.event" => format!(
+            "A connected module sent {}",
+            event.subject.state.as_deref().unwrap_or("an event")
+        ),
         other => other.to_owned(),
     }
 }
@@ -1715,6 +1744,7 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "page.updated" => &["page_changed"],
         "sheet.updated" => &["sheet_changed"],
         "whiteboard.updated" => &["whiteboard_changed"],
+        "module.event" => &["module_event"],
         _ => &[],
     }
 }
@@ -1888,6 +1918,9 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             Trigger::WhiteboardChanged { whiteboard_id } => {
                 whiteboard_id.is_none_or(|only| subject.whiteboard_id == Some(only))
             }
+            Trigger::ModuleEvent { event_type } => event_type
+                .as_deref()
+                .is_none_or(|only| subject.state.as_deref() == Some(only)),
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
         if !wanted {

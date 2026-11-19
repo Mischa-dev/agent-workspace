@@ -28,6 +28,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "forward",
             "report",
             "install",
+            // Made, or changed when it exists: a connected module's thing,
+            // which the module names by its own id (M1.13).
+            "upsert",
             // A page made from other things (messages, a thread, blocks).
             "make",
             // A change kept for someone who edits the thing to decide (C1.11).
@@ -94,8 +97,12 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // An account stops acting and hearing until resumed (A2.10).
             "pause",
             "resume",
-            // A host's published action runs (A2.19).
+            // A host's published action runs (A2.19); so does a connected
+            // module's declared operation (M1.13).
             "run",
+            // Someone with the right grants what was asked: a connected
+            // module's scopes (M1.12).
+            "approve",
             // Someone makes their own what another owned, such as an agent
             // whose owning workspace is being deleted (K1.33).
             "take",

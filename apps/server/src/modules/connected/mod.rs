@@ -24,9 +24,13 @@
 //! Every call the app makes is checked against its account's current role,
 //! as anyone's is, so a scope that wasn't approved is refused everywhere.
 
+pub mod blocks;
 pub mod http;
 pub mod manifest;
 pub mod ops;
+pub mod panels;
+pub mod remote;
+pub mod things;
 
 use std::{collections::BTreeSet, time::Duration};
 
@@ -737,6 +741,7 @@ pub(crate) async fn install(
     .execute(&mut **transaction)
     .await
     .map_err(AppError::from)?;
+    things::register_kinds(transaction, workspace_id, module_id, manifest).await?;
     send_code_later(transaction, workspace_id, module_id).await?;
     Ok(module_id)
 }
@@ -881,7 +886,7 @@ async fn apply_manifest(
     .execute(&mut **transaction)
     .await
     .map_err(AppError::from)?;
-    Ok(())
+    things::register_kinds(transaction, row.workspace_id, row.module_id, manifest).await
 }
 
 /// Sets the approved scopes and the role that holds them.
@@ -977,6 +982,7 @@ pub(crate) async fn approve(
         .execute(&mut **transaction)
         .await
         .map_err(AppError::from)?;
+        things::register_kinds(transaction, row.workspace_id, row.module_id, &manifest).await?;
     }
     set_scopes(transaction, row, &approved, actor_id).await?;
     sqlx::query(

@@ -1957,12 +1957,26 @@ impl ServerHandler for McpServer {
             .entries()
             .filter(|entry| crate::ops::mcp::listed(&entry.meta, &principal, reach, modules))
             .map(|entry| crate::ops::mcp::tool_of(&entry.meta));
+        // M1.13: and the operations connected modules declare.
+        let remote =
+            crate::modules::connected::remote::tools_for(&self.state, &principal, reach, |name| {
+                !remote_declared(name)
+            })
+            .await
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    category = error.log_category(),
+                    "MCP connected module tools lookup failed"
+                );
+                Vec::new()
+            });
         Ok(ListToolsResult::with_all_items(
             tools
                 .into_iter()
                 .filter(|tool| tool_listed(&tool.name, reach) && modules.allows_tool(&tool.name))
                 .chain(listed)
                 .map(slim_for_listing)
+                .chain(remote)
                 .collect(),
         )
         .with_ttl_ms(LIST_TTL_MS)
@@ -2378,6 +2392,15 @@ async fn run_tool(
             ),
         ));
     }
+    // M1.13: a connected module's declared operation runs as
+    // `connected_module_run`.
+    if remote_declared(&request.name) {
+        request.arguments = Some(crate::modules::connected::remote::wrap(
+            &request.name,
+            request.arguments.take(),
+        ));
+        request.name = crate::modules::connected::remote::CALL_OP.into();
+    }
     // K2: an operation runs through the dispatcher, which checks access,
     // modules and request ids itself.
     if crate::ops::mcp::is_operation(&request.name) {
@@ -2768,6 +2791,19 @@ pub fn tool_catalog() -> Vec<rmcp::model::Tool> {
     tools
 }
 
+/// Whether a tool name can only be a connected module's declared operation
+/// (M1.13): no operation or hand-written tool has it, and it is shaped as
+/// one (`<publisher>_<name>`). Whether one is declared is the call's to say.
+fn remote_declared(name: &str) -> bool {
+    name.len() <= 80
+        && name.contains('_')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        && !crate::ops::mcp::is_operation(name)
+        && !McpServer::tools().has_route(name)
+}
+
 /// Whether a hand-written tool has this name (an operation must not).
 #[cfg(test)]
 pub(crate) fn has_legacy_tool(name: &str) -> bool {
@@ -2796,6 +2832,22 @@ pub(crate) async fn call_tool_direct(
     tool: &str,
     mut arguments: serde_json::Value,
 ) -> Result<serde_json::Value, DirectCallError> {
+    // M1.13: a connected module's declared operation runs as
+    // `connected_module_run`.
+    let wrapped;
+    let tool = if remote_declared(tool) {
+        let serde_json::Value::Object(object) = arguments else {
+            return Err(DirectCallError::InvalidArguments(
+                "The body must be a JSON object of the tool's arguments.".to_owned(),
+            ));
+        };
+        arguments =
+            serde_json::Value::Object(crate::modules::connected::remote::wrap(tool, Some(object)));
+        wrapped = crate::modules::connected::remote::CALL_OP;
+        wrapped
+    } else {
+        tool
+    };
     // K2: an operation runs through the dispatcher as a public API call.
     if crate::ops::mcp::is_operation(tool) {
         keys_to_ids(state, &principal, tool, &mut arguments)

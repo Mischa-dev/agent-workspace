@@ -57,6 +57,10 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
         "whiteboard.updated",
         "A whiteboard was saved as a new version",
     ),
+    (
+        "module.event",
+        "A connected module sent an event it declares",
+    ),
 ];
 
 pub fn is_event_type(value: &str) -> bool {
@@ -234,6 +238,24 @@ async fn heard(
                 logged.actor_account_id,
                 subject,
             )]
+        }
+        // A connected module's event (M1.13): rules match its declared
+        // type, carried as the subject's state, about its own thing.
+        "module.event" => {
+            let mut heard = event(
+                event_type,
+                format!("module.event:{}", logged.id),
+                logged.actor_account_id,
+                Subject {
+                    state: text_in("type"),
+                    ..Subject::default()
+                },
+            );
+            heard.thing = logged
+                .thing_kind
+                .clone()
+                .map(|kind| ThingRef { kind, id: thing });
+            vec![heard]
         }
         "task.created" => vec![event(
             event_type,

@@ -448,6 +448,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          no session, and the code names its one install; covered in connected_modules",
     ),
     (
+        "POST /api/v1/modules/{module_id}/events",
+        "a connected app sends in an event signed with its install's inbound secret; no \
+         session, and the signature reaches only that install; covered in connected_modules",
+    ),
+    (
         "POST /oauth/register",
         "OAuth client registration: makes a public client that belongs to no workspace",
     ),
@@ -587,6 +592,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connected_module_install",
     "connected_module_refresh",
     "connected_module_revoke",
+    "connected_module_run",
+    "module_panel_press",
     "module_create",
     "module_part_link",
     "module_part_unlink",
@@ -655,6 +662,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thing_link_create",
     "thing_share_add",
     "thing_share_remove",
+    "thing_upsert",
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
@@ -7777,6 +7785,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-revoke-b"})],
         )
         .without_own("needs an installed app; connected_modules runs it"),
+        // M1.13: a declared operation runs only where its install is, and
+        // a connected thing is written only in the caller's workspace.
+        mcp_case(
+            "connected_module_run",
+            json!({"operation": "acme_build_rerun", "input": {"build": "1"}}),
+            vec![json!({"workspace": b.organization, "operation": "acme_build_rerun",
+                        "input": {"build": "1"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
+        mcp_case(
+            "thing_upsert",
+            json!({"kind": "acme.build", "title": "Build 1"}),
+            vec![json!({"workspace": b.organization, "kind": "acme.build", "title": "Build 1",
+                        "clientRequestId": "net-thing-upsert-b"})],
+        )
+        .without_own("only a connected module's own account writes its kinds; connected_modules runs it"),
+        mcp_case(
+            "module_panel_press",
+            json!({"moduleId": a.organization, "panel": "builds", "action": {"id": "rerun"}}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization, "panel": "builds",
+                        "action": {"id": "rerun"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",

@@ -23,12 +23,14 @@ use super::support::{
     world::{Workspace, WorldBuilder},
 };
 
-/// The test app: the manifest it serves, and the install calls it got.
+/// The test app: the manifest it serves, and the install and operation
+/// calls it got.
 #[derive(Default)]
 struct TestApp {
     origin: String,
     manifest: Value,
     installs: Vec<(HeaderMap, String)>,
+    calls: Vec<(HeaderMap, String)>,
 }
 
 type Shared = Arc<Mutex<TestApp>>;
@@ -40,6 +42,63 @@ async fn manifest(State(app): State<Shared>) -> Json<Value> {
 async fn install(State(app): State<Shared>, headers: HeaderMap, body: String) -> StatusCode {
     app.lock().expect("app").installs.push((headers, body));
     StatusCode::OK
+}
+
+/// The builds panel: a form to start a build; an empty branch is the
+/// form's fault, a branch starts one, and `bad` answers a form that asks
+/// for a secret, which Workspace refuses to pass on.
+async fn panel(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, Json<Value>) {
+    let sent: Value = serde_json::from_str(&body).unwrap_or_default();
+    app.lock().expect("app").calls.push((headers, body));
+    let form = |field: &str| {
+        json!({"format": "aw-panel/1", "title": "Builds", "blocks": [
+            {"type": "status", "state": "ok", "label": "Nothing is running"},
+            {"type": "form", "id": "start",
+             "schema": {"type": "object", "properties": {field: {"type": "string"}}},
+             "submit": {"label": "Start", "action": {"id": "start"}}}
+        ], "state": "page=1"})
+    };
+    let answer = match sent["action"]["id"].as_str() {
+        None => json!({"panel": form("branch")}),
+        Some("start")
+            if sent["action"]["values"]["branch"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty() =>
+        {
+            json!({"errors": {"branch": "A branch is needed."}})
+        }
+        Some("start") => json!({"done": {"message": "Build started.", "result": {"build": "215"}}}),
+        Some("bad") => json!({"panel": form("api_token")}),
+        Some(_) => json!({"close": true}),
+    };
+    (StatusCode::OK, Json(answer))
+}
+
+/// A declared operation: answers with what it was asked, or refuses an
+/// unknown build as the input's fault.
+async fn rerun(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, Json<Value>) {
+    let sent: Value = serde_json::from_str(&body).unwrap_or_default();
+    app.lock().expect("app").calls.push((headers, body));
+    let build = sent["input"]["build"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    if build == "404" {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": {"message": "No such build."}})),
+        );
+    }
+    (StatusCode::OK, Json(json!({"rerun": true, "build": build})))
 }
 
 fn builds(origin: &str, scopes: Value) -> Value {
@@ -82,6 +141,9 @@ async fn test_app() -> Shared {
     let router = Router::new()
         .route("/manifest.json", get(manifest))
         .route("/workspace/install", post(install))
+        .route("/workspace/ops/rerun", post(rerun))
+        .route("/workspace/ops/purge", post(rerun))
+        .route("/workspace/panels/builds", post(panel))
         .with_state(shared.clone());
     tokio::spawn(async move {
         axum::serve(listener, router).await.expect("serve");
@@ -141,10 +203,13 @@ async fn pump(world: &Workspace) {
     };
     for _ in 0..10 {
         drain_outbox(&world.state).await;
+        let handled = agent_workspace_server::events::catch_up(world.pool())
+            .await
+            .expect("catch up");
         let ran = jobs::run_due(&world.state, &registry, &options)
             .await
             .expect("run jobs");
-        if ran == 0 {
+        if handled == 0 && ran == 0 {
             return;
         }
     }
@@ -409,5 +474,487 @@ async fn a_connected_module_holds_what_was_approved_until_it_is_revoked() {
     .expect("switch");
     assert_eq!(on, "off");
     assert!(secrets.is_none());
+    world.finish().await;
+}
+
+/// The builds manifest with two declared operations: rerunning a build
+/// needs tasks.create, which members hold; purging one needs
+/// modules.manage, which they don't.
+fn builds_with_operations(origin: &str) -> Value {
+    let mut manifest = builds(
+        origin,
+        json!([
+            {"scope": "members.view", "why": "To show who started a build.", "required": true},
+            {"scope": "tasks.create", "why": "To file a task for a failed build."},
+            {"scope": "modules.manage", "why": "To purge old builds."}
+        ]),
+    );
+    manifest["operations"] = json!([
+        {"name": "acme_build_rerun", "verb": "change", "permission": "tasks.create",
+         "description": "Run a build again.",
+         "input": {"type": "object", "properties": {"build": {"type": "string"}},
+                   "required": ["build"], "additionalProperties": false},
+         "endpoint": "ops/rerun"},
+        {"name": "acme_build_purge", "verb": "change", "permission": "modules.manage",
+         "description": "Delete a build's artifacts.",
+         "input": {"type": "object", "properties": {"build": {"type": "string"}},
+                   "required": ["build"]},
+         "endpoint": "ops/purge"}
+    ]);
+    manifest
+}
+
+/// What an install leaves the app: its module, its account's secret, and
+/// the two signing secrets.
+struct Connected {
+    module: String,
+    secret: String,
+    outbound: String,
+    inbound: String,
+}
+
+/// Installs the app's manifest as the owner's app and trades the code.
+async fn connect(world: &Workspace, app: &Shared, url: &str) -> Connected {
+    let installed = tool(
+        world,
+        "desk",
+        "connected_module_install",
+        json!({"url": url, "clientRequestId": "install-ops"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    let module = installed["value"]["moduleId"]
+        .as_str()
+        .expect("module")
+        .to_owned();
+    pump(world).await;
+    let body = app
+        .lock()
+        .expect("app")
+        .installs
+        .last()
+        .cloned()
+        .expect("install call")
+        .1;
+    let sent: Value = serde_json::from_str(&body).expect("install body");
+    let (status, credentials) = exchange(world, sent["code"].as_str().expect("code")).await;
+    assert_eq!(status, StatusCode::OK, "{credentials}");
+    let text = |key: &str| credentials[key].as_str().expect(key).to_owned();
+    Connected {
+        module,
+        secret: text("clientSecret"),
+        outbound: text("outboundSigningSecret"),
+        inbound: text("inboundSigningSecret"),
+    }
+}
+
+/// An event the app sends in, signed with `secret` at `timestamp`.
+async fn send_event(
+    world: &Workspace,
+    module: &str,
+    secret: &str,
+    id: &str,
+    timestamp: i64,
+    event: &Value,
+) -> (StatusCode, Value) {
+    let body = event.to_string();
+    let signature =
+        agent_workspace_host_protocol::sign_push(secret, id, timestamp, &body).expect("sign");
+    send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/modules/{module}/events"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("webhook-id", id)
+            .header("webhook-timestamp", timestamp.to_string())
+            .header("webhook-signature", signature)
+            .body(Body::from(body))
+            .expect("request"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_connected_module_runs_its_operations_and_sends_in_its_events() {
+    let app = test_app().await;
+    let origin = app.lock().expect("app").origin.clone();
+    app.lock().expect("app").manifest = builds_with_operations(&origin);
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .agent("helper", "member")
+        .config("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", origin.clone())
+        .build("m113_remote_operations")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let connected = connect(&world, &app, &format!("{origin}/manifest.json")).await;
+    let helper = &world.agents["helper"];
+
+    // Each declared operation is a tool for whoever holds its permission.
+    let listed = super::support::app::tools_list(&world.app, &helper.token, &helper.session)
+        .await
+        .into_iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert!(
+        listed.iter().any(|name| name == "acme_build_rerun"),
+        "{listed:?}"
+    );
+    assert!(
+        !listed.iter().any(|name| name == "acme_build_purge"),
+        "{listed:?}"
+    );
+
+    // A call reaches the module signed with the outbound secret, with the
+    // caller and input; its answer is the call's value.
+    let ran = tool(
+        &world,
+        "helper",
+        "acme_build_rerun",
+        json!({"build": "214"}),
+    )
+    .await;
+    assert_eq!(ran["outcome"], "ok", "{ran}");
+    assert_eq!(
+        ran["value"]["result"],
+        json!({"rerun": true, "build": "214"})
+    );
+    let (headers, body) = app
+        .lock()
+        .expect("app")
+        .calls
+        .last()
+        .cloned()
+        .expect("call");
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .expect(name)
+            .to_owned()
+    };
+    assert!(agent_workspace_delivery_contract::webhook::verify_standard(
+        &connected.outbound,
+        &header("webhook-id"),
+        &header("webhook-timestamp"),
+        &header("webhook-signature"),
+        &body,
+    ));
+    let sent: Value = serde_json::from_str(&body).expect("call body");
+    assert_eq!(sent["operation"], "acme_build_rerun");
+    assert_eq!(sent["input"], json!({"build": "214"}));
+    assert_eq!(sent["caller"]["account"], helper.actor.to_string());
+    let calls = app.lock().expect("app").calls.len();
+
+    // Input the schema refuses never leaves; without the permission it is
+    // refused; the module's own refusal comes back as the input's fault.
+    let typed = tool(&world, "helper", "acme_build_rerun", json!({"build": 214})).await;
+    assert_eq!(typed["outcome"], "invalid_request", "{typed}");
+    let purge = tool(
+        &world,
+        "helper",
+        "acme_build_purge",
+        json!({"build": "214"}),
+    )
+    .await;
+    assert_eq!(purge["outcome"], "permission_denied", "{purge}");
+    assert_eq!(app.lock().expect("app").calls.len(), calls);
+    let missing = tool(
+        &world,
+        "helper",
+        "acme_build_rerun",
+        json!({"build": "404"}),
+    )
+    .await;
+    assert_eq!(missing["outcome"], "invalid_request", "{missing}");
+    assert!(missing.to_string().contains("No such build."), "{missing}");
+    let owner = tool(&world, "desk", "acme_build_purge", json!({"build": "214"})).await;
+    assert_eq!(owner["outcome"], "ok", "{owner}");
+    let nothing = tool(&world, "helper", "acme_build_nothing", json!({})).await;
+    assert_eq!(nothing["outcome"], "not_found", "{nothing}");
+
+    // The app writes its own things in a space it is in; nobody else writes
+    // things of its kind. (It joins the project here as a person would add
+    // it: space_member_add doesn't list app accounts yet.)
+    let work: uuid::Uuid = world.project("WORK").parse().expect("project id");
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, role_id, display_name, handle) \
+         SELECT gen_random_uuid(), $1, app.account_id, 'member', app.role_id, 'Builds', 'builds-app' \
+         FROM module_apps app WHERE app.module_id = $2::uuid",
+    )
+    .bind(work)
+    .bind(&connected.module)
+    .execute(&pool)
+    .await
+    .expect("app joins the project");
+    let made = as_app(
+        &world,
+        &connected.secret,
+        "thing_upsert",
+        json!({"kind": "acme.build", "title": "Build 214", "status": "running",
+               "spaceId": work, "url": format!("{origin}/b/214"),
+               "fields": {"branch": "main"}, "clientRequestId": "build-214"}),
+    )
+    .await;
+    assert_eq!(made.0, StatusCode::OK, "{}", made.1);
+    let thing = made.1["value"]["id"].as_str().expect("thing").to_owned();
+    let changed = as_app(
+        &world,
+        &connected.secret,
+        "thing_upsert",
+        json!({"kind": "acme.build", "id": thing, "title": "Build 214", "status": "passed"}),
+    )
+    .await;
+    assert_eq!(changed.1["value"]["version"], 2, "{}", changed.1);
+    assert_eq!(changed.1["value"]["existed"], true);
+    let forged = tool(
+        &world,
+        "helper",
+        "thing_upsert",
+        json!({"kind": "acme.build", "title": "Fake build", "clientRequestId": "fake"}),
+    )
+    .await;
+    assert_eq!(forged["outcome"], "permission_denied", "{forged}");
+    let (kind, space): (String, Option<uuid::Uuid>) =
+        sqlx::query_as("SELECT kind, space_id FROM things WHERE id = $1::uuid")
+            .bind(&thing)
+            .fetch_one(&pool)
+            .await
+            .expect("thing row");
+    assert_eq!(kind, "acme.build");
+    assert_eq!(space, Some(work));
+
+    // A rule on the module's event, then the event: forged, stale,
+    // undeclared and replayed ones are refused; the real one fires it.
+    let rule = tool(
+        &world,
+        "desk",
+        "automation_write",
+        json!({"projectId": work, "operation": "create", "name": "Builds",
+               "trigger": {"kind": "module_event", "eventType": "acme.build.finished"},
+               "actions": [{"kind": "notify", "recipients": "owner", "message": "A build finished"}]}),
+    )
+    .await;
+    assert_eq!(rule["outcome"], "ok", "{rule}");
+    let now = chrono::Utc::now().timestamp();
+    let finished = json!({"type": "acme.build.finished", "thing": {"id": thing},
+                          "data": {"build": "214", "seconds": 81}});
+    let forged = send_event(
+        &world,
+        &connected.module,
+        &connected.outbound,
+        "evt_1",
+        now,
+        &finished,
+    )
+    .await;
+    assert_eq!(forged.0, StatusCode::UNAUTHORIZED, "{}", forged.1);
+    let stale = send_event(
+        &world,
+        &connected.module,
+        &connected.inbound,
+        "evt_1",
+        now - 600,
+        &finished,
+    )
+    .await;
+    assert_eq!(stale.0, StatusCode::UNAUTHORIZED, "{}", stale.1);
+    let undeclared = send_event(
+        &world,
+        &connected.module,
+        &connected.inbound,
+        "evt_2",
+        now,
+        &json!({"type": "acme.build.vanished", "thing": {"id": thing}}),
+    )
+    .await;
+    assert_eq!(undeclared.0, StatusCode::BAD_REQUEST, "{}", undeclared.1);
+    let accepted = send_event(
+        &world,
+        &connected.module,
+        &connected.inbound,
+        "evt_1",
+        now,
+        &finished,
+    )
+    .await;
+    assert_eq!(accepted.0, StatusCode::ACCEPTED, "{}", accepted.1);
+    let replayed = send_event(
+        &world,
+        &connected.module,
+        &connected.inbound,
+        "evt_1",
+        now,
+        &finished,
+    )
+    .await;
+    assert_eq!(replayed.0, StatusCode::CONFLICT, "{}", replayed.1);
+    pump(&world).await;
+    let fired: Vec<Value> = sqlx::query_scalar(
+        "SELECT detail FROM notifications WHERE kind = 'automation' ORDER BY created_at",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("notifications");
+    assert_eq!(fired.len(), 1, "{fired:?}");
+    assert!(
+        fired[0].to_string().contains("A build finished"),
+        "{fired:?}"
+    );
+    world.finish().await;
+}
+
+#[tokio::test]
+async fn a_connected_module_draws_its_panels_and_hears_their_actions() {
+    let app = test_app().await;
+    let origin = app.lock().expect("app").origin.clone();
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .agent("helper", "member")
+        .config("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", origin.clone())
+        .build("m114_panels")
+        .await
+    else {
+        return;
+    };
+    let connected = connect(&world, &app, &format!("{origin}/manifest.json")).await;
+    let helper = &world.agents["helper"];
+    let work = world.project("WORK");
+
+    // A space's tab lists the panel, as a layout part of its own.
+    let listed = tool(
+        &world,
+        "helper",
+        "module_panel_list",
+        json!({"slot": "space.tab", "spaceId": work}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(
+        listed["value"]["panels"],
+        json!([{"moduleId": connected.module, "moduleKey": "acme.builds", "panel": "builds",
+                "slot": "space.tab", "title": "Builds", "part": "panel.acme.builds.builds"}])
+    );
+    let elsewhere = tool(
+        &world,
+        "helper",
+        "module_panel_list",
+        json!({"slot": "home.card"}),
+    )
+    .await;
+    assert_eq!(elsewhere["value"]["panels"], json!([]), "{elsewhere}");
+
+    // Opening asks the app, signed, naming the viewer and the space.
+    let opened = tool(
+        &world,
+        "helper",
+        "module_panel_open",
+        json!({"moduleId": connected.module, "panel": "builds", "spaceId": work}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(opened["value"]["answer"]["kind"], "panel");
+    assert_eq!(
+        opened["value"]["answer"]["panel"]["blocks"][1]["id"],
+        "start"
+    );
+    let (headers, body) = app
+        .lock()
+        .expect("app")
+        .calls
+        .last()
+        .cloned()
+        .expect("call");
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .expect(name)
+            .to_owned()
+    };
+    assert!(agent_workspace_delivery_contract::webhook::verify_standard(
+        &connected.outbound,
+        &header("webhook-id"),
+        &header("webhook-timestamp"),
+        &header("webhook-signature"),
+        &body,
+    ));
+    let sent: Value = serde_json::from_str(&body).expect("panel body");
+    assert_eq!(sent["viewer"]["account"], helper.actor.to_string());
+    assert_eq!(sent["space"]["id"], work);
+    assert_eq!(sent["context"]["slot"], "space.tab");
+    assert!(sent["action"].is_null(), "{sent}");
+
+    // A space's tab isn't drawn without a space.
+    let nowhere = tool(
+        &world,
+        "helper",
+        "module_panel_open",
+        json!({"moduleId": connected.module, "panel": "builds"}),
+    )
+    .await;
+    assert_eq!(nowhere["outcome"], "not_found", "{nowhere}");
+
+    // The form's round trip: errors under the field, then done.
+    let press = |values: Value, id: &str, request: &str| {
+        json!({"moduleId": connected.module, "panel": "builds", "spaceId": work,
+               "state": "page=1", "action": {"id": id, "values": values},
+               "clientRequestId": request})
+    };
+    let empty = tool(
+        &world,
+        "helper",
+        "module_panel_press",
+        press(json!({"branch": ""}), "start", "press-1"),
+    )
+    .await;
+    assert_eq!(empty["outcome"], "ok", "{empty}");
+    assert_eq!(
+        empty["value"]["answer"],
+        json!({"kind": "errors", "errors": {"branch": "A branch is needed."}})
+    );
+    let started = tool(
+        &world,
+        "helper",
+        "module_panel_press",
+        press(json!({"branch": "main"}), "start", "press-2"),
+    )
+    .await;
+    assert_eq!(
+        started["value"]["answer"],
+        json!({"kind": "done", "message": "Build started.", "result": {"build": "215"}}),
+        "{started}"
+    );
+    let sent: Value = serde_json::from_str(
+        &app.lock()
+            .expect("app")
+            .calls
+            .last()
+            .cloned()
+            .expect("call")
+            .1,
+    )
+    .expect("press body");
+    assert_eq!(
+        sent["action"],
+        json!({"id": "start", "values": {"branch": "main"}})
+    );
+    assert_eq!(sent["state"], "page=1");
+
+    // A panel asking for a secret never reaches the viewer.
+    let bad = tool(
+        &world,
+        "helper",
+        "module_panel_press",
+        press(json!({}), "bad", "press-3"),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    assert!(bad.to_string().contains("api_token"), "{bad}");
     world.finish().await;
 }

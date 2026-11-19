@@ -753,6 +753,22 @@
     "title": "Revoke a connected module"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "module.operation_ran"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "connected_module_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a connected module's operation"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -2164,6 +2180,50 @@
     "preview": false,
     "proposable": false,
     "title": "Open a module"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "module_panel_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List connected module panels"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "module_panel_open",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open a connected module's panel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "module.panel_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "module_panel_press",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Act in a connected module's panel"
   },
   {
     "automation": true,
@@ -4082,6 +4142,22 @@
     "preview": false,
     "proposable": false,
     "title": "Stop sharing one thing"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "connected_thing.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "thing_upsert",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Add or change a connected thing"
   },
   {
     "automation": false,

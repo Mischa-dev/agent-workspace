@@ -1,0 +1,77 @@
+{
+  "format": "aw-panel/1",
+  "title": "Builds",
+  "blocks": [
+    { "type": "text", "text": "Builds for **this space**, newest first. See the [build log](https://builds.example.com/log).", "style": "body" },
+    { "type": "status", "state": "working", "label": "Build 214 is running", "detail": "Started by the nightly schedule.", "progress": 0.6 },
+    {
+      "type": "fields",
+      "items": [
+        { "label": "Branch", "value": "main" },
+        { "label": "Started", "value": "2026-11-14T09:12:00Z", "kind": "time" },
+        { "label": "Duration", "value": 312, "kind": "number" },
+        { "label": "Result", "value": { "text": "running", "tone": "agent" }, "kind": "badge" },
+        { "label": "Log", "value": { "href": "https://builds.example.com/214", "text": "Build 214" }, "kind": "link" }
+      ]
+    },
+    {
+      "type": "table",
+      "columns": [
+        { "id": "build", "label": "Build" },
+        { "id": "status", "label": "Status", "kind": "badge" },
+        { "id": "finished", "label": "Finished", "kind": "time" }
+      ],
+      "rows": [
+        { "id": "214", "cells": { "build": "214", "status": { "text": "running", "tone": "agent" } } },
+        { "id": "213", "cells": { "build": "213", "status": { "text": "passed", "tone": "success" }, "finished": "2026-11-13T22:40:00Z" } },
+        { "id": "212", "cells": { "build": "212", "status": { "text": "failed", "tone": "danger" }, "finished": "2026-11-13T18:05:00Z" } }
+      ],
+      "rowAction": { "id": "open_build" }
+    },
+    {
+      "type": "list",
+      "items": [
+        { "id": "flaky", "title": "Two tests failed twice this week", "subtitle": "renderer, physics", "status": { "text": "flaky", "tone": "warning" }, "action": { "id": "open_flaky" } },
+        { "id": "cache", "title": "Cache hit rate is 82%", "meta": "last 7 days" }
+      ],
+      "empty": "Nothing needs a look."
+    },
+    { "type": "chart", "kind": "bar", "x": ["Mon", "Tue", "Wed", "Thu", "Fri"], "series": [{ "name": "Failed", "values": [2, 0, 1, 0, 3] }] },
+    { "type": "chart", "kind": "number", "value": 97.5, "unit": "%" },
+    {
+      "type": "section",
+      "title": "Start a build",
+      "blocks": [
+        {
+          "type": "form",
+          "id": "start",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "branch": { "type": "string", "title": "Branch", "maxLength": 100, "default": "main" },
+              "target": { "type": "string", "title": "Target", "enum": ["debug", "release"] },
+              "runs": { "type": "integer", "title": "Runs", "minimum": 1, "maximum": 5 },
+              "notify": { "type": "boolean", "title": "Tell me when it finishes" },
+              "platforms": { "type": "array", "title": "Platforms", "items": { "enum": ["linux", "mac", "windows"] } }
+            },
+            "required": ["branch", "target"]
+          },
+          "ui": { "order": ["branch", "target", "platforms", "runs", "notify"], "widgets": { "target": "radio", "platforms": "multiselect" } },
+          "values": { "branch": "main", "target": "release" },
+          "submit": { "label": "Start build", "action": { "id": "start" } },
+          "cancel": { "label": "Cancel" }
+        }
+      ]
+    },
+    {
+      "type": "buttons",
+      "items": [
+        { "label": "Rerun", "action": { "id": "rerun", "values": { "build": "214" } }, "style": "primary", "confirm": { "title": "Rerun build 214?" } },
+        { "label": "Open in Builds", "action": { "id": "open_app" }, "style": "secondary" },
+        { "label": "Cancel build", "action": { "id": "cancel" }, "style": "danger", "confirm": { "title": "Cancel build 214?", "body": "Its runners stop and the build is marked failed." } }
+      ]
+    }
+  ],
+  "state": "page=1",
+  "refresh": { "afterSeconds": 15 }
+}

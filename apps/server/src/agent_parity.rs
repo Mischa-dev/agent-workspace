@@ -1015,6 +1015,16 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/connected-modules/token",
+            Plumbing("a connected module trading its one-time install code"),
+        ),
+        (
+            Post,
+            "/api/v1/modules/{module_id}/events",
+            Plumbing("a connected module sending in an event signed with its install's secret"),
+        ),
+        (
+            Post,
             "/api/v1/host/describe",
             Plumbing("a host describing itself with its own credential"),
         ),

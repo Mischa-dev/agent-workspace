@@ -638,6 +638,34 @@ pub static THEME_CHANGED: EventType = signal(
     None,
     "Someone's theme was made, changed, offered or deleted",
 );
+// A connected module's things and the events it sends in (M1.13). Their
+// kinds and types are the module's own, so the thing names them; the
+// declared type rides in the payload.
+pub static CONNECTED_THING_CHANGED: EventType = fact(
+    "connected_thing.changed",
+    "workspace",
+    None,
+    "A connected module added or changed one of its things",
+);
+pub static MODULE_OPERATION_RAN: EventType = fact(
+    "module.operation_ran",
+    "workspace",
+    None,
+    "Someone ran an operation a connected module declares",
+);
+pub static MODULE_PANEL_PRESSED: EventType = fact(
+    "module.panel_pressed",
+    "workspace",
+    None,
+    "Someone pressed a button or sent a form in a connected module's panel",
+);
+pub static MODULE_EVENT: EventType = fact(
+    "module.event",
+    "workspace",
+    None,
+    "A connected module sent an event it declares",
+)
+.automatable();
 pub static WORKSPACE_THEMES_CHANGED: EventType = signal(
     "workspace_themes.changed",
     "workspace",
@@ -794,6 +822,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,
+        &CONNECTED_THING_CHANGED,
+        &MODULE_OPERATION_RAN,
+        &MODULE_PANEL_PRESSED,
+        &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &ACCOUNT_STATUS_CHANGED,

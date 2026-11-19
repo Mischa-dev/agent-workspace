@@ -433,7 +433,10 @@ pub fn check(bytes: &[u8], address: &Url, allow_http: bool) -> Result<Checked, V
     let mut kinds = BTreeSet::new();
     for (index, kind) in manifest.kinds.iter().enumerate() {
         let path = format!("kinds[{index}]");
-        if !owned(&kind.kind, '.') || !event_type(&kind.kind) || !kinds.insert(kind.kind.as_str()) {
+        if !owned(&kind.kind, '.')
+            || !crate::things::kind::valid_name(&kind.kind)
+            || !kinds.insert(kind.kind.as_str())
+        {
             problems.push(problem(
                 format!("{path}.kind"),
                 format!("A kind is named once, starting \"{prefix}.\"."),

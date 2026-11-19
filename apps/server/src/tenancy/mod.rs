@@ -86,6 +86,9 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // Redeeming a connected module's one-time install code (M1.12), before
     // the app's workspace is known: one lookup by the code's digest.
     ("modules.install_code", &["modules/connected/mod.rs"]),
+    // An event a connected module sends in (M1.13), before its workspace
+    // is known: one lookup of the install by its id.
+    ("modules.events_in", &["modules/connected/http.rs"]),
     // An operator suspending or resuming a workspace from the command line
     // (H1.24), before any account is known.
     ("workspace.operator", &["workspace/lifecycle.rs"]),

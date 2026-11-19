@@ -21,7 +21,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ConnectedModuleList>()
         .add::<ConnectedModuleRefresh>()
         .add::<ConnectedModuleApprove>()
-        .add::<ConnectedModuleRevoke>();
+        .add::<ConnectedModuleRevoke>()
+        .add::<ConnectedModuleRun>()
+        .add::<ThingUpsert>();
 }
 
 const THE_MODULE: &str = "That connected module";
@@ -386,5 +388,149 @@ impl Operation for ConnectedModuleRevoke {
         super::revoke(tx, &current, actor).await?;
         call.audit_target("module", module_id, json!({ "revoked": true }));
         view(call, module_id).await
+    }
+}
+
+// ------------------------------------------------------------ call
+
+/// Runs an operation a connected module declares (M1.13). The edges give
+/// each declared operation its own tool and call this with its arguments.
+pub struct ConnectedModuleRun;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectedModuleRunInput {
+    /// The declared operation's name.
+    pub operation: String,
+    /// Its arguments, as its input schema says.
+    #[serde(default = "empty_object")]
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+    pub input: serde_json::Value,
+}
+
+fn empty_object() -> serde_json::Value {
+    json!({})
+}
+
+impl Targeted for ConnectedModuleRunInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+impl Operation for ConnectedModuleRun {
+    const NAME: &'static str = super::remote::CALL_OP;
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "workspace";
+    // The declared operation's own permission is checked when it runs.
+    const PERMISSION: Option<Perm> = None;
+    // The module receives the request id and keeps it; this server holds
+    // nothing open while it answers, so a retry calls it again.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const AUTOMATION: bool = false;
+    const MAX_BODY_BYTES: usize = super::remote::MAX_INPUT_BYTES + 1024;
+    const EMITS: &'static [&'static str] = &["module.operation_ran"];
+    const TITLE: &'static str = "Run a connected module's operation";
+    const DESCRIPTION: &'static str = "Run an operation an outside app connected to this \
+        workspace declares, by its name and input. The app runs it and its answer is the value. \
+        Each declared operation is also a tool of its own name.";
+
+    type Input = ConnectedModuleRunInput;
+    type Output = super::remote::RemoteAnswer;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConnectedModuleRunInput,
+    ) -> Result<super::remote::RemoteAnswer, OpError> {
+        super::remote::call(call, input.operation.trim(), input.input).await
+    }
+}
+
+// ------------------------------------------------------------ things
+
+/// A connected module writes one of its things (M1.13, ruling R54): only
+/// the install that owns the kind, as its own account.
+pub struct ThingUpsert;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThingUpsertInput {
+    /// The thing's kind, one your manifest declares (`acme.build`).
+    pub kind: String,
+    /// The thing to change. Leave out to make a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<IdRef>,
+    /// What it's called, on one line.
+    pub title: String,
+    /// A key such as `running` or `passed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The space it belongs in; left out, it is the workspace's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<IdRef>,
+    /// Its address in your app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Its field values, by your manifest's field ids (16 KB at most).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Put away (true) or bring back (false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+}
+
+impl Targeted for ThingUpsertInput {
+    fn target(&self) -> Target {
+        match &self.space_id {
+            Some(space) => Target::Space(space.id()),
+            None => Target::Workspace(None),
+        }
+    }
+}
+
+impl Operation for ThingUpsert {
+    const NAME: &'static str = "thing_upsert";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "workspace";
+    // Owning the kind is what lets it write; checked when it runs.
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const AUTOMATION: bool = false;
+    const TITLE: &'static str = "Add or change a connected thing";
+    const DESCRIPTION: &'static str = "For a connected module, as its own account: add one of \
+        the things its manifest declares a kind of (a build, say), or change one it added, so \
+        people can find, open and link it here. Only the module that owns the kind may.";
+    const EMITS: &'static [&'static str] = &["connected_thing.changed"];
+
+    type Input = ThingUpsertInput;
+    type Output = super::things::ConnectedThingView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ThingUpsertInput,
+    ) -> Result<super::things::ConnectedThingView, OpError> {
+        let upsert = super::things::Upsert {
+            id: input.id.map(|id| id.id()),
+            kind: input.kind.trim(),
+            title: &input.title,
+            status: input.status.as_deref(),
+            space_id: call.ctx.space_id,
+            url: input.url.as_deref(),
+            fields: input.fields.as_ref(),
+            archived: input.archived,
+        };
+        super::things::check(&upsert)?;
+        let workspace = call.ctx.workspace_id;
+        let account = call.account_id();
+        let tx = call.tx().await?;
+        let module_id = super::things::owner_for(tx, workspace, upsert.kind, account)
+            .await?
+            .ok_or(OpError::Denied {
+                reason: crate::ops::DenyReason::Rule,
+                message: "Only the connected module that owns this kind writes its things.".into(),
+            })?;
+        let view = super::things::upsert(tx, workspace, module_id, account, upsert).await?;
+        call.audit_target("thing", view.id, json!({ "kind": view.kind }));
+        Ok(view)
     }
 }
