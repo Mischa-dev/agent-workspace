@@ -4,9 +4,8 @@ import { useEffect, useRef } from 'react'
 import { isApiError } from '../api/errors'
 import { callOp, opQuery } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
-import type { ThemeDocument } from '../api/generated/operations'
 import { appearanceQueryKey, type StoredAppearance } from './accountAppearance'
-import { CONTRACT_VERSION } from './contract'
+import { myColors } from './myColors'
 import { normalizeAppearancePreferences } from './preferences'
 import { isDarkScheme } from './slots'
 import { useTheme } from './themeContext'
@@ -57,23 +56,20 @@ export default function CustomThemeSync() {
   const converting = useRef(false)
   const overrides = theme.overrides
   useEffect(() => {
-    if (!settled || converting.current || customTheme || !workspaceId || !Object.keys(overrides).length || theme.theme === 'system') return
+    if (!settled || converting.current || customTheme || !workspaceId || !Object.keys(overrides).length) return
     converting.current = true
     const before = selection(theme)
-    const dark = isDarkScheme(theme.theme)
-    const document: ThemeDocument = {
-      format: CONTRACT_VERSION,
-      light: { base: dark ? 'quiet' : theme.theme, tokens: dark ? {} : overrides },
-      dark: { base: dark ? theme.theme : 'quiet-dark', tokens: dark ? overrides : {} },
-      css: '',
-    }
+    const document = myColors(theme.theme, overrides)
+    // "Match system" colours applied in both modes, so the theme keeps both
+    // and keeps following the system; otherwise the one mode they were made in.
+    const mode = theme.theme === 'system' ? 'system' : isDarkScheme(theme.theme) ? 'dark' : 'light'
     void callOp('theme_create', { name: 'My colors', document }, { workspaceId })
       .then((created) => {
         // Chosen elsewhere while it was being made: keep that choice (the
         // theme stays in the list).
         if (selection(latest.current) !== before) return
         setCustomTheme({ id: created.id, workspaceId, version: created.version, name: created.name, document: created.document })
-        theme.setMode(dark ? 'dark' : 'light')
+        theme.setMode(mode)
       })
       .catch(() => {
         // Leave the colours as they are; the next visit tries again.

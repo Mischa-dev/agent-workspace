@@ -14,12 +14,14 @@ import {
   PageHeader,
   Section,
   SegmentedControl,
+  SelectField,
   SettingsSkeleton,
   describeError,
   showToast,
   type MenuEntry,
 } from '../ui'
 import type { SettingsPageProps } from '../settings/types'
+import { useViewedWorkspace } from '../settings/workspaceChoice'
 import { blankDocument, readDocument } from './contract'
 import type { EditorStart } from './ThemeEditor'
 import { THEME_PRESETS, isDarkScheme, loadThemeSheets } from './slots'
@@ -58,7 +60,14 @@ function download(name: string, document: ThemeDocument) {
 export default function AppearancePage({ session, workspace }: SettingsPageProps) {
   const theme = useTheme()
   const queryClient = useQueryClient()
-  const workspaceId = workspace?.id
+  // Themes belong to a workspace: show the one whose theme is in use, else
+  // the workspace last open in settings, and let someone in several pick.
+  const [viewed] = useViewedWorkspace(session)
+  const [picked, setPicked] = useState<string | null>(null)
+  const workspaces = session.organizations
+  const library =
+    workspaces.find((entry) => entry.id === (picked ?? theme.customTheme?.workspaceId ?? viewed?.id)) ?? workspace
+  const workspaceId = library?.id
   const themes = useQuery({
     ...opQuery('theme_list', {}, { workspaceId }),
     enabled: Boolean(workspaceId),
@@ -344,6 +353,15 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
                 description="Themes you made, and ones this workspace offers."
                 title="Your themes"
               >
+                {workspaces.length > 1 && workspaceId ? (
+                  <SelectField label="Workspace" onChange={(event) => setPicked(event.target.value)} value={workspaceId}>
+                    {workspaces.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </SelectField>
+                ) : null}
                 {themes.isError ? (
                   <Banner onRetry={() => void themes.refetch()} tone="danger">
                     {describeError(themes.error).message}
