@@ -423,7 +423,8 @@ pub async fn restore(
                 expected_version: Some(expected_version),
                 ..Default::default()
             };
-            crate::memory::update_page(transaction, restorer.page, id, &input).await?;
+            let space = restorer.space_id.ok_or(AppError::NotFound("page"))?;
+            crate::memory::update_page(transaction, restorer.page, space, id, &input).await?;
             let now =
                 sqlx::query_scalar::<_, i64>("SELECT version FROM project_pages WHERE id = $1")
                     .bind(id)

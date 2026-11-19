@@ -794,8 +794,14 @@ pub(crate) async fn page_write(
                     || input.restore_version.is_some()
                     || input.parent_page_id.is_some();
                 if more {
-                    memory::update_page(&mut transaction, writer(principal), page_id, &input)
-                        .await?;
+                    memory::update_page(
+                        &mut transaction,
+                        writer(principal),
+                        project_id,
+                        page_id,
+                        &input,
+                    )
+                    .await?;
                 }
                 page_id
             }

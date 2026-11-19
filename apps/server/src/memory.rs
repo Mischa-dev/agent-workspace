@@ -874,10 +874,12 @@ pub async fn create_page(
 }
 
 /// Change a page: edit it, restore an earlier version, or archive it. Every
-/// change saves a new version.
+/// change saves a new version. `in_space` is the space the writer was
+/// allowed in; a page moved out of it since reads as missing.
 pub async fn update_page(
     transaction: &mut Transaction<'_, Postgres>,
     writer: Writer,
+    in_space: Uuid,
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Uuid, AppError> {
@@ -924,6 +926,9 @@ pub async fn update_page(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("page"))?;
+    if project_id != in_space {
+        return Err(AppError::NotFound("page"));
+    }
     if let Some(expected) = input.expected_version
         && expected != version
     {
@@ -1828,7 +1833,7 @@ async fn update_page_http(
             suggestion_id,
         }));
     }
-    update_page(&mut transaction, writer, page_id, &input).await?;
+    update_page(&mut transaction, writer, project_id, page_id, &input).await?;
     audit(
         &mut transaction,
         &principal,
