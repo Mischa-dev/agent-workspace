@@ -156,6 +156,9 @@ mod tests {
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
         let need = super::needs("project_export").expect("listed");
-        assert!(need.is_none_or(|need| viewer.contains(need)), "project_export");
+        assert!(
+            need.is_none_or(|need| viewer.contains(need)),
+            "project_export"
+        );
     }
 }

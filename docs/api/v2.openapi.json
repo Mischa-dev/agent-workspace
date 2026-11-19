@@ -6628,7 +6628,7 @@
             "type": "boolean"
           },
           "isTemplate": {
-            "description": "A template: page_write fromTemplateId starts a page from it.",
+            "description": "A template: page_create fromTemplateId starts a page from it.",
             "type": "boolean"
           },
           "skillDescription": {
@@ -79924,7 +79924,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -79944,12 +79944,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
@@ -80140,7 +80140,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -80160,12 +80160,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
@@ -80408,7 +80408,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -80428,12 +80428,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
@@ -80624,7 +80624,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -80644,12 +80644,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
@@ -82235,7 +82235,7 @@
     },
     "/api/v2/w/{workspace}/ops/page_template_list": {
       "post": {
-        "description": "List what a new page in a space can start from: the built-in templates and pages marked as templates. Pass a template's id to page_write as fromTemplateId.",
+        "description": "List what a new page in a space can start from: the built-in templates and pages marked as templates. Pass a template's id to page_create as fromTemplateId.",
         "operationId": "page_template_list",
         "parameters": [
           {
@@ -82731,7 +82731,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -82751,12 +82751,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
@@ -82947,7 +82947,7 @@
                               "type": "string"
                             },
                             "history": {
-                              "description": "Recent versions, newest first. Restore one with page_write.",
+                              "description": "Recent versions, newest first. Restore one with page_update.",
                               "items": {
                                 "$ref": "#/components/schemas/RevisionLine"
                               },
@@ -82967,12 +82967,12 @@
                               "type": "boolean"
                             },
                             "openComments": {
-                              "description": "Open comment threads on the page (page_comments reads them).",
+                              "description": "Open comment threads on the page (page_comment_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },
                             "pendingSuggestions": {
-                              "description": "Suggested edits waiting on someone (page_suggestions reads them).",
+                              "description": "Suggested edits waiting on someone (page_suggestion_list reads them).",
                               "format": "int64",
                               "type": "integer"
                             },

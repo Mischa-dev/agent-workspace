@@ -129,6 +129,11 @@ tool_op!(PageGet {
     kind: Describe,
     permission: None,
     idempotency: None,
+    resource: crate::ops::ResourceAddress {
+        path: "pages/{pageId}",
+        mime_type: "text/markdown",
+        text_at: Some("/body"),
+    },
     title: "Read page",
     description: "Read a page (or an earlier version of it), with its recent history.",
     emits: [],

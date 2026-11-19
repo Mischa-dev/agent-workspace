@@ -18,6 +18,7 @@ macro_rules! tool_op {
             idempotency: $idem:ident,
             $(destructive: $destructive:literal,)?
             $(spans: $spans:literal,)?
+            $(resource: $resource:expr,)?
             $(audited: $audited:literal,)?
             title: $title:literal,
             description: $description:expr,
@@ -37,6 +38,7 @@ macro_rules! tool_op {
             const IDEMPOTENCY: crate::ops::Idempotency = crate::ops::Idempotency::$idem;
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(const SPANS_WORKSPACES: bool = $spans;)?
+            $(const RESOURCE: Option<crate::ops::ResourceAddress> = Some($resource);)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];

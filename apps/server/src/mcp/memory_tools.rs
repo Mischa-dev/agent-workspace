@@ -298,7 +298,7 @@ pub(crate) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
-    /// A template: page_write fromTemplateId starts a page from it.
+    /// A template: page_create fromTemplateId starts a page from it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_template: bool,
     /// Set when the page is a skill: when to use it. skill_get loads it.
@@ -394,13 +394,13 @@ pub(crate) struct PageValue {
     pub updated_at: String,
     pub stale: bool,
     pub archived: bool,
-    /// Recent versions, newest first. Restore one with page_write.
+    /// Recent versions, newest first. Restore one with page_update.
     pub history: Vec<RevisionLine>,
     pub url: String,
-    /// Open comment threads on the page (page_comments reads them).
+    /// Open comment threads on the page (page_comment_list reads them).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub open_comments: i64,
-    /// Suggested edits waiting on someone (page_suggestions reads them).
+    /// Suggested edits waiting on someone (page_suggestion_list reads them).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub pending_suggestions: i64,
     /// Set when your change to the text was kept as a suggestion instead
@@ -864,7 +864,7 @@ async fn suggest_text(
         Ok(suggestions::Suggested::Archived) => {
             return Ok(Err(ToolResult::invalid(
                 "pageId",
-                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+                "That page is archived. Bring it back with page_update (archived: false) to edit it.",
             )));
         }
         Ok(suggestions::Suggested::TooBig) => {
@@ -1467,7 +1467,7 @@ pub(crate) async fn page_edit(
         if page.archived {
             return Ok(ToolResult::invalid(
                 "pageId",
-                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+                "That page is archived. Bring it back with page_update (archived: false) to edit it.",
             ));
         }
         if let Some(expected) = arguments.expected_version

@@ -109,6 +109,18 @@ pub enum Idempotency {
     None,
 }
 
+/// Where a describe operation's thing reads as an MCP resource (K2.20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceAddress {
+    /// Under the server's scheme, naming the one input field in braces:
+    /// `pages/{pageId}`.
+    pub path: &'static str,
+    pub mime_type: &'static str,
+    /// Where the value keeps the text served (a JSON pointer); without one
+    /// the whole value is served as JSON.
+    pub text_at: Option<&'static str>,
+}
+
 /// One operation. A unit struct implements it; `registry::entry::<O>()`
 /// erases it into the registry.
 pub trait Operation: Send + Sync + 'static {
@@ -140,6 +152,9 @@ pub trait Operation: Send + Sync + 'static {
     /// lists across all of them (each filtered by the caller's access
     /// there) instead of asking which. Only reads may span.
     const SPANS_WORKSPACES: bool = false;
+    /// Reads as an MCP resource at this address (a describe operation
+    /// whose input is one id).
+    const RESOURCE: Option<ResourceAddress> = None;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.

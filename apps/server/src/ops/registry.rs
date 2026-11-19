@@ -39,6 +39,8 @@ pub struct OpMeta {
     /// Output fields shown once and never kept (`Operation::SHOWN_ONCE`).
     pub shown_once: &'static [&'static str],
     pub max_body_bytes: usize,
+    /// Reads as an MCP resource (`Operation::RESOURCE`).
+    pub resource: Option<super::ResourceAddress>,
     pub input_schema: fn() -> Value,
     pub output_schema: fn() -> Value,
 }
@@ -95,6 +97,7 @@ pub fn entry<O: Operation>() -> OpEntry {
             emits: O::EMITS,
             shown_once: O::SHOWN_ONCE,
             max_body_bytes: O::MAX_BODY_BYTES,
+            resource: O::RESOURCE,
             input_schema: schema_of::<O::Input>,
             output_schema: schema_of::<O::Output>,
         },

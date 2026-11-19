@@ -64,6 +64,7 @@ pub(crate) mod ai_tools;
 mod batch_tools;
 pub(crate) mod briefing;
 pub(crate) mod bug_report_tools;
+mod card;
 pub(crate) mod channels;
 pub(crate) mod code;
 mod collaboration;
@@ -100,6 +101,7 @@ mod reactions;
 pub(crate) mod reads;
 pub(crate) mod replies;
 pub(crate) mod repository_tools;
+pub(crate) mod resources;
 mod run_pages;
 mod runs;
 mod sheet_tools;
@@ -124,7 +126,6 @@ pub const MCP_PATH: &str = "/api/v1/mcp";
 /// The per-workspace alias of the endpoint (rulings R4, R19): the same
 /// server, with the workspace a call acts in named by the address.
 pub const MCP_WORKSPACE_PATH: &str = "/api/v1/w/{workspace}/mcp";
-pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
 /// What a short-lived narrow token (K1.24) authenticates as.
@@ -1249,6 +1250,8 @@ impl ServerHandler for McpServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
+                .enable_skills()
                 .enable_tasks()
                 .build(),
         )
@@ -1320,6 +1323,72 @@ impl ServerHandler for McpServer {
         )
         .with_ttl_ms(LIST_TTL_MS)
         .with_cache_scope(CacheScope::Private))
+    }
+
+    /// K2.20: each space's guide page, as the caller may read it.
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
+        let (principal, edge) = resource_caller(&context)?;
+        let listed = resources::list(&self.state, &principal, &edge).await;
+        Ok(rmcp::model::ListResourcesResult::with_all_items(listed)
+            .with_ttl_ms(LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourceTemplatesResult, ErrorData> {
+        Ok(
+            rmcp::model::ListResourceTemplatesResult::with_all_items(resources::templates())
+                .with_ttl_ms(LIST_TTL_MS)
+                .with_cache_scope(CacheScope::Public),
+        )
+    }
+
+    /// K2.20: a page (or any operation's thing with an address) or a
+    /// skill's SKILL.md, read as the caller.
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, ErrorData> {
+        let (principal, edge) = resource_caller(&context)?;
+        let contents = resources::read(&self.state, &principal, &edge, &request.uri).await?;
+        Ok(rmcp::model::ReadResourceResponse::Complete(
+            rmcp::model::ReadResourceResult::new(vec![contents])
+                .with_ttl_ms(0)
+                .with_cache_scope(CacheScope::Private),
+        ))
+    }
+
+    /// K2.20: the skills extension, over every space the caller works in.
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListSkillsResult, ErrorData> {
+        let (principal, edge) = resource_caller(&context)?;
+        let skills = resources::skills(&self.state, &principal, &edge).await;
+        Ok(rmcp::model::ListSkillsResult::with_all_items(skills)
+            .with_ttl_ms(LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn get_skill(
+        &self,
+        request: rmcp::model::GetSkillRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetSkillResult, ErrorData> {
+        let (principal, edge) = resource_caller(&context)?;
+        let skill = resources::skill(&self.state, &principal, &edge, &request.uri).await?;
+        Ok(rmcp::model::GetSkillResult::new(skill)
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
@@ -1429,6 +1498,20 @@ async fn own_task(
 
 /// The caller of an MCP request, as `authenticate_mcp` (or a direct call)
 /// left it.
+/// Who reads a resource or skill, and through which edge.
+fn resource_caller(
+    context: &RequestContext<RoleServer>,
+) -> Result<(McpPrincipal, crate::ops::Edge), ErrorData> {
+    let principal = context_principal(context)
+        .ok_or_else(|| ErrorData::invalid_request("Sign in to read resources.", None))?;
+    let edge = context
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<crate::ops::Edge>().cloned())
+        .unwrap_or_else(|| crate::ops::Edge::of_mcp(&principal));
+    Ok((principal, edge))
+}
+
 fn context_principal(context: &RequestContext<RoleServer>) -> Option<McpPrincipal> {
     context
         .extensions
@@ -2030,6 +2113,20 @@ fn resumable_session_id(session_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+tokio::task_local! {
+    /// The revision the request being served names, for resuming its
+    /// session (`ResumeAnySession::load` runs inside the request).
+    static RESUMED_REVISION: Option<ProtocolVersion>;
+}
+
+/// A revision a session can resume on: one with an `initialize` handshake.
+fn resumable_revision(named: &str) -> Option<ProtocolVersion> {
+    ProtocolVersion::KNOWN_VERSIONS
+        .iter()
+        .find(|known| known.as_str() == named && known.has_initialize())
+        .cloned()
+}
+
 #[async_trait::async_trait]
 impl SessionStore for ResumeAnySession {
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
@@ -2042,7 +2139,13 @@ impl SessionStore for ResumeAnySession {
                 ClientCapabilities::default(),
                 Implementation::new("resumed session", "0"),
             )
-            .with_protocol_version(ProtocolVersion::V_2025_06_18),
+            .with_protocol_version(
+                RESUMED_REVISION
+                    .try_with(Clone::clone)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(ProtocolVersion::V_2025_06_18),
+            ),
         )))
     }
 
@@ -2117,7 +2220,7 @@ pub fn router(state: AppState) -> Router<AppState> {
 }
 
 pub fn oauth_router() -> Router<AppState> {
-    oauth::router()
+    oauth::router().merge(card::router())
 }
 
 /// Every tool's name, description, schemas and hints, for the public API's
@@ -2402,7 +2505,14 @@ async fn authenticate_mcp(
                 request = Request::from_parts(parts, Body::from(bytes));
             }
             request.extensions_mut().insert(principal);
-            let response = next.run(request).await;
+            // K2.20: a session the server no longer holds resumes on the
+            // revision this request names.
+            let revision = request
+                .headers()
+                .get("mcp-protocol-version")
+                .and_then(|value| value.to_str().ok())
+                .and_then(resumable_revision);
+            let response = RESUMED_REVISION.scope(revision, next.run(request)).await;
             match handshake {
                 Some(step) => step.watch(response, started),
                 None => response,
