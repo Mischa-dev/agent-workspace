@@ -13,6 +13,7 @@ import {
   projectBId,
 } from '../test/appHarness'
 import { parseSettingsPath } from './route'
+import { permissionsOf } from '../test/permissions'
 
 describe('settings addresses', () => {
   installAppShellLifecycle()
@@ -125,7 +126,7 @@ describe('settings addresses', () => {
   })
 
   it('starts a workspace page afresh on another workspace, so nothing typed for one is saved to it', async () => {
-    const side = { id: ownerOrganizationId, name: 'Side project', slug: 'side', role: 'owner' as const }
+    const side = { id: ownerOrganizationId, name: 'Side project', slug: 'side', role: 'owner' as const, permissions: permissionsOf('owner') }
     const fetchMock = installStandardApi({ ...authenticatedSession, organizations: [organization, side] })
     const standard = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((input, init) => {

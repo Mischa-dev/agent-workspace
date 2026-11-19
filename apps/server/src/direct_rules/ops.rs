@@ -28,7 +28,13 @@ pub fn register_ops(registry: &mut Registry) {
 async fn tell(call: &mut OpCall<'_>, accounts: &[Uuid]) -> Result<(), OpError> {
     let workspace = call.ctx.workspace_id;
     let tx = call.tx().await?;
-    let space = crate::spaces::workspace::ensure(tx, workspace).await?;
+    // A DM's call lands in the direct scope (K4.12), which has no space:
+    // its notice goes there as it is.
+    let space = if workspace == crate::spaces::DIRECT {
+        workspace
+    } else {
+        crate::spaces::workspace::ensure(tx, workspace).await?
+    };
     for account in accounts {
         crate::outbox::enqueue_typed(
             tx,

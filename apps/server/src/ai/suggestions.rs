@@ -385,10 +385,7 @@ const WITHIN_APP_LIMIT_11: &str = "$11::uuid[] IS NULL OR (suggestion.project_id
 /// While an app acts for the reader: the projects its limit lets it see
 /// tasks in. None otherwise.
 fn app_limit_projects(reader: Reader) -> Option<Vec<Uuid>> {
-    crate::policy::agent_limit_projects_allowing(
-        reader.actor_id,
-        crate::policy::Permission::TasksView,
-    )
+    crate::access::limited_spaces(reader.actor_id, crate::policy::Permission::TasksView)
 }
 
 fn parse_cursor(cursor: &str) -> Option<(f32, Uuid)> {

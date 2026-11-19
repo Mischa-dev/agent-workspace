@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import { normalizeConversationActor } from '../conversations/sidebarApi'
 import type { ConversationActor } from '../conversations/types'
 
@@ -19,12 +20,18 @@ export type DirectConversation = {
   /** Set to tell you nothing: still unread, but never bold or counted. */
   muted: boolean
   lastActivityAt: string
+  /** Kept by the current workspace rather than the people's own. */
+  kept: boolean
+  /** Tells apart a pair's DMs when there is more than one in the list. */
+  label?: string
 }
 
 export type DirectOverview = {
   projectId: string
-  /** The workspace the Messages space belongs to. */
+  /** The workspace the list was asked for: the one the person is in. */
   organizationId: string
+  /** That workspace's own space, where an agent added without a project lives. */
+  workspaceSpaceId: string
   conversations: DirectConversation[]
   people: ConversationActor[]
   capabilities: { startConversation: boolean; manageAgents: boolean }
@@ -70,11 +77,18 @@ function normalizeConversation(value: unknown): DirectConversation | null {
     muted: record.muted === true,
     lastActivityAt:
       typeof record.lastActivityAt === 'string' ? record.lastActivityAt : '',
+    kept: record.kept === true,
+    ...(typeof record.label === 'string' && record.label ? { label: record.label } : {}),
   }
 }
 
-export async function getDirectOverview(): Promise<DirectOverview> {
-  const root = asRecord(await requestJson<unknown>('/api/v1/direct'))
+/** Names the workspace the person is in: a workspace-level request never leaves the server to guess (K4.6). */
+function inWorkspace(path: string, workspaceId: string | null | undefined) {
+  return workspaceId ? `${path}?workspaceId=${encodeURIComponent(workspaceId)}` : path
+}
+
+export async function getDirectOverview(workspaceId?: string | null): Promise<DirectOverview> {
+  const root = asRecord(await requestJson<unknown>(inWorkspace('/api/v1/direct', workspaceId)))
   const capabilities = asRecord(root.capabilities)
   if (typeof root.projectId !== 'string') {
     throw new Error('Direct messages are unavailable.')
@@ -82,6 +96,7 @@ export async function getDirectOverview(): Promise<DirectOverview> {
   return {
     projectId: root.projectId,
     organizationId: typeof root.organizationId === 'string' ? root.organizationId : '',
+    workspaceSpaceId: typeof root.workspaceSpaceId === 'string' ? root.workspaceSpaceId : '',
     conversations: Array.isArray(root.conversations)
       ? root.conversations
           .map(normalizeConversation)
@@ -101,11 +116,12 @@ function conversationId(value: unknown) {
   return id
 }
 
-export async function openDm(actorId: string) {
+/** Opens the pair's DM, started in the workspace the person is in (a workspace that keeps DMs keeps it). */
+export async function openDm(actorId: string, workspaceId?: string | null) {
   return conversationId(
     await requestJson<unknown>('/api/v1/direct/dms', {
       method: 'POST',
-      json: { actorId },
+      json: workspaceId ? { actorId, workspaceId } : { actorId },
     }),
   )
 }
@@ -114,6 +130,7 @@ export async function createGroup(input: {
   name?: string
   memberIds: string[]
   idempotencyKey: string
+  workspaceId?: string | null
 }) {
   return conversationId(
     await requestJson<unknown>('/api/v1/direct/groups', {
@@ -122,6 +139,7 @@ export async function createGroup(input: {
       json: {
         name: input.name?.trim() ? input.name.trim() : null,
         memberIds: input.memberIds,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       },
     }),
   )
@@ -145,22 +163,27 @@ export async function removeGroupMember(
 }
 
 export function useDirectOverview() {
+  const workspaceId = useWorkspaceId()
   return useQuery({
-    queryKey: directQueryKey,
-    queryFn: getDirectOverview,
+    queryKey: queryKeys.directIn(workspaceId),
+    queryFn: () => getDirectOverview(workspaceId),
     staleTime: 15_000,
     retry: false,
   })
 }
 
-/** DMs are named after the other person; groups keep their own name. */
+/**
+ * DMs are named after the other person; groups keep their own name. A pair
+ * with more than one DM in the list says whose each is.
+ */
 export function conversationTitle(
-  conversation: Pick<DirectConversation, 'kind' | 'name' | 'members'>,
+  conversation: Pick<DirectConversation, 'kind' | 'name' | 'members'> & { label?: string },
   viewerId: string,
 ) {
-  if (conversation.kind === 'group') return conversation.name
+  const suffix = conversation.label ? ` (${conversation.label})` : ''
+  if (conversation.kind === 'group') return conversation.name + suffix
   const other = conversation.members.find((member) => member.id !== viewerId)
   // A DM with only yourself in it is your note to self (C2.32).
   if (!other && conversation.members.length > 0) return 'Note to self'
-  return other?.displayName ?? conversation.name
+  return (other?.displayName ?? conversation.name) + suffix
 }

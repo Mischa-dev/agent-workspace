@@ -236,7 +236,6 @@ async fn template_page(
     project_access(
         &mut **transaction,
         writer.actor_id,
-        writer.actor_kind,
         template_project,
         Action::ProjectView,
     )

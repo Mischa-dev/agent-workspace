@@ -136,9 +136,7 @@ pub async fn thread(
                left(message.plain_text, $4) AS text
         FROM messages message
         JOIN conversations conversation ON conversation.id = message.conversation_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
-         AND membership.actor_id = message.author_actor_id
+        LEFT JOIN LATERAL place_profile(conversation.project_id, message.author_actor_id) membership ON true
         WHERE message.conversation_id = $1 AND message.removed_at IS NULL
           AND ($2::timestamptz IS NULL OR message.created_at > $2)
           AND btrim(message.plain_text) <> ''

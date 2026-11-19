@@ -17,7 +17,7 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
-    policy::{Action, ActorKind},
+    policy::Action,
     work_items::project_templates::{
         self as templates, ProjectTemplateOutcome, ProjectTemplateView, TemplateChange,
         TemplateReader,
@@ -75,7 +75,6 @@ impl From<ProjectTemplateView> for ProjectTemplateLine {
 fn reader(principal: &McpPrincipal) -> TemplateReader {
     TemplateReader {
         actor_id: principal.actor_id,
-        human: principal.actor_kind == ActorKind::Human,
     }
 }
 

@@ -227,10 +227,38 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The statuses an operation's own refusal answers with (its `outcome`
-/// says which), rather than the shared error body.
-fn refuses(status: &str) -> bool {
-    matches!(status, "403" | "404" | "409" | "422" | "503")
+/// An output schema's descriptions cut to their first sentence: the
+/// result's shape is the reference, and the operation's own description and
+/// its arguments say the rest. Kept whole, results take most of the
+/// document.
+fn brief(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                match child {
+                    Value::String(text) if key == "description" => {
+                        if let Some(end) = first_sentence_end(text) {
+                            text.truncate(end);
+                        }
+                    }
+                    _ => brief(child),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(brief),
+        _ => {}
+    }
+}
+
+/// Where a description's first sentence ends, when more follows it.
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(1)).find_map(|index| {
+        (matches!(bytes[index], b'.' | b'?' | b'!' | b';' | b':')
+            && bytes[index + 1].is_ascii_whitespace()
+            && !text[index + 1..].trim().is_empty())
+        .then_some(index + 1)
+    })
 }
 
 /// Moves a schema's `$defs` into `components.schemas` and points its
@@ -570,6 +598,11 @@ fn slim(value: &mut Value) {
             if map.get("additionalProperties") == Some(&Value::Bool(true)) {
                 map.remove("additionalProperties");
             }
+            // A plain integer is read as 64 bits wherever the format is left
+            // out; only narrower ones say so.
+            if map.get("format").and_then(Value::as_str) == Some("int64") {
+                map.remove("format");
+            }
             if map
                 .get("format")
                 .and_then(Value::as_str)
@@ -667,7 +700,10 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let mut hoisted = hoist(&root, schema, &mut components);
+                        let mut briefed = Value::Object(Map::clone(schema.as_ref()));
+                        brief(&mut briefed);
+                        let briefed = briefed.as_object().cloned().unwrap_or_default();
+                        let mut hoisted = hoist(&root, &briefed, &mut components);
                         share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
@@ -679,34 +715,23 @@ pub(crate) fn document() -> Value {
                 (key, reference)
             })
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
-        // The result, and a refusal (the same result with its `outcome`),
-        // are one response that 200 and the refusing statuses point at,
-        // shared by every operation with that result, so the document stays
-        // small as tools are added. The introduction says what each status
-        // means.
+        // The result, a refusal (the same result with its `outcome`) and
+        // the shared `Error` body (401, 413 and 429, the same for every
+        // operation) are one response that 200 and every other status
+        // (`default`) point at, shared by every operation with that result,
+        // so an operation adds no responses of its own and the document
+        // stays small as operations are added. The introduction says what
+        // each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "See `outcome`.",
-                "content": { "application/json": { "schema": output } },
+                "description": "The result, a refusal (see `outcome`), or an `Error`.",
+                "content": { "application/json": { "schema": {
+                    "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
+                } } },
             })
         });
-        let mut responses = Map::new();
         let own = json!({ "$ref": format!("#/components/responses/{result}") });
-        responses.insert("200".to_owned(), own.clone());
-        // The refusing statuses (403, 404, 409, 422, 503) share it as the
-        // `default` response (every status not named); the statuses every
-        // operation answers the same way are named, which takes precedence.
-        for (status, _) in ERROR_STATUSES {
-            if !refuses(status) {
-                // The same for every operation, so referenced rather than
-                // repeated, which keeps the document small as tools are added.
-                responses.insert(
-                    (*status).to_owned(),
-                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
-                );
-            }
-        }
-        responses.insert("default".to_owned(), own.clone());
+        let responses = json!({ "200": own.clone(), "default": own });
         let mut post = json!({
             "operationId": name,
             "summary": title,
@@ -752,24 +777,7 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
-            "responses": ERROR_STATUSES
-                .iter()
-                .filter(|(status, _)| !refuses(status))
-                .map(|(status, description)| {
-                    (
-                        format!("Error{status}"),
-                        json!({
-                            "description": description,
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Error" },
-                                },
-                            },
-                        }),
-                    )
-                })
-                .chain(refusals)
-                .collect::<Map<_, _>>(),
+            "responses": refusals,
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",

@@ -12,9 +12,11 @@
 
 mod agents;
 pub mod claims;
+pub mod credential_ops;
 pub mod join;
 pub mod ops;
 mod people;
+pub mod refs;
 
 pub use agents::{NewAgent, create_agent};
 pub use people::{NewPerson, Person, create_person};
@@ -159,6 +161,37 @@ pub async fn load(connection: &mut PgConnection, id: Uuid) -> Result<Option<Acco
             (None, None) => None,
         },
     }))
+}
+
+/// What an account is called in `workspace`, whatever its kind: a person's
+/// sign-in names, otherwise the name and handle its memberships there carry
+/// (an agent's, an app's). `None` for an account with neither.
+pub async fn names_in(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    account: Uuid,
+) -> Result<Option<(String, String)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT user_account.display_name, user_account.login_name
+        FROM users user_account
+        WHERE user_account.actor_id = $2 AND user_account.status = 'active'
+        UNION ALL
+        SELECT * FROM (
+            SELECT membership.display_name, membership.handle
+            FROM project_memberships membership
+            JOIN projects space ON space.id = membership.project_id
+            WHERE space.organization_id = $1 AND membership.actor_id = $2
+            ORDER BY membership.created_at
+            LIMIT 1
+        ) carried
+        LIMIT 1
+        "#,
+    )
+    .bind(workspace)
+    .bind(account)
+    .fetch_optional(&mut *connection)
+    .await?)
 }
 
 #[cfg(test)]

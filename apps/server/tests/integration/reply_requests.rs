@@ -900,7 +900,8 @@ async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
 
 /// Stop ends an agent's work: the request and its queued follow-ups are
 /// cancelled, the agent's next call is refused with the reason, its
-/// connections hear about it at once, and only people can press it.
+/// connections hear about it at once, and only roles holding replies.steer
+/// can press it.
 #[tokio::test]
 async fn stop_cancels_the_claim_and_refuses_the_next_call() {
     let Some(Fixture {
@@ -1798,7 +1799,10 @@ async fn fixture(prefix: &str) -> Option<Fixture> {
     let (_, overview) = owner
         .call(&app, "GET", "/api/v1/direct", None, Value::Null)
         .await;
-    let space = overview["projectId"].as_str().expect("space").to_owned();
+    let space = overview["workspaceSpaceId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
     Some(Fixture {
         admin,
         schema,
@@ -1928,7 +1932,11 @@ impl Owner {
     /// A new project in the owner's organization.
     async fn project(&self, app: &axum::Router, pool: &PgPool, space: &str, key: &str) -> String {
         let organization_id = sqlx::query_scalar::<_, String>(
-            "SELECT organization_id::text FROM projects WHERE id = $1::uuid",
+            // The direct scope is no space: then the owner's workspace.
+            "SELECT COALESCE( \
+                 (SELECT organization_id FROM projects WHERE id = $1::uuid), \
+                 (SELECT id FROM organizations WHERE id <> direct_scope_id() \
+                  ORDER BY created_at LIMIT 1))::text",
         )
         .bind(space)
         .fetch_one(pool)

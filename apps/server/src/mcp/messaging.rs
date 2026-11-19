@@ -68,16 +68,22 @@ pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
         scopes.push("write".to_owned());
     }
     McpPrincipal {
-        credential_id: credential_id.unwrap_or_else(Uuid::nil),
+        // A narrow token (K1.24) is no MCP credential, but it is the
+        // credential the call came through.
+        credential_id: credential_id
+            .or(ctx.caller.credential_id)
+            .unwrap_or_else(Uuid::nil),
         mcp_credential_id: credential_id,
         oauth_grant_id: oauth_grant_id.or(ctx.caller.via_grant_id),
         actor_id: ctx.caller.account_id,
         actor_kind: ctx.caller.kind,
         // A credential held to one space is that space's, as it was before
         // the operation located the call at the workspace.
+        // A DM or group is found in the direct scope.
         project_id: ctx
             .space_id
             .or(ctx.caller.confined_space)
+            .or(ctx.direct.map(|_| crate::spaces::DIRECT))
             .unwrap_or_else(Uuid::nil),
         external_agent_connection_id: ctx.caller.connection_id,
         client_name,

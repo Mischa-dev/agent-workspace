@@ -81,7 +81,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "leave",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
-            // A secret is replaced; the old one keeps working for a while.
+            // A credential gets a new value; the old one lapses (K1.23).
             "rotate",
             // An environment is tried and the result recorded (K2.18).
             "check",
@@ -94,10 +94,17 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // An account stops acting and hearing until resumed (A2.10).
             "pause",
             "resume",
-            // An account joins a workspace (A2.18).
-            "add",
             // A host's published action runs (A2.19).
             "run",
+            // Someone makes their own what another owned, such as an agent
+            // whose owning workspace is being deleted (K1.33).
+            "take",
+            // Someone joins or leaves a space or a workspace, or is added or
+            // taken out (K4.8, A2.18).
+            "add",
+            "remove",
+            "join",
+            "leave",
         ],
     ),
     (

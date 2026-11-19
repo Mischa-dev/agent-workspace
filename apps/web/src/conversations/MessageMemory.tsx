@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { FilePlus, Pin, PinOff } from 'lucide-react'
 
+import { can } from '../auth/can'
 import { toastError } from '../app/mutations'
 import { memoryKeys, pin, unpin } from '../memory/api'
 import { usePins } from '../memory/hooks'
@@ -39,7 +40,7 @@ export function useMessageMemory({
   const records = useProjectExperience(projectId).shows('area.collections')
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.
   const projects = useProjects()
-  const decisionProjects = direct ? (projects.data?.projects ?? []).filter((project) => !project.archivedAt && project.role !== 'viewer') : []
+  const decisionProjects = direct ? (projects.data?.projects ?? []).filter((project) => !project.archivedAt && can(project, 'pages.edit')) : []
   const pinned = new Set((pins.data?.pins ?? []).filter((item) => item.kind === 'message').map((item) => item.id))
   const pinsKey = memoryKeys.pins(projectId, conversationId)
 

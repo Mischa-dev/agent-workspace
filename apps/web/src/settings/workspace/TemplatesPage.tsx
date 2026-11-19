@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Package } from 'lucide-react'
 
+import { can } from '../../auth/can'
 import { Button, Icon, PageHeader, Section, SelectField, TextField, describeError, showToast } from '../../ui'
 import { saveTemplate, templateKeys } from '../../workspace-templates/api'
 import { TemplatePicker } from '../../workspace-templates/TemplatePicker'
@@ -13,7 +14,7 @@ import type { SettingsPageProps } from '../types'
 
 export default function TemplatesPage({ projects, workspace }: SettingsPageProps) {
   if (!workspace) return null
-  const manages = workspace.role === 'owner' || workspace.role === 'admin'
+  const manages = can(workspace, 'settings.manage')
   const ownProjects = projects.filter((project) => project.organizationId === workspace.id && !project.archivedAt)
   return (
     <>

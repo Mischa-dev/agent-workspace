@@ -34,14 +34,14 @@ use crate::{
         ResolvedContent, TimelineEntryView, authorize_conversation_row_for, enqueue_event,
         enqueue_external_message_events, fetch_conversation_access, fetch_timeline_entry,
         finish_idempotent_command, insert_audit_event_for, insert_message_projections,
-        lock_message_conversation, message_content_error, parse_actor_kind,
-        resolve_message_content, suggested_thread_name, web_suggested_thread_name,
+        lock_message_conversation, message_content_error, resolve_message_content,
+        suggested_thread_name, web_suggested_thread_name,
     },
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox::{ConversationUpdatedPayload, MessageUpdatedPayload, OutboxEventPayload},
-    policy::{Action, ActorKind},
+    policy::Action,
     reactions,
     replies::{self, Withdraw},
 };
@@ -96,8 +96,6 @@ pub(crate) enum Refused {
     NotYourMessage,
     /// The caller's role can't send here (a Viewer, for example).
     RoleCannotWrite,
-    /// Agents remove only their own messages, whatever their role.
-    OnlyPeopleModerate,
     Removed,
     /// Edits wait until the conversation is restored.
     Archived,
@@ -127,9 +125,7 @@ impl From<sqlx::Error> for ChangeError {
 impl From<Refused> for AppError {
     fn from(refused: Refused) -> Self {
         match refused {
-            Refused::NotYourMessage | Refused::RoleCannotWrite | Refused::OnlyPeopleModerate => {
-                AppError::Forbidden
-            }
+            Refused::NotYourMessage | Refused::RoleCannotWrite => AppError::Forbidden,
             Refused::Removed => AppError::Conflict("message", "removed"),
             Refused::Archived => AppError::Conflict("conversation", "archived"),
             Refused::RevisionMoved(current) => AppError::VersionConflict {
@@ -320,10 +316,11 @@ pub(crate) async fn lock_message_for_change(
         };
     let message = sqlx::query_as::<_, MessageLockRow>(
         r#"
-        SELECT id, project_id, author_actor_id, content, plain_text, revision,
+        SELECT id, COALESCE(project_id, direct_scope_id()) AS project_id,
+               author_actor_id, content, plain_text, revision,
                removed_at IS NOT NULL AS removed
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         FOR UPDATE
         "#,
     )
@@ -336,9 +333,8 @@ pub(crate) async fn lock_message_for_change(
     if conversation.project_archived {
         return Err(AppError::ProjectArchived.into());
     }
-    let actor_kind = parse_actor_kind(&actor.actor_kind)?;
     let is_author = message.author_actor_id == actor.actor_id;
-    let can_write = conversation.allows(actor.actor_id, actor_kind, Action::MessageSend)?;
+    let can_write = conversation.allows(actor.actor_id, Action::MessageSend)?;
     let as_moderator = match change {
         Change::Edit => {
             if !is_author {
@@ -355,14 +351,10 @@ pub(crate) async fn lock_message_for_change(
         Change::Remove => {
             if is_author && can_write {
                 false
-            } else if actor_kind == ActorKind::Human
-                && conversation.allows(actor.actor_id, actor_kind, Action::MessageModerate)?
-            {
+            } else if conversation.allows(actor.actor_id, Action::MessageModerate)? {
                 true
             } else if is_author {
                 return Err(ChangeError::Refused(Refused::RoleCannotWrite));
-            } else if actor_kind != ActorKind::Human {
-                return Err(ChangeError::Refused(Refused::OnlyPeopleModerate));
             } else {
                 return Err(ChangeError::Refused(Refused::NotYourMessage));
             }
@@ -390,12 +382,8 @@ async fn locked_entry(
     let mut entry = fetch_timeline_entry(&mut **transaction, &locked.conversation, locked.id)
         .await?
         .ok_or(AppError::Internal("locked message has no timeline entry"))?;
-    if !crate::conversations::sees_tasks_in(
-        &mut **transaction,
-        viewer,
-        locked.conversation.project_id,
-    )
-    .await?
+    if !crate::conversations::sees_tasks_in(&mut **transaction, viewer, locked.conversation.place())
+        .await?
     {
         crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
     }
@@ -490,7 +478,7 @@ pub(crate) async fn apply_edit(
             project_id, message_id, revision, content, plain_text,
             written_by_actor_id, via_oauth_grant_id, written_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        VALUES (NULLIF($1, direct_scope_id()), $2, $3, $4, $5, $6, $7, now())
         "#,
     )
     .bind(locked.project_id)
@@ -1042,7 +1030,7 @@ pub(crate) async fn message_revisions_in(
         r#"
         SELECT revision, removed_at IS NOT NULL
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         "#,
     )
     .bind(message_id)
@@ -1063,13 +1051,11 @@ pub(crate) async fn message_revisions_in(
                revision.redacted_at IS NOT NULL AS redacted
         FROM message_revisions revision
         JOIN actors writer ON writer.id = revision.written_by_actor_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = revision.project_id
-         AND membership.actor_id = revision.written_by_actor_id
+        LEFT JOIN LATERAL place_profile(revision.project_id, revision.written_by_actor_id) membership ON true
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = revision.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-        WHERE revision.message_id = $1 AND revision.project_id = $2
+        WHERE revision.message_id = $1 AND revision.project_id IS NOT DISTINCT FROM $2
         ORDER BY revision.revision
         "#,
     )
@@ -1090,9 +1076,7 @@ pub(crate) async fn message_revisions_in(
                    message.removed_at IS NOT NULL AS redacted
             FROM messages message
             JOIN actors author ON author.id = message.author_actor_id
-            LEFT JOIN project_memberships membership
-              ON membership.project_id = message.project_id
-             AND membership.actor_id = message.author_actor_id
+            LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership ON true
             LEFT JOIN mcp_oauth_grants via_grant
               ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
             LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -1156,7 +1140,6 @@ async fn readable_conversation(
         .ok_or(AppError::NotFound("message"))?;
     match authorize_conversation_row_for(
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         &conversation,
         Action::ProjectView,
         true,
@@ -1176,12 +1159,8 @@ async fn get_message(
     let mut entry = fetch_timeline_entry(&state.pool, &conversation, message_id)
         .await?
         .ok_or(AppError::NotFound("message"))?;
-    if !crate::conversations::sees_tasks_in(
-        &state.pool,
-        principal.actor_id,
-        conversation.project_id,
-    )
-    .await?
+    if !crate::conversations::sees_tasks_in(&state.pool, principal.actor_id, conversation.place())
+        .await?
     {
         crate::conversations::hide_entry_work_item_details(std::slice::from_mut(&mut entry));
     }

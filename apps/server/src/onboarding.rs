@@ -195,7 +195,7 @@ async fn project_steps(
         r#"
         SELECT 1 FROM project_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.project_id = $1 AND actor.kind = 'external_agent'
+        WHERE membership.project_id = $1 AND actor.kind = 'external_agent' -- // kind-check: mechanical (the step is connecting an agent)
           AND membership.enabled AND $2::uuid IS NOT NULL
         "#,
         project_id,
@@ -226,7 +226,7 @@ pub async fn onboarding_for(
     organization_id: Uuid,
     actor_id: Uuid,
 ) -> Result<Onboarding, AppError> {
-    let (organization_name, role) = membership(&state.pool, organization_id, actor_id).await?;
+    let (organization_name, _role) = membership(&state.pool, organization_id, actor_id).await?;
     let progress = sqlx::query_as::<_, Progress>(
         r#"
         SELECT project_id, confirmed_steps, skipped_steps, dismissed_at IS NOT NULL AS dismissed
@@ -237,7 +237,12 @@ pub async fn onboarding_for(
     .bind(actor_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
-    let can_manage_workspace = matches!(role.as_str(), "owner" | "admin");
+    let can_manage_workspace = {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        crate::workspace::standing_of(&mut connection, actor_id, organization_id, false)
+            .await?
+            .may(crate::policy::Permission::SettingsManage)
+    };
     let project = chosen_project(
         &state.pool,
         organization_id,
