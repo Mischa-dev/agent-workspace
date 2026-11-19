@@ -403,8 +403,16 @@ pub async fn mark_dependents(
     if queued == 0 {
         return Ok(());
     }
-    // A job that hasn't started takes these too; one already running may
-    // have taken its last batch, so another is queued behind it.
+    queue_recalculation(connection, project_id).await
+}
+
+/// Makes sure a job will work out the space's queued records. A job that
+/// hasn't started takes them too; one already running may have taken its
+/// last batch, so another is queued behind it.
+async fn queue_recalculation(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> Result<(), AppError> {
     let waiting = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM background_jobs \
          WHERE kind = $1 AND project_id = $2 AND state = 'queued')",
@@ -500,7 +508,8 @@ pub async fn recalculate_space(pool: &sqlx::PgPool, project_id: Uuid) -> Result<
             return Ok(());
         }
     }
-    Ok(())
+    let mut connection = pool.acquire().await?;
+    queue_recalculation(&mut connection, project_id).await
 }
 
 /// Queues the recalculation of a collection's formulas, as part of the
