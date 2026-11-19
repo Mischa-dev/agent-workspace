@@ -208,8 +208,8 @@ html[data-theme="frame-dark"],
   --row-default: 32px;
   --size-row: 28px;
   --msg-pad-y: 4px;
-  --t-headline: 800 calc(20px * var(--text-scale)) / calc(28px * var(--text-scale)) var(--font-sans);
-  --t-display: 800 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-sans);
+  --t-headline: 800 calc(20px * var(--text-scale)) / calc(28px * var(--text-scale)) var(--font-display);
+  --t-display: 800 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-display);
   --t-body: 400 calc(15px * var(--text-scale)) / calc(21px * var(--text-scale)) var(--font-sans);
 }
 

@@ -20,6 +20,9 @@ const TOKEN_NAME = /^[a-z0-9-]+$/
 // eslint-disable-next-line no-control-regex
 const UNSAFE_VALUE = /[;{}<>\\@!\u0000-\u001f]|\/\*|url\(/i
 const UNSAFE_CSS = /[\\<]|url\(|@import|@font-face|@namespace|image-set\(|image\(|src\(/i
+// Comments are checked out, as the editor and the server check them: a
+// comment that names a blocked function doesn't empty a stylesheet.
+const CSS_COMMENT = /\/\*[\s\S]*?(\*\/|$)/g
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
@@ -79,7 +82,7 @@ export function documentProperties(document: ThemeDocument, mode: ModeName): Rec
 /** A document's CSS, or '' when it fails the last guard. */
 export function documentCss(document: ThemeDocument): string {
   const css = typeof document.css === 'string' ? document.css : ''
-  return UNSAFE_CSS.test(css) ? '' : css
+  return UNSAFE_CSS.test(css.replace(CSS_COMMENT, '')) ? '' : css
 }
 
 /**
