@@ -3226,6 +3226,92 @@ async fn roles_and_caps_change_only_for_those_the_rules_allow() {
     world.finish().await;
 }
 
+/// M1.12: connected modules are managed only with `modules.manage`. A
+/// role that manages settings and members but not modules lists, installs,
+/// re-reads, approves and revokes nothing, and its refusal comes before the
+/// module is looked up or its manifest fetched; the owner, asking the same,
+/// gets past the gate.
+#[tokio::test]
+async fn connected_modules_are_managed_only_by_holders_of_modules_manage() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_connected_modules")
+        .await
+    else {
+        return;
+    };
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_create"),
+            Some("cm-role"),
+            json!({"name": "Settings, not modules", "baseRole": "admin",
+                   "permissions": ["projects.view", "settings.manage", "members.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let role = made["value"]["id"].as_str().expect("role id").to_owned();
+    let (status, assigned) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_assign"),
+            Some("cm-assign"),
+            json!({"account": "@lena", "role": role}),
+        ),
+    )
+    .await;
+    assert_eq!(assigned["outcome"], "ok", "{status} {assigned}");
+
+    let unknown = Uuid::now_v7().to_string();
+    // An address nothing answers at: reaching the fetch at all is the
+    // owner's, never the narrowed role's.
+    let url = "https://modules.invalid/manifest.json";
+    let calls = [
+        ("connected_module_list", json!({})),
+        ("connected_module_install", json!({"url": url})),
+        ("connected_module_refresh", json!({"moduleId": unknown})),
+        ("connected_module_approve", json!({"moduleId": unknown})),
+        ("connected_module_revoke", json!({"moduleId": unknown})),
+    ];
+    for (index, (name, body)) in calls.iter().enumerate() {
+        let key = format!("cm-lena-{index}");
+        let (status, refused) = send(
+            &world.app,
+            lena.request("POST", &op(name), Some(&key), body.clone()),
+        )
+        .await;
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "{name} as the narrowed role: {status} {refused}"
+        );
+        let key = format!("cm-owner-{index}");
+        let (status, answered) = send(
+            &world.app,
+            owner.request("POST", &op(name), Some(&key), body.clone()),
+        )
+        .await;
+        assert_ne!(
+            answered["outcome"], "permission_denied",
+            "{name} as the owner: {status} {answered}"
+        );
+    }
+    let installed =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_apps WHERE workspace_id = $1")
+            .bind(world.organization)
+            .fetch_one(world.pool())
+            .await
+            .expect("module apps");
+    assert_eq!(installed, 0);
+    world.finish().await;
+}
+
 /// C2.6 and C2.7: someone outside a private channel can't read its details
 /// or members, join it, leave it or set its topic, and browsing doesn't
 /// list it; a role that can't post sets no topic anywhere.
