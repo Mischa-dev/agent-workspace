@@ -1,0 +1,29 @@
+{
+  "about": "Protocol 2: the connection drops and comes back saying where it stopped; the server replays what was missed and says it resumed, so only what those events name refetches, never everything open.",
+  "fetched": {
+    "channel timeline": {
+      "min": 1
+    },
+    "sidebar": {
+      "min": 1
+    },
+    "rail": {
+      "min": 1
+    }
+  },
+  "untouched": [
+    "page list",
+    "sheet list",
+    "collections",
+    "task board",
+    "members",
+    "messages overview"
+  ],
+  "sent": [
+    {
+      "type": "hello",
+      "protocol": 2,
+      "resumeFrom": "19"
+    }
+  ]
+}

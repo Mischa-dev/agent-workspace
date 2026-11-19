@@ -43,6 +43,7 @@ export const PART_IDS = [
   'channel.details',
   'talk.sidebar_sections',
   'talk.replies',
+  'talk.typing',
   'thing.comments',
   'page.live_editing',
   'page.comments',

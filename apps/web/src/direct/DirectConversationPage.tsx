@@ -23,7 +23,7 @@ import { ThreadChip } from '../conversations/ThreadChip'
 import { threadChipFacts } from '../conversations/threadChipModel'
 import { useRefreshThreads, useThreads } from '../conversations/threadModel'
 import { ThreadDialog } from '../conversations/ThreadDialog'
-import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries } from '../conversations/Timeline'
+import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries, TypingNow } from '../conversations/Timeline'
 import type { ConversationActor, ConversationTimelineEntry, ThreadSummary } from '../conversations/types'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useFirstUnread } from '../conversations/useFirstUnread'
@@ -433,6 +433,8 @@ export function DirectConversationPage() {
           viewerId={viewerId}
         />
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {/* Direct messages always say who is typing; layouts are for spaces. */}
+        <TypingNow conversationId={conversationId} entries={entries} viewerId={viewerId} />
       </ConversationTimeline>
       {waitingForContinue ? (
         <Banner

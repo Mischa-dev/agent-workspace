@@ -42,7 +42,7 @@ import { useNavigate } from 'react-router-dom'
 import * as Y from 'yjs'
 
 import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
-import { useOptionalRealtime } from '../../realtime/realtimeContext'
+import { useOptionalRealtime, useWatchDocument } from '../../realtime/realtimeContext'
 import { Banner, Button, Menu, TextField, Tooltip, describeError, showToast, type MenuEntry } from '../../ui'
 import { formatShortcut } from '../../ui/shortcut'
 import { toastError } from '../../app/mutations'
@@ -117,6 +117,8 @@ export default function LivePage({ collections, discussion = null, fallback, pag
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
+  // In the page's live room while it is open (W1.6).
+  useWatchDocument(pageId ? { kind: 'page', id: pageId } : null)
   useEffect(() => {
     let alive = true
     getPageDocument(pageId)

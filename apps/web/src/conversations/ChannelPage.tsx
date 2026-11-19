@@ -43,7 +43,7 @@ import { ThreadDialog } from './ThreadDialog'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { uploadFile } from '../files/api'
-import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries } from './Timeline'
+import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries, TypingNow } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
 import { useFirstUnread } from './useFirstUnread'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
@@ -181,6 +181,7 @@ export function ChannelPage() {
   const detailsShown = useProjectExperience(projectId).shows('channel.details')
   const channelExperience = useProjectExperience(projectId)
   const tabsShown = channelExperience.shows('channel.tabs') && channelExperience.shows('area.pages')
+  const typingShown = channelExperience.shows('talk.typing')
   const pageTab = tabsShown && validBoundary ? tabParam : null
   useAutoMarkSeen(
     {
@@ -558,6 +559,7 @@ export function ChannelPage() {
           viewerId={viewer.actorId}
         />
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {typingShown ? <TypingNow conversationId={channelId} entries={entries} viewerId={viewer.actorId} /> : null}
       </ConversationTimeline>
 
       {canPost ? (
