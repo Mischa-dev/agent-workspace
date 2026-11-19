@@ -408,7 +408,9 @@ export type ScheduledLine = { conversationId: string; failure?: string | null; i
 
 export type ScopeAccount = { accountId: string; displayName?: string | null }
 
-export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; name?: string | null }
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; members: ScopeMember[]; name?: string | null; workspaceId: string }
+
+export type ScopeMember = { accountId: string; displayName?: string | null; you: boolean }
 
 export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
 

@@ -6,8 +6,18 @@ import { opQuery, useOp, type OpOutput } from '../api/ops'
 import { DetailList, Dialog, ErrorState, ListSkeleton, Row, RowList, Section, Switch } from '../ui'
 
 type Scope = OpOutput<'agent_scope_get'>
+type Conversation = Scope['privateConversations'][number]
 
 const KIND_LABELS: Record<string, string> = { dm: 'Direct message', group: 'Group', channel: 'Private channel' }
+const SPACE_LABELS: Record<string, string> = { project: 'Project', team: 'Team space', personal: 'Personal space', workspace: 'Workspace space' }
+
+/** A channel's name; for a DM or group, who else is in it. */
+function conversationTitle(conversation: Conversation): string {
+  if (conversation.kind === 'channel' && conversation.name) return conversation.name
+  const names = conversation.members.map((member) => (member.you ? 'you' : (member.displayName ?? 'someone')))
+  if (names.length) return sentence(`With ${names.join(', ')}`)
+  return conversation.name ?? KIND_LABELS[conversation.kind] ?? 'Conversation'
+}
 
 function sentence(text: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : text
@@ -35,11 +45,6 @@ export function AgentScopeDialog({ accountId, name, onClose }: { accountId: stri
 }
 
 function ScopeDetails({ scope }: { scope: Scope }) {
-  const workspaceId = useWorkspaceId() ?? undefined
-  const consent = useOp('app_consent_set', {
-    workspaceId,
-    invalidates: ['agent_scope_get'],
-  })
   return (
     <>
       <DetailList
@@ -58,7 +63,7 @@ function ScopeDetails({ scope }: { scope: Scope }) {
         {scope.spaces.length ? (
           <RowList label="Spaces">
             {scope.spaces.map((space) => (
-              <Row key={space.spaceId} meta={`${sentence(space.kind)} · ${sentence(space.role)}`} title={space.name} />
+              <Row key={space.spaceId} meta={`${SPACE_LABELS[space.kind] ?? sentence(space.kind)} · ${sentence(space.role)}`} title={space.name} />
             ))}
           </RowList>
         ) : (
@@ -76,26 +81,7 @@ function ScopeDetails({ scope }: { scope: Scope }) {
         {scope.privateConversations.length ? (
           <RowList label="Private conversations">
             {scope.privateConversations.map((conversation) => (
-              <Row
-                actions={
-                  scope.readsWithConsent ? (
-                    <Switch
-                      checked={conversation.heard}
-                      disabled={consent.isPending}
-                      label={conversation.heard ? 'Hears it' : 'Doesn’t hear it'}
-                      onChange={(granted) =>
-                        consent.mutate(
-                          { conversation: conversation.conversationId, app: scope.accountId, granted },
-                          { onError: (reason) => toastError('That didn’t change', reason) },
-                        )
-                      }
-                    />
-                  ) : null
-                }
-                key={conversation.conversationId}
-                meta={KIND_LABELS[conversation.kind] ?? sentence(conversation.kind)}
-                title={conversation.name ?? KIND_LABELS[conversation.kind] ?? 'Conversation'}
-              />
+              <ConversationRow accountId={scope.accountId} consent={scope.readsWithConsent} conversation={conversation} key={conversation.conversationId} />
             ))}
           </RowList>
         ) : (
@@ -103,5 +89,35 @@ function ScopeDetails({ scope }: { scope: Scope }) {
         )}
       </Section>
     </>
+  )
+}
+
+function ConversationRow({ accountId, consent, conversation }: { accountId: string; consent: boolean; conversation: Conversation }) {
+  // Consent is changed where the conversation lives: a DM or group in the
+  // direct scope, a private channel in this workspace.
+  const change = useOp('app_consent_set', {
+    workspaceId: conversation.workspaceId,
+    invalidates: ['agent_scope_get'],
+  })
+  return (
+    <Row
+      actions={
+        consent ? (
+          <Switch
+            checked={conversation.heard}
+            disabled={change.isPending}
+            label={conversation.heard ? 'Hears it' : 'Doesn’t hear it'}
+            onChange={(granted) =>
+              change.mutate(
+                { conversation: conversation.conversationId, app: accountId, granted },
+                { onError: (reason) => toastError('That didn’t change', reason) },
+              )
+            }
+          />
+        ) : null
+      }
+      meta={KIND_LABELS[conversation.kind] ?? sentence(conversation.kind)}
+      title={conversationTitle(conversation)}
+    />
   )
 }

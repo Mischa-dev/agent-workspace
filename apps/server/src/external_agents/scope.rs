@@ -77,12 +77,29 @@ pub struct ScopeSpace {
 pub struct ScopeConversation {
     #[schemars(with = "String")]
     pub conversation_id: Uuid,
+    /// Where it lives: this workspace, or the direct scope for a DM or
+    /// group (name it as `workspace` to change consent there).
+    #[schemars(with = "String")]
+    pub workspace_id: Uuid,
     /// dm, group or channel.
     pub kind: String,
     pub name: Option<String>,
     /// Whether it hears this conversation, for an account that reads with
     /// consent; always true for one that doesn't.
     pub heard: bool,
+    /// Who else is in it (up to six, you first), for naming one that has
+    /// no name.
+    pub members: Vec<ScopeMember>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeMember {
+    #[schemars(with = "String")]
+    pub account_id: Uuid,
+    pub display_name: Option<String>,
+    /// Whether this is you.
+    pub you: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -160,10 +177,29 @@ impl Operation for AgentScopeGet {
             role,
         })
         .collect();
-        let private_conversations = sqlx::query_as::<_, (Uuid, String, Option<String>, bool)>(
+        let private_conversations = sqlx::query_as::<
+            _,
+            (Uuid, Uuid, String, Option<String>, bool, sqlx::types::Json<Vec<ScopeMember>>),
+        >(
             r#"
-            SELECT conversation.id, conversation.kind::text, conversation.name,
-                   app_may_read($2, conversation.id)
+            SELECT conversation.id, conversation.workspace_id, conversation.kind::text,
+                   conversation.name, app_may_read($2, conversation.id),
+                   COALESCE((
+                       SELECT json_agg(json_build_object(
+                                  'accountId', other.actor_id,
+                                  'displayName', other.display_name,
+                                  'you', other.actor_id = $3)
+                              ORDER BY other.actor_id <> $3, other.display_name)
+                       FROM (
+                           SELECT someone.actor_id, profile.display_name
+                           FROM conversation_members someone
+                           LEFT JOIN LATERAL account_profile(someone.actor_id, $1) profile ON true
+                           WHERE someone.conversation_id = conversation.id
+                             AND someone.actor_id <> $2
+                           ORDER BY someone.actor_id <> $3, profile.display_name
+                           LIMIT 6
+                       ) other
+                   ), '[]'::json)
             FROM conversation_members member
             JOIN conversations conversation ON conversation.id = member.conversation_id
             CROSS JOIN LATERAL app_consent_root(conversation.id) root
@@ -184,12 +220,16 @@ impl Operation for AgentScopeGet {
         .await
         .map_err(AppError::from)?
         .into_iter()
-        .map(|(conversation_id, kind, name, heard)| ScopeConversation {
-            conversation_id,
-            kind,
-            name,
-            heard,
-        })
+        .map(
+            |(conversation_id, workspace_id, kind, name, heard, members)| ScopeConversation {
+                conversation_id,
+                workspace_id,
+                kind,
+                name,
+                heard,
+                members: members.0,
+            },
+        )
         .collect();
         let managers = sqlx::query_as::<_, (Uuid, Option<String>)>(
             r#"

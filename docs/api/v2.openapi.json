@@ -7711,17 +7711,52 @@
             "description": "dm, group or channel.",
             "type": "string"
           },
+          "members": {
+            "description": "Who else is in it (up to six, you first), for naming one that has\nno name.",
+            "items": {
+              "$ref": "#/components/schemas/ScopeMember"
+            },
+            "type": "array"
+          },
           "name": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "workspaceId": {
+            "description": "Where it lives: this workspace, or the direct scope for a DM or\ngroup (name it as `workspace` to change consent there).",
+            "type": "string"
           }
         },
         "required": [
           "conversationId",
+          "workspaceId",
           "kind",
-          "heard"
+          "heard",
+          "members"
+        ],
+        "type": "object"
+      },
+      "ScopeMember": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "you": {
+            "description": "Whether this is you.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accountId",
+          "you"
         ],
         "type": "object"
       },
