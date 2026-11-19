@@ -1021,6 +1021,31 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
         written_otherwise["outcome"], "invalid_request",
         "{written_otherwise}"
     );
+
+    // Rules set in the same write as an insert name the cells as they are
+    // after it: they don't move with it.
+    let both = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet,
+               "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 1}],
+               "validations": [{"tab": "Work", "rules": [{"range": "A2:A10", "allow": "number"}]}],
+               "clientRequestId": "insert-and-rules"}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "ok", "{both}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
+    )
+    .await;
+    let tab = read["value"]["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tab| tab["name"] == "Work")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(tab["validations"][0]["range"], "A2:A10", "{tab}");
 }
 
 /// C1.18: a chart over a named range follows its cells: it reads them as
