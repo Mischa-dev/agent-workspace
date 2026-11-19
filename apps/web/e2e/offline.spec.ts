@@ -91,3 +91,37 @@ test('turning it off forgets what this device kept', async ({ page }) => {
   await expect(toggle).not.toBeChecked()
   await expect.poll(() => page.evaluate(() => localStorage.getItem('agent-workspace:offline-reading'))).toBeNull()
 })
+
+// W1.30, writing offline: a task edit made with no connection is kept on this
+// device, shows at once, and goes through once the connection is back.
+test('a task edit made with no connection goes through when it comes back', async ({ page }, testInfo) => {
+  const projectId = seededValue('E2E_PROJECT_ID')
+  const stamp = `${Date.now() % 100000}-${testInfo.project.name}`
+  await page.goto(`/projects/${projectId}/work-items`)
+  const headers = await writer(page)
+  const created = await page.request.post(`/api/v1/projects/${projectId}/work-items`, {
+    headers: headers(`offline-task-${stamp}`),
+    data: { title: `Edited on the train ${stamp}` },
+  })
+  expect(created.ok(), await created.text()).toBe(true)
+  const { id: taskId } = (await created.json()) as { id: string }
+  await page.goto(`/projects/${projectId}/work-items/${taskId}`)
+  const title = page.getByRole('textbox', { name: 'Title' })
+  await expect(title).toHaveValue(`Edited on the train ${stamp}`)
+
+  // The connection goes.
+  const refuse = (url: URL) => url.pathname.startsWith('/api/')
+  await page.route(refuse, (route) => route.abort('internetdisconnected'))
+  await title.fill(`Kept on the device ${stamp}`)
+  await title.blur()
+  await expect(page.getByText('Saved offline, sends when you’re back')).toBeVisible()
+  await expect(title).toHaveValue(`Kept on the device ${stamp}`)
+
+  // It comes back.
+  await page.unroute(refuse)
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect(page.getByText('Saved offline, sends when you’re back')).toBeHidden()
+  await expect
+    .poll(async () => ((await (await page.request.get(`/api/v1/projects/${projectId}/work-items/${taskId}`)).json()) as { title: string }).title)
+    .toBe(`Kept on the device ${stamp}`)
+})
