@@ -152,6 +152,10 @@ pub trait Operation: Send + Sync + 'static {
     /// lists across all of them (each filtered by the caller's access
     /// there) instead of asking which. Only reads may span.
     const SPANS_WORKSPACES: bool = false;
+    /// A call that names no workspace, from a caller who reaches several,
+    /// acts in the one its credential was made in (as the hand-written tool
+    /// it replaced did), when it was made in one of them.
+    const HOME_WORKSPACE_BY_DEFAULT: bool = false;
     /// Reads as an MCP resource at this address (a describe operation
     /// whose input is one id).
     const RESOURCE: Option<ResourceAddress> = None;

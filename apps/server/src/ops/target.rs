@@ -197,6 +197,14 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // K2.19: a queued launch, in its space; the command checks who may
+    // cancel it.
+    (
+        "launch",
+        "SELECT project.organization_id, project.id FROM launches launch \
+         JOIN projects project ON project.id = launch.project_id \
+         WHERE launch.id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // C1.3: things with a discussion, by the same rule their comments follow.
     // A whiteboard is the one below (K2.12).
     (

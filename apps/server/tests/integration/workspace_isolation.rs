@@ -2152,8 +2152,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "run_detail_get",
     "run_get",
     "run_list",
-    "run_steps",
-    "run_usage",
+    "run_step_list",
+    "run_usage_list",
     "agent_usage_list",
     "workspace_search",
     "setting_list",
@@ -2169,8 +2169,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "template_list",
     "thing_open",
     "thread_followed_list",
-    "usage_batch",
-    "usage_windows",
+    "usage_batch_preview",
+    "usage_window_list",
     "view_list",
     "whiteboard_list",
     "whiteboard_read",
@@ -2714,13 +2714,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "usage_windows",
+            "usage_window_list",
             vec![json!({})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
         ),
         case(
-            "usage_batch",
+            "usage_batch_preview",
             vec![json!({"accountId": a.provider_account})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
@@ -3091,7 +3091,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "run_steps",
+            "run_step_list",
             vec![
                 json!({"runId": a.run.to_string()}),
                 json!({"runId": a.run.to_string(), "includeDiff": true}),
@@ -3113,7 +3113,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "run_usage",
+            "run_usage_list",
             vec![
                 json!({}),
                 json!({"projectId": "WORK", "groupBy": "model"}),

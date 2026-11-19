@@ -833,7 +833,7 @@ impl Operation for RunUsageReport {
     const TITLE: &'static str = "Report usage";
     const DESCRIPTION: &'static str = "Report tokens (and cost, if you know it) for a run you \
         opened, or for a time window in a space when you meter by time (windowStart and \
-        windowEnd). Each reportKey is recorded once, so a retry adds nothing. run_usage reads the \
+        windowEnd). Each reportKey is recorded once, so a retry adds nothing. run_usage_list reads the \
         totals.";
     const EMITS: &'static [&'static str] = &["run.usage_reported"];
 

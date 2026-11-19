@@ -19,9 +19,9 @@ use super::{
 };
 use crate::{AppState, error::AppError, github, policy::Action};
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunPublishArguments {
+pub(crate) struct RunPublishArguments {
     /// The finished run whose branch to push to GitHub.
     pub run_id: String,
 }
@@ -112,7 +112,7 @@ async fn run_project(
         .ok_or(AppError::NotFound("agent_run"))
 }
 
-pub(super) async fn run_publish(
+pub(crate) async fn run_publish(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunPublishArguments,

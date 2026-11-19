@@ -24,7 +24,7 @@
     "account_workspace_add": "change",
     "account_joinable_list": "query",
     "agent_profile_list": "query",
-    "agent_profile_write": "change",
+    "agent_profile_set": "change",
     "session_bind": "change",
     "host_list": "query",
     "host_enrolment_create": "create",

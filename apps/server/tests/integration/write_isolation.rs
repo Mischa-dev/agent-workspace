@@ -477,7 +477,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_register_decide",
     "agent_pause",
     "agent_resume",
-    "agent_profile_write",
+    "agent_profile_set",
     "agent_ref_set",
     "agent_ref_decide",
     "agent_ref_remove",
@@ -603,7 +603,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "module_restore",
     "module_set",
     "module_update",
-    "model_catalog_write",
+    "model_catalog_set",
     "notification_keyword_set",
     "notification_update",
     "package_install",
@@ -641,7 +641,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "app_limit_set",
     "run_activity_report",
     "run_cancel",
-    "run_dismiss_failure",
+    "run_failure_hide",
     "run_mark_not_started",
     "run_create",
     "run_publish",
@@ -6651,7 +6651,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
-            "agent_profile_write",
+            "agent_profile_set",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
             vec![json!({"projectId": b.project, "template": "reviewer", "name": "Net mcp reviewer"})],
         )
@@ -6690,7 +6690,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
         mcp_case(
-            "model_catalog_write",
+            "model_catalog_set",
             json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
             vec![
                 json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
@@ -8266,7 +8266,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
         ),
         mcp_case(
-            "run_dismiss_failure",
+            "run_failure_hide",
             json!({"runId": ax.failed_run}),
             vec![json!({"runId": bx.failed_run})],
         ),

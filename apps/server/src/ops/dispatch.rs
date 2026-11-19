@@ -369,7 +369,10 @@ async fn admit<O: Operation>(
             [only] => *workspace = Some(*only),
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
-            several => return Err(name_the_workspace(&mut connection, several).await),
+            several => match home_workspace::<O>(&mut connection, caller, several).await? {
+                Some(home) => *workspace = Some(home),
+                None => return Err(name_the_workspace(&mut connection, several).await),
+            },
         }
     }
     if spans {
@@ -693,6 +696,32 @@ fn runs_while_paused(name: &str) -> bool {
             | "run_usage_report"
             | "run_update"
     ) || name.starts_with("connection_")
+}
+
+/// The workspace the caller's credential was made in, among `reach`, for
+/// an operation that defaults to it.
+async fn home_workspace<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    reach: &[Uuid],
+) -> Result<Option<Uuid>, OpError> {
+    let Some(credential) = caller
+        .credential_id
+        .filter(|_| O::HOME_WORKSPACE_BY_DEFAULT)
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT space.organization_id FROM projects space \
+             WHERE space.id = ({}) AND space.organization_id = ANY($3)",
+        super::wrapped::CREDENTIAL_ANCHOR_SQL
+    ))
+    .bind(credential)
+    .bind(caller.account_id)
+    .bind(reach)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error.into()))
 }
 
 /// A caller reaching several workspaces, calling an operation whose target

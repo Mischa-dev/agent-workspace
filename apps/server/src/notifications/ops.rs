@@ -151,6 +151,7 @@ tool_op!(LaterSave {
     kind: Create,
     permission: None,
     idempotency: Dispatcher,
+    home: true,
     audited: true,
     title: "Save for later",
     description: "Save a message (messageId) or task for later, or set yourself a reminder: \

@@ -15,15 +15,11 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodePublish, CollectionsBuild, CollectionsEdit,
-    MembersView, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksEdit,
-    TasksView, WhiteboardsEdit,
+    self, ChannelsCreate, ChannelsPost, CollectionsBuild, CollectionsEdit, MembersView, RunsLaunch,
+    SheetsEdit, TasksCreate, TasksEdit, TasksView, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
-    ("usage_windows", None),
-    ("usage_batch", None),
-    ("usage_batch_launch", Some(RunsLaunch)),
     ("project_members", Some(MembersView)),
     ("conversation_list", None),
     ("conversation_open", None),
@@ -61,21 +57,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("ai_suggestion_decide", Some(TasksEdit)),
     ("ai_analyze", Some(TasksEdit)),
     ("ai_summarize", Some(TasksView)),
-    ("run_start", Some(RunsLaunch)),
-    ("task_launch", Some(RunsLaunch)),
-    ("run_get", None),
-    ("run_stop", Some(RunsInterrupt)),
-    ("run_retry", Some(RunsLaunch)),
-    ("run_dismiss_failure", None),
-    ("run_publish", Some(CodePublish)),
-    ("run_list", None),
-    ("run_steps", None),
-    ("run_usage", None),
-    ("agent_profile_list", None),
-    ("agent_profile_write", Some(SettingsManage)),
-    ("launch_list", None),
-    ("launch_cancel", Some(RunsLaunch)),
-    ("model_catalog_write", Some(SettingsManage)),
     ("run_request", Some(RunsLaunch)),
     ("external_event_poll", None),
 ];

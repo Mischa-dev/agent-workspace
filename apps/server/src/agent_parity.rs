@@ -129,17 +129,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/agent-profiles",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Put,
@@ -436,7 +436,7 @@ mod tests {
         (
             Post,
             "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Tool("run_dismiss_failure"),
+            Tool("run_failure_hide"),
         ),
         (
             Post,
@@ -518,32 +518,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Put,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Delete,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Post,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Post,

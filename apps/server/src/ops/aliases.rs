@@ -532,6 +532,14 @@ pub const ALIASES: &[Alias] = &[
     run_renamed!("run_open" => "run_create"),
     run_renamed!("run_activity" => "run_activity_report"),
     run_renamed!("run_result" => "run_result_report"),
+    // K2.19: the run and settings tools answered in the envelope.
+    run_renamed!("run_dismiss_failure" => "run_failure_hide"),
+    run_renamed!("agent_profile_write" => "agent_profile_set"),
+    run_renamed!("model_catalog_write" => "model_catalog_set"),
+    run_renamed!("run_steps" => "run_step_list"),
+    run_renamed!("run_usage" => "run_usage_list"),
+    run_renamed!("usage_windows" => "usage_window_list"),
+    run_renamed!("usage_batch" => "usage_batch_preview"),
 ];
 
 /// Aliases added by tests outside the crate.

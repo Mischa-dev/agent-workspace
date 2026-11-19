@@ -58,10 +58,10 @@ use crate::{
 };
 
 pub(crate) mod admin;
-mod agent_profile_tools;
+pub(crate) mod agent_profile_tools;
 mod agents;
 pub(crate) mod ai_tools;
-mod batch_tools;
+pub(crate) mod batch_tools;
 pub(crate) mod briefing;
 pub(crate) mod bug_report_tools;
 mod card;
@@ -89,7 +89,7 @@ pub(crate) mod memory_tools;
 mod message_edits;
 pub(crate) mod messaging;
 pub(crate) use common::string_or_number;
-mod model_catalog_tools;
+pub(crate) mod model_catalog_tools;
 pub(crate) mod module_tools;
 pub(crate) mod notifications;
 mod oauth;
@@ -102,8 +102,8 @@ pub(crate) mod reads;
 pub(crate) mod replies;
 pub(crate) mod repository_tools;
 pub(crate) mod resources;
-mod run_pages;
-mod runs;
+pub(crate) mod run_pages;
+pub(crate) mod runs;
 mod sheet_tools;
 pub(crate) mod talk;
 pub(crate) mod task_batch;
@@ -115,7 +115,7 @@ mod task_drafts;
 pub(crate) mod task_move;
 pub(crate) mod tasks;
 mod tool_permissions;
-mod usage_tools;
+pub(crate) mod usage_tools;
 pub(crate) mod views_data;
 pub(crate) mod whiteboard_commands;
 mod whiteboard_tools;
@@ -239,59 +239,6 @@ impl McpServer {
     // -- Orientation ---------------------------------------------------------
 
     // -- Projects and people -------------------------------------------------
-
-    #[tool(
-        description = "Your provider accounts' usage: every window (a five-hour session, a week, a month, or a reset schedule you set) with percent used, percent unused and when it resets, banked resets you could spend, and how many ready tasks each account could run. Read only; schedules, alert rules and spending a banked reset happen in the app.",
-        annotations(
-            title = "Usage windows",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn usage_windows(
-        &self,
-        Parameters(arguments): Parameters<usage_tools::UsageWindowsArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<usage_tools::UsageWindowsValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(usage_tools::usage_windows(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Use it before it resets: the batch of ready tasks one of your provider accounts could run before its usage window resets. Tasks come from every project the account serves whose default environment runs on its harness, ranked like task_ready_list and sized to the capacity left; projects that can't take part say what to change. Launch it with usage_batch_launch.",
-        annotations(
-            title = "Suggested batch",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn usage_batch(
-        &self,
-        Parameters(arguments): Parameters<batch_tools::UsageBatchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<batch_tools::UsageBatchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(batch_tools::usage_batch(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Launch a batch on one of your provider accounts: the suggested batch from usage_batch, or the tasks you pick from it. Each task goes through its project's launch queue in that project's default environment with its defaults, on this account, and is checked again as you when it starts. Follow them with launch_list.",
-        annotations(
-            title = "Launch batch",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn usage_batch_launch(
-        &self,
-        Parameters(arguments): Parameters<batch_tools::UsageBatchLaunchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<batch_tools::UsageBatchLaunchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(batch_tools::usage_batch_launch(&self.state, principal, arguments).await)
-    }
 
     #[tool(
         description = "List a project's members: people and agents, with their roles. Owners and admins only; anyone can find people to mention with people_search.",
@@ -844,271 +791,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<serde_json::Value>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(ai_tools::ai_summarize(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Start a run on your own provider account, in a thread. To work on a task: thread_start in a channel, task_link the thread to the task, then run_start there with the full instructions (the run sees only your prompt and the repository). Returns the run; follow it with run_get. People with full access only; at most 5 of your runs at once through connected apps.",
-        annotations(
-            title = "Start a run",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn run_start(
-        &self,
-        Parameters(arguments): Parameters<runs::RunStartArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_start(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Launch tasks: start a run for each with the project's defaults (environment, harness, model) and a prompt built from the task by the project's launch template, in the task's thread. One task starts at once; several, or startWhen at, window_reset or blockers_done, go through the launch queue, which starts them as your account's slots free up, blocked ones last. People with full access only. Follow a run with run_get and the queue with launch_list.",
-        annotations(
-            title = "Launch tasks",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn task_launch(
-        &self,
-        Parameters(arguments): Parameters<launch_tools::TaskLaunchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<launch_tools::TaskLaunchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(launch_tools::task_launch(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A run: its stage (queued, working, waiting_for_approval, finished, failed, published, checks_pending, checks_passed, checks_failed), its pull request and checks, and what to do next. Poll it every pollAfterSeconds to follow a run.",
-        annotations(title = "Get run", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn run_get(
-        &self,
-        Parameters(arguments): Parameters<runs::RunGetArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_get(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Stop a run that's queued, working or waiting for an answer, as the run's Stop button does. Its workspace is kept and its open questions are withdrawn; stopping one already stopped changes nothing. Start it again with run_retry (people) or run_request (agents).",
-        annotations(
-            title = "Stop run",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn run_stop(
-        &self,
-        Parameters(arguments): Parameters<runs::RunControlArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_stop(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Start a finished, failed or stopped run again: a new run in the same thread with the same prompt, repository and settings, on your own account. Returns the new run. People with full access only; agents ask with run_request.",
-        annotations(
-            title = "Retry run",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn run_retry(
-        &self,
-        Parameters(arguments): Parameters<runs::RunControlArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_retry(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Dismiss a failed run's notice for yourself, as the notice's Dismiss button does: the run stops showing as needing your attention. The run and its failure stay; dismissing twice changes nothing.",
-        annotations(
-            title = "Dismiss run failure",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn run_dismiss_failure(
-        &self,
-        Parameters(arguments): Parameters<runs::RunDismissFailureArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_dismiss_failure(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Push a finished run's branch to GitHub, as the run page's Publish button does. It's queued for the GitHub worker; run_get shows when it's published. Publishing the same commit again returns the job already queued. Then pull_request_create opens a pull request from it.",
-        annotations(
-            title = "Publish run branch",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = true
-        )
-    )]
-    async fn run_publish(
-        &self,
-        Parameters(arguments): Parameters<publish_tools::RunPublishArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<publish_tools::QueuedValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(publish_tools::run_publish(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
-        annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn run_list(
-        &self,
-        Parameters(arguments): Parameters<runs::RunListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<runs::RunListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(runs::run_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "What a run did: its steps in order (commands with exit code and the end of their output, file changes, the agent's notes, other tools, approvals and test results), test totals, the files it changed against its base, and tokens and estimated cost per model. includeDiff: true adds the unified diff. Secrets were removed before steps were stored.",
-        annotations(
-            title = "Read run steps",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn run_steps(
-        &self,
-        Parameters(arguments): Parameters<run_pages::RunStepsArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<run_pages::RunStepsValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(run_pages::run_steps(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Tokens in, out and cached, and estimated cost, of the runs you can see, totalled per day, project, account or model (groupBy) over the last days (30 by default). Cost comes from the model catalog's prices, or what the harness reported. Your own accounts are named; other people's show as one row.",
-        annotations(
-            title = "Run usage and cost",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn run_usage(
-        &self,
-        Parameters(arguments): Parameters<run_pages::RunUsageArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<run_pages::RunUsageValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(run_pages::run_usage(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's agents and what each is doing now (idle, working on a task, or waiting for an answer), the agent profiles people made there (Reviewer, Planner, Fixer or their own: @handle, harness, model settings, instructions, allowed tools, environment), the harnesses a new agent could run on and the templates. Tag an agent's @handle in a thread to give it work. Profiles are made in project settings.",
-        annotations(
-            title = "List agent profiles",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn agent_profile_list(
-        &self,
-        Parameters(arguments): Parameters<run_pages::AgentProfileListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<run_pages::AgentProfileListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(run_pages::agent_profile_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: make an agent in a project (often from a template such as reviewer), change it (name, @handle, harness, model settings, instructions, allowed tools, environment), turn it off or on, or remove it. The project's owners and admins, through an app connected as themselves; agents read them with agent_profile_list. Audited.",
-        annotations(
-            title = "Change an agent",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn agent_profile_write(
-        &self,
-        Parameters(arguments): Parameters<agent_profile_tools::AgentProfileWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<agent_profile_tools::AgentProfileWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(agent_profile_tools::agent_profile_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's launch queue: what waits to start and why (blocked by a task, waiting for an account slot, a set time), and the latest launches that started, failed or were cancelled.",
-        annotations(
-            title = "List launches",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn launch_list(
-        &self,
-        Parameters(arguments): Parameters<launch_tools::ProjectArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<launch_tools::LaunchListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(launch_tools::launch_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Take a launch out of the queue before it starts, as the queue's Cancel button does: your own, or anyone's if you own or administer the project. Pass its launchId from launch_list. One that already started can't be cancelled; stop its run with run_stop.",
-        annotations(
-            title = "Cancel launch",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn launch_cancel(
-        &self,
-        Parameters(arguments): Parameters<launch_tools::LaunchCancelArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<launch_tools::LaunchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(launch_tools::launch_cancel(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: change a workspace's model list for one harness, as its Runs and models settings do: edit a model (name, context size, prices, reasoning levels, speeds, hiding it, making it the default) or add one by hand with model and overrides, remove one with remove, or refresh the list from the harness through your own signed-in account with refresh. The workspace's owners and admins, through an app connected as themselves. Audited.",
-        annotations(
-            title = "Change model list",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn model_catalog_write(
-        &self,
-        Parameters(arguments): Parameters<model_catalog_tools::ModelCatalogWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<model_catalog_tools::ModelCatalogWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(model_catalog_tools::model_catalog_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

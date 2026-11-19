@@ -193,6 +193,36 @@
     "kind": "query",
     "long": false,
     "module": "agents",
+    "name": "agent_profile_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List agent profiles"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "setting.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_profile_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Change an agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
     "name": "agent_recipe_list",
     "permission": null,
     "preview": false,
@@ -2087,6 +2117,36 @@
   },
   {
     "automation": true,
+    "destructive": true,
+    "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "launch_cancel",
+    "permission": "runs.launch",
+    "preview": false,
+    "proposable": false,
+    "title": "Cancel launch"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "launch_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List launches"
+  },
+  {
+    "automation": true,
     "destructive": false,
     "emits": [
       "workspace.updated"
@@ -2334,6 +2394,22 @@
     "preview": false,
     "proposable": false,
     "title": "Update milestone"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "setting.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "model_catalog_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Change model list"
   },
   {
     "automation": true,
@@ -3664,6 +3740,50 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_failure_hide",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Dismiss run failure"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "runs",
+    "name": "run_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get run"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "run_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List runs"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "run.changed"
     ],
     "idempotent": true,
@@ -3675,6 +3795,22 @@
     "preview": false,
     "proposable": false,
     "title": "Mark a run not started"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_publish",
+    "permission": "code.publish",
+    "preview": false,
+    "proposable": false,
+    "title": "Publish run branch"
   },
   {
     "automation": true,
@@ -3696,6 +3832,68 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_retry",
+    "permission": "runs.launch",
+    "preview": false,
+    "proposable": false,
+    "title": "Retry run"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_start",
+    "permission": "runs.launch",
+    "preview": false,
+    "proposable": false,
+    "title": "Start a run"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "run_step_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read run steps"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "run_stop",
+    "permission": "runs.interrupt",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop run"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "run.changed"
     ],
     "idempotent": true,
@@ -3707,6 +3905,20 @@
     "preview": false,
     "proposable": false,
     "title": "Update a run"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "run_usage_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run usage and cost"
   },
   {
     "automation": true,
@@ -4438,6 +4650,22 @@
     "automation": true,
     "destructive": true,
     "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "task_launch",
+    "permission": "runs.launch",
+    "preview": false,
+    "proposable": false,
+    "title": "Launch tasks"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
       "task.updated"
     ],
     "idempotent": true,
@@ -4838,6 +5066,50 @@
     "preview": false,
     "proposable": false,
     "title": "Update thread"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "run.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "usage_batch_launch",
+    "permission": "runs.launch",
+    "preview": false,
+    "proposable": false,
+    "title": "Launch batch"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "usage_batch_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Suggested batch"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "usage_window_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Usage windows"
   },
   {
     "automation": true,

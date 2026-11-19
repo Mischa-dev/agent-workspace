@@ -20,6 +20,8 @@ export type Envelope<T> =
 
 export type AcceptanceCriterionProjection = { completed: boolean; id: string; position: number; text: string }
 
+export type AccountLine = { accountId: string; bankedResets?: number | null; connected: boolean; harness: string; name: string; readyTasks: number; windows: WindowLine[] }
+
 export type Action = ({ agentProfileId?: string | null; environmentId?: string | null; kind: "launch"; prompt?: string | null }) | { field: string; kind: "set_field"; value: string } | { kind: "notify"; message: string; recipients: Recipients } | { conversationId: string; kind: "post_message"; text: string } | { input: unknown; kind: "run_operation"; operation: string } | ({ accountId: string; conversationId?: string | null; kind: "ask_agent"; prompt: string })
 
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
@@ -35,6 +37,8 @@ export type AssigneeProjection = { actorId: string; displayName: string; handle:
 export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
 export type AvatarLine = { accountId: string; url: string }
+
+export type BatchTaskLine = { environment: string; key: string; priority: string; project: string; projectId: string; reasons: string[]; taskId: string; title: string; unblocks: number }
 
 export type BlockLine = { hash: string; id: string; level?: number | null; markdown?: string | null; position: number; preview?: string | null; type: string }
 
@@ -160,6 +164,8 @@ export type EntryView = { description: string; entry: string; error?: string | n
 
 export type EnvironmentValue = { branch?: string | null; harness: string; harnessName: string; id: string; isDefault: boolean; lastCheckMessage?: string | null; lastCheckOk?: boolean | null; name: string; providerEnvironmentId?: string | null; repositoryId?: string | null; runsOn?: string | null; setupNotes: string; version: number }
 
+export type FailedLine = { project: string; reason: string; tasks: number }
+
 export type FieldDecl = { id: string; label: string; markdown?: boolean; options?: string[]; tones?: Record<string, ChipTone>; type: FieldType }
 
 export type FieldFilterArgument = { field: string; op: FieldOp; values?: string[] }
@@ -247,6 +253,10 @@ export type LastMessage = { at: string; author: string; removed?: boolean; text:
 export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
 export type LaterLine = { done: boolean; id: string; kind: string; messageId?: string | null; note?: string; preview?: string | null; project: string; remindAt?: string | null; task?: string | null; url: string }
+
+export type LaunchValue = { createdAt: string; environment?: string | null; harness?: string | null; id: string; requestedBy: string; runId?: string | null; runState?: string | null; startAt?: string | null; startWhen: string; state: string; statusReason?: string | null; task?: string | null; taskTitle?: string | null; threadUrl?: string | null }
+
+export type LaunchedLine = { environment: string; project: string; tasks: string[] }
 
 export type Layer = { scope: Scope; updatedAt: string; updatedByActorId?: string | null; value: unknown; version: number }
 
@@ -462,9 +472,13 @@ export type RunActivityInput = { at?: string | null; id: string; kind: string; p
 
 export type RunCauseInput = { conversationId?: string | null; kind: string; messageId?: string | null; ref?: string | null; taskId?: string | null }
 
+export type RunPullRequestLine = { checks?: string | null; number: number; review?: string | null; state: string; title: string; url: string }
+
 export type RunRecord = { activityCount: number; cancelRequestedAt?: string | null; clientRunId?: string | null; externalUrl?: string | null; finishedAt?: string | null; liveness: string; reportIntervalSeconds: number; runId: string; state: string; statusLine?: string | null; title: string; version: number }
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
+
+export type RunValue = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
 
 export type SavedSearch = { id: string; name: string; position: number; query: string }
 
@@ -507,6 +521,8 @@ export type SidebarItem = { conversationId: string; hidden: boolean; kind: strin
 export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
 
 export type SkillLine = { description: string; name: string; pageId: string; stale: boolean; title: string; updatedAt: string; version: number }
+
+export type SkippedLine = { project: string; reason: string }
 
 export type SkippedProject = { projectId: string; reason: string }
 
@@ -612,6 +628,8 @@ export type WhiteboardLine = { createdAt: string; createdBy?: string | null; del
 
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
 
+export type WindowLine = { label: string; limitReached: boolean; resetsAt?: string | null; source: string; unusedPercent?: number | null; usedPercent?: number | null }
+
 export type WordLine = { many: string; noun: string; one: string }
 
 export type WorkItemProjection = { acceptanceCriteria: AcceptanceCriterionProjection[]; archived: boolean; assignee?: AssigneeProjection | null; blocked?: BlockedProjection | null; canonicalUrl: string; description: string; descriptionTruncated: boolean; id: string; itemType: NamedProjection; key: string; labels: string[]; linkedPullRequests: PullRequestProjection[]; linkedRepositories: LinkedRepositoryProjection[]; parentWorkItemId?: string | null; priority: string; projectId: string; status: StatusProjection; title: string; version: number }
@@ -679,6 +697,14 @@ export type AgentOfferStartOutput = { commandId: string; page?: string | null }
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 
 export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentProfileListInput = { projectId?: string | null }
+
+export type AgentProfileListOutput = { agents: Array<Record<string, unknown>>; harnesses: Array<Record<string, unknown>>; profiles: Array<Record<string, unknown>>; templates: Array<Record<string, unknown>> }
+
+export type AgentProfileSetInput = { allowedTools?: string[] | null; avatar?: string | null; color?: string | null; description?: string | null; enabled?: boolean | null; environmentId?: string | null; expectedVersion?: number | null; handle?: string | null; harness?: string | null; instructions?: string | null; name?: string | null; profile?: string | null; projectId: string; remove?: boolean | null; runDefaults?: Record<string, unknown> | null; template?: string | null }
+
+export type AgentProfileSetOutput = { done: string; profile?: Record<string, unknown> | null }
 
 export type AgentRecipeListInput = Record<string, never>
 
@@ -1176,6 +1202,14 @@ export type LaterUpdateInput = { at?: string | null; done?: boolean | null; id: 
 
 export type LaterUpdateOutput = { item?: LaterLine | null; removed: boolean }
 
+export type LaunchCancelInput = { launchId: string }
+
+export type LaunchCancelOutput = { createdAt: string; environment?: string | null; harness?: string | null; id: string; requestedBy: string; runId?: string | null; runState?: string | null; startAt?: string | null; startWhen: string; state: string; statusReason?: string | null; task?: string | null; taskTitle?: string | null; threadUrl?: string | null }
+
+export type LaunchListInput = { projectId?: string | null }
+
+export type LaunchListOutput = { queued: LaunchValue[]; recent: LaunchValue[] }
+
 export type LayoutPresetCreateInput = { base?: string | null; description?: string | null; expectedVersion?: number | null; name?: string | null; preset?: string | null; projectId: string; remove?: boolean | null; show?: Record<string, boolean> | null; words?: Record<string, PresetWord> | null }
 
 export type LayoutPresetCreateOutput = { done: string; id: string; name: string; preset?: LayoutPresetLine | null }
@@ -1239,6 +1273,10 @@ export type MilestoneListOutput = { milestones: MilestoneValue[] }
 export type MilestoneUpdateInput = { addTasks?: string[] | null; archived?: boolean | null; clientRequestId?: string | null; description?: string | null; expectedVersion?: number | null; milestoneId?: string | null; name?: string | null; projectId: string; removeTasks?: string[] | null; targetDate?: string | null }
 
 export type MilestoneUpdateOutput = { archived: boolean; canceled?: number; description: string; finished: number; id: string; idempotentReplay?: boolean; name: string; open?: number; overdue: boolean; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
+
+export type ModelCatalogSetInput = { harness: string; model?: string | null; overrides?: unknown; projectId: string; refresh?: boolean | null; remove?: boolean | null }
+
+export type ModelCatalogSetOutput = { done: string; harness: unknown }
 
 export type ModuleArchiveInput = { moduleId: string; parts: ArchiveParts }
 
@@ -1588,17 +1626,53 @@ export type RunDetailGetInput = { runId: string }
 
 export type RunDetailGetOutput = { activities: ActivityLine[]; agentActorId: string; agentName: string; backend?: string | null; branch?: string | null; builtin: boolean; cachedInputTokens: number; causeKind: string; causeRef?: string | null; conversationId?: string | null; cost?: number | null; costConfidence?: string | null; createdAt: string; currency?: string | null; externalUrl?: string | null; failureReason?: string | null; finishedAt?: string | null; gapCount: number; harness?: string | null; harnessName?: string | null; hiddenActivities: number; hostId?: string | null; hostName?: string | null; id: string; inputTokens: number; lastReportAt?: string | null; liveness: string; model?: string | null; organizationId: string; outcomeSummary?: string | null; outputTokens: number; plan?: unknown; projectId?: string | null; projectKey?: string | null; projectName?: string | null; pullRequestNumber?: number | null; pullRequestState?: string | null; pullRequestUrl?: string | null; pullRequests: PullRequest[]; requestedByActorId?: string | null; requestedByName?: string | null; requests: RequestLine[]; results: unknown[]; startedAt?: string | null; state: string; statusLine?: string | null; taskId?: string | null; taskKey?: string | null; taskTitle?: string | null; threadName?: string | null; title: string; updatedAt: string; usageByModel: ModelUsageLine[]; waitingOnRequestId?: string | null; waitingOnTitle?: string | null }
 
+export type RunFailureHideInput = { runId: string }
+
+export type RunFailureHideOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
+export type RunGetInput = { runId: string }
+
+export type RunGetOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
+export type RunListInput = { limit?: number | null; mine?: boolean | null; projectId?: string | null; state?: string | null }
+
+export type RunListOutput = { runs: RunValue[] }
+
 export type RunMarkNotStartedInput = { runId: string }
 
 export type RunMarkNotStartedOutput = { idempotentReplay?: boolean; run: RunRecord }
+
+export type RunPublishInput = { runId: string }
+
+export type RunPublishOutput = { job: Record<string, unknown>; queued: boolean }
 
 export type RunResultReportInput = { results: RunResultInput[]; runId: string }
 
 export type RunResultReportOutput = { added: number; run: RunRecord }
 
+export type RunRetryInput = { clientRequestId?: string | null; runId: string }
+
+export type RunRetryOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
+export type RunStartInput = { clientRequestId?: string | null; harness?: string | null; model?: string | null; prompt: string; reasoning?: string | null; repositoryId?: string | null; speed?: string | null; threadId: string }
+
+export type RunStartOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
+export type RunStepListInput = { includeDiff?: boolean; runId: string }
+
+export type RunStepListOutput = { diff?: Record<string, unknown> | null; run: Record<string, unknown> }
+
+export type RunStopInput = { clientRequestId?: string | null; runId: string }
+
+export type RunStopOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
 export type RunUpdateInput = { backend?: string | null; expectedVersion?: number | null; externalUrl?: string | null; failureReason?: string | null; outcomeSummary?: string | null; runId: string; state?: string | null; statusLine?: string | null; title?: string | null }
 
 export type RunUpdateOutput = { idempotentReplay?: boolean; run: RunRecord }
+
+export type RunUsageListInput = { days?: number | null; groupBy?: string | null; projectId?: string | null }
+
+export type RunUsageListOutput = { usage: Record<string, unknown> }
 
 export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: number | null; currency?: string | null; inputTokens?: number | null; model: string; outputTokens?: number | null; reportKey: string; runId?: string | null; spaceId?: string | null; windowEnd?: string | null; windowStart?: string | null }
 
@@ -1788,6 +1862,10 @@ export type TaskImportInput = { commit?: boolean | null; githubState?: string | 
 
 export type TaskImportOutput = { import: unknown; nextStep: string }
 
+export type TaskLaunchInput = { agentAccountId?: string | null; attempts?: number | null; clientRequestId?: string | null; environmentId?: string | null; harness?: string | null; model?: string | null; prompt?: string | null; reasoning?: string | null; speed?: string | null; startAt?: string | null; startWhen?: string | null; taskIds: string[] }
+
+export type TaskLaunchOutput = { launches: LaunchValue[] }
+
 export type TaskLinkInput = { blockedBy?: string[] | null; blocks?: string[] | null; close?: boolean | null; conversationId?: string | null; decisionId?: string | null; expectedVersion?: number | null; kind?: string | null; messageId?: string | null; otherTaskId?: string | null; pageId?: string | null; pullRequestId?: string | null; remove?: boolean | null; repositoryId?: string | null; role?: string | null; taskId: string; whiteboardId?: string | null }
 
 export type TaskLinkOutput = DependencyValue | RelationsValue | LinkValue
@@ -1891,6 +1969,18 @@ export type ThreadStartOutput = { created?: boolean | null; id: string; message?
 export type ThreadUpdateInput = { clearOutcome?: boolean | null; name?: string | null; outcome?: string | null; status?: string | null; threadId: string }
 
 export type ThreadUpdateOutput = { created?: boolean | null; id: string; message?: SentMessage | null; name: string; outcome?: string | null; parentId: string; status: string; url: string }
+
+export type UsageBatchLaunchInput = { accountId: string; clientRequestId?: string | null; taskIds?: string[] | null; windowKey?: string | null }
+
+export type UsageBatchLaunchOutput = { failed: FailedLine[]; launched: number; projects: LaunchedLine[] }
+
+export type UsageBatchPreviewInput = { accountId: string; windowKey?: string | null }
+
+export type UsageBatchPreviewOutput = { account: string; harness: string; more: BatchTaskLine[]; size: number; sizing: string; skipped: SkippedLine[]; tasks: BatchTaskLine[] }
+
+export type UsageWindowListInput = { accountId?: string | null }
+
+export type UsageWindowListOutput = { accounts: AccountLine[] }
 
 export type ViewCreateInput = { collection: string; config?: unknown; name: string; position?: number | null; shared?: boolean; type: string }
 
@@ -2005,6 +2095,8 @@ export type Operations = {
   agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
   agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
   agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_profile_list: { input: AgentProfileListInput; output: AgentProfileListOutput }
+  agent_profile_set: { input: AgentProfileSetInput; output: AgentProfileSetOutput }
   agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
   agent_ref_decide: { input: AgentRefDecideInput; output: AgentRefDecideOutput }
   agent_ref_remove: { input: AgentRefRemoveInput; output: AgentRefRemoveOutput }
@@ -2129,6 +2221,8 @@ export type Operations = {
   later_list: { input: LaterListInput; output: LaterListOutput }
   later_save: { input: LaterSaveInput; output: LaterSaveOutput }
   later_update: { input: LaterUpdateInput; output: LaterUpdateOutput }
+  launch_cancel: { input: LaunchCancelInput; output: LaunchCancelOutput }
+  launch_list: { input: LaunchListInput; output: LaunchListOutput }
   layout_preset_create: { input: LayoutPresetCreateInput; output: LayoutPresetCreateOutput }
   layout_preset_update: { input: LayoutPresetUpdateInput; output: LayoutPresetUpdateOutput }
   layout_update: { input: LayoutUpdateInput; output: LayoutUpdateOutput }
@@ -2145,6 +2239,7 @@ export type Operations = {
   milestone_create: { input: MilestoneCreateInput; output: MilestoneCreateOutput }
   milestone_list: { input: MilestoneListInput; output: MilestoneListOutput }
   milestone_update: { input: MilestoneUpdateInput; output: MilestoneUpdateOutput }
+  model_catalog_set: { input: ModelCatalogSetInput; output: ModelCatalogSetOutput }
   module_archive: { input: ModuleArchiveInput; output: ModuleArchiveOutput }
   module_create: { input: ModuleCreateInput; output: ModuleCreateOutput }
   module_list: { input: ModuleListInput; output: ModuleListOutput }
@@ -2232,9 +2327,18 @@ export type Operations = {
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
   run_detail_get: { input: RunDetailGetInput; output: RunDetailGetOutput }
+  run_failure_hide: { input: RunFailureHideInput; output: RunFailureHideOutput }
+  run_get: { input: RunGetInput; output: RunGetOutput }
+  run_list: { input: RunListInput; output: RunListOutput }
   run_mark_not_started: { input: RunMarkNotStartedInput; output: RunMarkNotStartedOutput }
+  run_publish: { input: RunPublishInput; output: RunPublishOutput }
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
+  run_retry: { input: RunRetryInput; output: RunRetryOutput }
+  run_start: { input: RunStartInput; output: RunStartOutput }
+  run_step_list: { input: RunStepListInput; output: RunStepListOutput }
+  run_stop: { input: RunStopInput; output: RunStopOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
+  run_usage_list: { input: RunUsageListInput; output: RunUsageListOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
   saved_search_list: { input: SavedSearchListInput; output: SavedSearchListOutput }
   saved_search_set: { input: SavedSearchSetInput; output: SavedSearchSetOutput }
@@ -2282,6 +2386,7 @@ export type Operations = {
   task_criteria_update: { input: TaskCriteriaUpdateInput; output: TaskCriteriaUpdateOutput }
   task_get: { input: TaskGetInput; output: TaskGetOutput }
   task_import: { input: TaskImportInput; output: TaskImportOutput }
+  task_launch: { input: TaskLaunchInput; output: TaskLaunchOutput }
   task_link: { input: TaskLinkInput; output: TaskLinkOutput }
   task_link_many: { input: TaskLinkManyInput; output: TaskLinkManyOutput }
   task_list: { input: TaskListInput; output: TaskListOutput }
@@ -2308,6 +2413,9 @@ export type Operations = {
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
   thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }
+  usage_batch_launch: { input: UsageBatchLaunchInput; output: UsageBatchLaunchOutput }
+  usage_batch_preview: { input: UsageBatchPreviewInput; output: UsageBatchPreviewOutput }
+  usage_window_list: { input: UsageWindowListInput; output: UsageWindowListOutput }
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
   view_default_set: { input: ViewDefaultSetInput; output: ViewDefaultSetOutput }
   view_delete: { input: ViewDeleteInput; output: ViewDeleteOutput }

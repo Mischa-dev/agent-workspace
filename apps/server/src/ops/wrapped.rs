@@ -18,6 +18,7 @@ macro_rules! tool_op {
             idempotency: $idem:ident,
             $(destructive: $destructive:literal,)?
             $(spans: $spans:literal,)?
+            $(home: $home:literal,)?
             $(resource: $resource:expr,)?
             $(audited: $audited:literal,)?
             title: $title:literal,
@@ -38,6 +39,7 @@ macro_rules! tool_op {
             const IDEMPOTENCY: crate::ops::Idempotency = crate::ops::Idempotency::$idem;
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(const SPANS_WORKSPACES: bool = $spans;)?
+            $(const HOME_WORKSPACE_BY_DEFAULT: bool = $home;)?
             $(const RESOURCE: Option<crate::ops::ResourceAddress> = Some($resource);)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
@@ -82,6 +84,16 @@ macro_rules! run_tool {
         let principal = crate::work_items::ops::reads::reader($call.state, $call.ctx).await?;
         crate::mcp::task_commands::tool_answer($command($call.state, &principal, $arguments).await)
     }};
+    // As `as_tool`, and where the call reaches no space at all (a person's
+    // session naming none), in the workspace's own space, whose workspace
+    // the command reads.
+    ($call:ident, in_workspace, $command:path, $arguments:expr) => {{
+        let mut principal = crate::work_items::ops::reads::reader($call.state, $call.ctx).await?;
+        if principal.project_id.is_nil() {
+            principal.project_id = crate::ops::wrapped::own_space($call.state, $call.ctx).await?;
+        }
+        crate::mcp::task_commands::tool_answer($command($call.state, &principal, $arguments).await)
+    }};
     ($call:ident, $command:path, $arguments:expr) => {
         crate::ops::wrapped::run_tool!($call, None, $command, $arguments)
     };
@@ -92,6 +104,32 @@ macro_rules! run_tool {
 }
 
 pub(crate) use {run_tool, tool_op};
+
+/// The space a credential was made in (`$1`, an MCP secret or an app's
+/// grant, held by `$2`): where a call naming none acted before operations.
+pub(crate) const CREDENTIAL_ANCHOR_SQL: &str = "SELECT anchor.project_id FROM ( \
+     SELECT project_id FROM account_credentials WHERE id = $1 AND actor_id = $2 \
+     UNION ALL \
+     SELECT project_id FROM mcp_oauth_grants WHERE id = $1 AND actor_id = $2 \
+     ) anchor LIMIT 1";
+
+/// The workspace's own space, for a command that reads its workspace from
+/// a space; nil when the call spans workspaces.
+pub(crate) async fn own_space(
+    state: &crate::AppState,
+    ctx: &super::OpContext,
+) -> Result<uuid::Uuid, super::OpError> {
+    if ctx.workspace_id.is_nil() {
+        return Ok(uuid::Uuid::nil());
+    }
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(|error| super::OpError::logged(ctx.op, &error.into()))?;
+    crate::spaces::workspace::find(&mut transaction, ctx.workspace_id)
+        .await
+        .map(Option::unwrap_or_default)
+        .map_err(|error| super::OpError::logged(ctx.op, &error))
+}
 
 /// A `_write` tool split in two: a create names no existing thing, an
 /// update does.

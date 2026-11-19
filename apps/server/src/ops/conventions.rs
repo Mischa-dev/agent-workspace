@@ -37,6 +37,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "propose",
             // A template made from what's there, such as a workspace (K2.17).
             "save",
+            // Work handed to agents: runs started from tasks (K2.19).
+            "launch",
         ],
     ),
     (
@@ -70,6 +72,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            // A run's work goes out to its code host (K2.19).
+            "publish",
             // A group's agents take more turns (K2.8).
             "continue",
             // An agent passes on, or a person stops, a reply request (K2.9).

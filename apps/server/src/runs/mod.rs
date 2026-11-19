@@ -43,6 +43,7 @@ pub mod sql;
 pub mod state;
 pub mod steps;
 pub mod store;
+pub mod tool_ops;
 pub mod usage;
 pub mod views;
 
