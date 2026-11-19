@@ -146,7 +146,7 @@ pub async fn task_links(
                AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
-        FROM work_item_dependencies dependency
+        FROM task_dependencies dependency
         JOIN task_rows item
           ON item.project_id = dependency.blocking_project_id
          AND item.id = dependency.blocking_work_item_id
@@ -165,7 +165,7 @@ pub async fn task_links(
     .await?;
     let blocks = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
-        FROM work_item_dependencies dependency
+        FROM task_dependencies dependency
         JOIN task_rows item
           ON item.project_id = dependency.project_id
          AND item.id = dependency.blocked_work_item_id
@@ -188,7 +188,7 @@ pub async fn task_links(
                   WHEN relation.kind = 'duplicates' THEN 'duplicated_by'
                   ELSE 'relates_to' END AS relation_kind,
                {TASK_REF_COLUMNS}
-        FROM work_item_relations relation
+        FROM task_relations relation
         JOIN task_rows item
           ON item.id = CASE WHEN relation.work_item_id = $2
                             THEN relation.other_work_item_id ELSE relation.work_item_id END
@@ -212,7 +212,7 @@ pub async fn task_links(
         SELECT status.semantic_category IN ('completed', 'canceled'),
                item.blocked_reason IS NOT NULL,
                (SELECT count(*)
-                  FROM work_item_dependencies dependency
+                  FROM task_dependencies dependency
                   JOIN task_rows blocker
                     ON blocker.project_id = dependency.blocking_project_id
                    AND blocker.id = dependency.blocking_work_item_id
@@ -284,7 +284,7 @@ struct RelationRow {
 /// SQL for a task row aliased `item`: how many unfinished tasks block it.
 pub const OPEN_BLOCKER_COUNT: &str = r#"
     (SELECT count(*)
-       FROM work_item_dependencies dependency
+       FROM task_dependencies dependency
        JOIN task_rows blocker
          ON blocker.project_id = dependency.blocking_project_id
         AND blocker.id = dependency.blocking_work_item_id
@@ -300,7 +300,7 @@ pub const OPEN_BLOCKER_COUNT: &str = r#"
 /// SQL condition for a task row aliased `item`: some unfinished task blocks it.
 pub const HAS_OPEN_BLOCKER: &str = r#"
     EXISTS (SELECT 1
-       FROM work_item_dependencies dependency
+       FROM task_dependencies dependency
        JOIN task_rows blocker
          ON blocker.project_id = dependency.blocking_project_id
         AND blocker.id = dependency.blocking_work_item_id
@@ -507,11 +507,11 @@ async fn blocking_path(
         r#"
         WITH RECURSIVE reach(node, via) AS (
             SELECT dependency.blocked_work_item_id, dependency.blocking_work_item_id
-            FROM work_item_dependencies dependency
+            FROM task_dependencies dependency
             WHERE dependency.blocking_work_item_id = $1
             UNION
             SELECT dependency.blocked_work_item_id, dependency.blocking_work_item_id
-            FROM work_item_dependencies dependency
+            FROM task_dependencies dependency
             JOIN reach ON dependency.blocking_work_item_id = reach.node
         )
         SELECT via, node FROM reach
@@ -605,15 +605,10 @@ pub async fn change_dependencies(
             Direction::Blocks => (task, other),
         };
         let rows = if remove {
-            sqlx::query(
-                "DELETE FROM work_item_dependencies WHERE project_id = $1 AND blocking_work_item_id = $2 AND blocked_work_item_id = $3",
+            u64::from(
+                crate::links::drop_explicit(transaction, blocking.id, blocked.id, "blocks", false)
+                    .await?,
             )
-            .bind(blocked.project_id)
-            .bind(blocking.id)
-            .bind(blocked.id)
-            .execute(&mut **transaction)
-            .await?
-            .rows_affected()
         } else {
             if let Some(path) = blocking_path(transaction, blocked.id, blocking.id).await? {
                 let keys = keys_for(transaction, actor, &path).await?;
@@ -622,9 +617,9 @@ pub async fn change_dependencies(
             let (blockers, blocking_count) = sqlx::query_as::<_, (i64, i64)>(
                 r#"
                 SELECT
-                    (SELECT count(*) FROM work_item_dependencies
+                    (SELECT count(*) FROM task_dependencies
                       WHERE blocked_work_item_id = $1 AND blocking_work_item_id <> $2),
-                    (SELECT count(*) FROM work_item_dependencies
+                    (SELECT count(*) FROM task_dependencies
                       WHERE blocking_work_item_id = $2 AND blocked_work_item_id <> $1)
                 "#,
             )
@@ -645,28 +640,22 @@ pub async fn change_dependencies(
                     },
                 )));
             }
-            let inserted = sqlx::query(
-                r#"
-                INSERT INTO work_item_dependencies (
-                    project_id, blocking_work_item_id, blocked_work_item_id,
-                    created_by_actor_id, blocking_project_id
-                ) VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING
-                "#,
+            match crate::links::put_explicit(
+                transaction,
+                blocking.id,
+                blocked.id,
+                "blocks",
+                Some(actor.actor_id),
             )
-            .bind(blocked.project_id)
-            .bind(blocking.id)
-            .bind(blocked.id)
-            .bind(actor.actor_id)
-            .bind(blocking.project_id)
-            .execute(&mut **transaction)
-            .await;
-            match inserted {
-                Ok(result) => result.rows_affected(),
-                Err(error) if is_check_violation(&error) => {
+            .await?
+            {
+                Ok(made) => u64::from(made),
+                Err(crate::links::Refused::OtherWorkspace) => {
                     return Ok(Err((index, LinkRefusal::OtherWorkspace)));
                 }
-                Err(error) => return Err(error.into()),
+                Err(crate::links::Refused::NotThings) => {
+                    return Ok(Err((index, LinkRefusal::NotFound)));
+                }
             }
         };
         if rows == 0 {
@@ -816,13 +805,6 @@ async fn keys_for(
         .collect())
 }
 
-fn is_check_violation(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|database| database.code())
-        .is_some_and(|code| code == "23514")
-}
-
 // ---------------------------------------------------------------------------
 // Relations
 
@@ -877,20 +859,16 @@ pub async fn change_relation(
         }));
     }
     let rows = if remove {
-        sqlx::query(
-            r#"
-            DELETE FROM work_item_relations
-            WHERE kind = $1
-              AND ((work_item_id = $2 AND other_work_item_id = $3)
-                   OR ($1 = 'relates_to' AND work_item_id = $3 AND other_work_item_id = $2))
-            "#,
+        u64::from(
+            crate::links::drop_explicit(
+                transaction,
+                task_id,
+                other_id,
+                kind.as_str(),
+                kind == RelationKind::RelatesTo,
+            )
+            .await?,
         )
-        .bind(kind.as_str())
-        .bind(task_id)
-        .bind(other_id)
-        .execute(&mut **transaction)
-        .await?
-        .rows_affected()
     } else {
         if kind == RelationKind::Duplicates
             && let Some(original) = sqlx::query_scalar::<_, String>(
@@ -900,7 +878,7 @@ pub async fn change_relation(
                     THEN project.project_key || '-' || item.number
                     ELSE 'a task in another project'
                 END
-                FROM work_item_relations relation
+                FROM task_relations relation
                 JOIN task_rows item ON item.id = relation.other_work_item_id
                 JOIN projects project ON project.id = item.project_id
                 WHERE relation.kind = 'duplicates' AND relation.work_item_id = $1
@@ -920,7 +898,7 @@ pub async fn change_relation(
         for end in [task, other] {
             let count = sqlx::query_scalar::<_, i64>(
                 r#"
-                SELECT count(*) FROM work_item_relations
+                SELECT count(*) FROM task_relations
                 WHERE (work_item_id = $1 OR other_work_item_id = $1)
                   AND NOT ((work_item_id = $1 AND other_work_item_id = $2)
                            OR (work_item_id = $2 AND other_work_item_id = $1))
@@ -936,30 +914,20 @@ pub async fn change_relation(
                 }));
             }
         }
-        let inserted = sqlx::query(
-            r#"
-            INSERT INTO work_item_relations (
-                id, kind, project_id, work_item_id, other_project_id, other_work_item_id,
-                created_by_actor_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
-            "#,
+        match crate::links::put_explicit(
+            transaction,
+            task.id,
+            other.id,
+            kind.as_str(),
+            Some(actor.actor_id),
         )
-        .bind(Uuid::now_v7())
-        .bind(kind.as_str())
-        .bind(task.project_id)
-        .bind(task.id)
-        .bind(other.project_id)
-        .bind(other.id)
-        .bind(actor.actor_id)
-        .execute(&mut **transaction)
-        .await;
-        match inserted {
-            Ok(result) => result.rows_affected(),
-            Err(error) if is_check_violation(&error) => {
+        .await?
+        {
+            Ok(made) => u64::from(made),
+            Err(crate::links::Refused::OtherWorkspace) => {
                 return Ok(Err(LinkRefusal::OtherWorkspace));
             }
-            Err(error) => return Err(error.into()),
+            Err(crate::links::Refused::NotThings) => return Ok(Err(LinkRefusal::NotFound)),
         }
     };
     let mut activities: HashMap<Uuid, Vec<(String, String, serde_json::Value)>> = HashMap::new();

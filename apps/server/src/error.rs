@@ -145,6 +145,9 @@ pub enum AppError {
     /// The workspace is suspended, or being deleted (H1.24).
     #[error("the workspace is suspended")]
     WorkspaceSuspended,
+    /// A plan, workspace or spend limit refused it (H1.25).
+    #[error("the {} limit is reached", .0.meter)]
+    LimitReached(Box<crate::metering::LimitRefusal>),
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
     /// Work under a lease (K5.2) found the lease gone: another instance
@@ -187,6 +190,7 @@ impl AppError {
             Self::SecretsNotConfigured => "secrets_not_configured",
             Self::ModuleOff { .. } => "module_off",
             Self::WorkspaceSuspended => "workspace_suspended",
+            Self::LimitReached(_) => "limit_reached",
             Self::Internal(_) => "internal",
             Self::LeaseLost => "lease_lost",
         }
@@ -238,6 +242,9 @@ enum ErrorDetails {
     Module {
         module: &'static str,
     },
+    Limit {
+        limit: crate::metering::LimitRefusal,
+    },
 }
 
 impl IntoResponse for AppError {
@@ -262,6 +269,9 @@ impl IntoResponse for AppError {
                 action: "connect_provider_account",
             }),
             Self::ModuleOff { module } => Some(ErrorDetails::Module { module }),
+            Self::LimitReached(refusal) => Some(ErrorDetails::Limit {
+                limit: (**refusal).clone(),
+            }),
             _ => None,
         };
         let (status, code, message, retry_after_seconds) = match self {
@@ -403,6 +413,12 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 "module_off",
                 "This part of the workspace is turned off.",
+                None,
+            ),
+            Self::LimitReached(_) => (
+                StatusCode::PAYMENT_REQUIRED,
+                "limit_reached",
+                "A limit is reached. Its details say which, when it resets and who can raise it.",
                 None,
             ),
             Self::WorkspaceSuspended => (

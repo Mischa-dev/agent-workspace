@@ -227,7 +227,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         assert_eq!(related["outcome"], "not_found", "{related}");
     }
     let crossing = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_dependencies WHERE project_id = $1 OR blocking_project_id = $1",
+        "SELECT count(*) FROM task_dependencies WHERE project_id = $1 OR blocking_project_id = $1",
     )
     .bind(other.parse::<Uuid>().expect("other id"))
     .fetch_one(&setup.pool)

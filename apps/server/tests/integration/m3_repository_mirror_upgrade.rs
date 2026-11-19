@@ -45,6 +45,7 @@ async fn legacy_mirror_is_copied_to_canonical_layout_without_removing_history() 
         ),
     ]))
     .expect("repository-upgrade configuration");
+    crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed pre-M3 repository rows");

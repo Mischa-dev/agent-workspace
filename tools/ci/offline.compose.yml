@@ -1,0 +1,15 @@
+# H1.19: the compose stack with no way out. Used with
+# deploy/container/compose.yml by tools/ci/image-smoke.sh: the services
+# share one internal network, which reaches neither the internet nor the
+# host, so the server has to start and get ready on its own.
+services:
+  db:
+    networks: [closed]
+  app:
+    networks: [closed]
+    # An internal network can't publish ports to the host.
+    ports: !reset []
+
+networks:
+  closed:
+    internal: true

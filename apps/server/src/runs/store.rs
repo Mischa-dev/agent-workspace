@@ -341,3 +341,21 @@ pub async fn space_of_own(
     .await?
     .flatten())
 }
+
+/// The account a built-in run's worker acts as, for routing what it streams.
+pub async fn worker_actor_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT worker.actor_id
+        FROM agent_runs run
+        JOIN execution_workers worker ON worker.id = run.execution_worker_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}

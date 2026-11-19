@@ -1,4 +1,5 @@
 pub mod identity;
+pub mod oidc;
 pub mod password;
 pub mod workos;
 
@@ -41,6 +42,7 @@ const MAX_COOKIE_VALUE_BYTES: usize = 256;
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(workos::router())
+        .merge(oidc::router())
         .route("/api/v1/auth/session", get(read_session))
         .route("/api/v1/auth/csrf", get(read_csrf))
         .route("/api/v1/auth/login", post(login))

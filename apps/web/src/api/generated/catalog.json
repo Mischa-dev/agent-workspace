@@ -81,6 +81,20 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "activity_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List activity"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
     "kind": "describe",
     "long": false,
     "module": "agents",
@@ -1669,6 +1683,38 @@
     "title": "Link to a file"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.attached"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "file_upload_finish",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Finish a direct upload"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.upload_started"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "file_upload_start",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Start a direct upload"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2118,6 +2164,52 @@
     "preview": false,
     "proposable": false,
     "title": "Save an inbox view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "incoming_hook.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_create",
+    "permission": "automations.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Make an incoming hook"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "incoming_hook.deleted"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_delete",
+    "permission": "automations.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Delete an incoming hook"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List incoming hooks"
   },
   {
     "automation": true,
@@ -4529,6 +4621,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "link.created"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "thing_link",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link two things"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "thing.share_changed"
     ],
     "idempotent": true,
@@ -4572,6 +4680,22 @@
     "preview": false,
     "proposable": false,
     "title": "Stop sharing one thing"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "link.deleted"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "thing_unlink",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Take a link away"
   },
   {
     "automation": false,
@@ -4926,6 +5050,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "workspace.transfer_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_export_start",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "Export the workspace"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "account.profile_changed"
     ],
     "idempotent": true,
@@ -4967,5 +5107,93 @@
     "preview": true,
     "proposable": false,
     "title": "Change what the workspace is for"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_get",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "See the workspace's file bucket"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.file_store_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_revoke",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop using the workspace's own file bucket"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.file_store_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Use the workspace's own file bucket"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_transfer_get",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "See a workspace export"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_transfer_list",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "List workspace exports"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_usage_get",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "See the workspace's usage"
   }
 ]

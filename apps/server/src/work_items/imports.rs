@@ -1977,7 +1977,7 @@ async fn export_tasks(
                     ELSE project.project_key || '-' || parent.number END AS parent,
                COALESCE((
                    SELECT array_agg(project.project_key || '-' || blocker.number ORDER BY blocker.number)
-                   FROM work_item_dependencies dependency
+                   FROM task_dependencies dependency
                    JOIN task_rows blocker
                      ON blocker.project_id = dependency.project_id
                     AND blocker.id = dependency.blocking_work_item_id

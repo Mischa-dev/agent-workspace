@@ -21,6 +21,7 @@ use std::{collections::HashMap, time::Duration};
 use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use super::{LOGGED_EVENT_COLUMNS, LoggedEvent};
 use crate::{
@@ -79,6 +80,12 @@ pub trait Consumer: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EventFilter<'a> {
     pub types: Option<&'a [&'a str]>,
+    /// Only these workspaces' events (R19: one cursor over every workspace
+    /// a connection reaches, in the one global position order); every
+    /// workspace's when None.
+    pub workspaces: Option<&'a [Uuid]>,
+    /// With `workspaces`, also the direct scope's (DMs and groups).
+    pub direct: bool,
 }
 
 /// Events after `after`, oldest first, that pass `filter`. For consumers
@@ -96,11 +103,16 @@ pub async fn read(
     Ok(sqlx::query_as::<_, LoggedEvent>(&format!(
         "SELECT {LOGGED_EVENT_COLUMNS} FROM events \
          WHERE position > $1 AND ($3::text[] IS NULL OR type = ANY($3)) \
+           AND ($4::uuid[] IS NULL OR workspace_id = ANY($4) \
+                OR ($5 AND workspace_id = $6)) \
          ORDER BY position LIMIT $2"
     ))
     .bind(after)
     .bind(limit.clamp(1, 5000))
     .bind(types)
+    .bind(filter.workspaces)
+    .bind(filter.direct)
+    .bind(super::DIRECT_SCOPE_ID)
     .fetch_all(&mut *connection)
     .await?)
 }
@@ -161,23 +173,45 @@ impl<C: Consumer> Runner<C> {
             });
         };
         let limit = if one_by_one { 1 } else { BATCH };
+        // A consumer of some types only moves past the rest too: the log's
+        // head, read before the batch (the counter and the events it counts
+        // commit together), is a position every event up to it is visible
+        // at. Without it, a cursor behind thousands of other events reads
+        // them all again on every poll.
+        let head = match self.consumer.types() {
+            Some(_) => Some(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT next_position - 1 FROM event_position_counter",
+                )
+                .fetch_one(&mut *transaction)
+                .await?,
+            ),
+            None => None,
+        };
         let batch = read(
             &mut transaction,
             &EventFilter {
                 types: self.consumer.types(),
+                ..EventFilter::default()
             },
             cursor,
             limit,
         )
         .await?;
+        // A short batch held every matching event up to the head.
+        let passed = head.filter(|_| batch.len() < usize::try_from(limit).unwrap_or(usize::MAX));
         let Some(last) = batch.last().map(|event| event.position) else {
+            if let Some(head) = passed.filter(|head| *head > cursor) {
+                advance(&mut transaction, self.consumer.name(), head).await?;
+            }
             transaction.commit().await?;
             self.batch_failures = 0;
             return Ok(Round::default());
         };
         match self.consumer.handle(&mut transaction, &batch).await {
             Ok(()) => {
-                advance(&mut transaction, self.consumer.name(), last).await?;
+                let to = passed.map_or(last, |head| head.max(last));
+                advance(&mut transaction, self.consumer.name(), to).await?;
                 transaction.commit().await?;
                 self.event_failures.remove(&last);
                 self.passed(last);
@@ -429,12 +463,37 @@ async fn run_rounds<C: Consumer>(
 /// held by another runner. For tests and tools that need the log's effects
 /// now rather than at the next poll; returns how many events were handled.
 pub async fn catch_up(pool: &PgPool) -> Result<usize, AppError> {
+    let round = log_round(pool, None).await?;
+    Ok(round.handled)
+}
+
+/// What a round of the log did (K5.18).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogRound {
+    pub handled: usize,
+    /// The round stopped at its deadline before the consumers caught up.
+    pub more: bool,
+}
+
+/// The sequencer and the server's own consumers, round after round, until
+/// they catch up or `deadline` passes, then a sweep of their parked
+/// events: the log's share of a tick.
+pub async fn log_round(
+    pool: &PgPool,
+    deadline: Option<std::time::Instant>,
+) -> Result<LogRound, AppError> {
     crate::tenancy::system("events.log", async {
         let mut router = Runner::new(super::Router);
         let mut notifier = Runner::new(crate::notifications::Notifier);
         let mut pusher = Runner::new(crate::delivery::push::Pusher);
-        let mut handled = 0;
+        let mut round = LogRound {
+            more: true,
+            ..LogRound::default()
+        };
         for _ in 0..50 {
+            if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                break;
+            }
             super::sequencer::step(pool).await?;
             let routed = router.round(pool).await?;
             let notified = notifier.round(pool).await?;
@@ -445,12 +504,18 @@ pub async fn catch_up(pool: &PgPool) -> Result<usize, AppError> {
                 + notified.parked
                 + pushed.handled
                 + pushed.parked;
-            handled += done;
+            round.handled += done;
             if done == 0 {
+                round.more = false;
                 break;
             }
         }
-        Ok(handled)
+        if deadline.is_some() {
+            router.sweep(pool).await?;
+            notifier.sweep(pool).await?;
+            pusher.sweep(pool).await?;
+        }
+        Ok(round)
     })
     .await
 }

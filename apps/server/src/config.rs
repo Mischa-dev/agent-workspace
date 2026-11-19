@@ -71,6 +71,22 @@ impl fmt::Debug for SecretString {
     }
 }
 
+/// An S3-compatible store (K5.12). The endpoint is the operator's, never a
+/// workspace's; the access keys are read from owner-only files.
+#[derive(Clone, Debug)]
+pub struct ObjectStoreConfig {
+    pub endpoint: url::Url,
+    pub bucket: String,
+    pub region: String,
+    /// Put before every key, ending in `/`, or empty.
+    pub prefix: String,
+    /// `endpoint/bucket/key` rather than `bucket.endpoint/key` (MinIO and
+    /// most self-hosted stores).
+    pub path_style: bool,
+    pub access_key_id_path: PathBuf,
+    pub secret_access_key_path: PathBuf,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub environment: Environment,
@@ -127,6 +143,8 @@ pub struct AppConfig {
     pub demo_executor: bool,
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
+    /// Plain OpenID Connect sign-in with one issuer (H1.18).
+    pub oidc: Option<OidcConfig>,
     pub log_filter: String,
     /// The secrets master keyring (S1): an owner-only file outside the data
     /// and release roots. Unset in development, a keyring under
@@ -139,6 +157,12 @@ pub struct AppConfig {
     pub push_contact: Option<String>,
     /// The bearer token `/metrics` requires (O2), as an owner-only file.
     pub metrics_token_path: Option<PathBuf>,
+    /// Where new uploads are stored (K5.12): `local` (the data root, the
+    /// default) or `object` (`AGENT_WORKSPACE_FILE_STORE`). Files already
+    /// stored stay where their row says.
+    pub file_store: String,
+    /// The S3-compatible store (`AGENT_WORKSPACE_S3_*`), when one is set.
+    pub object_store: Option<ObjectStoreConfig>,
     /// Background jobs run at once in this process (F9).
     pub job_concurrency: usize,
     /// Lets workspaces point their model provider (`ai.base_url`) and mail
@@ -212,6 +236,18 @@ pub struct AppConfig {
     /// Where an instance without `api` answers health checks:
     /// `AGENT_WORKSPACE_HEALTH_ADDR`, default the application address.
     pub health_addr: Option<SocketAddr>,
+    /// Whether a `work` instance runs its queue work by itself
+    /// (`AGENT_WORKSPACE_WORK_LOOP`, default on), or only when an outside
+    /// timer calls `POST /internal/work/tick` (K5.18).
+    pub work_loop: bool,
+    /// An owner-only file holding the bearer token the tick requires
+    /// (`AGENT_WORKSPACE_WORK_TICK_SECRET_PATH`); without it there is no
+    /// tick.
+    pub work_tick_secret_path: Option<PathBuf>,
+    /// An outside live service implementing the live contract (K5.19),
+    /// where `work` publishes the log (`AGENT_WORKSPACE_LIVE_URL`); unset,
+    /// the live role is this server's own.
+    pub live_url: Option<url::Url>,
 }
 
 /// A set of defaults sized for one kind of server (H1.12). A profile only
@@ -326,6 +362,23 @@ pub struct WorkOsConfig {
     /// Where the WorkOS API lives: always `https://api.workos.com` outside
     /// development, where the browser tests point it at a stand-in.
     pub api_base: String,
+}
+
+/// One OpenID Connect issuer people sign in with (H1.18).
+#[derive(Clone, Debug)]
+pub struct OidcConfig {
+    /// The issuer's identifier, without a trailing slash: an https URL, or
+    /// a loopback stand-in in development.
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: SecretString,
+    /// What the sign-in button says: "Continue with <name>".
+    pub name: String,
+    /// Whether someone with a verified email and no account here gets one.
+    pub allow_signup: bool,
+    /// People whose verified email is in this domain join this workspace
+    /// (by its address).
+    pub join: Option<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -583,6 +636,7 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, environment, &data_root, &web_root)?;
+        let oidc = oidc_config(values, environment, &data_root, &web_root)?;
         let (secrets_key_path, secrets_key_missing) =
             secrets_key_path(values, &data_root, &web_root)?;
         // The master key opens every stored credential; a checkout (or an
@@ -613,6 +667,25 @@ impl AppConfig {
         }
         let metrics_token_path =
             optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
+        let object_store = object_store(values, &data_root, &web_root)?;
+        let file_store = optional(values, "FILE_STORE", "local");
+        match file_store.as_str() {
+            "local" => {}
+            "object" if object_store.is_some() => {}
+            "object" => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}FILE_STORE"),
+                    reason: "object needs AGENT_WORKSPACE_S3_ENDPOINT, _BUCKET and both key paths"
+                        .into(),
+                });
+            }
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}FILE_STORE"),
+                    reason: "use local or object".into(),
+                });
+            }
+        }
         let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
         if !(1..=64).contains(&job_concurrency) {
             return Err(ConfigError::Invalid {
@@ -730,19 +803,26 @@ impl AppConfig {
                 key: format!("{PREFIX}ROLES"),
                 reason,
             })?;
-        let builtin_host = match optional(values, "BUILTIN_HOST", "on")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "on" | "true" => true,
-            "off" | "false" => false,
-            _ => {
-                return Err(ConfigError::Invalid {
-                    key: format!("{PREFIX}BUILTIN_HOST"),
-                    reason: "expected on or off".into(),
-                });
-            }
+        let builtin_host = on_off(values, "BUILTIN_HOST")?;
+        let work_loop = on_off(values, "WORK_LOOP")?;
+        let work_tick_secret_path =
+            optional_secret_path(values, "WORK_TICK_SECRET_PATH", &data_root, &web_root, 4096)?;
+        let live_url = match optional(values, "LIVE_URL", "").trim() {
+            "" => None,
+            value => Some(
+                url::Url::parse(value)
+                    .ok()
+                    .filter(|url| {
+                        matches!(url.scheme(), "http" | "https")
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                    })
+                    .ok_or_else(|| ConfigError::Invalid {
+                        key: format!("{PREFIX}LIVE_URL"),
+                        reason: "expected an http or https address without credentials".into(),
+                    })?,
+            ),
         };
         let drain_seconds = parse::<u64>(values, "DRAIN_SECONDS", "5")?;
         if drain_seconds > 120 {
@@ -795,10 +875,13 @@ impl AppConfig {
             demo_executor,
             github,
             workos,
+            oidc,
             log_filter,
             secrets_key_path,
             push_contact,
             metrics_token_path,
+            file_store,
+            object_store,
             job_concurrency,
             allow_private_addresses,
             operator_logins,
@@ -818,7 +901,26 @@ impl AppConfig {
             builtin_host,
             drain: Duration::from_secs(drain_seconds),
             health_addr,
+            work_loop,
+            work_tick_secret_path,
+            live_url,
         })
+    }
+}
+
+/// A switch that is on unless set to `off` (or `false`).
+fn on_off(values: &BTreeMap<String, String>, key: &str) -> Result<bool, ConfigError> {
+    match optional(values, key, "on")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        _ => Err(ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: "expected on or off".into(),
+        }),
     }
 }
 
@@ -1021,6 +1123,100 @@ fn github_connect_config(
         app_slug: slug,
         client_id,
         client_secret_path,
+    }))
+}
+
+/// The S3-compatible store's settings, all or none.
+fn object_store(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<ObjectStoreConfig>, ConfigError> {
+    let invalid = |key: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{key}"),
+        reason: reason.into(),
+    };
+    let endpoint = optional(values, "S3_ENDPOINT", "");
+    let bucket = optional(values, "S3_BUCKET", "");
+    let access_key_id_path =
+        optional_secret_path(values, "S3_ACCESS_KEY_ID_PATH", data_root, web_root, 4096)?;
+    let secret_access_key_path = optional_secret_path(
+        values,
+        "S3_SECRET_ACCESS_KEY_PATH",
+        data_root,
+        web_root,
+        4096,
+    )?;
+    if endpoint.is_empty()
+        && bucket.is_empty()
+        && access_key_id_path.is_none()
+        && secret_access_key_path.is_none()
+    {
+        return Ok(None);
+    }
+    let endpoint = url::Url::parse(&endpoint)
+        .ok()
+        .filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.path() == "/"
+        })
+        .ok_or_else(|| invalid("S3_ENDPOINT", "an http or https address with no path"))?;
+    if !(3..=63).contains(&bucket.len())
+        || !bucket.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
+    {
+        return Err(invalid(
+            "S3_BUCKET",
+            "3 to 63 lowercase letters, digits, dots or dashes",
+        ));
+    }
+    let region = optional(values, "S3_REGION", "us-east-1");
+    if !(1..=32).contains(&region.len())
+        || !region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(invalid("S3_REGION", "lowercase letters, digits and dashes"));
+    }
+    let prefix = optional(values, "S3_PREFIX", "");
+    let prefix = prefix.trim_matches('/');
+    if prefix.len() > 64
+        || !prefix.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'/' | b'-')
+        })
+        || prefix.contains("//")
+    {
+        return Err(invalid(
+            "S3_PREFIX",
+            "lowercase letters, digits, dashes and slashes",
+        ));
+    }
+    let (Some(access_key_id_path), Some(secret_access_key_path)) =
+        (access_key_id_path, secret_access_key_path)
+    else {
+        return Err(invalid(
+            "S3_ACCESS_KEY_ID_PATH",
+            "set both S3_ACCESS_KEY_ID_PATH and S3_SECRET_ACCESS_KEY_PATH",
+        ));
+    };
+    Ok(Some(ObjectStoreConfig {
+        endpoint,
+        bucket,
+        region,
+        prefix: if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}/")
+        },
+        path_style: parse(values, "S3_PATH_STYLE", "false")?,
+        access_key_id_path,
+        secret_access_key_path,
     }))
 }
 
@@ -1507,6 +1703,105 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
+/// `AGENT_WORKSPACE_OIDC_*`: unset, no OpenID Connect sign-in.
+fn oidc_config(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<OidcConfig>, ConfigError> {
+    let issuer = values.get("AGENT_WORKSPACE_OIDC_ISSUER");
+    let client_id = values.get("AGENT_WORKSPACE_OIDC_CLIENT_ID");
+    let secret_path = values.get("AGENT_WORKSPACE_OIDC_CLIENT_SECRET_PATH");
+    if issuer.is_none() && client_id.is_none() && secret_path.is_none() {
+        return Ok(None);
+    }
+    let invalid = |key: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{key}"),
+        reason: reason.into(),
+    };
+    let together = || {
+        invalid(
+            "OIDC_ISSUER",
+            "set the issuer, client ID and protected client secret file together",
+        )
+    };
+    let issuer = url::Url::parse(issuer.ok_or_else(together)?.trim())
+        .map_err(|_| invalid("OIDC_ISSUER", "must be a URL"))?;
+    let loopback = issuer.scheme() == "http"
+        && matches!(issuer.host_str(), Some("127.0.0.1" | "localhost"))
+        && environment.is_development();
+    if (issuer.scheme() != "https" && !loopback)
+        || issuer.host_str().is_none()
+        || !issuer.username().is_empty()
+        || issuer.password().is_some()
+        || issuer.query().is_some()
+        || issuer.fragment().is_some()
+    {
+        return Err(invalid(
+            "OIDC_ISSUER",
+            "must be an https URL with no query (a loopback http one in development)",
+        ));
+    }
+    let client_id = client_id
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty() && id.len() <= 255 && id.chars().all(|c| c.is_ascii_graphic()))
+        .ok_or_else(together)?;
+    let path = PathBuf::from(secret_path.ok_or_else(together)?);
+    validate_secret_file("OIDC_CLIENT_SECRET_PATH", &path, data_root, web_root, 4096)?;
+    let secret = std::fs::read_to_string(&path).map_err(|_| together())?;
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return Err(together());
+    }
+    let name = values
+        .get("AGENT_WORKSPACE_OIDC_NAME")
+        .map(|name| name.trim().to_owned())
+        .unwrap_or_else(|| "single sign-on".to_owned());
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err(invalid("OIDC_NAME", "1 to 60 characters"));
+    }
+    let allow_signup = match values
+        .get("AGENT_WORKSPACE_OIDC_ALLOW_SIGNUP")
+        .map(String::as_str)
+    {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => return Err(invalid("OIDC_ALLOW_SIGNUP", "true or false")),
+    };
+    let join = values
+        .get("AGENT_WORKSPACE_OIDC_JOIN")
+        .map(|value| {
+            let (domain, workspace) = value
+                .split_once('=')
+                .map(|(domain, workspace)| (domain.trim(), workspace.trim()))
+                .filter(|(domain, workspace)| {
+                    domain.contains('.')
+                        && !domain.contains('@')
+                        && !workspace.is_empty()
+                        && domain
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                })
+                .ok_or_else(|| {
+                    invalid(
+                        "OIDC_JOIN",
+                        "domain=workspace-address, such as example.com=acme",
+                    )
+                })?;
+            Ok::<_, ConfigError>((domain.to_ascii_lowercase(), workspace.to_owned()))
+        })
+        .transpose()?;
+    Ok(Some(OidcConfig {
+        issuer: issuer.as_str().trim_end_matches('/').to_owned(),
+        client_id,
+        client_secret: SecretString::new(secret),
+        name,
+        allow_signup,
+        join,
+    }))
+}
+
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";
 
 fn workos_config(
@@ -1925,10 +2220,12 @@ mod tests {
         assert!(default.builtin_host);
         assert_eq!(default.drain, Duration::from_secs(5));
         assert_eq!(default.health_addr, None);
+        assert!(default.work_loop && default.work_tick_secret_path.is_none());
 
         values.insert("AGENT_WORKSPACE_ROLES".to_owned(), " work ".to_owned());
         values.insert("AGENT_WORKSPACE_BUILTIN_HOST".to_owned(), "off".to_owned());
         values.insert("AGENT_WORKSPACE_DRAIN_SECONDS".to_owned(), "0".to_owned());
+        values.insert("AGENT_WORKSPACE_WORK_LOOP".to_owned(), "OFF".to_owned());
         values.insert(
             "AGENT_WORKSPACE_HEALTH_ADDR".to_owned(),
             "127.0.0.1:3101".to_owned(),
@@ -1936,6 +2233,7 @@ mod tests {
         let work = AppConfig::from_values(&values).expect("work only");
         assert!(work.roles.work && !work.roles.api && !work.roles.live);
         assert!(!work.builtin_host);
+        assert!(!work.work_loop);
         assert_eq!(work.drain, Duration::ZERO);
         assert_eq!(
             work.health_addr,

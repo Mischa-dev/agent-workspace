@@ -122,6 +122,9 @@ pub static WEBHOOK_ATTEMPTS: Bucket = exact("webhooks.attempts", 300, MINUTE);
 /// Reports sent to one bug report link: enough for a burst of real
 /// reports, not for a loop to flood a project.
 pub static BUG_REPORTS: Bucket = exact("bug_reports", 30, MINUTE);
+/// Deliveries to one incoming hook (K3.26), before its signature is
+/// checked; the workspace's public budget is charged too.
+pub static INCOMING_HOOK_DELIVERIES: Bucket = exact("incoming_hooks.deliveries", 120, MINUTE);
 /// Bug reports and public form submissions into one workspace, across all
 /// its links (H1.1).
 pub static WORKSPACE_PUBLIC_SUBMISSIONS: Bucket =
@@ -600,6 +603,13 @@ impl RateLimiters {
         }
     }
 
+    /// A delivery to the incoming hook `hook` (K3.26).
+    pub async fn check_incoming_hook(&self, hook: Uuid) -> Result<(), AppError> {
+        self.limits
+            .check(&INCOMING_HOOK_DELIVERIES, LimitKey::Secret(hook.as_bytes()))
+            .await
+    }
+
     pub async fn check_webhook_attempt(&self) -> Result<(), AppError> {
         self.limits.check(&WEBHOOK_ATTEMPTS, LimitKey::Global).await
     }
@@ -738,6 +748,7 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&WORKOS_STARTS_GLOBAL, LimitScope::ServerUnattributed),
     (&WEBHOOK_ATTEMPTS, LimitScope::Server),
     (&BUG_REPORTS, LimitScope::Link),
+    (&INCOMING_HOOK_DELIVERIES, LimitScope::Link),
     (&WORKSPACE_PUBLIC_SUBMISSIONS, LimitScope::Workspace),
     (&CUSTOM_EMOJI_EVENTS, LimitScope::Workspace),
     (&FORM_ANSWER_SENDERS, LimitScope::Address),

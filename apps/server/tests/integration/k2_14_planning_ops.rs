@@ -222,7 +222,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
                 WHERE item.project_id = $1 AND milestone.name = 'Beta'
                   AND item.estimate = 2 AND item.start_date = '2026-12-01'
                   AND item.due_date = '2026-12-20'),
-               (SELECT count(*) FROM work_item_dependencies WHERE project_id = $1)
+               (SELECT count(*) FROM task_dependencies WHERE project_id = $1)
         "#,
     )
     .bind(space)
@@ -266,7 +266,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
     .await;
     assert_ne!(looped["outcome"], "ok", "{looped}");
     let dependencies = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_dependencies WHERE project_id = $1",
+        "SELECT count(*) FROM task_dependencies WHERE project_id = $1",
     )
     .bind(space)
     .fetch_one(&setup.pool)
@@ -491,7 +491,7 @@ async fn a_plan_import_updates_the_tasks_a_space_already_has() {
                (SELECT count(*) FROM work_item_active_labels active
                 JOIN task_rows item ON item.id = active.work_item_id
                 WHERE item.project_id = $1 AND item.number = 1 AND active.name = 'Import'),
-               (SELECT count(*) FROM work_item_dependencies dependency
+               (SELECT count(*) FROM task_dependencies dependency
                 JOIN task_rows blocked ON blocked.id = dependency.blocked_work_item_id
                 JOIN task_rows blocking ON blocking.id = dependency.blocking_work_item_id
                 WHERE dependency.project_id = $1 AND blocked.number = 2 AND blocking.number = 1)

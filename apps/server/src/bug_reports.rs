@@ -1035,6 +1035,16 @@ async fn receive(
         .rate_limits
         .check_workspace_public_submission(link.organization_id)
         .await?;
+    // And the workspace's monthly limit on them, before any work.
+    {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        crate::metering::admit(
+            &mut transaction,
+            crate::metering::Ask::new(link.organization_id, "form_submissions", 1),
+        )
+        .await?;
+        transaction.commit().await?;
+    }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
@@ -1108,6 +1118,7 @@ async fn receive(
         .bind(link.id)
         .execute(crate::db::scoped(&state.pool))
         .await?;
+        count_submission(state, &link).await?;
     }
     let status = if duplicate {
         StatusCode::OK
@@ -1123,6 +1134,32 @@ async fn receive(
         })),
     )
         .into_response())
+}
+
+/// Counts a submission that made something against the workspace's
+/// monthly limit on them (H1.26).
+async fn count_submission(state: &AppState, link: &ReportLink) -> Result<(), AppError> {
+    let key = format!("submission:{}", Uuid::now_v7());
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::metering::record(
+        &mut transaction,
+        crate::metering::Usage {
+            workspace_id: link.organization_id,
+            meter: "form_submissions",
+            quantity: 1,
+            account_id: None,
+            space_id: None,
+            conversation_id: None,
+            recorded: crate::metering::Recorded {
+                source_kind: "bug_report_link",
+                source_id: Some(link.id),
+                dedupe_key: &key,
+            },
+        },
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// The link acting as its maker, through the same tools the app uses.
@@ -1324,6 +1361,7 @@ async fn receive_answer(
         .bind(link.id)
         .execute(crate::db::scoped(&state.pool))
         .await?;
+        count_submission(state, link).await?;
         if taken_today >= limit {
             pause_for_the_day(state, link, collection_id, limit).await?;
         }

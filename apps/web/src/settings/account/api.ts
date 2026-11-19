@@ -1,6 +1,6 @@
 import { requestJson } from '../../api/client'
 
-export type SignInMethod = 'password' | 'workos' | 'invitation'
+export type SignInMethod = 'password' | 'workos' | 'invitation' | 'oidc'
 
 export type AccountSession = {
   id: string
