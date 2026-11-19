@@ -637,7 +637,9 @@ export async function updateWorkItem(input: {
 }) {
   const operation = taskUpdateInput(input.workItemId, input.patch)
   if (operation) {
-    await callOp('task_update', operation, { requestId: input.idempotencyKey })
+    await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+      refuseAsMovedOn(error, { ...input, expectedVersion: input.patch.expectedVersion }),
+    )
     return getWorkItem(input.projectId, input.workItemId)
   }
   return normalizeWorkItem(
@@ -659,8 +661,9 @@ export async function setWorkItemArchived(input: {
   idempotencyKey: string
 }) {
   const task = { taskId: input.workItemId, expectedVersion: input.expectedVersion }
-  if (input.archived) await callOp('task_archive', task, { requestId: input.idempotencyKey })
-  else await callOp('task_restore', task, { requestId: input.idempotencyKey })
+  await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+    refuseAsMovedOn(error, input),
+  )
   return getWorkItem(input.projectId, input.workItemId)
 }
 
@@ -699,20 +702,21 @@ async function assignableActors(projectId: string, parameters: URLSearchParams):
 /** One change to a task's acceptance criteria, through `task_criteria_update`. */
 async function changeCriteria(
   input: { projectId: string; workItemId: string; expectedVersion: number; idempotencyKey: string },
-  operation: CriterionOperationArgument,
+  ...operations: CriterionOperationArgument[]
 ) {
   await callOp(
     'task_criteria_update',
-    { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations: [operation] },
+    { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations },
     { requestId: input.idempotencyKey },
   ).catch((error: unknown) => refuseAsMovedOn(error, input))
   return getWorkItem(input.projectId, input.workItemId)
 }
 
 /**
- * For task writes whose conflicts don't carry the task (criteria, links):
- * read it, and if it moved on past the version the change was made against,
- * refuse the way `task_update` does, so the editor loads the newer one.
+ * A task write's conflict, with the whole task as it is now: criteria and
+ * links refuse without it, and `task_update` and archiving send only a few of
+ * its fields. Reads the task, and if it moved on past the version the change
+ * was made against, refuses with it, so the editor loads the newer one.
  */
 async function refuseAsMovedOn(error: unknown, input: { projectId: string; workItemId: string; expectedVersion?: number }): Promise<never> {
   if (!isApiError(error) || error.code !== 'conflict' || input.expectedVersion === undefined) throw error
@@ -722,7 +726,7 @@ async function refuseAsMovedOn(error: unknown, input: { projectId: string; workI
     status: error.status,
     code: 'conflict',
     message: error.message,
-    details: { reason: 'version', currentVersion: current.version, current: { task: current } },
+    details: { reason: 'version', currentVersion: current.version, current: { task: current, whole: true } },
     requestId: error.requestId,
   })
 }
@@ -737,7 +741,7 @@ export async function createAcceptanceCriterion(input: {
   return changeCriteria(input, { op: 'add', text: input.text })
 }
 
-/** Edits, checks or moves one criterion; the task's version covers the one change. */
+/** Edits, checks and moves one criterion, all in one change the task's version covers. */
 export async function updateAcceptanceCriterion(input: {
   projectId: string
   workItemId: string
@@ -749,9 +753,11 @@ export async function updateAcceptanceCriterion(input: {
   idempotencyKey: string
 }) {
   const criterion = input.criterionId
-  if (input.text !== undefined) return changeCriteria(input, { op: 'edit', criterion, text: input.text })
-  if (input.position !== undefined) return changeCriteria(input, { op: 'move', criterion, position: input.position })
-  return changeCriteria(input, { op: input.completed ? 'check' : 'uncheck', criterion })
+  const operations: CriterionOperationArgument[] = []
+  if (input.text !== undefined) operations.push({ op: 'edit', criterion, text: input.text })
+  if (input.completed !== undefined) operations.push({ op: input.completed ? 'check' : 'uncheck', criterion })
+  if (input.position !== undefined) operations.push({ op: 'move', criterion, position: input.position })
+  return changeCriteria(input, ...operations)
 }
 
 export async function removeAcceptanceCriterion(input: {

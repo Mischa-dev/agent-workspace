@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 
 import { spaceHref } from '../app/href'
 import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
-import { useHomeExperience } from '../experience/layout'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { rowLabel } from '../modules/registry'
 import { phoneTabs } from './phoneTabsModel'
 import { useProjects } from '../projects/hooks'
@@ -33,10 +33,18 @@ export default function PhoneTabs({ spaceId }: { spaceId: string | null }) {
   const inboxUnread = useInboxUnread() ?? 0
   const workspaceId = useWorkspaceId()
   const space = spaceId ?? lastSpace(projects.data?.projects ?? [], workspaceId)?.id ?? null
-  const tabs = phoneTabs(experience).flatMap((tab) => {
-    if (tab.space === 'home') return [{ ...tab, to: href(tab.path), end: false }]
-    return space ? [{ ...tab, to: spaceHref(space, tab.path), end: !tab.path }] : []
-  })
+  // A space's destinations follow that space's layout; Home's, the workspace's.
+  const spaceExperience = useProjectExperience(space)
+  const tabs = [
+    ...phoneTabs(experience)
+      .filter((tab) => tab.space === 'home')
+      .map((tab) => ({ ...tab, to: href(tab.path), end: false, name: rowLabel(tab, experience) })),
+    ...(space
+      ? phoneTabs(spaceExperience)
+          .filter((tab) => tab.space !== 'home')
+          .map((tab) => ({ ...tab, to: spaceHref(space, tab.path), end: !tab.path, name: rowLabel(tab, spaceExperience) }))
+      : []),
+  ].sort((left, right) => left.rank - right.rank)
   return (
     <nav aria-label="Main" className="aw-phonetabs" data-part="phone-tabs">
       <NavLink className="aw-phonetabs__tab" end to={href('/home')}>
@@ -48,7 +56,7 @@ export default function PhoneTabs({ spaceId }: { spaceId: string | null }) {
         return (
           <NavLink className="aw-phonetabs__tab" end={tab.end} key={`${tab.module}:${tab.id}`} to={tab.to}>
             <Icon name={tab.icon} size={20} />
-            <span>{rowLabel(tab, experience)}</span>
+            <span>{tab.name}</span>
             <Badge className="aw-phonetabs__badge" count={count} label={`${count} unread`} />
           </NavLink>
         )
