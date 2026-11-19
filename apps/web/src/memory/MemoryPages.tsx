@@ -344,7 +344,13 @@ function NewPageDialog({
 }
 
 export function PageDetailPage() {
-  const { pageId = '' } = useParams()
+  const { pageId = '', projectId = '' } = useParams()
+  // A moved page's old link leads to where it is now (C1.37), even for a
+  // reader who can't open the space it left: the page is read by its id.
+  const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
+  if (page.data && page.data.projectId !== projectId) {
+    return <Navigate replace to={projectLocationHref(page.data.projectId, { kind: 'page', pageId })} />
+  }
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
@@ -596,7 +602,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
           />
         </Suspense>
       ) : null}
-      {current.children.length || (canEdit && !current.archived) ? (
+      {experience.shows('page.nesting') && (current.children.length || (canEdit && !current.archived)) ? (
         <Section
           actions={
             canEdit && !current.archived ? (

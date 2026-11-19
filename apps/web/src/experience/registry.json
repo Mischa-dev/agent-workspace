@@ -334,6 +334,13 @@
       "default": true
     },
     {
+      "id": "page.nesting",
+      "group": "pages",
+      "label": "Pages inside pages",
+      "description": "A page's own pages listed under it, and making a new page inside it.",
+      "default": true
+    },
+    {
       "id": "page.references",
       "group": "pages",
       "label": "Referenced in",
@@ -477,6 +484,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -518,6 +526,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -607,6 +616,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -652,6 +662,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "home.working_now",
         "workspace.my_work",
@@ -693,6 +704,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -739,6 +751,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -778,6 +791,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -824,6 +838,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "tech.task_keys",
         "workspace.my_work",
@@ -877,6 +892,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "tech.task_keys",
         "workspace.my_work"
@@ -907,6 +923,7 @@
         "page.live_editing",
         "page.comments",
         "page.import_export",
+        "page.nesting",
         "page.references",
         "workspace.my_work"
       ]

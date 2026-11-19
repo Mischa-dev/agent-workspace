@@ -1248,9 +1248,9 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     .bind(UNSENT_HOURS)
     .execute(crate::db::scoped(&state.pool))
     .await?;
-    let removed = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+    let removed = sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>)>(
         r#"
-        SELECT id, storage_key, thumbnail_key FROM files
+        SELECT id, organization_id, storage_key, thumbnail_key FROM files
         WHERE removed_at IS NOT NULL AND blob_deleted_at IS NULL
         ORDER BY removed_at
         LIMIT $1
@@ -1261,9 +1261,18 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     .await?;
     let store = FileStore::from_config(&state.config);
     let mut deleted = 0;
-    for (id, key, thumbnail_key) in removed {
+    for (id, organization_id, key, thumbnail_key) in removed {
         // Bytes named by content can be another file's too (a duplicated
         // board's images): they stay while any other row still holds them.
+        // The check, the delete and the mark happen under the lock
+        // `store_content` takes, so an upload of the same content either
+        // finds this row live and is counted as sharing it, or comes after
+        // the mark and writes the bytes again.
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{organization_id}"))
+            .execute(&mut *transaction)
+            .await?;
         let shared = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS (
@@ -1274,7 +1283,7 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         )
         .bind(&key)
         .bind(id)
-        .fetch_one(crate::db::scoped(&state.pool))
+        .fetch_one(&mut *transaction)
         .await?;
         // One file the store can't delete mustn't stop every later one: it
         // stays in the batch and is tried again next time.
@@ -1291,8 +1300,9 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         }
         sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
             .bind(id)
-            .execute(crate::db::scoped(&state.pool))
+            .execute(&mut *transaction)
             .await?;
+        transaction.commit().await?;
         deleted += 1;
     }
     deleted += crate::link_previews::cleanup(state, &store).await?;

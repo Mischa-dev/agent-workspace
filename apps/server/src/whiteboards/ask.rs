@@ -13,7 +13,7 @@ use crate::{
     discussion::{self, CommentBody, CommentPlace, SubjectKind},
     error::AppError,
     files::{self, Destination, Upload},
-    idempotency::IdempotencyKey,
+    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     ops::{Idempotency, OpCall, OpError, OpKind, Operation, Target, Targeted, refs::IdRef},
 };
 
@@ -182,25 +182,60 @@ impl Operation for WhiteboardAsk {
         )
         .await?;
         transaction.commit().await.map_err(AppError::from)?;
-        let picture = files::store_upload(
-            state,
-            caller.actor_id,
-            Destination::Conversation {
-                project_id,
-                conversation_id: comments_id,
-            },
-            Upload {
-                name: "selection.png".to_owned(),
-                declared_type: Some("image/png".to_owned()),
-                bytes: png,
-            },
-        )
-        .await?;
         let key = match call.ctx.request_id.as_deref() {
             Some(key) => IdempotencyKey::parse(key),
             None => IdempotencyKey::parse(&Uuid::now_v7().to_string()),
         }
         .map_err(|_| OpError::invalid("clientRequestId", "Pass a short request id."))?;
+        // A retry reuses the picture the first call kept, so the question it
+        // posts is the same one and replays (the message's request hash
+        // counts its files).
+        let prepared = files::prepare_upload(Upload {
+            name: "selection.png".to_owned(),
+            declared_type: Some("image/png".to_owned()),
+            bytes: png,
+        })
+        .await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+        let scope = idempotency::resource_bound_scope("whiteboard", board_id, "ask_picture")?;
+        let hash = RequestHash::for_value(&json!({
+            "elementIds": ids,
+            "accountId": asked,
+            "question": question,
+        }))?;
+        let picture_id =
+            match idempotency::reserve(&mut transaction, caller.actor_id, &scope, &key, hash)
+                .await?
+            {
+                IdempotencyOutcome::Replay(replay) => replay.decode::<Uuid>()?,
+                IdempotencyOutcome::Reserved(reservation) => {
+                    let row = files::store_prepared(
+                        state,
+                        &mut transaction,
+                        caller.actor_id,
+                        Destination::Conversation {
+                            project_id,
+                            conversation_id: comments_id,
+                        },
+                        prepared,
+                    )
+                    .await?;
+                    idempotency::complete(
+                        &mut transaction,
+                        &reservation,
+                        axum::http::StatusCode::CREATED,
+                        &row.id,
+                    )
+                    .await?;
+                    if let Err(error) = transaction.commit().await {
+                        files::discard_stored(state, &row).await;
+                        return Err(AppError::from(error).into());
+                    }
+                    row.id
+                }
+            };
         let content = json!({
             "version": 1,
             "nodes": [
@@ -219,7 +254,7 @@ impl Operation for WhiteboardAsk {
             },
             key,
             CommentBody::Content(content),
-            &[picture.id],
+            &[picture_id],
             None,
         )
         .await?;
@@ -233,7 +268,7 @@ impl Operation for WhiteboardAsk {
             thread_id: posted.thread_id.ok_or(OpError::Unavailable)?,
             message_id: posted.message_id,
             conversation_id: posted.conversation_id,
-            file_id: picture.id,
+            file_id: picture_id,
         })
     }
 }

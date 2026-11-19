@@ -1061,6 +1061,34 @@ async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
     .await
     .expect("requests");
     assert_eq!(requests, 1);
+
+    // A retry after a lost answer gets the same question and picture back,
+    // and keeps no second picture.
+    let keyed = || {
+        send(
+            app,
+            lena.browser.request(
+                "POST",
+                &format!("/api/v2/w/{workspace}/ops/whiteboard_ask"),
+                Some("ask-retry-1"),
+                ask(rook.actor),
+            ),
+        )
+    };
+    let (_, first) = keyed().await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let (_, again) = keyed().await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["messageId"], first["value"]["messageId"]);
+    assert_eq!(again["value"]["fileId"], first["value"]["fileId"]);
+    let pictures = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM files WHERE uploaded_by_actor_id = $1 AND name = 'selection.png'",
+    )
+    .bind(lena.actor)
+    .fetch_one(pool)
+    .await
+    .expect("pictures");
+    assert_eq!(pictures, 2, "one for each question, none for the retry");
 }
 
 /// A task's discussion (its comments, their threads and their files) stays
