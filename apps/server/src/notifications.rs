@@ -254,7 +254,6 @@ pub struct NewNotification {
     pub conversation_id: Option<Uuid>,
     pub message_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
-    pub comment_id: Option<Uuid>,
     pub agent_run_id: Option<Uuid>,
     pub pull_request_id: Option<Uuid>,
     pub detail: serde_json::Value,
@@ -282,7 +281,6 @@ impl NewNotification {
             conversation_id: None,
             message_id: None,
             work_item_id: None,
-            comment_id: None,
             agent_run_id: None,
             pull_request_id: None,
             detail: serde_json::json!({}),
@@ -396,22 +394,21 @@ pub async fn deliver(
         r#"
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
-            actor_id, conversation_id, message_id, work_item_id, comment_id,
+            actor_id, conversation_id, message_id, work_item_id,
             agent_run_id, pull_request_id, detail, group_key, archived_at,
             read_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                  CASE WHEN $16 THEN NULL ELSE now() END,
-                  CASE WHEN $17 THEN now() END)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                  CASE WHEN $15 THEN NULL ELSE now() END,
+                  CASE WHEN $16 THEN now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
             actor_id = EXCLUDED.actor_id,
             message_id = EXCLUDED.message_id,
-            comment_id = EXCLUDED.comment_id,
             pull_request_id = COALESCE(EXCLUDED.pull_request_id, notifications.pull_request_id),
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
-            read_at = CASE WHEN $17 THEN COALESCE(notifications.read_at, now()) END,
+            read_at = CASE WHEN $16 THEN COALESCE(notifications.read_at, now()) END,
             -- Snoozed until something new: this is it (C2.10).
             surfaced_at = CASE WHEN notifications.wake_on_activity THEN now()
                 ELSE GREATEST(now(), COALESCE(notifications.snoozed_until, now())) END,
@@ -432,7 +429,6 @@ pub async fn deliver(
     .bind(notification.conversation_id)
     .bind(notification.message_id)
     .bind(notification.work_item_id)
-    .bind(notification.comment_id)
     .bind(notification.agent_run_id)
     .bind(notification.pull_request_id)
     .bind(&notification.detail)
@@ -1028,7 +1024,7 @@ async fn thing_comments(
         .subject()
         .followers(transaction, subject_id)
         .await?;
-    let recipients = sqlx::query_scalar::<_, Uuid>(
+    let recipients = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
         WITH candidate AS (
             SELECT unnest($1::uuid[]) AS actor_id
@@ -1039,8 +1035,17 @@ async fn thing_comments(
             JOIN conversations place ON place.id = earlier.conversation_id
             WHERE (place.id = $2 OR place.parent_channel_id = $2)
               AND earlier.removed_at IS NULL AND earlier.id <> $4
+        ),
+        -- The author of the comment this one answers hears it as a reply.
+        answered AS (
+            -- visibility: the author of a comment in the same discussion
+            SELECT answered.author_actor_id AS actor_id
+            FROM messages comment
+            JOIN messages answered ON answered.id = comment.reply_to_message_id
+            WHERE comment.id = $4 AND answered.removed_at IS NULL
         )
-        SELECT candidate.actor_id
+        SELECT candidate.actor_id,
+               candidate.actor_id IN (SELECT actor_id FROM answered) AS answered
         FROM candidate
         -- An inbox row is how people are told; agents are asked by mention.
         JOIN actors actor ON actor.id = candidate.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (how a follower is told)
@@ -1066,17 +1071,29 @@ async fn thing_comments(
     .await?;
     Ok(recipients
         .into_iter()
-        .map(|recipient| {
-            let mut notification = NewNotification::new(
-                project_id,
-                recipient,
-                kind::THING_COMMENT,
-                "conversation",
-                conversation_id,
-                // One per place: the stream, or each thread on its own.
-                format!("comments:{conversation_id}"),
-                format!("message:{message_id}"),
-            );
+        .map(|(recipient, answered)| {
+            let mut notification = if answered {
+                NewNotification::new(
+                    project_id,
+                    recipient,
+                    kind::MENTION,
+                    "conversation",
+                    conversation_id,
+                    format!("mention:{conversation_id}"),
+                    format!("mention:{message_id}"),
+                )
+            } else {
+                NewNotification::new(
+                    project_id,
+                    recipient,
+                    kind::THING_COMMENT,
+                    "conversation",
+                    conversation_id,
+                    // One per place: the stream, or each thread on its own.
+                    format!("comments:{conversation_id}"),
+                    format!("message:{message_id}"),
+                )
+            };
             notification.actor_id = Some(author);
             notification.conversation_id = Some(conversation_id);
             notification.message_id = Some(message_id);
@@ -1084,6 +1101,7 @@ async fn thing_comments(
                 "subjectKind": thing_kind.as_str(),
                 "subjectId": subject_id,
                 "href": href,
+                "reply": answered,
             });
             notification
         })
@@ -1092,125 +1110,6 @@ async fn thing_comments(
 
 /// A removed message stops counting: its occurrences go, and a notification
 /// left with none goes too. The text itself was never copied here.
-/// A deleted task comment's notifications go with it, as a removed
-/// message's do. A notification that also stood for other occurrences stays,
-/// counted again.
-pub(crate) async fn forget_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-) -> Result<(), AppError> {
-    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        DELETE FROM notification_occurrences
-        WHERE dedupe_key = ANY($1)
-        RETURNING notification_id, recipient_actor_id
-        "#,
-    )
-    .bind(vec![
-        format!("comment-mention:{comment_id}"),
-        format!("watch:{comment_id}"),
-    ])
-    .fetch_all(&mut **transaction)
-    .await?;
-    retract(transaction, project_id, comment_id, affected).await
-}
-
-/// A page comment that was edited or deleted (AWD-53): a deletion takes its
-/// occurrence away (and the notification, when that was all it stood for),
-/// and either way the recipients hear the inbox changed. The words are read
-/// live when listing (P0.36), so there is no copy to strip.
-pub(crate) async fn forget_page_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-    deleted: bool,
-) -> Result<(), AppError> {
-    let key = format!("page-comment:{comment_id}");
-    let reached = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        UPDATE notifications n
-        SET updated_at = now()
-        FROM notification_occurrences o
-        WHERE o.notification_id = n.id AND o.dedupe_key = $1
-        RETURNING n.id, n.recipient_actor_id
-        "#,
-    )
-    .bind(&key)
-    .fetch_all(&mut **transaction)
-    .await?;
-    if !deleted {
-        let recipients = reached
-            .into_iter()
-            .map(|(_, recipient)| recipient)
-            .collect::<BTreeSet<_>>();
-        for recipient in recipients {
-            announce(transaction, project_id, recipient).await?;
-        }
-        return Ok(());
-    }
-    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        DELETE FROM notification_occurrences
-        WHERE dedupe_key = $1
-        RETURNING notification_id, recipient_actor_id
-        "#,
-    )
-    .bind(&key)
-    .fetch_all(&mut **transaction)
-    .await?;
-    retract(transaction, project_id, comment_id, affected).await
-}
-
-/// Notifications that lost occurrences: one left with none goes, the rest
-/// are counted again, and their recipients hear about it.
-async fn retract(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-    affected: Vec<(Uuid, Uuid)>,
-) -> Result<(), AppError> {
-    if affected.is_empty() {
-        return Ok(());
-    }
-    let ids = affected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    sqlx::query(
-        r#"
-        DELETE FROM notifications n
-        WHERE n.id = ANY($1)
-          AND NOT EXISTS (
-              SELECT 1 FROM notification_occurrences o WHERE o.notification_id = n.id
-          )
-        "#,
-    )
-    .bind(&ids)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE notifications n
-        SET comment_id = NULLIF(n.comment_id, $2),
-            repeat_count = GREATEST(1, (
-                SELECT count(*) FROM notification_occurrences o WHERE o.notification_id = n.id
-            )::integer),
-            updated_at = now()
-        WHERE n.id = ANY($1)
-        "#,
-    )
-    .bind(&ids)
-    .bind(comment_id)
-    .execute(&mut **transaction)
-    .await?;
-    let recipients = affected
-        .into_iter()
-        .map(|(_, recipient)| recipient)
-        .collect::<BTreeSet<_>>();
-    for recipient in recipients {
-        announce(transaction, project_id, recipient).await?;
-    }
-    Ok(())
-}
-
 async fn forget_message(
     transaction: &mut Transaction<'_, Postgres>,
     message_id: Uuid,
@@ -1263,15 +1162,6 @@ async fn forget_message(
 }
 
 #[derive(FromRow)]
-struct CommentMentionRow {
-    comment_id: Uuid,
-    author_actor_id: Uuid,
-    recipient_actor_id: Uuid,
-    /// The recipient wrote the comment this one replies to (AWD-95).
-    reply: bool,
-}
-
-#[derive(FromRow)]
 struct AssignmentRow {
     activity_id: Uuid,
     actor_id: Uuid,
@@ -1280,19 +1170,19 @@ struct AssignmentRow {
 
 #[derive(FromRow)]
 struct WatchedChangeRow {
-    /// The activity or comment this change is.
+    /// The activity this change is.
     change_id: Uuid,
     actor_id: Uuid,
-    comment_id: Option<Uuid>,
-    /// created, updated, archived, restored or commented.
+    /// created, updated, archived or restored.
     change: String,
     recipient_actor_id: Uuid,
 }
 
 /// What a task change means for people. `work_item.updated` carries only the
-/// task and its version, so this finds the comment and activity rows written
-/// in the same transaction as the event: they share its `created_at`
-/// (PostgreSQL's `now()` is the transaction's start).
+/// task and its version, so this finds the activity rows written in the same
+/// transaction as the event: they share its `created_at` (PostgreSQL's
+/// `now()` is the transaction's start). Comments are messages (C1.4): their
+/// mentions and followers are told as any comment's are (`thing_comments`).
 async fn work_item_changes(
     transaction: &mut Transaction<'_, Postgres>,
     event_id: Uuid,
@@ -1300,68 +1190,6 @@ async fn work_item_changes(
     work_item_id: Uuid,
 ) -> Result<Vec<NewNotification>, AppError> {
     let mut notifications = Vec::new();
-    let comments = sqlx::query_as::<_, CommentMentionRow>(
-        r#"
-        SELECT comment_id, author_actor_id, recipient_actor_id, bool_or(reply) AS reply
-        FROM (
-            SELECT comment.id AS comment_id, comment.author_actor_id,
-                   mention.actor_id AS recipient_actor_id, false AS reply,
-                   comment.project_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             -- A new comment, or an edit (it can add mentions; people already
-             -- told about this comment aren't told again).
-             AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
-             AND comment.removed_at IS NULL
-            JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
-            WHERE event.id = $1 AND event.space_id = $2
-            UNION ALL
-            -- A new reply tells whoever wrote the comment it answers.
-            SELECT comment.id, comment.author_actor_id, quoted.author_actor_id, true,
-                   comment.project_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             AND comment.created_at = event.created_at
-             AND comment.removed_at IS NULL
-            JOIN work_item_comments quoted
-              ON quoted.project_id = comment.project_id
-             AND quoted.work_item_id = comment.work_item_id
-             AND quoted.id = comment.reply_to_comment_id
-            WHERE event.id = $1 AND event.space_id = $2
-        ) told
-        WHERE recipient_actor_id <> author_actor_id
-          AND actor_can_access_project(recipient_actor_id, NULL, project_id)
-        GROUP BY comment_id, author_actor_id, recipient_actor_id, project_id
-        ORDER BY comment_id, recipient_actor_id
-        "#,
-    )
-    .bind(event_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for row in comments {
-        let mut notification = NewNotification::new(
-            project_id,
-            row.recipient_actor_id,
-            kind::COMMENT_MENTION,
-            "work_item",
-            work_item_id,
-            format!("mention:task:{work_item_id}"),
-            format!("comment-mention:{}", row.comment_id),
-        );
-        notification.actor_id = Some(row.author_actor_id);
-        notification.work_item_id = Some(work_item_id);
-        notification.comment_id = Some(row.comment_id);
-        if row.reply {
-            notification.detail = serde_json::json!({"reply": true});
-        }
-        notifications.push(notification);
-    }
     let assignments = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT activity.id AS activity_id, activity.actor_id,
@@ -1410,7 +1238,7 @@ async fn work_item_changes(
     let changes = sqlx::query_as::<_, WatchedChangeRow>(
         r#"
         WITH changes AS (
-            SELECT activity.id AS change_id, activity.actor_id, NULL::uuid AS comment_id,
+            SELECT activity.id AS change_id, activity.actor_id,
                    replace(activity.kind, 'work_item_', '') AS change,
                    activity.project_id, activity.work_item_id
             FROM events event
@@ -1419,18 +1247,8 @@ async fn work_item_changes(
              AND activity.work_item_id = $3
              AND activity.created_at = event.created_at
             WHERE event.id = $1 AND event.space_id = $2
-            UNION ALL
-            SELECT comment.id, comment.author_actor_id, comment.id, 'commented',
-                   comment.project_id, comment.work_item_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             AND comment.created_at = event.created_at
-             AND comment.removed_at IS NULL
-            WHERE event.id = $1 AND event.space_id = $2
         )
-        SELECT change.change_id, change.actor_id, change.comment_id, change.change,
+        SELECT change.change_id, change.actor_id, change.change,
                watcher.actor_id AS recipient_actor_id
         FROM changes change
         JOIN work_item_watchers watcher
@@ -1465,7 +1283,6 @@ async fn work_item_changes(
         );
         notification.actor_id = Some(row.actor_id);
         notification.work_item_id = Some(work_item_id);
-        notification.comment_id = row.comment_id;
         notification.detail = serde_json::json!({ "change": row.change });
         notifications.push(notification);
     }
@@ -1844,12 +1661,13 @@ struct NotificationRow {
     parent_conversation_id: Option<Uuid>,
     /// Where a comment's thing opens, for a comments conversation (C1.3).
     subject_href: Option<String>,
+    /// What a comment is on, for a comments conversation: a task's key or a
+    /// thing's title.
+    subject_label: Option<String>,
     message_id: Option<Uuid>,
     message_preview: Option<String>,
-    comment_preview: Option<String>,
     page_title: Option<String>,
     page_archived: Option<bool>,
-    page_comment_preview: Option<String>,
     work_item_id: Option<Uuid>,
     work_item_key: Option<String>,
     work_item_title: Option<String>,
@@ -1901,12 +1719,33 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                         COALESCE(comments_parent.subject_kind, conversation.subject_kind),
                         COALESCE(comments_parent.subject_id, conversation.subject_id))
                END AS subject_href,
+               -- What a comment is on, named live (C1.4): a task by its key,
+               -- anything else by its title.
+               CASE WHEN COALESCE(comments_parent.kind, conversation.kind) = 'comments' THEN
+                   CASE COALESCE(comments_parent.subject_kind, conversation.subject_kind)
+                       WHEN 'task' THEN (
+                           SELECT subject_space.project_key || '-' || subject_task.number::text
+                           FROM task_rows subject_task
+                           JOIN projects subject_space ON subject_space.id = subject_task.project_id
+                           WHERE subject_task.id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'page' THEN (
+                           SELECT title FROM project_pages
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'whiteboard' THEN (
+                           SELECT title FROM whiteboards
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'sheet' THEN (
+                           SELECT name FROM sheets
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'record' THEN (
+                           SELECT title FROM collection_records
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                   END
+               END AS subject_label,
                n.message_id,
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
-               left(comment.plain_text, {PREVIEW_CHARACTERS}) AS comment_preview,
                page.title AS page_title, page.archived_at IS NOT NULL AS page_archived,
-               left(page_comment.body, {PREVIEW_CHARACTERS}) AS page_comment_preview,
                n.work_item_id,
                project.project_key || '-' || item.number::text AS work_item_key,
                item.title AS work_item_title,
@@ -1933,12 +1772,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         LEFT JOIN conversations comments_parent
           ON comments_parent.id = conversation.parent_channel_id
         LEFT JOIN messages message ON message.id = n.message_id
-        LEFT JOIN work_item_comments comment ON comment.id = n.comment_id
         LEFT JOIN project_pages page ON n.subject_kind = 'page' AND page.id = n.subject_id
-        LEFT JOIN project_page_comments page_comment
-          ON n.kind = 'page_comment'
-         AND page_comment.id = (n.detail->>'pageCommentId')::uuid
-         AND page_comment.deleted_at IS NULL
         LEFT JOIN task_rows item ON item.id = n.work_item_id
         {run_join}
         LEFT JOIN project_memberships run_agent
@@ -2157,6 +1991,13 @@ pub async fn attention_counts(
 }
 
 fn conversation_label(row: &NotificationRow) -> String {
+    if let Some(label) = row
+        .subject_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+    {
+        return label.to_owned();
+    }
     match (
         row.conversation_kind.as_deref(),
         row.conversation_name.as_deref(),
@@ -2216,6 +2057,19 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         |number| format!("PR #{number}"),
     );
     let (title, preview) = match row.kind.as_str() {
+        kind::MENTION
+            if row.subject_label.is_some()
+                && row.detail.get("reply").and_then(serde_json::Value::as_bool) == Some(true) =>
+        {
+            (
+                format!("{who} replied to you on {place}"),
+                row.message_preview.clone(),
+            )
+        }
+        kind::MENTION if row.subject_label.is_some() => (
+            format!("{who} mentioned you on {place}"),
+            row.message_preview.clone(),
+        ),
         kind::MENTION => (
             format!("{who} mentioned you in {place}"),
             row.message_preview.clone(),
@@ -2228,6 +2082,10 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         kind::DIRECT_MESSAGE => (format!("{who} messaged you"), row.message_preview.clone()),
         kind::KEYWORD => (
             format!("{who} used one of your words in {place}"),
+            row.message_preview.clone(),
+        ),
+        kind::THING_COMMENT if row.subject_label.is_some() => (
+            format!("{who} commented on {place}"),
             row.message_preview.clone(),
         ),
         kind::THING_COMMENT => (format!("{who} commented"), row.message_preview.clone()),
@@ -2258,7 +2116,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
             } else {
                 format!("{who} mentioned you on {task_key}")
             },
-            row.comment_preview.clone(),
+            row.message_preview.clone(),
         ),
         kind::ASSIGNED => (
             format!("{who} assigned you {task_key}"),
@@ -2272,7 +2130,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 Some("created") => format!("{who} created {task_key}"),
                 _ => format!("{who} updated {task_key}"),
             },
-            row.comment_preview
+            row.message_preview
                 .clone()
                 .or_else(|| row.work_item_title.clone()),
         ),
@@ -2340,7 +2198,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
             if row.kind == kind::PAGE_COMMENT {
                 (
                     format!("New comment on {page}"),
-                    row.page_comment_preview.clone().filter(|_| !archived),
+                    row.message_preview.clone().filter(|_| !archived),
                 )
             } else {
                 (format!("Suggested edits to {page}"), None)

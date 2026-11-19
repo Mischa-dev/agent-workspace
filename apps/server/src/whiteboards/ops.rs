@@ -13,15 +13,17 @@ use serde_json::json;
 use super::{
     access,
     edit::{self, EditOutcome},
+    proposals::{self, Proposed},
     scene::Operation as SceneOperation,
 };
 use crate::{
+    access::WriteMode,
     mcp::whiteboard_commands::{
         self, BoardUpdate, LinkArgument, NewBoard, WhiteboardChangeValue, WhiteboardLinkValue,
     },
     ops::{
-        ConflictReason, Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target,
-        Targeted, refs::IdRef,
+        ConflictReason, DenyReason, Idempotency, OpCall, OpError, OpKind, Operation, Perm,
+        Registry, Target, Targeted, refs::IdRef,
     },
 };
 
@@ -29,6 +31,7 @@ pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<WhiteboardCreate>()
         .add::<WhiteboardUpdateElements>()
+        .add::<WhiteboardPropose>()
         .add::<WhiteboardUpdate>()
         .add::<WhiteboardDuplicate>()
         .add::<WhiteboardLink>()
@@ -77,7 +80,10 @@ impl Operation for WhiteboardUpdateElements {
     const NAME: &'static str = "whiteboard_update_elements";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "whiteboards";
-    const PERMISSION: Option<Perm> = Some(Perm::WhiteboardsEdit);
+    // Suggest is the floor: `run` asks `access::write_mode` whether the
+    // drawing lands (edit, or edit-own on your own board) or waits as a
+    // proposal (suggest only).
+    const PERMISSION: Option<Perm> = Some(Perm::WhiteboardsSuggest);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const DESTRUCTIVE: bool = true;
     // Images ride along as base64 (up to 4 MiB each).
@@ -87,8 +93,9 @@ impl Operation for WhiteboardUpdateElements {
         arrows and images, connect shapes, update, move, align, distribute, lay out, group and \
         order them, or delete them. The server turns them into elements and merges them like a \
         browser's change, so open boards update live. Pass the sceneSeq you read as \
-        expectedSceneSeq to be told when someone else changed what you touch.";
-    const EMITS: &'static [&'static str] = &["whiteboard.updated"];
+        expectedSceneSeq to be told when someone else changed what you touch. If you only \
+        suggest here, it becomes a proposal (proposalId).";
+    const EMITS: &'static [&'static str] = &["whiteboard.updated", "whiteboard.proposals_changed"];
 
     type Input = WhiteboardUpdateElementsInput;
     type Output = EditOutcome;
@@ -99,17 +106,33 @@ impl Operation for WhiteboardUpdateElements {
     ) -> Result<EditOutcome, OpError> {
         let id = input.whiteboard_id.id();
         let caller = whiteboard_commands::caller_of(call.ctx);
+        let access_caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
-        let board = access(tx, &caller, id, true)
-            .await
-            .map_err(|error| whiteboard_commands::edit_error(edit::EditError::App(error)))?;
-        if board.deleted {
-            return Err(OpError::Conflict {
-                reason: ConflictReason::State { code: "deleted" },
-                message: "That whiteboard is in the trash. Restore it with whiteboard_update \
-                          deleted: false first."
-                    .into(),
-                current: None,
+        let (board, mode) = board_for_writing(tx, &caller, &access_caller, id).await?;
+        if mode == WriteMode::Propose {
+            let planned = edit::plan(tx, id, &input.operations, input.expected_scene_seq)
+                .await
+                .map_err(whiteboard_commands::edit_error)?;
+            let changed = edit::parsed(planned.changed).map_err(whiteboard_commands::edit_error)?;
+            let (proposal_id, _) = propose(
+                tx,
+                &caller,
+                &board,
+                planned.scene_seq,
+                changed,
+                Self::NAME,
+                None,
+            )
+            .await?;
+            if let Some(proposal) = proposal_id {
+                call.audit_target("proposal", proposal, json!({ "whiteboard": id }));
+            }
+            return Ok(EditOutcome {
+                scene_seq: planned.scene_seq,
+                results: planned.results,
+                changed: Vec::new(),
+                saved_revision: None,
+                proposal_id: proposal_id.map(|proposal| proposal.to_string()),
             });
         }
         let operations =
@@ -130,6 +153,177 @@ impl Operation for WhiteboardUpdateElements {
             json!({ "changed": outcome.changed.len(), "sceneSeq": outcome.scene_seq }),
         );
         Ok(outcome)
+    }
+}
+
+/// The board, refused when it's in the trash, and how the caller may write
+/// on it: directly (edit, or edit-own on their own board) or as a proposal
+/// (suggest only). Anyone else is refused.
+async fn board_for_writing(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    caller: &super::Caller,
+    access_caller: &crate::access::Caller,
+    id: uuid::Uuid,
+) -> Result<(super::BoardAccess, WriteMode), OpError> {
+    let board = access(tx, caller, id, false)
+        .await
+        .map_err(|error| whiteboard_commands::edit_error(edit::EditError::App(error)))?;
+    if board.deleted {
+        return Err(OpError::Conflict {
+            reason: ConflictReason::State { code: "deleted" },
+            message: "That whiteboard is in the trash. Restore it with whiteboard_update \
+                      deleted: false first."
+                .into(),
+            current: None,
+        });
+    }
+    if board.can_edit {
+        return Ok((board, WriteMode::Direct));
+    }
+    let own = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT created_by_actor_id FROM whiteboards WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(crate::error::AppError::from)?
+        == caller.actor_id;
+    let mode = crate::access::write_mode(
+        tx,
+        access_caller,
+        "whiteboard",
+        board.project_id,
+        own,
+        Some("whiteboards"),
+    )
+    .await?
+    .ok()
+    .map(|grant| grant.mode);
+    match mode {
+        Some(mode) => Ok((board, mode)),
+        None => Err(whiteboard_commands::edit_error(edit::EditError::App(
+            crate::error::AppError::Forbidden,
+        ))),
+    }
+}
+
+/// Keeps elements as a proposal: its id (none when nothing would change)
+/// and how many elements it sets.
+async fn propose(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    caller: &super::Caller,
+    board: &super::BoardAccess,
+    scene_seq: i64,
+    elements: Vec<super::elements::Element>,
+    operation: &str,
+    note: Option<&str>,
+) -> Result<(Option<uuid::Uuid>, usize), OpError> {
+    match proposals::propose(tx, caller, board, scene_seq, elements, operation, note).await? {
+        Proposed::Made { id, elements } => Ok((Some(id), elements.len())),
+        Proposed::Unchanged => Ok((None, 0)),
+        Proposed::Refused(message) => Err(OpError::Denied {
+            reason: DenyReason::Rule,
+            message: message.into(),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// whiteboard_propose
+
+/// A browser's suggest-mode drawing, sent as one proposal.
+pub struct WhiteboardPropose;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WhiteboardProposeInput {
+    pub whiteboard_id: IdRef,
+    /// Changed elements as Excalidraw writes them.
+    #[schemars(with = "Vec<serde_json::Value>")]
+    pub elements: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl Targeted for WhiteboardProposeInput {
+    fn target(&self) -> Target {
+        Target::thing("whiteboard", self.whiteboard_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WhiteboardProposeOutput {
+    /// Absent when nothing would change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    pub elements: usize,
+}
+
+impl Operation for WhiteboardPropose {
+    const NAME: &'static str = "whiteboard_propose";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "whiteboards";
+    const PERMISSION: Option<Perm> = Some(Perm::WhiteboardsSuggest);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const MAX_BODY_BYTES: usize = 6 * 1024 * 1024;
+    const TITLE: &'static str = "Propose a whiteboard change";
+    const DESCRIPTION: &'static str = "Propose changed elements for someone who edits the \
+        board to decide. whiteboard_update_elements proposes by itself when you only suggest.";
+    const EMITS: &'static [&'static str] = &["whiteboard.proposals_changed"];
+
+    type Input = WhiteboardProposeInput;
+    type Output = WhiteboardProposeOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: WhiteboardProposeInput,
+    ) -> Result<WhiteboardProposeOutput, OpError> {
+        let id = input.whiteboard_id.id();
+        if input.elements.is_empty() {
+            return Err(OpError::invalid("elements", "Send at least one element."));
+        }
+        if input.elements.len() > proposals::MAX_PROPOSED_ELEMENTS {
+            return Err(OpError::invalid(
+                "elements",
+                "Propose up to 500 elements at a time.",
+            ));
+        }
+        let note = input
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|note| !note.is_empty());
+        if note.is_some_and(|note| note.chars().count() > 500) {
+            return Err(OpError::invalid("note", "Keep the note to 500 characters."));
+        }
+        let elements = input
+            .elements
+            .into_iter()
+            .map(super::elements::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|message| OpError::Invalid {
+                field: "elements".into(),
+                message: message.into(),
+            })?;
+        let caller = whiteboard_commands::caller_of(call.ctx);
+        let access_caller = call.ctx.caller.clone();
+        let tx = call.tx().await?;
+        let (board, _) = board_for_writing(tx, &caller, &access_caller, id).await?;
+        let scene_seq = super::store::lock(tx, id).await?;
+        let (proposal_id, count) =
+            propose(tx, &caller, &board, scene_seq, elements, Self::NAME, note).await?;
+        if let Some(proposal) = proposal_id {
+            call.audit_target(
+                "proposal",
+                proposal,
+                json!({ "whiteboard": id, "elements": count }),
+            );
+        }
+        Ok(WhiteboardProposeOutput {
+            proposal_id: proposal_id.map(|proposal| proposal.to_string()),
+            elements: count,
+        })
     }
 }
 

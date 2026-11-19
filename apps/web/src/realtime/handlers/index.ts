@@ -21,6 +21,7 @@ export const SELF_HANDLED: ReadonlySet<string> = new Set([
   'collection.updated',
   'dashboard.updated',
   'sheet.updated',
+  'sheet.ranges_changed',
   'project.modules.updated',
 ])
 

@@ -108,7 +108,8 @@ pub struct TileInput {
     /// new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<IdRef>,
-    /// "view" (the default when view is given) or "text".
+    /// "view" (the default when view is given), "sheet" (when sheet is) or
+    /// "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<TileKind>,
     /// Shown above the tile; left out, the view's name.
@@ -122,6 +123,17 @@ pub struct TileInput {
     /// A text tile's note, up to 2,000 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// A sheet tile's sheet, by id. The tile charts a block of it: labels
+    /// from the first column, numbers from the second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<IdRef>,
+    /// A sheet tile's block: a named range of the sheet (sheet_range_set),
+    /// or such as "A1:B9" or "Summary!A1:B9".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    /// A sheet tile's chart: bar (the default), line, donut or number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::views::definition::ChartStyle>,
     /// Columns of twelve it spans: 3 to 12 (6 when left out).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u8>,
@@ -153,6 +165,8 @@ async fn tiles_of(
     for input in tiles {
         let kind = input.kind.unwrap_or(if input.view.is_some() {
             TileKind::View
+        } else if input.sheet.is_some() {
+            TileKind::Sheet
         } else {
             TileKind::Text
         });
@@ -178,6 +192,9 @@ async fn tiles_of(
             collection: None,
             view: None,
             text: String::new(),
+            sheet: None,
+            range: String::new(),
+            style: None,
             width,
             height,
         };
@@ -232,6 +249,47 @@ async fn tiles_of(
                 }
                 tile.text = text;
             }
+            TileKind::Sheet => {
+                let Some(sheet) = input.sheet.map(IdRef::id) else {
+                    return Err(invalid("tiles", "A sheet tile names its sheet."));
+                };
+                let range = input.range.as_deref().unwrap_or("").trim().to_owned();
+                if range.is_empty() || range.chars().count() > 100 {
+                    return Err(invalid(
+                        "tiles",
+                        "A sheet tile names its block: a named range, or such as A1:B9.",
+                    ));
+                }
+                tile.sheet = Some(sheet);
+                tile.style = input.style;
+                let kept = before
+                    .iter()
+                    .any(|old| old.id == tile.id && old.sheet == Some(sheet) && old.range == range);
+                tile.range = range;
+                if !kept {
+                    let seen = sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS (SELECT 1 FROM sheets WHERE id = $1 AND project_id = $2                            AND archived_at IS NULL AND subject_visible_to('sheet', id, $3))",
+                    )
+                    .bind(sheet)
+                    .bind(project_id)
+                    .bind(writer)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(AppError::from)?;
+                    if !seen {
+                        return Err(OpError::not_found("That sheet"));
+                    }
+                    if crate::sheets::ranges::resolve(tx, sheet, &tile.range)
+                        .await?
+                        .is_none()
+                    {
+                        return Err(invalid(
+                            "tiles",
+                            "That sheet has no such block: name one of its named ranges, or a                              block such as A1:B9 or Summary!A1:B9.",
+                        ));
+                    }
+                }
+            }
         }
         if written.iter().any(|other: &Tile| other.id == tile.id) {
             return Err(invalid("tiles", "Each tile appears once."));
@@ -248,7 +306,8 @@ pub struct DashboardEntry {
     #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// Left out when there is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// True for one everyone in the project sees; false for your own.
     pub shared: bool,
@@ -265,7 +324,7 @@ pub struct TileEntry {
     #[schemars(with = "String")]
     pub id: Uuid,
     pub kind: TileKind,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
@@ -273,11 +332,18 @@ pub struct TileEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub view: Option<Uuid>,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub sheet: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub range: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::views::definition::ChartStyle>,
     pub width: u8,
     pub height: u8,
-    /// With figures: what the view finds, read as you.
+    /// With figures: what the view (or sheet block) shows, read as you.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub figures: Option<Figures>,
     /// With figures, when there are none for you: why.
@@ -301,6 +367,9 @@ fn entry(dashboard: &Dashboard) -> DashboardEntry {
                 collection: tile.collection,
                 view: tile.view,
                 text: tile.text.clone(),
+                sheet: tile.sheet,
+                range: tile.range.clone(),
+                style: tile.style,
                 width: tile.width,
                 height: tile.height,
                 figures: None,
@@ -462,10 +531,14 @@ impl Operation for DashboardGet {
         let reader = call.ctx.caller.account_id;
         let tx = call.tx().await?;
         for (tile, shown) in dashboard.tiles.iter().zip(shown.tiles.iter_mut()) {
-            if tile.kind != TileKind::View {
-                continue;
-            }
-            match super::figures(tx, project_id, tile, reader, can_view_tasks).await? {
+            let figures = match tile.kind {
+                TileKind::Text => continue,
+                TileKind::View => {
+                    super::figures(tx, project_id, tile, reader, can_view_tasks).await?
+                }
+                TileKind::Sheet => super::sheet_figures(tx, project_id, tile, reader).await?,
+            };
+            match figures {
                 Ok(figures) => shown.figures = Some(figures),
                 Err(Unseen::Gone) => {
                     shown.unseen =
@@ -474,6 +547,12 @@ impl Operation for DashboardGet {
                 Err(Unseen::Tasks) => {
                     shown.unseen =
                         Some("You can't see this data: your role doesn't see tasks.".into());
+                }
+                Err(Unseen::Range) => {
+                    shown.unseen = Some(
+                        "This tile's range is gone: its name was removed, or its cells deleted."
+                            .into(),
+                    );
                 }
             }
         }
@@ -519,7 +598,8 @@ impl Operation for DashboardCreate {
     const EMITS: &'static [&'static str] = &["dashboard.updated"];
     const TITLE: &'static str = "Make a dashboard";
     const DESCRIPTION: &'static str = "Make a dashboard in a project: tiles that each show one of \
-        a collection's views (a chart view as its chart) or a note. Make chart views first with \
+        a collection's views (a chart view as its chart), a block of a sheet as a chart, or a \
+        note. Make chart views first with \
         view_create (type chart). Shared dashboards need a role that can edit dashboards.";
 
     type Input = DashboardCreateInput;
@@ -656,6 +736,9 @@ impl Operation for DashboardUpdate {
                         title: Some(tile.title.clone()),
                         view: tile.view.map(IdRef),
                         text: (!tile.text.is_empty()).then(|| tile.text.clone()),
+                        sheet: tile.sheet.map(IdRef),
+                        range: (!tile.range.is_empty()).then(|| tile.range.clone()),
+                        style: tile.style,
                         width: Some(tile.width),
                         height: Some(tile.height),
                     })

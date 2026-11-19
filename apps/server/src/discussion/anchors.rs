@@ -21,7 +21,8 @@ use uuid::Uuid;
 use super::subjects::{AnchorShape, Subject};
 use crate::error::AppError;
 
-const MAX_QUOTE: usize = 500;
+/// A page anchor's quote, as page comments always allowed.
+const MAX_TEXT_QUOTE: usize = 1_000;
 const MAX_ID: usize = 128;
 const MAX_ELEMENTS: usize = 50;
 const MAX_ROW: i64 = 1_000_000;
@@ -72,9 +73,16 @@ pub async fn check(
         (AnchorShape::Text, "text") => {
             let block_id = text(object, "blockId", MAX_ID)
                 .ok_or(refused("A page anchor names its blockId."))?;
-            let quote = text(object, "quote", MAX_QUOTE)
-                .ok_or(refused("A page anchor quotes up to 500 characters."))?;
-            Ok(json!({ "kind": "text", "blockId": block_id, "quote": quote }))
+            // A quote is optional: without one the thread is about the
+            // whole block.
+            match object.get("quote") {
+                None | Some(Value::Null) => Ok(json!({ "kind": "text", "blockId": block_id })),
+                Some(_) => {
+                    let quote = text(object, "quote", MAX_TEXT_QUOTE)
+                        .ok_or(refused("A page anchor quotes up to 1,000 characters."))?;
+                    Ok(json!({ "kind": "text", "blockId": block_id, "quote": quote }))
+                }
+            }
         }
         (AnchorShape::Cells, "cell" | "range") => {
             let tab_id = object
