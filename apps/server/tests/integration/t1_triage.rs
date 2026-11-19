@@ -177,7 +177,7 @@ async fn triage_lands_orders_rules_and_wakes_snoozes() {
     assert_eq!(duplicate["outcome"], "ok", "{duplicate}");
     assert_eq!(status_of(copy.clone()).await.0, "canceled");
     let linked = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_relations WHERE kind = 'duplicates'",
+        "SELECT count(*) FROM task_relations WHERE kind = 'duplicates'",
     )
     .fetch_one(pool)
     .await

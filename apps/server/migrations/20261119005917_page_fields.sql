@@ -156,9 +156,12 @@ BEGIN
 END
 $$;
 
+-- A workspace import brings each page's record with it (`importing()`).
 CREATE TRIGGER project_pages_record_insert
     AFTER INSERT ON project_pages
-    FOR EACH ROW EXECUTE FUNCTION page_record_insert();
+    FOR EACH ROW
+    WHEN (NOT importing())
+    EXECUTE FUNCTION page_record_insert();
 
 CREATE FUNCTION page_record_update() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -192,8 +195,9 @@ CREATE TRIGGER project_pages_record_update
     AFTER UPDATE OF title, archived_at ON project_pages
     FOR EACH ROW
     WHEN (
-        OLD.title IS DISTINCT FROM NEW.title
-        OR OLD.archived_at IS DISTINCT FROM NEW.archived_at
+        (OLD.title IS DISTINCT FROM NEW.title
+         OR OLD.archived_at IS DISTINCT FROM NEW.archived_at)
+        AND NOT importing()
     )
     EXECUTE FUNCTION page_record_update();
 
@@ -239,6 +243,6 @@ $$;
 CREATE TRIGGER collection_records_page_guard
     BEFORE INSERT OR UPDATE OR DELETE ON collection_records
     FOR EACH ROW
-    WHEN (NOT workspace_deletion_in_progress())
+    WHEN (NOT workspace_deletion_in_progress() AND NOT importing())
     EXECUTE FUNCTION page_record_guard();
 

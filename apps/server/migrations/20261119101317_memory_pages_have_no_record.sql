@@ -61,7 +61,8 @@ CREATE TRIGGER project_pages_record_leave
     AFTER UPDATE OF memory_for_kind ON project_pages
     FOR EACH ROW
     WHEN (NEW.memory_for_kind = 'conversation'
-          AND OLD.memory_for_kind IS DISTINCT FROM NEW.memory_for_kind)
+          AND OLD.memory_for_kind IS DISTINCT FROM NEW.memory_for_kind
+          AND NOT importing())
     EXECUTE FUNCTION page_record_leave();
 
 -- The guard lets only the page's own triggers remove a Pages record.
