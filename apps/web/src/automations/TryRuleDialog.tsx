@@ -5,7 +5,7 @@ import { describeError } from '../app/mutations'
 import { Banner, Button, Dialog, ErrorState, ListSkeleton, Row, RowList, showToast } from '../ui'
 import { TaskSearchPicker } from '../work-items/TaskSearchPicker'
 import { automationKeys, previewRule, runRule, type AutomationRule, type RulePreview } from './api'
-import { AUTOMATION_OPERATIONS } from './operationForm'
+import { AUTOMATION_OPERATIONS, fieldName } from './operationForm'
 
 /** A step as people read it: an operation by its title, not its name. */
 function stepTitle(step: RulePreview['actions'][number]) {
@@ -56,7 +56,7 @@ export function TryRuleDialog({
     <Dialog
       footer={
         <>
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>Done</Button>
           <Button busy={run.isPending} disabled={!preview.data || Boolean(nothing)} icon="play" onClick={() => run.mutate()} variant="primary">
             Run it for real
           </Button>
@@ -71,7 +71,7 @@ export function TryRuleDialog({
         <p className="aw-quiet">This shows what it would do now. Nothing is sent or changed until you run it.</p>
         <div className="aw-rule-try__task">
           <span>{task ? `As if it fired for ${task.key}` : 'As if it fired now'}</span>
-          <Button onClick={(event) => setPicking(event.currentTarget)} size="sm" variant="ghost">
+          <Button icon="search" onClick={(event) => setPicking(event.currentTarget)} size="sm">
             {task ? 'Another task' : 'Choose a task'}
           </Button>
           {task ? (
@@ -110,14 +110,35 @@ export function TryRuleDialog({
                     {index + 1}
                   </span>
                 }
-                meta={step.kind === 'run_operation' ? <code className="aw-rule-try__input">{JSON.stringify((step.action as { input?: unknown }).input ?? {})}</code> : undefined}
+                meta={step.kind === 'run_operation' ? <OperationInput input={(step.action as { input?: unknown }).input} /> : undefined}
                 title={stepTitle(step)}
               />
             ))}
           </RowList>
         )}
+        {!task && preview.data && !nothing ? (
+          <p className="aw-quiet">Task details like {'{{task.title}}'} stay empty until you choose a task.</p>
+        ) : null}
         {run.isError ? <Banner tone="danger">It didn’t run. {describeError(run.error).message}</Banner> : null}
       </div>
     </Dialog>
+  )
+}
+
+/** An operation's input as it would be sent, a line per answer, the space it runs in left out. */
+function OperationInput({ input }: { input: unknown }) {
+  const entries = Object.entries(input && typeof input === 'object' ? (input as Record<string, unknown>) : {}).filter(
+    ([key]) => key !== 'projectId' && key !== 'spaceId',
+  )
+  if (!entries.length) return null
+  return (
+    <dl className="aw-rule-try__input">
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <dt>{fieldName(key)}</dt>
+          <dd>{typeof value !== 'string' ? JSON.stringify(value) : value || <span className="aw-quiet">(empty)</span>}</dd>
+        </div>
+      ))}
+    </dl>
   )
 }

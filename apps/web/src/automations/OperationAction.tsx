@@ -110,7 +110,17 @@ export function OperationAction({
       ) : fields.length === 0 ? (
         <p className="aw-quiet">It needs nothing else.</p>
       ) : (
-        <FormPieceFields fields={fields} onChange={change} values={values} />
+        <>
+          <FormPieceFields fields={fields.filter((field) => field.required)} onChange={change} values={values} />
+          {fields.some((field) => !field.required) ? (
+            <details className="aw-disclosure" open={fields.some((field) => !field.required && values[field.id] !== undefined && values[field.id] !== '')}>
+              <summary>More options</summary>
+              <div className="aw-rule-operation">
+                <FormPieceFields fields={fields.filter((field) => !field.required)} onChange={change} values={values} />
+              </div>
+            </details>
+          ) : null}
+        </>
       )}
     </div>
   )

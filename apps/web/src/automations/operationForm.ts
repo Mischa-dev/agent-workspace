@@ -84,6 +84,7 @@ export function fieldName(id: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/_/g, ' ')
     .toLowerCase()
+    .replace(/\bids\b/g, 'IDs')
     .replace(/\bid\b/g, 'ID')
     .replace(/\burl\b/g, 'URL')
   return words.charAt(0).toUpperCase() + words.slice(1)

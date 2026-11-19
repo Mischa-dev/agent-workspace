@@ -32,8 +32,8 @@ test('a rule built from pickers and an operation’s form, tried without writing
   await page.getByRole('menuitem', { name: 'Try it' }).click()
   const trying = page.getByRole('dialog', { name: `Try ${name}` })
   await expect(trying.getByText('Run “Comment on task”')).toBeVisible()
-  await expect(trying.getByText(/"text":"Please check /)).toBeVisible()
-  await trying.getByRole('button', { name: 'Close' }).click()
+  await expect(trying.getByText(/^Please check/)).toBeVisible()
+  await trying.getByRole('button', { name: 'Done' }).click()
 
   // Trying it ran nothing.
   const rules = await page.evaluate(async ({ projectId, name }) => {

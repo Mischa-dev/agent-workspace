@@ -16,6 +16,7 @@ import {
 } from '../../automations/api'
 import '../../automations/automations.css'
 import { TryRuleDialog } from '../../automations/TryRuleDialog'
+import { AUTOMATION_OPERATIONS } from '../../automations/operationForm'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
 import { priorityLabel } from '../../work-items/constants'
@@ -132,7 +133,7 @@ function describeAction(action: RuleAction): string {
     case 'post_message':
       return 'post a message'
     case 'run_operation':
-      return `run ${action.operation}`
+      return `run “${AUTOMATION_OPERATIONS.find((entry) => entry.name === action.operation)?.title ?? action.operation}”`
     case 'ask_agent':
       return 'ask an agent'
   }
