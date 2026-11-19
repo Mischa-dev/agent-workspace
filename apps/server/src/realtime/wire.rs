@@ -177,7 +177,11 @@ pub(crate) fn stream_delta(conversation: Option<Uuid>, payload: &Value) -> Strin
         "kind": "stream.delta",
         "conversationId": conversation,
         "messageId": field("message_id", "messageId"),
-        "runId": field("run_id", "runId"),
+        // Provider and ephemeral payloads name the run `agent_run_id`.
+        "runId": match field("agent_run_id", "agentRunId") {
+            Value::Null => field("run_id", "runId"),
+            id => id,
+        },
         "delta": field("delta", "delta"),
     })
     .to_string()
@@ -229,6 +233,17 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn a_streamed_delta_names_its_run() {
+        let run = Uuid::now_v7();
+        let frame: Value = serde_json::from_str(&stream_delta(
+            None,
+            &json!({"agent_run_id": run, "message_id": Uuid::now_v7(), "delta": "next"}),
+        ))
+        .expect("frame");
+        assert_eq!(frame["runId"], json!(run));
+    }
 
     fn fixture() -> Value {
         serde_json::from_str(include_str!("../../tests/fixtures/realtime_wire_v2.json"))
