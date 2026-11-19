@@ -1859,6 +1859,10 @@ pub async fn list(
         r#"
           AND ($5::bigint IS NULL
                OR ((extract(epoch FROM n.surfaced_at) * 1000000)::bigint, n.id) < ($5, $6))
+          -- A DM's or group's follows a credential's limit by the
+          -- workspace it is kept in.
+          AND ($8::uuid[] IS NULL OR n.project_id IS NOT NULL
+               OR COALESCE(conversation.workspace_id, n.workspace_id) = ANY($8))
         ORDER BY n.surfaced_at DESC, n.id DESC
         LIMIT $7
         "#,
@@ -1871,6 +1875,10 @@ pub async fn list(
         .bind(cursor.map(|(micros, _)| micros))
         .bind(cursor.map(|(_, id)| id))
         .bind(limit + 1)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            viewer,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(pool))
         .await?;
     let next_cursor = if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
@@ -1956,6 +1964,10 @@ pub async fn unread_count(
         WHERE n.recipient_actor_id = $1
           AND {view}
           AND ($2::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($2))
+          AND ($3::uuid[] IS NULL OR n.project_id IS NOT NULL
+               -- visibility: only the DM's workspace is read, to apply a credential's limit
+               OR COALESCE((SELECT kept.workspace_id FROM conversations kept
+                            WHERE kept.id = n.conversation_id), n.workspace_id) = ANY($3))
           AND {VISIBLE}
           AND {switches}
         "#,
@@ -1963,6 +1975,10 @@ pub async fn unread_count(
     ))
     .bind(viewer)
     .bind(within)
+    .bind(crate::policy::agent_limit_direct_workspaces(
+        viewer,
+        crate::policy::Permission::ProjectsView,
+    ))
     .fetch_one(crate::db::scoped(pool))
     .await?)
 }

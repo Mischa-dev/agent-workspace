@@ -392,6 +392,30 @@ pub fn agent_limit_hides_direct(
 /// `permission` in (every other project allows nothing). None outside such
 /// a call, meaning no limit applies. For queries that can't filter rows in
 /// Rust, such as counts.
+/// While an app or token acts for `actor_id`, the workspaces whose DMs and
+/// groups its limit leaves `permission` in, with the direct scope (personal
+/// ones) when it allows it in any, as `agent_limit_hides_direct` decides one
+/// at a time; `None` outside such a call. For list SQL over DMs.
+pub fn agent_limit_direct_workspaces(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                let mut allowed = limits
+                    .organizations
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(workspace, _)| *workspace)
+                    .collect::<Vec<_>>();
+                if !allowed.is_empty() {
+                    allowed.push(crate::spaces::DIRECT);
+                }
+                allowed
+            })
+        })
+        .ok()
+        .flatten()
+}
+
 pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
     AGENT_LIMITS
         .try_with(|limits| {

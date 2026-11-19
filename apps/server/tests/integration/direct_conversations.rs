@@ -1635,6 +1635,21 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     let kept_word = format!("keptword{}", Uuid::now_v7().simple());
     say(&personal, &personal_word).await;
     say(&kept, &kept_word).await;
+    // Ben mentions Ana in the kept DM.
+    let (status, mentioned) = send(
+        &world.app,
+        ben.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{kept}/messages"),
+            Some("ben-mentions-ana"),
+            json!({ "content": {"version": 1, "nodes": [
+                {"type": "mention", "actorId": ana.actor},
+                {"type": "text", "text": " kept mention"}
+            ]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{mentioned}");
 
     // Ana's account-wide token for the first workspace.
     let (status, made) = send(
@@ -1737,6 +1752,14 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     assert!(
         !listed_ids.contains(&kept),
         "a token listed another workspace's DM: {listed}"
+    );
+
+    // Nor does the briefing bring the kept DM's mention.
+    let briefing = call("briefing", json!({})).await;
+    assert_eq!(briefing["outcome"], "ok", "{briefing}");
+    assert!(
+        !briefing.to_string().contains(&kept),
+        "a token's briefing named another workspace's DM: {briefing}"
     );
 
     // The token is for the first workspace: the second's groups (a call

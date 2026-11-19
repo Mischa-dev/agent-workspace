@@ -181,12 +181,20 @@ pub(crate) async fn briefing(
               AND entry.sequence > COALESCE(read_state.highest_seen_sequence, 0)
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $1)
+              -- A DM or group follows the credential's limit by the
+              -- workspace it is kept in.
+              AND ($3::uuid[] IS NULL OR message.project_id IS NOT NULL
+                   OR conversation.workspace_id = ANY($3))
             ORDER BY message.created_at DESC
             LIMIT 20
             "#,
         )
         .bind(principal.actor_id)
         .bind(&talk_projects)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            principal.actor_id,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let unread = list_rows(

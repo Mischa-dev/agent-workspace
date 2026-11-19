@@ -3675,6 +3675,41 @@ async fn groups_give_spaces_and_guests_see_only_theirs() {
     .expect("membership");
     assert!(!enabled, "an expired workspace membership is turned off");
 
+    // An end date is a removal on a timer: an admin can't set one on
+    // another admin, as they can't remove them; an owner can.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = true, expires_at = NULL, role = 'admin', \
+           role_id = (SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'admin') \
+         WHERE organization_id = $1 AND actor_id = ANY($2)",
+    )
+    .bind(world.organization)
+    .bind(vec![lena.actor, gus.actor])
+    .execute(world.pool())
+    .await
+    .expect("lena and gus run the workspace");
+    let (_, admin_on_admin) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "workspace_member_update",
+            "lena-expire-gus",
+            json!({"account": "@gus", "expiresAt": soon}),
+        ),
+    )
+    .await;
+    assert_ne!(admin_on_admin["outcome"], "ok", "{admin_on_admin}");
+    let (_, owner_on_admin) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "workspace_member_update",
+            "owner-expire-gus-admin",
+            json!({"account": "@gus", "expiresAt": soon}),
+        ),
+    )
+    .await;
+    assert_eq!(owner_on_admin["outcome"], "ok", "{owner_on_admin}");
+
     world.finish().await;
 }
 
