@@ -63,6 +63,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
                 crate::workspace::lifecycle::NewWorkspace {
                     name: "Demo Workspace".to_owned(),
                     slug: Some("demo-workspace".to_owned()),
+                    id: None,
                 },
             )
             .await?;

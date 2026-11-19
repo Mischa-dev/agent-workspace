@@ -48,6 +48,7 @@ const SIGN_IN_METHODS: Record<string, string> = {
   password: 'Password',
   workos: 'Single sign-on',
   invitation: 'Invitation',
+  oidc: 'Single sign-on',
 }
 
 function codeError(reason: unknown) {

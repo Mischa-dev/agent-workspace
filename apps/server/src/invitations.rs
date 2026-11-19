@@ -744,6 +744,7 @@ async fn accept_new_user(
     // A project role never makes a workspace role (K1.19): someone who
     // joins through a project starts as a workspace member.
     let organization_role = crate::policy::MembershipRole::Member.key();
+    crate::metering::admit_member(&mut transaction, invitation.organization_id, actor_id).await?;
     sqlx::query(
         "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, $3)",
     )

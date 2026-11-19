@@ -105,6 +105,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/events/catalogue",
     "/api/v1/files/{id}",
     "/api/v1/files/{id}/content",
+    "/api/v1/files/links/{token}",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
     "/api/v1/inbox",
@@ -132,6 +133,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/roles",
     "/api/v1/organizations/{organization_id}/secrets",
+    "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
@@ -241,6 +243,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// `/health/*`, `/auth.md`, `/connect.md`, OAuth and the WorkOS callback are
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "/api/v1/setup",
+        "first run (H1.14): whether nobody has an account yet, and the built-in shapes; no \
+         workspace's data; covered in first_run",
+    ),
+    (
+        "/api/v1/setup/import/{transfer}",
+        "first run (H1.14): the requester's own import, by its id and their account alone; \
+         covered in first_run",
+    ),
     (
         "/api/v1/host/commands",
         "a host's own command queue (A1.12), signed in with the host's key, never a \
@@ -959,6 +971,26 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 "/api/v1/organizations/{}/invitations",
                 b.organization
             )],
+            vec![],
+        ),
+        // H1.9: an export's archive is its requester's alone; B's never
+        // downloads in A, nor A's under B's address.
+        case(
+            "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
+            vec![format!(
+                "/api/v1/organizations/{}/transfers/{}/archive",
+                a.organization, a.export
+            )],
+            vec![
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    b.organization, b.export
+                ),
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    a.organization, b.export
+                ),
+            ],
             vec![],
         ),
         case(
@@ -1860,6 +1892,14 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         files(b, "/content"),
         vec![],
     ));
+    // A signed link is its own credential (K5.12): A's owner's link to A's
+    // file opens; one made for A's owner naming B's file never does.
+    cases.push(case(
+        "/api/v1/files/links/{token}",
+        vec![a.file_link.clone()],
+        vec![a.foreign_file_link.clone()],
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/files/{id}/thumbnail",
         // Only images have one.
@@ -2044,6 +2084,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "ai_suggestions_list",
     "automation_history",
     "automation_list",
+    "incoming_hook_list",
     "briefing_get",
     "bug_report_link_list",
     "change_list",
@@ -2070,6 +2111,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_link_get",
     "history_list",
     "history_show",
+    "activity_list",
     "invite_link_list",
     "job_get",
     "collection_list",
@@ -2173,7 +2215,11 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "whiteboard_read",
     "whiteboard_render",
     "workflow_get",
+    "workspace_store_get",
     "workspace_template_list",
+    "workspace_transfer_get",
+    "workspace_transfer_list",
+    "workspace_usage_get",
 ];
 
 pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
@@ -2377,6 +2423,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        by_project("incoming_hook_list"),
         // C1.24: the template galleries of a space or a workspace.
         by_project("page_template_list"),
         case(
@@ -2385,6 +2432,36 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"spaceId": b.project}),
                 json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        // K5.20: B's own bucket never shows in A.
+        case(
+            "workspace_store_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.25: B's usage never shows in A.
+        case(
+            "workspace_usage_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.9: B's exports never show in A.
+        case(
+            "workspace_transfer_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "workspace_transfer_get",
+            vec![json!({"transferId": a.export})],
+            vec![
+                json!({"workspace": b.organization, "transferId": b.export}),
+                json!({"transferId": b.export}),
             ],
             vec![],
         ),
@@ -3186,6 +3263,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        // K3.20: any thing's activity from the log.
+        case(
+            "activity_list",
+            vec![json!({"thing": a.page}), json!({"thing": a.task})],
+            vec![json!({"thing": b.page}), json!({"thing": b.task})],
             vec![],
         ),
         case(

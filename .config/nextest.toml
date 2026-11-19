@@ -28,6 +28,11 @@ retries = 1
 # anything: they get ten minutes instead of five. Retries stay at zero. The
 # read sweep runs once per edge (http, an app, an agent, realtime), so its
 # filter matches every edge's test.
+#
+# The idle-cost test makes ten thousand workspaces, each through the
+# triggers that give it its space and roles, then counts two idle windows:
+# three to four minutes alone, by size, and a minute before each window
+# for PostgreSQL's statistics to land. Ten minutes too; no retry.
 [[profile.ci.overrides]]
-filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another)"
+filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another) | test(=idle_cost::ten_thousand_quiet_workspaces_cost_what_one_does)"
 slow-timeout = { period = "60s", terminate-after = 10 }

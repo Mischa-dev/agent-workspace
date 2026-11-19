@@ -54,21 +54,33 @@ pub struct ThingKindSpec {
     pub links: Support<()>,
 }
 
-const NOT_YET_HISTORY: &str = "K3.19 adds history adapters";
-const NOT_YET_EXPORT: &str = "H1 declares exporters";
-const NOT_YET_LINKS: &str = "K3.12 adds the link store";
+/// A kind with no history adapter (`history::ADAPTERS`) says why here.
+const NO_HISTORY: &str = "its changes are events; it keeps no versions of its own";
 
 macro_rules! spec {
     ($kind:ident, $module:literal, $table:literal, $events:expr, $search:expr) => {
+        spec!(
+            $kind,
+            $module,
+            $table,
+            $events,
+            $search,
+            Support::Not(NO_HISTORY)
+        )
+    };
+    ($kind:ident, $module:literal, $table:literal, $events:expr, $search:expr, $history:expr) => {
         ThingKindSpec {
             kind: ThingKind::$kind,
             module: $module,
             table: $table,
             events: $events,
             search: $search,
-            history: Support::Not(NOT_YET_HISTORY),
-            export: Support::Not(NOT_YET_EXPORT),
-            links: Support::Not(NOT_YET_LINKS),
+            history: $history,
+            // Its table's export declaration (H1.8), checked below.
+            export: Support::Yes($table),
+            // Every registered thing may be a link end: `links` points at
+            // `things`.
+            links: Support::Yes(()),
         }
     };
 }
@@ -107,14 +119,20 @@ static REGISTRY: [ThingKindSpec; 19] = [
         "tasks",
         "work_items",
         Support::Yes(&["task.created", "task.updated", "task.placement_changed"]),
-        Support::Yes("tasks")
+        Support::Yes("tasks"),
+        Support::Yes("task")
     ),
     spec!(
         PAGE,
         "pages",
         "project_pages",
-        Support::Yes(&["page.content_saved", "page.discussion_changed"]),
-        Support::Yes("pages")
+        Support::Yes(&[
+            "page.content_saved",
+            "page.discussion_changed",
+            "page.updated"
+        ]),
+        Support::Yes("pages"),
+        Support::Yes("page")
     ),
     spec!(
         DECISION,
@@ -127,15 +145,17 @@ static REGISTRY: [ThingKindSpec; 19] = [
         WHITEBOARD,
         "whiteboards",
         "whiteboards",
-        Support::Yes(&["whiteboard.scene_changed"]),
-        Support::Yes("whiteboards")
+        Support::Yes(&["whiteboard.scene_changed", "whiteboard.updated"]),
+        Support::Yes("whiteboards"),
+        Support::Yes("whiteboard")
     ),
     spec!(
         SHEET,
         "sheets",
         "sheets",
         Support::Yes(&["sheet.updated"]),
-        Support::Yes("sheets")
+        Support::Yes("sheets"),
+        Support::Yes("sheet")
     ),
     spec!(
         COLLECTION,
@@ -149,7 +169,8 @@ static REGISTRY: [ThingKindSpec; 19] = [
         "collections",
         "collection_records",
         Support::Yes(&["record.created", "record.updated"]),
-        Support::Yes("records")
+        Support::Yes("records"),
+        Support::Yes("record")
     ),
     // K3.11.
     spec!(
@@ -157,7 +178,8 @@ static REGISTRY: [ThingKindSpec; 19] = [
         "messages",
         "messages",
         Support::Yes(&["message.created", "message.edited", "message.removed"]),
-        Support::Yes("messages")
+        Support::Yes("messages"),
+        Support::Yes("message")
     ),
     spec!(
         FILE,
@@ -385,6 +407,51 @@ mod tests {
                 spec(kind).is_some(),
                 "{kind} is openable but not registered"
             );
+        }
+    }
+
+    /// K3 guard 1: every kind has each shared service (events, search,
+    /// history, export, links) or says why not, and what it claims is true:
+    /// a history only with an adapter, an export only with a declaration.
+    #[test]
+    fn every_kind_has_shared_services() {
+        let exported = crate::export::registry::DECLARATIONS
+            .iter()
+            .flat_map(|declaration| declaration.kinds.iter().map(|kind| kind.table))
+            .collect::<BTreeSet<_>>();
+        for spec in registry() {
+            let kind = spec.kind.as_str();
+            let reasons = [
+                ("events", reason(&spec.events)),
+                ("search", reason(&spec.search)),
+                ("history", reason(&spec.history)),
+                ("export", reason(&spec.export)),
+                ("links", reason(&spec.links)),
+            ];
+            for (service, why) in reasons {
+                assert!(
+                    why.is_none_or(|why| !why.trim().is_empty()),
+                    "{kind} has no {service} and doesn't say why"
+                );
+            }
+            assert_eq!(
+                spec.history.is_yes(),
+                crate::history::adapter(kind).is_some(),
+                "{kind}: its history support and the history adapters disagree"
+            );
+            if let Support::Yes(table) = spec.export {
+                assert!(
+                    exported.contains(table),
+                    "{kind} says it exports {table}, which no declaration lists"
+                );
+            }
+        }
+    }
+
+    fn reason<T>(support: &Support<T>) -> Option<&'static str> {
+        match support {
+            Support::Yes(_) => None,
+            Support::Not(why) => Some(why),
         }
     }
 }

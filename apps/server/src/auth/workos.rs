@@ -522,6 +522,7 @@ async fn resolve_identity(
             crate::workspace::lifecycle::NewWorkspace {
                 name: "My workspace".to_owned(),
                 slug: None,
+                id: None,
             },
         )
         .await?;

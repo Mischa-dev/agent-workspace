@@ -290,12 +290,7 @@ pub(crate) async fn within_limits_at(
     limits: &AgentLimits,
     position: i64,
 ) -> Result<bool, AppError> {
-    let event = sqlx::query_as::<_, LoggedEvent>(&format!(
-        "SELECT {LOGGED_EVENT_COLUMNS} FROM events WHERE position = $1"
-    ))
-    .bind(position)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let event = crate::events::logged_at(connection, position).await?;
     Ok(event.is_some_and(|event| within_limits(limits, &event)))
 }
 
