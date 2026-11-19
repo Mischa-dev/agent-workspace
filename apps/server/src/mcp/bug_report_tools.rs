@@ -4,7 +4,7 @@
 //! goes through `crate::bug_reports`, which audits each change.
 
 use rmcp::schemars;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
@@ -43,14 +43,14 @@ async fn tasks_on(state: &AppState, principal: &McpPrincipal) -> Result<bool, Ap
 
 const TASKS_OFF: &str = "Tasks is turned off here, so its bug report links are too: only forms (links with a collection) can be made or changed.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct BugReportLinkListArguments {
+pub(crate) struct BugReportLinkListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
 }
 
-pub(super) async fn bug_report_link_list(
+pub(crate) async fn bug_report_link_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: BugReportLinkListArguments,
@@ -75,9 +75,9 @@ pub(super) async fn bug_report_link_list(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct BugReportLinkWriteArguments {
+pub(crate) struct BugReportLinkWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// A link to change, by ID (bug_report_link_list). Leave it out to make
@@ -108,9 +108,9 @@ pub(super) struct BugReportLinkWriteArguments {
     pub form: Option<FormWrite>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FormWrite {
+pub(crate) struct FormWrite {
     /// Shown above the fields: what the form is for.
     #[serde(default)]
     pub intro: Option<String>,
@@ -126,9 +126,9 @@ pub(super) struct FormWrite {
     pub daily_limit: Option<u32>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FormFieldWrite {
+pub(crate) struct FormFieldWrite {
     /// The field, by name or ID.
     pub field: String,
     #[serde(default)]
@@ -171,7 +171,7 @@ async fn form_from_written(
     }))
 }
 
-pub(super) async fn bug_report_link_write(
+pub(crate) async fn bug_report_link_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: BugReportLinkWriteArguments,

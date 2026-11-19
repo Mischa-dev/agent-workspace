@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { callOp, invalidateOps, opQuery } from '../api/ops'
-import type { SubjectKind } from '../api/generated/operations'
+import type { CommentThreadView, SubjectKind } from '../api/generated/operations'
 import { queryKeys } from '../api/queryKeys'
 import { searchMentionableActors } from '../conversations/api'
 import type { ComposerSubmission } from '../conversations/composerModel'
@@ -31,6 +31,9 @@ export default function ThingComments({ kind, thingId, viewerId }: ThingComments
   const spaceId = summary.data?.spaceId ?? ''
   const conversationId = summary.data?.conversationId ?? ''
   const [openThreadId, setOpenThreadId] = useState<string | null>(null)
+  // Threads past the first page (200), loaded on request.
+  const [more, setMore] = useState<{ after: string; threads: CommentThreadView[]; next: string | null } | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   const submit = async (submission: ComposerSubmission) => {
     await callOp(
@@ -53,7 +56,25 @@ export default function ThingComments({ kind, thingId, viewerId }: ThingComments
   if (summary.isError) {
     return <ErrorState error={summary.error} onRetry={() => void summary.refetch()} title="Comments didn’t load" />
   }
-  const threads = summary.data.threads
+  const firstNext = summary.data.nextCursor ?? null
+  // A reloaded first page with a different end drops the pages after it.
+  const extra = more && more.after === firstNext ? more : null
+  const threads = extra ? [...summary.data.threads, ...extra.threads] : summary.data.threads
+  const nextCursor = extra ? extra.next : firstNext
+  const loadMore = async () => {
+    if (!nextCursor) return
+    setLoadingMore(true)
+    try {
+      const page = await callOp('comment_list', { thing, cursor: nextCursor })
+      setMore({
+        after: firstNext ?? '',
+        threads: [...(extra?.threads ?? []), ...page.threads],
+        next: page.nextCursor ?? null,
+      })
+    } finally {
+      setLoadingMore(false)
+    }
+  }
   const openThread = openThreadId ? threads.find((thread) => thread.id === openThreadId) : undefined
   if (openThread && spaceId) {
     return (
@@ -87,6 +108,11 @@ export default function ThingComments({ kind, thingId, viewerId }: ThingComments
             </li>
           ))}
         </ul>
+      ) : null}
+      {nextCursor ? (
+        <Button disabled={loadingMore} onClick={() => void loadMore()} size="sm" variant="ghost">
+          {loadingMore ? 'Loading discussions' : 'More discussions'}
+        </Button>
       ) : null}
       {summary.data.acceptsComments ? (
         <StructuredComposer

@@ -101,3 +101,51 @@ describe('opKey and opQuery', () => {
     expect(query.queryKey).toEqual(key)
   })
 })
+
+describe('useOp with an overlay', () => {
+  it('drops the overlay on a version conflict, reads the thing again and says so', async () => {
+    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+    const { act, renderHook, waitFor } = await import('@testing-library/react')
+    const { createElement } = await import('react')
+    const { things } = await import('../data/things')
+    const { useOp } = await import('./ops')
+    const toasts = await import('../ui/toastStore')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        answer(409, {
+          outcome: 'conflict',
+          code: 'version',
+          message: 'It changed.',
+          retryCategory: 'reread',
+          details: { currentVersion: 3 },
+        }),
+      ),
+    )
+    things.clear()
+    things.put({ kind: 'task', id: 't1', version: 2, title: 'Theirs before' })
+    const refetch = vi.fn().mockResolvedValue({ kind: 'task', id: 't1', version: 3, title: 'Theirs now' })
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    const wrapper = ({ children }: { children: React.ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const use = useOp as unknown as (
+      name: string,
+      options: Record<string, unknown>,
+    ) => { mutate: (input: unknown) => void; isError: boolean }
+    const { result } = renderHook(
+      () =>
+        use('task_update', {
+          optimistic: (input: { title: string }) => ({ ref: { kind: 'task', id: 't1' }, patch: { title: input.title } }),
+          refetch,
+        }),
+      { wrapper },
+    )
+    act(() => result.current.mutate({ taskId: 't1', title: 'Mine', expectedVersion: 2 }))
+    expect(things.get('task', 't1')?.title).toBe('Mine')
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    await waitFor(() => expect(things.get('task', 't1')?.title).toBe('Theirs now'))
+    expect(refetch).toHaveBeenCalledWith({ kind: 'task', id: 't1' })
+    const shown = renderHook(() => toasts.useToasts())
+    expect(shown.result.current.map((toast) => toast.title)).toContain('Someone changed this first')
+    toasts.clearToasts()
+  })
+})

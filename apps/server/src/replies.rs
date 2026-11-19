@@ -12,6 +12,8 @@
 //! - Claiming starts a lease. A lapsed lease becomes "expired" and waits for a
 //!   person to retry it, rather than being handed out again silently.
 
+pub mod ops;
+
 use std::{collections::BTreeSet, time::Duration};
 
 use axum::{
@@ -1469,7 +1471,6 @@ pub async fn mark_unresponsive(pool: &PgPool) -> Result<(), AppError> {
                 conversation_id: Some(conversation_id),
                 message_id: Some(message_id),
                 work_item_id: None,
-                comment_id: None,
                 agent_run_id: None,
                 pull_request_id: None,
                 detail: serde_json::json!({}),

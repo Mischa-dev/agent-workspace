@@ -1471,6 +1471,7 @@ pub async fn resolve_access_token(
             authentication_class: "mcp_oauth",
             account_wide: false,
             project_explicit: false,
+            workspace_id: None,
         }));
     }
     Ok(Some(McpPrincipal {
@@ -1486,6 +1487,7 @@ pub async fn resolve_access_token(
         authentication_class: "mcp_oauth",
         account_wide: row.account_wide,
         project_explicit: false,
+        workspace_id: None,
     }))
 }
 

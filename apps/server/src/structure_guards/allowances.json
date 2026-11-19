@@ -60,7 +60,6 @@
   },
   "custom_role_allows": {},
   "direct_tool_calls": {
-    "automations.rs": 1,
     "bug_reports.rs": 2,
     "public_api.rs": 1
   },

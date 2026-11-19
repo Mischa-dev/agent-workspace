@@ -363,7 +363,12 @@ function MemberRow({
   // Every membership names a role row (K1.10); a starting role is picked by its key.
   const named = member.roleId ? roles.find((role) => role.id === member.roleId) : undefined
   const held = named && !named.builtIn ? named : undefined
-  const options = held && !customRoles.some((role) => role.id === held.id) ? [held, ...customRoles] : customRoles
+  // The server says which roles you could give them (W1.37); the one they
+  // hold always shows.
+  const assignable = new Set(member.assignableRoles ?? [])
+  const offered = (value: string) => assignable.has(value) || value === member.role
+  const grantable = customRoles.filter((role) => assignable.has(role.id))
+  const options = held && !grantable.some((role) => role.id === held.id) ? [held, ...grantable] : grantable
   return (
     <Row
       actions={
@@ -376,9 +381,9 @@ function MemberRow({
             value={held?.id ?? member.role}
           >
             {member.role === 'owner' && <option value="owner">Owner</option>}
-            <option value="admin">Admin</option>
-            <option value="member">Member</option>
-            <option value="viewer">Viewer</option>
+            {offered('admin') && <option value="admin">Admin</option>}
+            {offered('member') && <option value="member">Member</option>}
+            {offered('viewer') && <option value="viewer">Viewer</option>}
             <CustomRoleOptions roles={options} />
           </SelectField>
           {member.capabilities.disable && (

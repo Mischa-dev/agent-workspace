@@ -1,6 +1,6 @@
 import '@excalidraw/excalidraw/index.css'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { CaptureUpdateAction, Excalidraw, reconcileElements, restoreElements } from '@excalidraw/excalidraw'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState, BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
@@ -23,6 +23,14 @@ const RETRIES = 2
 /** Why saving stopped, and how to try again. */
 export type SaveFailure = { message: string; retry: () => void }
 
+/** In suggest mode (C1.11): the drawing not yet sent, and a way to drop it. */
+export type DraftHandle = {
+  /** The elements changed here since the server's copy, to send as a proposal. */
+  draft: () => StoredElement[]
+  /** Puts the board back as the server holds it. */
+  discard: () => Promise<void>
+}
+
 export type BoardCanvasProps = {
   whiteboardId: string
   initial: SceneView
@@ -32,6 +40,11 @@ export type BoardCanvasProps = {
   onEditors: (editors: Editor[]) => void
   /** Saving has failed more than a retry can fix (null once it saves again). */
   onSaveFailure?: (failure: SaveFailure | null) => void
+  /** The role only suggests: drawing stays here until it's sent as a proposal. */
+  suggesting?: boolean
+  /** How many elements the unsent drawing changes. */
+  onDraft?: (count: number) => void
+  draftRef?: MutableRefObject<DraftHandle | null>
 }
 
 type Element = OrderedExcalidrawElement
@@ -39,7 +52,18 @@ type Element = OrderedExcalidrawElement
 const asStored = (elements: readonly Element[]) => elements as unknown as StoredElement[]
 const asElements = (elements: readonly StoredElement[]) => elements as unknown as Element[]
 
-export default function BoardCanvas({ whiteboardId, initial, editable, dark, onSaveState, onEditors, onSaveFailure }: BoardCanvasProps) {
+export default function BoardCanvas({
+  whiteboardId,
+  initial,
+  editable,
+  dark,
+  onSaveState,
+  onEditors,
+  onSaveFailure,
+  suggesting = false,
+  onDraft,
+  draftRef,
+}: BoardCanvasProps) {
   const navigate = useNavigate()
   const realtime = useOptionalRealtime()
   const live = realtime?.connection === 'live'
@@ -63,11 +87,11 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
   const retryTimer = useRef<number | undefined>(undefined)
   // Once the board closes, a last save may still go out, but nothing retries.
   const closed = useRef(false)
-  const callbacks = useRef({ onSaveState, onEditors, onSaveFailure })
+  const callbacks = useRef({ onSaveState, onEditors, onSaveFailure, onDraft })
   const saveRef = useRef<() => Promise<void>>(() => Promise.resolve())
   useEffect(() => {
-    callbacks.current = { onSaveState, onEditors, onSaveFailure }
-  }, [onEditors, onSaveFailure, onSaveState])
+    callbacks.current = { onSaveState, onEditors, onSaveFailure, onDraft }
+  }, [onDraft, onEditors, onSaveFailure, onSaveState])
   useEffect(() => {
     closed.current = false
     return () => {
@@ -211,15 +235,37 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
     saveRef.current = save
   }, [save])
 
+  // Suggest mode: the drawing is the elements changed here, sent on request.
+  useEffect(() => {
+    if (!draftRef) return
+    draftRef.current = {
+      draft: () => unsaved(asStored(api.current?.getSceneElementsIncludingDeleted() ?? []), known),
+      discard: async () => {
+        const scene = await getScene(whiteboardId)
+        remember(known, scene.elements)
+        seq.current = Math.max(seq.current, scene.sceneSeq)
+        api.current?.updateScene({ elements: restoreElements(asElements(scene.elements), null), captureUpdate: CaptureUpdateAction.NEVER })
+        callbacks.current.onDraft?.(0)
+      },
+    }
+    return () => {
+      draftRef.current = null
+    }
+  }, [draftRef, known, whiteboardId])
+
   const onChange = useCallback(
     (elements: readonly Element[]) => {
+      if (suggesting) {
+        callbacks.current.onDraft?.(unsaved(asStored(elements), known).length)
+        return
+      }
       if (!editable) return
       if (unsaved(asStored(elements), known).length === 0 && !hasNewFiles(api.current, uploadedFiles.current)) return
       callbacks.current.onSaveState('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(() => void save(), SAVE_DELAY_MS)
     },
-    [editable, known, save],
+    [editable, known, save, suggesting],
   )
 
   // Live changes from people and agents.
@@ -251,7 +297,7 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       const board = api.current
-      if (board && editable && unsaved(asStored(board.getSceneElementsIncludingDeleted()), known).length) {
+      if (board && (editable || suggesting) && unsaved(asStored(board.getSceneElementsIncludingDeleted()), known).length) {
         event.preventDefault()
       }
     }
@@ -262,7 +308,7 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
       window.clearTimeout(retryTimer.current)
       void save()
     }
-  }, [editable, known, save])
+  }, [editable, known, save, suggesting])
 
   return (
     <Excalidraw
@@ -288,7 +334,7 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
         canvasActions: { loadScene: false, saveToActiveFile: false, toggleTheme: false, export: false },
       }}
       validateEmbeddable={false}
-      viewModeEnabled={!editable}
+      viewModeEnabled={!editable && !suggesting}
     />
   )
 }

@@ -103,6 +103,11 @@ const KINDS: &[(&str, &str)] = &[
              WHERE membership.project_id = message.project_id AND membership.actor_id = $2 \
                AND membership.enabled))",
     ),
+    // K2.21: a long call's task is found only by its caller.
+    (
+        "operation_task",
+        "SELECT workspace_id, space_id FROM operation_tasks WHERE id = $1 AND account_id = $2",
+    ),
     // K2.7: a scheduled message is found only by its author.
     (
         "scheduled_message",
@@ -201,10 +206,30 @@ const KINDS: &[(&str, &str)] = &[
          WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
     ),
     (
+        "change_set",
+        "SELECT change.workspace_id, change.space_id FROM document_change_sets change \
+         WHERE change.id = $1 \
+           AND subject_visible_to(change.thing_kind, change.thing_id, $2)",
+    ),
+    (
+        "proposal",
+        "SELECT proposal.workspace_id, proposal.space_id FROM proposals proposal \
+         WHERE proposal.id = $1 \
+           AND subject_visible_to(proposal.thing_kind, proposal.thing_id, $2)",
+    ),
+    (
         "sheet",
         "SELECT project.organization_id, project.id FROM sheets sheet \
          JOIN projects project ON project.id = sheet.project_id \
          WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
+    ),
+    // C1.16: a sheet's view, for whoever sees the sheet and, for a
+    // personal one, only its owner.
+    (
+        "sheet_view",
+        "SELECT view.workspace_id, view.space_id FROM sheet_views view \
+         WHERE view.id = $1 AND subject_visible_to('sheet', view.sheet_id, $2) \
+           AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
     ),
     (
         "record",
@@ -229,6 +254,47 @@ const KINDS: &[(&str, &str)] = &[
     (
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // K2.9: a reply request, for the agent it asks (claim, reply, pass,
+    // release); another agent's is not found. One in a DM or group has no
+    // space (K4.15) and is located at its conversation.
+    (
+        "reply_request",
+        "SELECT COALESCE(project.organization_id, conversation.workspace_id), request.project_id \
+         FROM reply_requests request \
+         JOIN conversations conversation ON conversation.id = request.conversation_id \
+         LEFT JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND request.agent_actor_id = $2 \
+           AND conversation_visible_to(request.conversation_id, $2)",
+    ),
+    // K2.9: a reply request for anyone who sees its conversation (stop it,
+    // ask again).
+    (
+        "reply_request_seen",
+        "SELECT COALESCE(project.organization_id, conversation.workspace_id), request.project_id \
+         FROM reply_requests request \
+         JOIN conversations conversation ON conversation.id = request.conversation_id \
+         LEFT JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND conversation_visible_to(request.conversation_id, $2) \
+           AND (request.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled))",
+    ),
+    // K2.18: a repository, archived ones too, in its space; the command
+    // checks who may see or manage it.
+    (
+        "repository",
+        "SELECT project.organization_id, project.id FROM repositories repository \
+         JOIN projects project ON project.id = repository.project_id \
+         WHERE repository.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // K2.18: a pull request goes by pull_request_visible_to (one opened
+    // from a private thread stays private).
+    (
+        "pull_request",
+        "SELECT project.organization_id, project.id FROM github_pull_requests pull \
+         JOIN projects project ON project.id = pull.project_id \
+         WHERE pull.id = $1 AND pull_request_visible_to(pull.id, $2)",
     ),
     // A2.12: a file, in its space, or in the DM or group it was sent in
     // (K4.15), which is found as the conversation is; who may read it is
@@ -353,6 +419,14 @@ async fn thing(
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?
         .flatten(),
+        ("reply_request" | "reply_request_seen", None) => sqlx::query_scalar::<_, Uuid>(
+            "-- visibility: the request was just found through its conversation\n\
+                 SELECT conversation_id FROM reply_requests WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
         // A registry thing with no space: a DM's or group's conversation,
         // message or file is located at it.
         ("thing", None) => sqlx::query_scalar::<_, Option<Uuid>>(
@@ -393,12 +467,16 @@ fn what_of(kind: &str) -> &'static str {
         "task" => "That task",
         "run" => "That run",
         "page" => "That page",
+        "proposal" => "That proposal",
+        "change_set" => "That change",
         "sheet" => "That sheet",
         "record" => "That record",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
+        "repository" => "That repository",
+        "pull_request" => "That pull request",
         "file" => "That file",
         _ => "That",
     }

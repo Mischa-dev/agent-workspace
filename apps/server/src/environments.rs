@@ -7,6 +7,8 @@
 //! People see a project's environments; owners and admins change them.
 //! Checking one runs as the caller, on their own provider account.
 
+pub mod ops;
+
 use std::collections::BTreeMap;
 
 use axum::{

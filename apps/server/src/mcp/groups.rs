@@ -40,7 +40,7 @@ const MAX_CHANGED: usize = MAX_GROUP_MEMBERS - 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MemberRef {
+pub(crate) struct MemberRef {
     pub id: String,
     pub name: String,
     pub handle: String,
@@ -62,7 +62,7 @@ impl From<ActorView> for MemberRef {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ConversationMembersArguments {
+pub(crate) struct ConversationMembersArguments {
     /// The group, or a thread in it: an ID or link.
     pub conversation_id: String,
     /// People and agents to add: actor IDs or @handles. They can read the
@@ -80,7 +80,7 @@ pub(super) struct ConversationMembersArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GroupMembersValue {
+pub(crate) struct GroupMembersValue {
     /// Always the group, even when you passed a thread in it.
     pub conversation_id: String,
     pub name: String,
@@ -104,7 +104,7 @@ pub(super) struct GroupMembersValue {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ConversationContinueArguments {
+pub(crate) struct ConversationContinueArguments {
     /// The group, or a thread in one: an ID or link.
     pub conversation_id: String,
     /// A stable ID for this call, so a retry doesn't grant another round.
@@ -113,7 +113,7 @@ pub(super) struct ConversationContinueArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ContinueValue {
+pub(crate) struct ContinueValue {
     pub conversation_id: String,
     /// Agent messages allowed before a person has to continue again.
     pub agent_turns_remaining: i32,
@@ -155,7 +155,7 @@ async fn visible_conversation(
     Ok(Some(row))
 }
 
-pub(super) async fn conversation_members(
+pub(crate) async fn conversation_members(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ConversationMembersArguments,
@@ -392,7 +392,7 @@ pub(super) async fn conversation_members(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "conversation_members"))
 }
 
-pub(super) async fn conversation_continue(
+pub(crate) async fn conversation_continue(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ConversationContinueArguments,

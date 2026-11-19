@@ -5,7 +5,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { useWorkspace } from '../app/workspace'
 import { defaultWorkspace } from '../settings/workspaceChoice'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SettingsSkeleton } from '../ui'
 import { getOnboarding, onboardingKeys, progressText, STEP_TITLES, type Onboarding, type OnboardingStepId } from './api'
 import { StepPanel } from './StepPanel'
@@ -22,18 +22,17 @@ export function OnboardingPage() {
   const session = useAuthenticatedSession()
   // The workspace in the address; the person's default only outside one.
   const workspace = useWorkspace() ?? defaultWorkspace(session)
+  useShellPage({ mainClassName: 'aw-main--page' })
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-onboarding">
-        {workspace ? (
-          <OnboardingFor organizationId={workspace.id} />
-        ) : (
-          <EmptyState icon="home" title="No workspace yet">
-            Ask an owner to invite you to their workspace, or set one up from the command line.
-          </EmptyState>
-        )}
-      </div>
-    </AppShell>
+    <div className="aw-page aw-onboarding">
+      {workspace ? (
+        <OnboardingFor organizationId={workspace.id} />
+      ) : (
+        <EmptyState icon="home" title="No workspace yet">
+          Ask an owner to invite you to their workspace, or set one up from the command line.
+        </EmptyState>
+      )}
+    </div>
   )
 }
 

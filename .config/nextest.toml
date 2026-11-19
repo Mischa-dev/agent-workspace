@@ -21,10 +21,13 @@ path = "junit.xml"
 filter = "test(=w7_launch::launches_use_the_defaults_queue_in_order_and_recheck_access)"
 retries = 1
 
-# The two isolation sweeps call every read and write route and tool as each
+# The isolation sweeps call every read and write route and tool as each
 # workspace against the other's ids (hundreds of calls), and take four to
-# five minutes on a shared runner. Slow by size, not by waiting on anything:
-# they get ten minutes instead of five. Retries stay at zero.
+# five minutes on a shared runner (the agent and app sweeps read a tools
+# list of close to a megabyte for each). Slow by size, not by waiting on
+# anything: they get ten minutes instead of five. Retries stay at zero. The
+# read sweep runs once per edge (http, an app, an agent, realtime), so its
+# filter matches every edge's test.
 [[profile.ci.overrides]]
-filter = "test(=workspace_isolation::one_workspace_never_sees_another) | test(=write_isolation::one_workspace_never_writes_to_another)"
+filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another)"
 slow-timeout = { period = "60s", terminate-after = 10 }

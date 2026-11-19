@@ -12,6 +12,8 @@
   "tools": {
     "page_list": "query",
     "page_get": "describe",
+    "conversation_tab_list": "query",
+    "conversation_tab_set": "change",
     "page_blocks": "describe",
     "page_write": "change",
     "page_template_list": "query",
@@ -21,13 +23,16 @@
     "page_comment_update": "change",
     "page_suggestions": "query",
     "page_suggestion_decide": "change",
+    "change_list": "query",
+    "change_undo": "change",
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
     "decision_record": "create",
     "thing_share_add": "change",
     "thing_share_remove": "change",
-    "thing_link_create": "create"
+    "thing_link_create": "create",
+    "page_make": "create"
   },
   "routes": [
     "/api/v1/pages/*",
@@ -84,7 +89,7 @@
   "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "channel.tabs"],
     "sidebar": [],
     "home": [],
     "settings": [],

@@ -28,5 +28,7 @@ impl CoreModule for Module {
         module.operations(crate::agent_plugin::register_ops);
         module.operations(crate::accounts::ops::register_ops);
         module.operations(crate::accounts::refs::register_ops);
+        module.operations(crate::statuses::ops::register_agent_ops);
+        module.operations(crate::packages::ops::register_agent_ops);
     }
 }

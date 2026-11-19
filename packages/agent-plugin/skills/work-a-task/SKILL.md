@@ -11,6 +11,6 @@ description: Pick up a task, meet its acceptance criteria, and leave it in a sta
 3. Say what you found or decided with `task_comment_create`. Attach files with
    `file_upload` and their ids.
 4. Changing a task needs its current version (`expectedVersion`); on a
-   conflict, read it again with `task_open` and retry.
+   conflict, read it again with `task_get` and retry.
 5. If you stop before it is done, `task_release` with a handoff note that
    says where it got to.

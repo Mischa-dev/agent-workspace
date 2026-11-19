@@ -217,6 +217,9 @@ fn written(result: writes::WriteResult) -> Result<TaskWritten, OpError> {
 fn answer<T>(result: ToolResult<T>) -> Result<T, OpError> {
     match result {
         ToolResult::Ok { value } => Ok(value),
+        ToolResult::NotFound { message } if !message.is_empty() => Err(OpError::Missing {
+            message: Cow::Owned(message),
+        }),
         ToolResult::NotFound { .. } => Err(OpError::not_found("That task")),
         ToolResult::InvalidRequest { field, message } => Err(OpError::Invalid {
             field: Cow::Owned(field),
@@ -426,4 +429,56 @@ pub(crate) async fn criteria(
         )
         .await,
     )
+}
+
+// ---------------------------------------------------------------------------
+// K2.14 and K2.15: the planning, link, bulk and read tools' commands, run by
+// `work_items::ops`. Each operation calls the hand-written tool's command
+// with the caller the dispatcher checked.
+
+/// The caller as a tool's command reads it, acting in `space` when the call
+/// didn't locate one (a credential held to its own space).
+pub(crate) fn principal_for(ctx: &OpContext, space: Option<Uuid>) -> McpPrincipal {
+    principal_in(ctx, space)
+}
+
+/// A tool's answer as an operation's.
+pub(crate) fn tool_answer<T>(result: ToolResult<T>) -> Result<T, OpError> {
+    answer(result)
+}
+
+/// The request id a command that keeps its own idempotency scopes its retry
+/// to: the caller's, or a fresh one (it runs once, R52).
+pub(crate) fn command_request_id(ctx: &OpContext) -> String {
+    request_id(ctx)
+}
+
+/// A batch tool's answer as an operation's: a rejected batch is a conflict
+/// whose `details.current.problems` lists each problem, with its index.
+pub(crate) fn batch_answer<T>(result: super::task_batch::BatchResult<T>) -> Result<T, OpError> {
+    use super::task_batch::BatchResult as Batch;
+    match result {
+        Batch::Ok { value } => Ok(value),
+        Batch::Rejected { message, problems } => Err(OpError::Conflict {
+            reason: ConflictReason::State { code: "rejected" },
+            message: Cow::Owned(message),
+            current: Some(json!({ "problems": problems })),
+        }),
+        Batch::NotFound { .. } => Err(OpError::not_found("That project")),
+        Batch::InvalidRequest { field, message } => Err(OpError::Invalid {
+            field: Cow::Owned(field),
+            message: Cow::Owned(message),
+        }),
+        Batch::PermissionDenied {
+            message,
+            retry_category,
+        } => answer::<T>(ToolResult::PermissionDenied {
+            message,
+            retry_category,
+        }),
+        Batch::Conflict { message } => answer::<T>(ToolResult::Conflict { message }),
+        Batch::TemporarilyUnavailable { message } => {
+            answer::<T>(ToolResult::TemporarilyUnavailable { message })
+        }
+    }
 }

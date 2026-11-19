@@ -1,15 +1,16 @@
 //! Moving a task (and its subtasks) to another project, for the web app and
 //! for `task_move` (AWD-102; docs/plans/mcp-tools.md, decision 1).
 //!
-//! A task can't change projects in place: its comments are immutable, and
-//! its links and authors belong to its project. So a move carries the task
-//! over into the target project (title, description, priority, status and
-//! type by name, the assignee if they're there, start and due dates, the
-//! estimate, the milestone by name if the target has it, acceptance
-//! criteria, subtasks, labels, custom field values that fit, and every
-//! comment quoted with its author and date), then archives the original. The
-//! original keeps its history, links and every field value, and its key
-//! keeps opening the new task (migration 0043).
+//! A task can't change projects in place: its links and authors belong to
+//! its project. So a move carries the task over into the target project
+//! (title, description, priority, status and type by name, the assignee if
+//! they're there, start and due dates, the estimate, the milestone by name
+//! if the target has it, acceptance criteria, subtasks, labels and custom
+//! field values that fit), hands its discussion (every comment, reply,
+//! reaction and file, C1.4) to the new task, then archives the original.
+//! The original keeps its history, links and every field value, and its key
+//! keeps opening the new task (migration 0043). Once the move is in, the new
+//! task gets a comment saying where it came from.
 //!
 //! Custom field values carry over only into a compatible field of the
 //! target (same name and type) and only when they mean the same thing there:
@@ -51,14 +52,12 @@ use crate::{
     error::AppError,
     fields::{self, FieldDefinition, FieldType, LinkTarget, Normalized},
     idempotency::{IdempotencyKey, RequestHash},
-    message_content::MessageContent,
     policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
         CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, NewTaskFields, ProjectMembership,
-        authorize_mutation, create_work_item_with_id, finalize_change, finalize_comment,
-        finalize_copied_comment, insert_criteria, lock_membership, read_membership,
-        record_audit_for, validate_assignee,
+        authorize_mutation, create_work_item_with_id, finalize_change, insert_criteria,
+        lock_membership, read_membership, record_audit_for, validate_assignee,
     },
     work_item_fields::{self, FieldValueChange, FieldValueChanges, Writer},
     work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
@@ -68,13 +67,6 @@ use crate::{
 pub const MAX_TASKS: usize = 100;
 /// The most choices one confirmation takes.
 pub const MAX_RESOLUTIONS: usize = 1_000;
-/// The most comments carried over per task; the rest stay on the original.
-const MAX_COMMENTS: usize = 200;
-/// Comments are at most 20,000 characters; leave room for the quote header.
-/// Each carried comment gets the clock time, so they keep their order within
-/// the one transaction.
-const MAX_QUOTED_CHARACTERS: usize = 19_000;
-
 // ---------------------------------------------------------------------------
 // Who moves, and through what
 
@@ -101,13 +93,6 @@ impl Surface {
         }
     }
 
-    fn move_comment(self) -> &'static str {
-        match self {
-            Self::Mcp => "work_item.mcp_move_comment",
-            Self::Web => "work_item.move_comment",
-        }
-    }
-
     fn label_created(self) -> &'static str {
         match self {
             Self::Mcp => "work_item_label.mcp_created",
@@ -131,6 +116,12 @@ pub struct Mover {
     /// Attribution in the target project.
     pub target: CommandActor,
     pub surface: Surface,
+    /// Who posts the provenance comment on each copy, through the send
+    /// pipeline; None for an account that can't send messages.
+    pub(crate) poster: Option<(
+        crate::conversations::MessageCommandActor,
+        crate::conversations::threads::ThreadCreator,
+    )>,
 }
 
 /// Why a move (or its preview) didn't happen. Each surface words these as
@@ -260,6 +251,11 @@ pub struct MoveDone {
     /// How many custom field values stayed on the original only.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub left_behind: u32,
+    /// Where each copy came from, for a comment on it once the move is in;
+    /// never sent.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) provenance: Vec<(Uuid, String)>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -1663,6 +1659,7 @@ pub async fn execute(
                 created: false,
                 replayed: false,
                 left_behind: 0,
+                provenance: Vec::new(),
             }),
             None => Err(Refusal::Conflict(
                 "That task is archived. Restore it before moving it.".to_owned(),
@@ -1762,6 +1759,31 @@ pub async fn execute(
     }
     transaction.commit().await?;
     let mut done = done;
+    // Each copy says where it came from. A comment is sent on its own, after
+    // the move; one that fails leaves the move as it is.
+    if let Some((actor, creator)) = &mover.poster {
+        for (task_id, text) in std::mem::take(&mut done.provenance) {
+            let Ok(key) = IdempotencyKey::parse(&format!("moved-{task_id}")) else {
+                continue;
+            };
+            if let Err(error) = crate::discussion::post(
+                state,
+                actor.clone(),
+                creator.clone(),
+                crate::discussion::SubjectKind::Task,
+                task_id,
+                crate::discussion::CommentPlace::Stream,
+                key,
+                crate::discussion::CommentBody::Text(text),
+                &[],
+                None,
+            )
+            .await
+            {
+                tracing::warn!(?error, %task_id, "a moved task's provenance comment wasn't posted");
+            }
+        }
+    }
     // As before: titles only for someone whose role shows tasks there.
     if crate::search::projects_showing_tasks(&state.pool, mover.actor_id, &[source_project_id])
         .await?
@@ -2016,6 +2038,7 @@ async fn carry_over(
         .collect::<HashMap<_, _>>();
     let mover_name = mover_name(transaction, source_project_id, mover.actor_id).await?;
     let mut moved = Vec::new();
+    let mut provenance_notes = Vec::new();
     for (index, task) in plan.tasks.iter().enumerate() {
         let settings = &plan.settings[index];
         let new_id = new_ids[&task.id];
@@ -2168,68 +2191,12 @@ async fn carry_over(
             provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
             provenance.push_str(&links_left_behind_text(&links));
         }
-        add_comment(
-            transaction,
-            &mover.target,
-            mover.surface,
-            new_id,
-            &provenance,
-            Notify::Yes,
-        )
-        .await?;
-        let comments = sqlx::query_as::<_, SourceComment>(
-            r#"
-            SELECT COALESCE(author.display_name, 'Someone') AS author,
-                   to_char(comment.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI "UTC"') AS created_at,
-                   comment.plain_text
-            FROM work_item_comments comment
-            LEFT JOIN project_memberships author
-              ON author.project_id = comment.project_id
-             AND author.actor_id = comment.author_actor_id
-            WHERE comment.project_id = $1 AND comment.work_item_id = $2
-              AND comment.removed_at IS NULL
-            ORDER BY comment.created_at, comment.id
-            LIMIT $3
-            "#,
-        )
-        .bind(source_project_id)
-        .bind(task.id)
-        .bind(MAX_COMMENTS as i64)
-        .fetch_all(&mut **transaction)
-        .await?;
-        let comment_count = sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM work_item_comments WHERE project_id = $1 AND work_item_id = $2 AND removed_at IS NULL",
-        )
-        .bind(source_project_id)
-        .bind(task.id)
-        .fetch_one(&mut **transaction)
-        .await?;
-        for comment in &comments {
-            let text = comment
-                .plain_text
-                .chars()
-                .take(MAX_QUOTED_CHARACTERS)
-                .collect::<String>();
-            let quoted = format!(
-                "{} wrote on {} (on {}):\n\n{}",
-                comment.author, comment.created_at, task.key, text
-            );
-            add_comment(
-                transaction,
-                &mover.target,
-                mover.surface,
-                new_id,
-                &quoted,
-                Notify::No,
-            )
-            .await?;
-        }
-        if comment_count > MAX_COMMENTS as i64 {
-            notes.push(format!(
-                "{} has {} comments; the first {MAX_COMMENTS} were carried over and the rest are on the original.",
-                task.key, comment_count
-            ));
-        }
+        // Posted once the move is in (`execute`): a comment goes through the
+        // send pipeline in its own transaction.
+        provenance_notes.push((new_id, provenance));
+        // The discussion goes with the task: its comments, replies,
+        // reactions and files, as they were (C1.4).
+        carry_discussion(transaction, &mover.target, task.id, new_id).await?;
 
         // Handoff notes go with the task, so whoever claims it in its new
         // project still reads where the last holder left it.
@@ -2251,23 +2218,8 @@ async fn carry_over(
         .execute(&mut **transaction)
         .await?;
 
-        // Point the original at its new home, then archive it. Its field
-        // values stay as they were.
-        add_comment(
-            transaction,
-            &mover.source,
-            mover.surface,
-            task.id,
-            &format!(
-                "Moved to {new_key}: {}",
-                link_url(
-                    state,
-                    &crate::addresses::Target::task(target_project_id, new_id),
-                )
-            ),
-            Notify::Yes,
-        )
-        .await?;
+        // Archive the original; its key opens the new task from now on.
+        // Its field values stay as they were.
         archive(transaction, &mover.source, mover.surface, task, &new_key).await?;
         sqlx::query(
             r#"
@@ -2317,6 +2269,7 @@ async fn carry_over(
         created: true,
         replayed: false,
         left_behind: chosen.left.iter().sum(),
+        provenance: provenance_notes,
     })
 }
 
@@ -2370,18 +2323,12 @@ async fn replayed(
         created: true,
         replayed: true,
         left_behind: u32::try_from(receipt.left_behind).unwrap_or_default(),
+        provenance: Vec::new(),
     })
 }
 
 // ---------------------------------------------------------------------------
 // Pieces of the move (unchanged from task_move)
-
-#[derive(Debug, FromRow)]
-struct SourceComment {
-    author: String,
-    created_at: String,
-    plain_text: String,
-}
 
 #[derive(Debug, FromRow)]
 struct SourceCriterion {
@@ -2544,70 +2491,36 @@ async fn links_left_behind(
     .await?)
 }
 
-/// Whether adding a comment tells watchers and the assignee. Copied history
-/// doesn't: the move's own comment already did, once.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Notify {
-    Yes,
-    No,
-}
-
-async fn add_comment(
+/// Gives the original's discussion to its copy and lists the comments in
+/// the copy's timeline.
+async fn carry_discussion(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
-    surface: Surface,
-    work_item_id: Uuid,
-    text: &str,
-    notify: Notify,
+    from: Uuid,
+    to: Uuid,
 ) -> Result<(), AppError> {
-    let validated = MessageContent::from_plain_text(text.to_owned())
-        .map_err(|_| AppError::Validation("comment"))?;
-    let content = serde_json::to_value(validated.content())
-        .map_err(|_| AppError::Internal("serialize moved comment"))?;
-    let version = sqlx::query_scalar::<_, i64>(
-        "SELECT version FROM work_items WHERE project_id = $1 AND id = $2",
+    let Some(comments_id) = crate::discussion::hand_over(
+        transaction,
+        crate::discussion::SubjectKind::Task,
+        from,
+        to,
+        actor.project_id,
     )
-    .bind(actor.project_id)
-    .bind(work_item_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    let comment_id = Uuid::now_v7();
-    sqlx::query(
+    .await?
+    else {
+        return Ok(());
+    };
+    let stream = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO work_item_comments (
-            id, project_id, work_item_id, author_actor_id, content_version, content, plain_text,
-            created_at
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6, clock_timestamp())
+        -- visibility: the moved task's own comments, moved by its mover
+        SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at, id
         "#,
     )
-    .bind(comment_id)
-    .bind(actor.project_id)
-    .bind(work_item_id)
-    .bind(actor.actor_id)
-    .bind(content)
-    .bind(text)
-    .execute(&mut **transaction)
+    .bind(comments_id)
+    .fetch_all(&mut **transaction)
     .await?;
-    if notify == Notify::No {
-        return finalize_copied_comment(
-            transaction,
-            actor,
-            work_item_id,
-            comment_id,
-            surface.move_comment(),
-        )
-        .await;
-    }
-    finalize_comment(
-        transaction,
-        actor,
-        work_item_id,
-        comment_id,
-        version,
-        surface.move_comment(),
-    )
-    .await?;
-    Ok(())
+    crate::work_item_commands::insert_comment_entries(transaction, actor.project_id, to, &stream)
+        .await
 }
 
 async fn archive(

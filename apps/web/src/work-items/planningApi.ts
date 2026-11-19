@@ -147,16 +147,6 @@ export async function setWatching(input: { projectId: string; workItemId: string
   return { watching: boolean(payload.watching), watchers: actorRefs(payload.watchers) }
 }
 
-export async function releaseClaim(input: { projectId: string; workItemId: string; idempotencyKey: string }) {
-  return normalizeWorkItem(
-    await requestJson<unknown>(taskPath(input.projectId, input.workItemId, 'release-claim'), {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: {},
-    }),
-  )
-}
-
 export async function saveWorkflow(input: { projectId: string; workflow: WorkflowUpdate; idempotencyKey: string }) {
   return normalizeWorkflow(
     await requestJson<unknown>(projectPath(input.projectId, 'work-item-workflow'), {

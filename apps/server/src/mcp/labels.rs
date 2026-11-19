@@ -42,9 +42,9 @@ const DENIED_MESSAGE: &str =
 // ---------------------------------------------------------------------------
 // label_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LabelListArguments {
+pub(crate) struct LabelListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Also list archived labels, which label_write can restore.
@@ -53,7 +53,7 @@ pub(super) struct LabelListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LabelLine {
+pub(crate) struct LabelLine {
     pub id: String,
     pub name: String,
     /// "#rrggbb".
@@ -85,12 +85,12 @@ impl From<LabelRow> for LabelLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LabelListValue {
+pub(crate) struct LabelListValue {
     /// Active labels by name, then archived ones when asked for.
     pub labels: Vec<LabelLine>,
 }
 
-pub(super) async fn label_list(
+pub(crate) async fn label_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LabelListArguments,
@@ -131,9 +131,9 @@ pub(super) async fn label_list(
 // ---------------------------------------------------------------------------
 // label_write
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LabelWriteArguments {
+pub(crate) struct LabelWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The label to change, by ID or current name. Leave it out to create one.
@@ -154,7 +154,7 @@ pub(super) struct LabelWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LabelWriteValue {
+pub(crate) struct LabelWriteValue {
     pub label: LabelLine,
     /// False when it already existed, or nothing needed to change.
     pub created: bool,
@@ -270,7 +270,7 @@ fn tasks_phrase(count: i64) -> String {
     }
 }
 
-pub(super) async fn label_write(
+pub(crate) async fn label_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LabelWriteArguments,

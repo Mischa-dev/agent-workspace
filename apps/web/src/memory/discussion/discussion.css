@@ -211,3 +211,11 @@
   font: var(--t-caption);
   color: var(--content-fg-muted);
 }
+
+/* Changes a thread asked for (C1.22) */
+.aw-discussion__changes {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--content-fg-muted);
+}

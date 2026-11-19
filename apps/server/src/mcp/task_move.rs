@@ -23,9 +23,9 @@ use crate::work_item_move::{
     self, MoveDone, MovePlan, MoveRequest, MovedTask, Mover, Refusal, Resolution, Surface,
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskMoveArguments {
+pub(crate) struct TaskMoveArguments {
     /// The task's ID, link, or key such as AW-7. Its subtasks move with it.
     pub task_id: String,
     /// Where it goes: a project ID, link, or key such as "AWD".
@@ -55,7 +55,7 @@ pub(super) struct TaskMoveArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskMoveValue {
+pub(crate) struct TaskMoveValue {
     /// The task first, then its subtasks. Empty for a preview.
     pub moved: Vec<MovedTask>,
     /// Anything that didn't carry over exactly, such as an assignee who isn't
@@ -82,7 +82,7 @@ fn is_zero(value: &u32) -> bool {
 
 const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, digits, dashes, dots or underscores, and send the same one when you retry.";
 
-pub(super) async fn task_move(
+pub(crate) async fn task_move(
     state: &crate::AppState,
     principal: &McpPrincipal,
     arguments: TaskMoveArguments,
@@ -105,6 +105,12 @@ pub(super) async fn task_move(
         source: command_actor(principal, source_project_id),
         target: command_actor(principal, target_project_id),
         surface: Surface::Mcp,
+        poster: super::talk::message_actor(principal).ok().map(|actor| {
+            (
+                actor,
+                crate::conversations::threads::ThreadCreator::mcp(principal),
+            )
+        }),
     };
     if arguments.preview == Some(true) {
         if arguments.snapshot.is_some()

@@ -1788,9 +1788,9 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
 const MODULE_INSTALLS_MIGRATION: i64 = 20261114231000;
 
 /// M1.2: a switch written before the migration reads as off after it, with
-/// its version; a write through the old settings path (an older server
-/// during the deploy) is mirrored into the table, and so is an unset; a
-/// role can name a dotted module key.
+/// its version; once M1.11's contract step has run, the old settings rows
+/// are gone and the old path mirrors nothing; a role can name a dotted
+/// module key.
 #[tokio::test]
 async fn module_switches_carry_across_to_their_table() {
     use super::a1_runs_record::{schema_before, seed};
@@ -1854,28 +1854,19 @@ async fn module_switches_carry_across_to_their_table() {
     assert!(switches.is_off("whiteboards") && !switches.is_off("sheets"));
     drop(connection);
 
-    // The old path, after the migration: mirrored, and an unset is on.
+    // M1.11's contract step: the old settings rows are gone, and nothing
+    // mirrors a write through the old path any more (no server reads it).
+    let left = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM settings WHERE organization_id = $1 AND key LIKE 'modules.%'",
+    )
+    .bind(organization)
+    .fetch_one(&pool)
+    .await
+    .expect("old rows");
+    assert_eq!(left, 0);
+    let before = installs().await;
     write_setting("modules.pages", json!(false), 1).await;
-    write_setting("modules.whiteboards", json!(true), 1).await;
-    let found = installs().await;
-    assert!(
-        found.contains(&("pages".to_owned(), "off".to_owned(), 1)),
-        "{found:?}"
-    );
-    assert!(
-        found.contains(&("whiteboards".to_owned(), "on".to_owned(), 4)),
-        "{found:?}"
-    );
-    sqlx::query("DELETE FROM settings WHERE organization_id = $1 AND key = 'modules.pages'")
-        .bind(organization)
-        .execute(&pool)
-        .await
-        .expect("unset");
-    assert!(
-        installs()
-            .await
-            .contains(&("pages".to_owned(), "on".to_owned(), 2))
-    );
+    assert_eq!(installs().await, before);
 
     // Roles name module keys, a built one's included.
     let named = sqlx::query(

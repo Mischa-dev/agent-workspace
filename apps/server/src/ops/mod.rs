@@ -23,6 +23,7 @@
 //!   access module will have (deleted by K2.17).
 //! - `dispatch`: the pipeline every call goes through.
 //! - `registry`: the list of operations, built once.
+//! - `long`: long calls answered `started` and finished by a job (K2.21).
 //! - `web` and `mcp`: the generated edges (the v2 route for the web app and
 //!   scripts, and the agent tools).
 //! - `codegen`: the web app's types and client, the catalogue and the v2
@@ -41,6 +42,7 @@ pub mod conventions;
 pub mod dispatch;
 pub mod envelope;
 pub mod error;
+pub mod long;
 pub mod mcp;
 pub mod refs;
 pub mod registry;
@@ -124,10 +126,19 @@ pub trait Operation: Send + Sync + 'static {
     /// Fields of the value shown once (a new secret): kept out of the stored
     /// answer a retry replays, which says null for them instead.
     const SHOWN_ONCE: &'static [&'static str] = &[];
-    /// May run as a job (MCP Tasks extension, K2.21).
+    /// May run as a job (MCP Tasks extension, K2.21): an MCP call whose
+    /// input `runs_long` is answered `started` and finished by a job.
     const LONG: bool = false;
     /// Accepts `preview: true`: runs and rolls back.
     const PREVIEW: bool = false;
+    /// A call that names no space acts in the space a space-held
+    /// credential is held to, and is authorized there (not against the
+    /// workspace).
+    const HELD_SPACE_BY_DEFAULT: bool = false;
+    /// A read that, naming no workspace for a caller who reaches several,
+    /// lists across all of them (each filtered by the caller's access
+    /// there) instead of asking which. Only reads may span.
+    const SPANS_WORKSPACES: bool = false;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.
@@ -143,6 +154,12 @@ pub trait Operation: Send + Sync + 'static {
 
     type Input: DeserializeOwned + Serialize + JsonSchema + Targeted + Send + 'static;
     type Output: Serialize + JsonSchema + Send + 'static;
+
+    /// Whether this call runs as a job (only for `LONG` operations): a big
+    /// batch, say, where a small one answers at once. Never a preview.
+    fn runs_long(_input: &Self::Input) -> bool {
+        Self::LONG
+    }
 
     /// Does the work. Writes run inside the dispatcher's transaction
     /// (`call.tx()`); the dispatcher commits after the audit row.

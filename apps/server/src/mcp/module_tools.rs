@@ -22,7 +22,7 @@ use crate::{
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ModuleListArguments {
+pub(crate) struct ModuleListArguments {
     /// A project's ID, link or key (such as "AWD"): its workspace's modules.
     /// Left out, the workspace of the project this connection is in.
     #[serde(default)]
@@ -35,7 +35,7 @@ pub(super) struct ModuleListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ModuleDetail {
+pub(crate) struct ModuleDetail {
     pub things: Vec<ThingDecl>,
     pub embeds: Vec<EmbedDecl>,
     /// Permission keys it owns.
@@ -46,7 +46,7 @@ pub(super) struct ModuleDetail {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ModuleListValue {
+pub(crate) struct ModuleListValue {
     #[schemars(with = "String")]
     pub workspace_id: Uuid,
     pub modules: Vec<modules::http::ModuleView>,
@@ -63,7 +63,7 @@ pub(super) struct ModuleListValue {
 /// A built module in module_list.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BuiltModuleSummary {
+pub(crate) struct BuiltModuleSummary {
     #[schemars(with = "String")]
     pub id: Uuid,
     pub key: String,
@@ -102,7 +102,7 @@ async fn workspace_of(
     )
 }
 
-pub(super) async fn module_list(
+pub(crate) async fn module_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ModuleListArguments,
@@ -185,7 +185,7 @@ pub(super) async fn module_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ThingOpenArguments {
+pub(crate) struct ThingOpenArguments {
     /// What kind of thing: task, page, decision, whiteboard, sheet, thread,
     /// channel, conversation, project, collection or record (a
     /// collection's). Leave it out to open any thing by its ID.
@@ -196,7 +196,7 @@ pub(super) struct ThingOpenArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThingOpenValue {
+pub(crate) struct ThingOpenValue {
     pub thing: Thing,
     /// Its links both ways, such as "Blocked by" or "Referenced in", to
     /// things you can see.
@@ -213,7 +213,7 @@ fn record_in_link(value: &str) -> Option<Uuid> {
         .and_then(|id| id.parse::<Uuid>().ok())
 }
 
-pub(super) async fn thing_open(
+pub(crate) async fn thing_open(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ThingOpenArguments,
@@ -296,7 +296,7 @@ pub(super) async fn thing_open(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkspaceUpdateArguments {
+pub(crate) struct WorkspaceUpdateArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
     /// A new name for the workspace.
@@ -327,7 +327,7 @@ pub(super) struct WorkspaceUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkspaceUpdateValue {
+pub(crate) struct WorkspaceUpdateValue {
     pub name: String,
     pub slug: String,
     pub version: i64,
@@ -342,7 +342,7 @@ pub(super) struct WorkspaceUpdateValue {
 const MANAGERS_ONLY: &str =
     "Only someone whose role manages the workspace's settings (or modules) changes it.";
 
-pub(super) async fn workspace_update(
+pub(crate) async fn workspace_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkspaceUpdateArguments,

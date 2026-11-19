@@ -2,8 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { parseTaskKey } from '../shell/shortcuts'
 import { useProjectByKey } from '../shell/useProjectByKey'
 import { Button, EmptyState, ErrorState, PageSkeleton } from '../ui'
@@ -12,7 +11,6 @@ import { queryKeys } from '../api/queryKeys'
 
 /** `/AWD-12` opens task 12 of the project whose key is AWD. */
 export function TaskKeyRedirect() {
-  const session = useAuthenticatedSession()
   const navigate = useNavigate()
   const { taskKey = '' } = useParams()
   const parsed = parseTaskKey(taskKey)
@@ -20,6 +18,7 @@ export function TaskKeyRedirect() {
   const [chosenId, setChosenId] = useState<string | null>(null)
   const byKey = useProjectByKey(parsed?.projectKey ?? null, chosenId)
   const { project } = byKey
+  useShellPage({ mainClassName: 'aw-main--page', project: project ?? undefined })
   const lookup = useQuery({
     queryKey: queryKeys.taskKey(project?.id ?? '', parsed?.key ?? ''),
     queryFn: async () => {
@@ -41,57 +40,55 @@ export function TaskKeyRedirect() {
     if (project) void lookup.refetch()
   }
   return (
-    <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
-      <div className="aw-page" role={loading || failed ? undefined : 'alert'}>
-        {loading ? (
-          <PageSkeleton label={`Opening ${parsed?.key ?? 'task'}`} />
-        ) : failed ? (
-          <ErrorState error={byKey.error ?? lookup.error} onRetry={retry} title={`${parsed?.key ?? 'The task'} didn’t open`} />
-        ) : choosing ? (
-          <EmptyState
-            action={
-              <div className="aw-empty-choices">
-                {byKey.matches.map((match) => (
-                  <Button key={match.id} onClick={() => setChosenId(match.id)}>
-                    {`Open ${parsed?.key} in ${match.name}`}
-                  </Button>
-                ))}
-              </div>
-            }
-            icon="search"
-            title={`Which ${parsed?.projectKey} project?`}
-          >
-            More than one project you can see uses this key.
-          </EmptyState>
-        ) : (
-          <EmptyState
-            action={
-              <div className="aw-empty-choices">
-                <Button onClick={() => navigate(project ? `/projects/${encodeURIComponent(project.id)}/work-items` : '/home')} variant="primary">
-                  {project ? `Go to ${project.name} tasks` : 'Go to Home'}
+    <div className="aw-page" role={loading || failed ? undefined : 'alert'}>
+      {loading ? (
+        <PageSkeleton label={`Opening ${parsed?.key ?? 'task'}`} />
+      ) : failed ? (
+        <ErrorState error={byKey.error ?? lookup.error} onRetry={retry} title={`${parsed?.key ?? 'The task'} didn’t open`} />
+      ) : choosing ? (
+        <EmptyState
+          action={
+            <div className="aw-empty-choices">
+              {byKey.matches.map((match) => (
+                <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                  {`Open ${parsed?.key} in ${match.name}`}
                 </Button>
-                {project
-                  ? byKey.matches
-                      .filter((match) => match.id !== project.id)
-                      .map((match) => (
-                        <Button key={match.id} onClick={() => setChosenId(match.id)}>
-                          {`Try ${match.name}`}
-                        </Button>
-                      ))
-                  : null}
-              </div>
-            }
-            icon="search"
-            title={parsed ? `${parsed.key} wasn’t found` : 'Page not found'}
-          >
-            {parsed
-              ? project
-                ? 'That task may have been removed, or you may not have access to it.'
-                : 'No project you can see uses that key.'
-              : 'That address isn’t part of this workspace. It may have moved, or the link may be old.'}
-          </EmptyState>
-        )}
-      </div>
-    </AppShell>
+              ))}
+            </div>
+          }
+          icon="search"
+          title={`Which ${parsed?.projectKey} project?`}
+        >
+          More than one project you can see uses this key.
+        </EmptyState>
+      ) : (
+        <EmptyState
+          action={
+            <div className="aw-empty-choices">
+              <Button onClick={() => navigate(project ? `/projects/${encodeURIComponent(project.id)}/work-items` : '/home')} variant="primary">
+                {project ? `Go to ${project.name} tasks` : 'Go to Home'}
+              </Button>
+              {project
+                ? byKey.matches
+                    .filter((match) => match.id !== project.id)
+                    .map((match) => (
+                      <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                        {`Try ${match.name}`}
+                      </Button>
+                    ))
+                : null}
+            </div>
+          }
+          icon="search"
+          title={parsed ? `${parsed.key} wasn’t found` : 'Page not found'}
+        >
+          {parsed
+            ? project
+              ? 'That task may have been removed, or you may not have access to it.'
+              : 'No project you can see uses that key.'
+            : 'That address isn’t part of this workspace. It may have moved, or the link may be old.'}
+        </EmptyState>
+      )}
+    </div>
   )
 }

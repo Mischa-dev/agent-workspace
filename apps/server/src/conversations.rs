@@ -2,6 +2,8 @@
 pub mod channel_ops;
 pub mod ops;
 pub mod sidebar_ops;
+pub mod system_entries;
+pub mod thread_ops;
 
 use std::{
     cmp::Reverse,
@@ -223,6 +225,16 @@ impl ConversationAccessRow {
     /// considered, and visibility was settled when the row was loaded: every
     /// lookup that returns this row goes through `conversation_visible_to`.
     pub(crate) fn allows(&self, actor_id: Uuid, action: Action) -> Result<bool, AppError> {
+        self.allows_permission(actor_id, action.permission())
+    }
+
+    /// [`Self::allows`] for a permission no action names (commenting on a
+    /// thing in its discussion).
+    pub(crate) fn allows_permission(
+        &self,
+        actor_id: Uuid,
+        permission: crate::policy::Permission,
+    ) -> Result<bool, AppError> {
         let grant = RoleGrant::stored(
             &self.membership_role,
             self.membership_role_permissions.as_deref(),
@@ -233,14 +245,11 @@ impl ConversationAccessRow {
                 space,
                 grant,
                 self.membership_enabled,
-                action.permission(),
+                permission,
             ),
-            None => crate::access::direct_grant_allows(
-                actor_id,
-                self.workspace_id,
-                grant,
-                action.permission(),
-            ),
+            None => {
+                crate::access::direct_grant_allows(actor_id, self.workspace_id, grant, permission)
+            }
         })
     }
 }
@@ -454,6 +463,9 @@ pub struct MessageView {
     /// it done (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<SavedMark>,
+    /// What this message was made into (C2.20), for the reader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_into: Vec<system_entries::MadeIntoView>,
 }
 
 /// The viewer's own saved-for-later mark on a message.
@@ -537,6 +549,19 @@ pub struct TimelineEntryView {
     pub created_at: String,
     pub message: Option<MessageView>,
     pub worker_event: Option<WorkerEventView>,
+    /// What a system entry says (C2.20), with its actor's name here; the
+    /// thing's title is read with the reader's access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemEntryView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemEntryView {
+    #[serde(flatten)]
+    pub event: system_entries::SystemEvent,
+    /// The actor's name in this space, if they're still in it.
+    pub actor_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -754,6 +779,10 @@ struct TimelineEntryRow {
     event_kind: Option<String>,
     event_summary: Option<String>,
     event_created_at: Option<String>,
+    #[sqlx(default)]
+    system_event: Option<serde_json::Value>,
+    #[sqlx(default)]
+    system_actor_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -2215,6 +2244,7 @@ pub(crate) async fn append_message_command_with(
         forwarded: None,
         reply_to,
         saved: None,
+        made_into: Vec::new(),
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2226,6 +2256,7 @@ pub(crate) async fn append_message_command_with(
             created_at: result.entry_created_at,
             message: Some(message),
             worker_event: None,
+            system: None,
         },
     };
     if let Some(reply) = reply {
@@ -2600,8 +2631,16 @@ pub(crate) async fn lock_message_conversation(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
+    // Posting in a thing's discussion is commenting on the thing: its
+    // "comment on" permission, not posting in channels (K1.16).
+    let discussed = match action {
+        Action::MessageSend => crate::discussion::subject_kind_of(transaction, row.id).await?,
+        _ => None,
+    };
     let allowed = if actor.run_id.is_some() {
         row.allows_for_run(actor.actor_id, action)?
+    } else if let Some(kind) = discussed {
+        row.allows_permission(actor.actor_id, kind.comment_permission())?
     } else {
         row.allows(actor.actor_id, action)?
     };
@@ -2710,10 +2749,15 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             event.agent_run_id,
             event.kind AS event_kind,
             event.summary AS event_summary,
-            event.created_at::text AS event_created_at
+            event.created_at::text AS event_created_at,
+            entry.system_event,
+            system_membership.display_name AS system_actor_name
         FROM conversation_entries entry
         LEFT JOIN messages message ON message.id = entry.message_id
         LEFT JOIN actors author ON author.id = message.author_actor_id
+        LEFT JOIN project_memberships system_membership
+          ON system_membership.project_id = $2
+         AND system_membership.actor_id = (entry.system_event->>'actorId')::uuid
         LEFT JOIN project_memberships author_membership
           ON author_membership.project_id = $2
          AND author_membership.actor_id = message.author_actor_id
@@ -2766,7 +2810,6 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
                     'size', file.byte_size,
                     'width', file.image_width,
                     'height', file.image_height,
-                    'commentId', file.comment_id,
                     'uploadedBy', file.uploaded_by_actor_id,
                     'createdAt', file.created_at::text
                 ) ORDER BY file.position, file.id
@@ -2889,6 +2932,8 @@ async fn conversation_timeline(
         hide_entry_work_item_details(&mut entries);
     }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
+    system_entries::attach_made_into(&state.pool, conversation.id, &mut entries, sees_tasks)
+        .await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
         if conversation.kind == "thread" {
@@ -4431,6 +4476,38 @@ where
     .await?)
 }
 
+/// Whether `viewer` is kept from a task's discussion (its comments
+/// conversation or one of that conversation's threads) because they don't
+/// see tasks in its space: by their role, or by the agent limit of an app
+/// acting for them. False for any other conversation, which the usual
+/// visibility rule decides alone.
+pub(crate) async fn task_discussion_hidden(
+    connection: &mut sqlx::PgConnection,
+    viewer: Uuid,
+    conversation_id: Uuid,
+) -> Result<bool, AppError> {
+    let space = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT discussion.project_id
+        FROM conversations place
+        LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
+        JOIN conversations discussion
+          ON discussion.id = CASE WHEN parent.kind = 'comments' THEN parent.id ELSE place.id END
+        WHERE place.id = $1 AND discussion.kind = 'comments'
+          AND discussion.subject_kind = 'task'
+          AND conversation_visible_to(place.id, $2)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(viewer)
+    .fetch_optional(&mut *connection)
+    .await?;
+    match space {
+        Some(space) => Ok(!sees_tasks_in(&mut *connection, viewer, space).await?),
+        None => Ok(false),
+    }
+}
+
 /// Whether a message `author` sends or edits now may notify everyone in a
 /// large conversation (`@everyone` past the small-audience allowance): a
 /// role that holds "notify everyone" (owners and admins by default), and,
@@ -4588,6 +4665,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .reply_to_message_id
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
+                made_into: Vec::new(),
             })
         }
         None => None,
@@ -4608,6 +4686,14 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         }),
         None => None,
     };
+    // An entry whose event this server doesn't know shows as a bare line.
+    let system = row
+        .system_event
+        .and_then(|value| serde_json::from_value::<system_entries::SystemEvent>(value).ok())
+        .map(|event| SystemEntryView {
+            event,
+            actor_name: row.system_actor_name,
+        });
     Ok(TimelineEntryView {
         id: row.id,
         sequence: row.sequence,
@@ -4615,6 +4701,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         created_at: row.created_at,
         message,
         worker_event,
+        system,
     })
 }
 

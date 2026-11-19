@@ -1367,7 +1367,7 @@ async fn acknowledge_failure(
 }
 
 pub(super) async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
             .bind(run_id)

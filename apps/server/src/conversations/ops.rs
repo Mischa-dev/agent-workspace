@@ -35,6 +35,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MessageReact>()
         .add::<ConversationMarkRead>()
         .add::<ConversationMemberList>()
+        .add::<ConversationTaskList>()
+        .add::<ConversationFileList>()
+        .add::<ConversationTabList>()
+        .add::<ConversationTabSet>()
         .add::<MessageSchedule>()
         .add::<ScheduledMessageUpdate>();
 }
@@ -806,5 +810,508 @@ impl Operation for ConversationMemberList {
                 .collect(),
             can_manage,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_task_list
+
+/// The tasks a conversation is about or made (C2.8's Tasks tab).
+pub struct ConversationTaskList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTaskListInput {
+    /// The channel, thread, DM or group: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationTaskListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTask {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    /// Such as AWD-12.
+    pub key: String,
+    pub title: String,
+    /// backlog, unstarted, started, completed or canceled.
+    pub status_category: String,
+    /// made_from: made from a message here; about: linked to the conversation.
+    pub how: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTasks {
+    /// Newest link first; archived tasks are left out.
+    pub tasks: Vec<ConversationTask>,
+}
+
+impl Operation for ConversationTaskList {
+    const NAME: &'static str = "conversation_task_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksView);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a conversation's tasks";
+    const DESCRIPTION: &'static str = "The tasks linked to a conversation or made from one of \
+        its messages, in the conversation's own space, newest first. task_open opens one.";
+
+    type Input = ConversationTaskListInput;
+    type Output = ConversationTasks;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTaskListInput,
+    ) -> Result<ConversationTasks, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let tx = call.tx().await?;
+        let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String)>(
+            r#"
+            WITH linked AS (
+                SELECT link.work_item_id, 'about' AS how, link.created_at
+                FROM work_item_links link
+                WHERE link.target_kind = 'conversation' AND link.target_id = $1
+                UNION ALL
+                SELECT link.work_item_id, 'about', link.created_at
+                FROM work_item_conversation_links link
+                WHERE link.conversation_id = $1
+                UNION ALL
+                SELECT link.work_item_id, 'made_from', link.created_at
+                FROM work_item_links link
+                JOIN messages message ON message.id = link.target_id
+                WHERE link.target_kind = 'message' AND message.conversation_id = $1
+                  AND message.removed_at IS NULL
+            ),
+            newest AS (
+                SELECT DISTINCT ON (work_item_id) work_item_id, how, created_at
+                FROM linked
+                ORDER BY work_item_id, created_at DESC
+            )
+            SELECT item.id, project.project_key || '-' || item.number::text, item.title,
+                   status.semantic_category, newest.how
+            FROM newest
+            JOIN task_rows item ON item.id = newest.work_item_id
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            WHERE item.project_id = $3 AND item.archived_at IS NULL
+              AND conversation_visible_to($1, $2)
+            ORDER BY newest.created_at DESC, item.id
+            LIMIT 200
+            "#,
+        )
+        .bind(input.conversation_id.id())
+        .bind(caller)
+        .bind(space)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        Ok(ConversationTasks {
+            tasks: rows
+                .into_iter()
+                .map(|(id, key, title, status_category, how)| ConversationTask {
+                    id,
+                    key,
+                    title,
+                    status_category,
+                    how,
+                })
+                .collect(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_file_list
+
+/// The files sent in a conversation (C2.8's Files tab).
+pub struct ConversationFileList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationFileListInput {
+    /// The channel, thread, DM or group: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationFileListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationFile {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub content_type: String,
+    pub size: i64,
+    /// Set for images that show inline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+    /// The message it was sent with.
+    #[schemars(with = "String")]
+    pub message_id: uuid::Uuid,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationFiles {
+    /// Newest first, at most 200; files of removed messages are left out.
+    pub files: Vec<ConversationFile>,
+}
+
+impl Operation for ConversationFileList {
+    const NAME: &'static str = "conversation_file_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "messages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a conversation's files";
+    const DESCRIPTION: &'static str = "The files sent in a conversation, newest first, with \
+        the message each came with. file_read opens one.";
+
+    type Input = ConversationFileListInput;
+    type Output = ConversationFiles;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationFileListInput,
+    ) -> Result<ConversationFiles, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let tx = call.tx().await?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                String,
+                String,
+                i64,
+                Option<i32>,
+                Option<i32>,
+                uuid::Uuid,
+                String,
+            ),
+        >(
+            r#"
+            SELECT file.id, file.name, file.content_type, file.byte_size, file.image_width,
+                   file.image_height, file.message_id,
+                   to_char(file.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            FROM files file
+            JOIN messages message ON message.id = file.message_id
+            WHERE file.conversation_id = $1 AND file.removed_at IS NULL
+              AND file.attached_at IS NOT NULL AND message.removed_at IS NULL
+              AND conversation_visible_to($1, $2)
+            ORDER BY file.created_at DESC, file.id
+            LIMIT 200
+            "#,
+        )
+        .bind(input.conversation_id.id())
+        .bind(caller)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        Ok(ConversationFiles {
+            files: rows
+                .into_iter()
+                .map(
+                    |(id, name, content_type, size, width, height, message_id, created_at)| {
+                        ConversationFile {
+                            id,
+                            name,
+                            content_type,
+                            size,
+                            width,
+                            height,
+                            message_id,
+                            created_at,
+                        }
+                    },
+                )
+                .collect(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_tab_list, conversation_tab_set (C1.26)
+
+/// A page shown as a tab on a channel.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTab {
+    /// "page".
+    pub kind: String,
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub title: String,
+    pub position: i32,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTabs {
+    /// In the order shown, after the messages; a page you can't open is
+    /// left out.
+    pub tabs: Vec<ConversationTab>,
+}
+
+/// Most tabs on one channel.
+const MAX_TABS: i64 = 20;
+
+/// The tabs on `conversation` that `viewer` can open.
+async fn tabs_for(
+    connection: &mut sqlx::PgConnection,
+    conversation: uuid::Uuid,
+    viewer: uuid::Uuid,
+) -> Result<ConversationTabs, OpError> {
+    let rows = sqlx::query_as::<_, (String, uuid::Uuid, String, i32)>(
+        r#"
+        SELECT tab.thing_kind, tab.thing_id, page.title, tab.position
+        FROM conversation_tabs tab
+        JOIN project_pages page ON page.id = tab.thing_id AND page.project_id = tab.space_id
+        WHERE tab.conversation_id = $1 AND tab.thing_kind = 'page'
+          AND page.archived_at IS NULL
+          AND conversation_visible_to($1, $2)
+          AND subject_visible_to('page', page.id, $2)
+        ORDER BY tab.position, tab.added_at, tab.thing_id
+        "#,
+    )
+    .bind(conversation)
+    .bind(viewer)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(crate::error::AppError::from)?;
+    Ok(ConversationTabs {
+        tabs: rows
+            .into_iter()
+            .map(|(kind, id, title, position)| ConversationTab {
+                kind,
+                id,
+                title,
+                position,
+            })
+            .collect(),
+    })
+}
+
+pub struct ConversationTabList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTabListInput {
+    /// The channel: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationTabListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+impl Operation for ConversationTabList {
+    const NAME: &'static str = "conversation_tab_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a channel's tabs";
+    const DESCRIPTION: &'static str = "The pages shown as tabs on a channel, in order. \
+        page_get reads one; conversation_tab_set adds, moves or removes one.";
+
+    type Input = ConversationTabListInput;
+    type Output = ConversationTabs;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTabListInput,
+    ) -> Result<ConversationTabs, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let tx = call.tx().await?;
+        tabs_for(tx, input.conversation_id.id(), caller).await
+    }
+}
+
+pub struct ConversationTabSet;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTabSetInput {
+    /// The channel: its id or a link. DMs and groups have no tabs.
+    pub conversation_id: IdRef,
+    /// The page, in the channel's space: its id or a link.
+    pub page: IdRef,
+    /// Where it goes among the tabs, from 0; the end when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i32>,
+    /// Take the tab away (the page itself stays).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove: bool,
+}
+
+impl Targeted for ConversationTabSetInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+impl Operation for ConversationTabSet {
+    const NAME: &'static str = "conversation_tab_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["conversation.updated"];
+    const TITLE: &'static str = "Set a channel's page tab";
+    const DESCRIPTION: &'static str = "Show a page as a tab on a channel, move it, or take it \
+        away (remove). The page must be in the channel's space; everyone who can read both \
+        sees the tab. At most 20 tabs.";
+
+    type Input = ConversationTabSetInput;
+    type Output = ConversationTabs;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTabSetInput,
+    ) -> Result<ConversationTabs, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let workspace = call.ctx.workspace_id;
+        let conversation = input.conversation_id.id();
+        let page = input.page.id();
+        let tx = call.tx().await?;
+        let kind = sqlx::query_scalar::<_, String>(
+            "SELECT kind FROM conversations \
+             WHERE id = $1 AND project_id = $2 AND archived_at IS NULL \
+               AND conversation_visible_to(id, $3)",
+        )
+        .bind(conversation)
+        .bind(space)
+        .bind(caller)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?
+        .ok_or_else(|| OpError::not_found("That conversation"))?;
+        if kind != "channel" {
+            return Err(OpError::invalid(
+                "conversationId",
+                "Only channels have tabs. Open the channel the thread is in.",
+            ));
+        }
+        if input.remove {
+            sqlx::query(
+                "DELETE FROM conversation_tabs \
+                 WHERE conversation_id = $1 AND thing_kind = 'page' AND thing_id = $2",
+            )
+            .bind(conversation)
+            .bind(page)
+            .execute(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        } else {
+            let found = sqlx::query_scalar::<_, uuid::Uuid>(
+                "SELECT id FROM project_pages \
+                 WHERE id = $1 AND project_id = $2 AND archived_at IS NULL \
+                   AND subject_visible_to('page', id, $3)",
+            )
+            .bind(page)
+            .bind(space)
+            .bind(caller)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if found.is_none() {
+                return Err(OpError::invalid(
+                    "page",
+                    "That isn't a page you can open in this channel's space.",
+                ));
+            }
+            let (count, held) = sqlx::query_as::<_, (i64, bool)>(
+                "SELECT count(*), bool_or(thing_id = $2) IS TRUE FROM conversation_tabs \
+                 WHERE conversation_id = $1",
+            )
+            .bind(conversation)
+            .bind(page)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if !held && count >= MAX_TABS {
+                return Err(OpError::invalid(
+                    "page",
+                    "This channel has 20 tabs, the most it can. Remove one first.",
+                ));
+            }
+            let position = input.position.map(|position| position.clamp(0, 99));
+            sqlx::query(
+                r#"
+                INSERT INTO conversation_tabs (
+                    workspace_id, space_id, conversation_id, thing_kind, thing_id, position,
+                    added_by_account_id
+                )
+                VALUES ($1, $2, $3, 'page', $4, COALESCE($5, (
+                    SELECT LEAST(COALESCE(max(position) + 1, 0), 99)
+                    FROM conversation_tabs WHERE conversation_id = $3
+                )), $6)
+                ON CONFLICT (conversation_id, thing_kind, thing_id)
+                    DO UPDATE SET position = COALESCE($5, conversation_tabs.position)
+                "#,
+            )
+            .bind(workspace)
+            .bind(space)
+            .bind(conversation)
+            .bind(page)
+            .bind(position)
+            .bind(caller)
+            .execute(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if let Some(at) = position {
+                // Moving one tab shifts the others: number them all again
+                // with this one at `at`.
+                let mut order = sqlx::query_as::<_, (String, uuid::Uuid)>(
+                    "SELECT thing_kind, thing_id FROM conversation_tabs \
+                     WHERE conversation_id = $1 AND NOT (thing_kind = 'page' AND thing_id = $2) \
+                     ORDER BY position, added_at, thing_id",
+                )
+                .bind(conversation)
+                .bind(page)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+                let at = usize::try_from(at).unwrap_or(0).min(order.len());
+                order.insert(at, ("page".to_owned(), page));
+                let (kinds, ids): (Vec<String>, Vec<uuid::Uuid>) = order.into_iter().unzip();
+                sqlx::query(
+                    "UPDATE conversation_tabs tab SET position = (ord.n - 1)::int \
+                     FROM unnest($2::text[], $3::uuid[]) WITH ORDINALITY AS ord(kind, id, n) \
+                     WHERE tab.conversation_id = $1 AND tab.thing_kind = ord.kind \
+                       AND tab.thing_id = ord.id AND tab.position <> (ord.n - 1)::int",
+                )
+                .bind(conversation)
+                .bind(&kinds)
+                .bind(&ids)
+                .execute(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+            }
+        }
+        crate::conversations::system_entries::announce(tx, conversation).await?;
+        let tabs = tabs_for(tx, conversation, caller).await?;
+        call.audit_target("conversation", conversation, json!({ "page": page }));
+        Ok(tabs)
     }
 }

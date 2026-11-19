@@ -11,6 +11,7 @@ import {
 
 import { requestJson } from '../api/client'
 import { clearLocalDrafts, setLocalDraftOwner } from '../app/localDrafts'
+import { things } from '../data/things'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
@@ -233,6 +234,8 @@ function clearActorScopedQueries(queryClient: QueryClient) {
   queryClient.getMutationCache().clear()
   // Toasts can name private conversations and hold Undo callbacks.
   clearToasts()
+  // What the last account read is theirs (W1.5).
+  things.clear()
   // A move whose answer never arrived belongs to whoever sent it (AWD-102).
   clearPendingMoves()
   // A menu left open must not reopen over the next session.

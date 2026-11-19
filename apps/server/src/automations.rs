@@ -26,6 +26,8 @@
 //! once. A rule that fires more than 30 times in an hour is turned off: it's
 //! almost certainly triggering itself.
 
+pub mod ops;
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -51,7 +53,7 @@ use crate::{
     idempotency::IdempotencyKey,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
     launch::{self, LaunchCaller, LaunchRequest},
-    mcp::{self, McpPrincipal},
+    mcp::McpPrincipal,
     notifications::{self, NewNotification},
     policy::{Action as PolicyAction, ActorKind, AgentLimits, with_agent_limits},
     views::filter::Filter,
@@ -1123,8 +1125,12 @@ pub(crate) async fn list(
     })
 }
 
+/// Make a rule in the operation's transaction, so the rule and the call's
+/// request id commit together (a retry finds the first answer, never a
+/// second rule).
 pub(crate) async fn create(
     state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     project_id: Uuid,
     request: CreateRule,
@@ -1134,20 +1140,11 @@ pub(crate) async fn create(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_one(crate::db::scoped(&state.pool))
+            .fetch_one(&mut **transaction)
             .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = insert(
-        &mut transaction,
-        caller,
-        organization_id,
-        project_id,
-        &prepared,
-    )
-    .await?;
-    transaction.commit().await?;
+    let id = insert(transaction, caller, organization_id, project_id, &prepared).await?;
     Ok(view(
-        fetch(&state.pool, project_id, id).await?,
+        fetch(&mut **transaction, project_id, id).await?,
         caller,
         admin,
     ))
@@ -2294,7 +2291,6 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             conversation_id: None,
             message_id: None,
             work_item_id: None,
-            comment_id: None,
             agent_run_id: None,
             pull_request_id: None,
             detail: json!({
@@ -2784,6 +2780,7 @@ fn principal_for(rule: &RuleRow, acting: &Acting) -> McpPrincipal {
         authentication_class: "automation",
         account_wide: false,
         project_explicit: true,
+        workspace_id: None,
     }
 }
 
@@ -2795,33 +2792,13 @@ async fn call_tool(
     tool: &str,
     mut arguments: Value,
 ) -> Result<Value, String> {
-    // A tool that is an operation runs through the dispatcher, with this
-    // rule and run on its audit row.
-    if crate::ops::mcp::is_operation(tool) {
-        let request_id = arguments
-            .as_object_mut()
-            .and_then(|object| object.remove("clientRequestId"))
-            .and_then(|value| value.as_str().map(str::to_owned));
-        return run_operation(state, rule, acting, run_id, tool, arguments, request_id).await;
-    }
-    let result = mcp::call_tool_direct(state, principal_for(rule, acting), tool, arguments)
-        .await
-        .map_err(|error| match error {
-            mcp::DirectCallError::UnknownTool => "the tool is missing".to_owned(),
-            mcp::DirectCallError::InvalidArguments(message) => message,
-            mcp::DirectCallError::Refused(error) => error.to_string(),
-        })?;
-    match result.get("outcome").and_then(Value::as_str) {
-        None | Some("ok" | "applied") => Ok(result),
-        Some(_) => Err(result
-            .get("message")
-            .or_else(|| result.get("error"))
-            .and_then(Value::as_str)
-            .unwrap_or("the change was refused")
-            .chars()
-            .take(300)
-            .collect()),
-    }
+    // Every action runs an operation through the dispatcher, with this rule
+    // and run on its audit row (K2.18).
+    let request_id = arguments
+        .as_object_mut()
+        .and_then(|object| object.remove("clientRequestId"))
+        .and_then(|value| value.as_str().map(str::to_owned));
+    run_operation(state, rule, acting, run_id, tool, arguments, request_id).await
 }
 
 /// Run an operation as the rule's maker, confined to the rule's project as
@@ -2852,6 +2829,7 @@ async fn run_operation(
         unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,
         renamed_from: None,
+        defer_long: false,
     };
     let answer = crate::ops::dispatch(state, request, operation, input).await;
     if answer.is_ok() {
@@ -3249,7 +3227,6 @@ async fn notify(
             conversation_id: None,
             message_id: None,
             work_item_id: context.work_item_id,
-            comment_id: None,
             agent_run_id: context.agent_run_id,
             pull_request_id: context.pull_request_id,
             detail: json!({
@@ -3308,10 +3285,10 @@ async fn create_route(
 ) -> Result<(StatusCode, Json<RuleView>), AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(create(&state, &caller, project_id, request).await?),
-    ))
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let made = create(&state, &mut transaction, &caller, project_id, request).await?;
+    transaction.commit().await?;
+    Ok((StatusCode::CREATED, Json(made)))
 }
 
 async fn update_route(

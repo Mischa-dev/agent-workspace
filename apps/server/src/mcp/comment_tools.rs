@@ -1,7 +1,7 @@
 //! task_comment_edit and task_comment_delete: the web's comment commands
-//! (`crate::work_items::comments`) for agents and connected apps. The author
-//! edits a comment; the author, or a project owner or admin who is a person,
-//! deletes it.
+//! (`crate::work_items::comments`, over the message commands) for agents and
+//! connected apps. The author edits a comment; the author, or a person whose
+//! role moderates the space, deletes it.
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -10,16 +10,13 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, parse_id},
-    writes::{WriteAccess, check_write_access, mcp_actor, normalize_comment},
+    writes::{WriteAccess, check_write_access, normalize_comment},
 };
 use crate::{
     AppState,
     error::AppError,
     message_content::MessageContent,
-    work_items::comments::{
-        CommentRefusal, apply_comment_edit, apply_comment_removal, is_comment_moderator,
-        lock_comment, resolve_comment_content,
-    },
+    work_items::comments::{self, CommentRefusal},
 };
 
 const TASK_ID_MESSAGE: &str = "Pass the task's ID, key (such as AWD-12) or link.";
@@ -106,7 +103,7 @@ fn refusal_result<T>(refusal: CommentRefusal) -> ToolResult<T> {
             "Only its author can edit a comment. Add a comment of your own instead.",
         ),
         CommentRefusal::NotModerator => ToolResult::denied(
-            "You can delete your own comments. Deleting someone else's takes a project owner or admin.",
+            "You can delete your own comments. Deleting someone else's takes a role that moderates this space.",
         ),
         CommentRefusal::Removed => ToolResult::conflict("That comment was deleted."),
         CommentRefusal::RevisionMoved(current) => ToolResult::conflict(format!(
@@ -160,34 +157,25 @@ pub(super) async fn task_comment_edit(
         {
             return Ok(result);
         }
-        let Some(locked) =
-            lock_comment(&mut transaction, principal.project_id, task_id, comment_id).await?
-        else {
-            return Ok(ToolResult::not_found("That comment"));
+        let actor = match super::talk::message_actor(principal) {
+            Ok(actor) => actor,
+            Err(message) => return Ok(ToolResult::denied(message)),
         };
-        let resolved = match resolve_comment_content(
+        let edit = match comments::edit(
             &mut transaction,
-            principal.project_id,
+            &actor,
+            task_id,
+            comment_id,
             validated,
+            arguments.expected_revision,
         )
         .await
         {
-            Ok(resolved) => resolved,
+            Ok(Ok(edit)) => edit,
+            Ok(Err(refusal)) => return Ok(refusal_result(refusal)),
+            Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That comment")),
             Err(AppError::Validation(_)) => return Ok(ToolResult::invalid("text", TEXT_MESSAGE)),
             Err(error) => return Err(error),
-        };
-        let actor = mcp_actor(principal, String::new());
-        let edit = match apply_comment_edit(
-            &mut transaction,
-            &actor,
-            &locked,
-            resolved,
-            arguments.expected_revision,
-        )
-        .await?
-        {
-            Ok(edit) => edit,
-            Err(refusal) => return Ok(refusal_result(refusal)),
         };
         transaction.commit().await?;
         Ok(ToolResult::ok(EditedComment {
@@ -218,19 +206,16 @@ pub(super) async fn task_comment_delete(
         {
             return Ok(result);
         }
-        let Some(locked) =
-            lock_comment(&mut transaction, principal.project_id, task_id, comment_id).await?
-        else {
-            return Ok(ToolResult::not_found("That comment"));
+        let actor = match super::talk::message_actor(principal) {
+            Ok(actor) => actor,
+            Err(message) => return Ok(ToolResult::denied(message)),
         };
-        let moderator =
-            is_comment_moderator(&mut transaction, principal.actor_id, principal.project_id)
-                .await?;
-        let actor = mcp_actor(principal, String::new());
         let already_deleted =
-            match apply_comment_removal(&mut transaction, &actor, moderator, &locked).await? {
-                Ok(already) => already,
-                Err(refusal) => return Ok(refusal_result(refusal)),
+            match comments::remove(&mut transaction, &actor, task_id, comment_id).await {
+                Ok(Ok(already)) => already,
+                Ok(Err(refusal)) => return Ok(refusal_result(refusal)),
+                Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That comment")),
+                Err(error) => return Err(error),
             };
         transaction.commit().await?;
         Ok(ToolResult::ok(DeletedComment {

@@ -639,7 +639,10 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     )
     .await;
     assert_ne!(early["outcome"], "ok", "{early}");
-    assert_eq!(early["problems"][0]["field"], "dueDate", "{early}");
+    assert_eq!(
+        early["details"]["current"]["problems"][0]["field"], "dueDate",
+        "{early}"
+    );
     assert!(
         early
             .to_string()

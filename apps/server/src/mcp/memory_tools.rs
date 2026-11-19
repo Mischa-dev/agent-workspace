@@ -55,7 +55,7 @@ pub(super) async fn page_write_mode(
     )
 }
 
-pub(super) fn writer(principal: &McpPrincipal) -> Writer {
+pub(crate) fn writer(principal: &McpPrincipal) -> Writer {
     Writer {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind,
@@ -67,9 +67,9 @@ pub(super) fn writer(principal: &McpPrincipal) -> Writer {
 // ---------------------------------------------------------------------------
 // search
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SearchArguments {
+pub(crate) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.
     /// Filters narrow it: from:@handle (or from:me), in:#channel,
     /// in:@person (your DM with them), during:2026-10, on:2026-10-05,
@@ -97,7 +97,7 @@ pub(super) struct SearchArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SearchResult {
+pub(crate) struct SearchResult {
     pub kind: String,
     pub id: String,
     pub title: String,
@@ -119,14 +119,14 @@ pub(super) struct SearchResult {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SearchValue {
+pub(crate) struct SearchValue {
     pub results: Vec<SearchResult>,
     pub hint: &'static str,
 }
 
 const SEARCH_HINT: &str = "Open a message's conversation around it with conversation_read (aroundMessageId). Decisions and pages are the settled version; prefer them over old messages.";
 
-pub(super) async fn search_tool(
+pub(crate) async fn search_tool(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SearchArguments,
@@ -285,7 +285,7 @@ pub(super) async fn search_tool(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageListArguments {
+pub(crate) struct PageListArguments {
     /// The project, or "workspace" for the workspace's own pages.
     pub project_id: String,
     /// Include archived pages.
@@ -294,7 +294,7 @@ pub(super) struct PageListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageLineValue {
+pub(crate) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
@@ -315,11 +315,11 @@ pub(super) struct PageLineValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageListValue {
+pub(crate) struct PageListValue {
     pub pages: Vec<PageLineValue>,
 }
 
-pub(super) async fn page_list(
+pub(crate) async fn page_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageListArguments,
@@ -368,7 +368,7 @@ pub(super) async fn page_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageGetArguments {
+pub(crate) struct PageGetArguments {
     pub page_id: String,
     /// Read an earlier version instead of the current one.
     pub version: Option<i64>,
@@ -376,7 +376,7 @@ pub(super) struct PageGetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageValue {
+pub(crate) struct PageValue {
     pub id: String,
     pub project_id: String,
     pub title: String,
@@ -418,7 +418,7 @@ fn is_zero(value: &i64) -> bool {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RevisionLine {
+pub(crate) struct RevisionLine {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -429,7 +429,7 @@ pub(super) struct RevisionLine {
     pub at: String,
 }
 
-pub(super) async fn page_get(
+pub(crate) async fn page_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageGetArguments,
@@ -471,13 +471,18 @@ pub(super) async fn page_get(
         let (open_comments, pending_suggestions) = sqlx::query_as::<_, (i64, i64)>(
             r#"
             SELECT
-                (SELECT count(*) FROM project_page_comments
-                 WHERE page_id = $1 AND thread_id = id AND resolved_at IS NULL
-                   AND EXISTS (SELECT 1 FROM project_page_comments reply
-                               WHERE reply.thread_id = project_page_comments.id
-                                 AND reply.deleted_at IS NULL)),
-                (SELECT count(*) FROM project_page_suggestions
-                 WHERE page_id = $1 AND status = 'pending')
+                -- visibility: a count of the page's open threads, for a reader of the page
+                (SELECT count(*) FROM conversations comments
+                 JOIN conversations thread
+                   ON thread.parent_channel_id = comments.id AND thread.kind = 'thread'
+                 WHERE comments.kind = 'comments' AND comments.subject_kind = 'page'
+                   AND comments.subject_id = $1
+                   AND lower(COALESCE(thread.thread_status, '')) <> 'resolved'
+                   AND EXISTS (SELECT 1 FROM messages reply
+                               WHERE reply.conversation_id = thread.id
+                                 AND reply.removed_at IS NULL)),
+                (SELECT count(*) FROM proposals
+                 WHERE thing_kind = 'page' AND thing_id = $1 AND status = 'pending')
             "#,
         )
         .bind(page_id)
@@ -525,7 +530,7 @@ pub(super) async fn page_get(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageWriteArguments {
+pub(crate) struct PageWriteArguments {
     /// The page to change. Leave it out to create a page (then projectId and
     /// title are needed).
     pub page_id: Option<String>,
@@ -562,13 +567,16 @@ pub(super) struct PageWriteArguments {
     pub note: Option<String>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
+    /// The page's comment thread that asked for this change, if one did:
+    /// the change is linked there (with Undo). Reply in that thread too.
+    pub thread_id: Option<String>,
     /// Makes creating a page safe to retry: send the same one again and you
     /// get the page the first call made, not a second one. Used only when
     /// creating.
     pub client_request_id: Option<String>,
 }
 
-pub(super) async fn page_write(
+pub(crate) async fn page_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageWriteArguments,
@@ -595,6 +603,17 @@ pub(super) async fn page_write(
             None => return ToolResult::invalid("pinToConversationId", "Pass a conversation ID."),
         },
         None => None,
+    };
+    let thread_id = match (arguments.thread_id.as_deref().map(parse_id), page_id) {
+        (None, _) => None,
+        (Some(Some(id)), Some(_)) => Some(id),
+        (Some(Some(_)), None) => {
+            return ToolResult::invalid(
+                "threadId",
+                "A thread asks for changes to its own page: pass pageId with it.",
+            );
+        }
+        (Some(None), _) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
     };
     let retry_key = match arguments.client_request_id.as_deref() {
         Some(value) if page_id.is_none() => match parse_request_id(value) {
@@ -682,6 +701,17 @@ pub(super) async fn page_write(
                 if owner != Some(project_id) {
                     return Ok(ToolResult::not_found("That page"));
                 }
+                if let Some(thread_id) = thread_id
+                    && !crate::change_sets::is_page_thread(
+                        &mut transaction,
+                        page_id,
+                        thread_id,
+                        principal.actor_id,
+                    )
+                    .await?
+                {
+                    return Ok(ToolResult::not_found("That comment thread on this page"));
+                }
                 // Someone who only suggests here (K1.12) has new text kept
                 // as a suggestion; the rest of the page needs edit access.
                 let creator = suggestions::page_creator(&mut transaction, page_id).await?;
@@ -760,6 +790,16 @@ pub(super) async fn page_write(
             serde_json::json!({}),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let mut value = page_get(
             state,
@@ -788,23 +828,6 @@ async fn suggest_text(
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Result<Option<SuggestionMade>, ToolResult<PageValue>>, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
-        return Ok(Err(ToolResult::not_found("That page")));
-    };
-    if let Some(expected) = input.expected_version
-        && expected != page.version
-    {
-        return Err(AppError::VersionConflict {
-            resource: "page",
-            current_version: page.version,
-        });
-    }
-    if page.archived {
-        return Ok(Err(ToolResult::invalid(
-            "pageId",
-            "That page is archived. Bring it back with page_write (archived: false) to edit it.",
-        )));
-    }
     let markdown = match (input.restore_version, input.body.as_deref()) {
         (_, Some(body)) => memory::normalize_body(body, memory::MAX_PAGE_BODY)?,
         (Some(restore), None) => sqlx::query_scalar::<_, String>(
@@ -822,41 +845,56 @@ async fn suggest_text(
             .restore_version
             .map(|restore| format!("Restore version {restore}"))
     });
-    let stored = store::document(transaction, page_id, &page).await?;
-    let current = store::read_blocks(&stored.state)?;
-    let Some(edits) = suggestions::diff(&current, &markdown) else {
-        return Ok(Ok(None));
-    };
-    if edits.len() > edits::MAX_EDITS {
-        return Ok(Err(ToolResult::invalid(
-            "body",
-            format!(
-                "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
-                edits::MAX_EDITS
-            ),
-        )));
-    }
-    let stored_edits = match suggestions::resolve(&current, &edits) {
-        Ok(stored) => stored,
-        Err(error) => return Ok(Err(ToolResult::invalid("body", error.to_string()))),
-    };
-    let id = suggestions::create(
+    let (id, edits_count, from_version) = match suggestions::suggest_text(
         transaction,
         writer(principal),
         page_id,
-        &page,
-        &stored_edits,
+        &markdown,
+        input.expected_version,
         note.as_deref(),
     )
-    .await?;
+    .await
+    {
+        Ok(suggestions::Suggested::Made {
+            id,
+            edits,
+            from_version,
+        }) => (id, edits, from_version),
+        Ok(suggestions::Suggested::Unchanged) => return Ok(Ok(None)),
+        Ok(suggestions::Suggested::Archived) => {
+            return Ok(Err(ToolResult::invalid(
+                "pageId",
+                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+            )));
+        }
+        Ok(suggestions::Suggested::TooBig) => {
+            return Ok(Err(ToolResult::invalid(
+                "body",
+                format!(
+                    "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
+                    edits::MAX_EDITS
+                ),
+            )));
+        }
+        Ok(suggestions::Suggested::Invalid(message)) => {
+            return Ok(Err(ToolResult::invalid("body", message)));
+        }
+        Err(AppError::NotFound(_)) => return Ok(Err(ToolResult::not_found("That page"))),
+        Err(error) => return Err(error),
+    };
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
+            .bind(page_id)
+            .fetch_one(&mut **transaction)
+            .await?;
     insert_audit(
         transaction,
         principal,
-        page.project_id,
+        project_id,
         "page.suggestion_created",
         "page",
         page_id,
-        serde_json::json!({ "edits": stored_edits.len(), "fromVersion": page.version, "suggestionId": id }),
+        serde_json::json!({ "edits": edits_count, "fromVersion": from_version, "suggestionId": id }),
     )
     .await?;
     Ok(Ok(Some(SuggestionMade::pending(id))))
@@ -875,7 +913,7 @@ const BLOCK_PREVIEW_CHARACTERS: usize = 120;
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageBlocksArguments {
+pub(crate) struct PageBlocksArguments {
     pub page_id: String,
     /// The version positions came from: needed when section, from or to is
     /// a position, and the read is then refused if the page has changed
@@ -901,7 +939,7 @@ pub(super) struct PageBlocksArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageBlocksValue {
+pub(crate) struct PageBlocksValue {
     pub page_id: String,
     pub project_id: String,
     pub title: String,
@@ -928,7 +966,7 @@ pub(super) struct PageBlocksValue {
 /// Edits kept as a suggestion for the page's owner to accept or reject.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SuggestionMade {
+pub(crate) struct SuggestionMade {
     pub suggestion_id: String,
     /// pending until someone decides; see page_suggestions.
     pub status: String,
@@ -936,7 +974,7 @@ pub(super) struct SuggestionMade {
 }
 
 impl SuggestionMade {
-    pub(super) fn pending(id: Uuid) -> Self {
+    pub(crate) fn pending(id: Uuid) -> Self {
         Self {
             suggestion_id: id.to_string(),
             status: "pending".to_owned(),
@@ -947,7 +985,7 @@ impl SuggestionMade {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct OutlineLine {
+pub(crate) struct OutlineLine {
     pub id: String,
     pub position: usize,
     pub level: u8,
@@ -959,7 +997,7 @@ pub(super) struct OutlineLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BlockLine {
+pub(crate) struct BlockLine {
     /// The block's lasting id: it stays the same while the block is edited
     /// or moved. Pass it to page_edit as blockId.
     pub id: String,
@@ -1196,7 +1234,7 @@ fn blocks_value(
     }
 }
 
-pub(super) async fn page_blocks(
+pub(crate) async fn page_blocks(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageBlocksArguments,
@@ -1296,7 +1334,7 @@ fn missing_block<T>(message: String, reference: &str) -> ToolResult<T> {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageEditArguments {
+pub(crate) struct PageEditArguments {
     pub page_id: String,
     /// The version you read. Needed when an edit names a block by position,
     /// and then the edit is refused if the page has changed since; with
@@ -1311,11 +1349,15 @@ pub(super) struct PageEditArguments {
     /// you may change directly. On a page someone else made, an agent's
     /// edits are always suggestions.
     pub suggest: Option<bool>,
+    /// The page's comment thread that asked for these edits, if one did:
+    /// the change (or suggestion) is linked there, with Undo. Reply in that
+    /// thread too.
+    pub thread_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageEditInput {
+pub(crate) struct PageEditInput {
     /// replace, insertBefore, insertAfter, delete, or append (to the end of
     /// the page; names no block).
     pub op: String,
@@ -1331,7 +1373,7 @@ pub(super) struct PageEditInput {
     pub markdown: Option<String>,
 }
 
-pub(super) async fn page_edit(
+pub(crate) async fn page_edit(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageEditArguments,
@@ -1341,6 +1383,11 @@ pub(super) async fn page_edit(
     }
     let Some(page_id) = parse_id(&arguments.page_id) else {
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
+    };
+    let thread_id = match arguments.thread_id.as_deref().map(parse_id) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
     };
     let note = match memory::normalize_note(arguments.note.as_deref()) {
         Ok(note) => note,
@@ -1406,6 +1453,17 @@ pub(super) async fn page_edit(
         if page.project_id != project_id {
             return Ok(ToolResult::not_found("That page"));
         }
+        if let Some(thread_id) = thread_id
+            && !crate::change_sets::is_page_thread(
+                &mut transaction,
+                page_id,
+                thread_id,
+                principal.actor_id,
+            )
+            .await?
+        {
+            return Ok(ToolResult::not_found("That comment thread on this page"));
+        }
         if page.archived {
             return Ok(ToolResult::invalid(
                 "pageId",
@@ -1468,6 +1526,16 @@ pub(super) async fn page_edit(
                 serde_json::json!({ "edits": edits.len(), "fromVersion": page.version, "suggestionId": id }),
             )
             .await?;
+            if let Some(thread_id) = thread_id {
+                crate::change_sets::answer_thread(
+                    &mut transaction,
+                    "page",
+                    page_id,
+                    principal.actor_id,
+                    thread_id,
+                )
+                .await?;
+            }
             transaction.commit().await?;
             let derived = store::derive_markdown(&page.body, &current);
             let now = PageAsBlocks {
@@ -1511,6 +1579,16 @@ pub(super) async fn page_edit(
             serde_json::json!({ "edits": edits.len(), "fromVersion": page.version }),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let after = PageAsBlocks {
             page_id,
@@ -1537,13 +1615,13 @@ pub(super) async fn page_edit(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SkillListArguments {
+pub(crate) struct SkillListArguments {
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillLine {
+pub(crate) struct SkillLine {
     /// Pass this to skill_get.
     pub name: String,
     /// When to use it.
@@ -1558,11 +1636,11 @@ pub(super) struct SkillLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillListValue {
+pub(crate) struct SkillListValue {
     pub skills: Vec<SkillLine>,
 }
 
-pub(super) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
+pub(crate) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
     pages
         .into_iter()
         .filter_map(|page| {
@@ -1579,7 +1657,7 @@ pub(super) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
         .collect()
 }
 
-pub(super) async fn skill_list(
+pub(crate) async fn skill_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SkillListArguments,
@@ -1609,7 +1687,7 @@ pub(super) async fn skill_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SkillGetArguments {
+pub(crate) struct SkillGetArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// The project. Needed with name; not with pageId.
@@ -1622,7 +1700,7 @@ pub(super) struct SkillGetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkillValue {
+pub(crate) struct SkillValue {
     pub name: String,
     pub description: String,
     /// The instructions, in Markdown.
@@ -1643,7 +1721,7 @@ pub(super) struct SkillValue {
 
 /// A skill in the SKILL.md format: YAML front matter with the name and
 /// description, then the instructions.
-pub(super) fn skill_md(name: &str, description: &str, body: &str) -> String {
+pub(crate) fn skill_md(name: &str, description: &str, body: &str) -> String {
     let quoted = serde_json::to_string(description).unwrap_or_default();
     format!(
         "---\nname: {name}\ndescription: {quoted}\n---\n\n{}\n",
@@ -1651,7 +1729,7 @@ pub(super) fn skill_md(name: &str, description: &str, body: &str) -> String {
     )
 }
 
-pub(super) async fn skill_get(
+pub(crate) async fn skill_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SkillGetArguments,

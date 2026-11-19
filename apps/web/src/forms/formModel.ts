@@ -6,6 +6,7 @@
  */
 
 import { apiUrl } from '../api/client'
+import { firstMissing, type FormField } from '../pieces/formFields'
 
 export type PublicFieldType = 'text' | 'long_text' | 'number' | 'date' | 'single_choice' | 'multiple_choice' | 'status' | 'url' | 'email' | 'phone' | 'checkbox'
 
@@ -73,17 +74,24 @@ export function normalizeForm(value: unknown): PublicForm {
   }
 }
 
+/** The form's questions as the form piece asks them: the title first, then each field. */
+export function formFields(form: PublicForm): FormField[] {
+  return [
+    { id: 'title', label: form.titleName, type: 'text', required: true, maxLength: 500 },
+    ...form.fields.map((field) => ({
+      id: field.id,
+      label: field.name,
+      type: field.type,
+      required: field.required,
+      hint: field.description,
+      options: field.options.map((option) => ({ value: option.id, label: option.name })),
+    })),
+  ]
+}
+
 /** The first thing the person still has to fill in, in words, or null. */
 export function missing(form: PublicForm, answers: Answers): string | null {
-  const title = answers.title
-  if (typeof title !== 'string' || !title.trim()) return `Fill in ${form.titleName}.`
-  for (const field of form.fields) {
-    if (!field.required || field.type === 'checkbox') continue
-    const value = answers[field.id]
-    const empty = value === undefined || (typeof value === 'string' && !value.trim()) || (Array.isArray(value) && value.length === 0)
-    if (empty) return `Fill in ${field.name}.`
-  }
-  return null
+  return firstMissing(formFields(form), answers)
 }
 
 /** The answers as the report URL takes them: by field ID, blanks left out. */

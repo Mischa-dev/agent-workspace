@@ -126,6 +126,7 @@ pub(crate) struct WorldBuilder {
     custom_roles: Vec<(String, &'static str, Vec<String>)>,
     dms: Vec<(String, String)>,
     groups: Vec<(String, Vec<String>)>,
+    config: Vec<(String, String)>,
 }
 
 impl WorldBuilder {
@@ -146,6 +147,12 @@ impl WorldBuilder {
 
     pub(crate) fn connected_app(mut self, name: &str) -> Self {
         self.apps.push(name.to_owned());
+        self
+    }
+
+    /// One more server setting, such as a data root or a package folder.
+    pub(crate) fn config(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.config.push((key.to_owned(), value.into()));
         self
     }
 
@@ -199,7 +206,13 @@ impl WorldBuilder {
         )
         .await
         .expect("bootstrap owner");
-        let (app, state) = app(&db).build();
+        let (app, state) = self
+            .config
+            .iter()
+            .fold(app(&db), |builder, (key, value)| {
+                builder.with(key, value.clone())
+            })
+            .build();
         let setup = Setup {
             app: app.clone(),
             browser: login(&app).await,

@@ -4,7 +4,7 @@
 //! - `sheet_read`: a range of one tab's cells (values, and formulas where
 //!   there are any), or its rows as objects by header, filtered.
 //! - `sheet_write`: create a sheet, rename, describe, archive or restore
-//!   it, and change its cells, rows and tabs, all or nothing
+//!   it, and change its cells, rows, tabs and formats, all or nothing
 //!   (`sheets.edit`).
 //!
 //! The rules are `crate::sheets`, the same the web app will use. A sheet is
@@ -102,14 +102,19 @@ async fn read_access<T>(
 
 /// A write holding the project lock (or, for changes to one sheet's cells
 /// and tabs, only the membership; C1.12), with the role checked again under
-/// it.
+/// it. `suggest_ok` lets a role without `sheets.edit` through for a change
+/// to an existing sheet's cells, which the caller then checks with
+/// `access::write_mode` once it knows the sheet (C1.11); the flag returned
+/// says whether the role edits sheets.
 async fn begin_write<T>(
     state: &AppState,
     principal: &McpPrincipal,
     project_lock: bool,
-) -> Result<Result<Transaction<'static, Postgres>, ToolResult<T>>, AppError> {
+    suggest_ok: bool,
+) -> Result<Result<(Transaction<'static, Postgres>, bool), ToolResult<T>>, AppError> {
     let project_id = principal.project_id;
-    if !can_write_in(state, principal, project_id, Action::SheetEdit).await? {
+    let edits = can_write_in(state, principal, project_id, Action::SheetEdit).await?;
+    if !edits && !suggest_ok {
         return Ok(Err(ToolResult::denied(EDIT_MESSAGE)));
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -128,12 +133,14 @@ async fn begin_write<T>(
     if membership.project_archived_at.is_some() {
         return Ok(Err(ToolResult::conflict(ARCHIVED_PROJECT_MESSAGE)));
     }
-    if !role_allows(
-        principal,
-        project_id,
-        &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
-        Action::SheetEdit,
-    ) {
+    let edits = edits
+        && role_allows(
+            principal,
+            project_id,
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            Action::SheetEdit,
+        );
+    if !edits && !suggest_ok {
         return Ok(Err(ToolResult::denied(EDIT_MESSAGE)));
     }
     let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
@@ -146,7 +153,7 @@ async fn begin_write<T>(
             MESSAGES_SPACE_MESSAGE,
         )));
     }
-    Ok(Ok(transaction))
+    Ok(Ok((transaction, edits)))
 }
 
 fn request_key(value: Option<&str>) -> Option<IdempotencyKey> {
@@ -271,8 +278,9 @@ pub(super) struct SheetReadArguments {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// Cells to read in A1 form: "A1:D20", "B:D" (whole columns), "2:10"
-    /// (whole rows) or "C4". Defaults to everything the tab uses. At most
-    /// 2,000 filled cells come back.
+    /// (whole rows), "C4" or "Tab!A1:D20", or a named range's name (which
+    /// picks its tab). Defaults to everything the tab uses. At most 2,000
+    /// filled cells come back.
     pub range: Option<String>,
     /// Read the tab as rows instead of cells: row 1 is the header, and each
     /// row below comes back as {header: value} with its row number.
@@ -300,6 +308,9 @@ pub(super) struct TabLine {
     pub used: String,
     /// Rows at the top that stay put while the rest scrolls.
     pub frozen_rows: i32,
+    /// Its conditional formats, in order (the first that applies wins).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<sheets::conditional::ConditionalRule>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -317,6 +328,21 @@ pub(super) struct CellLine {
     /// "error" when the value is an error code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The value as the cell shows it, for a cell with a number format
+    /// (such as "10%" for 0.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// Its number format, such as "0.0%", when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// Its style (bold, italic, underline, strike, color, fill, align,
+    /// wrap), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<sheets::CellStyle>,
+    /// How it looks once the tab's conditional formats apply, when that
+    /// differs from its own style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditional_style: Option<sheets::CellStyle>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -358,6 +384,9 @@ pub(super) struct SheetReadValue {
     pub truncated: bool,
     pub can_edit: bool,
     pub url: String,
+    /// The sheet's named ranges: pass a name as range to read one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_ranges: Vec<sheets::ranges::NamedRange>,
 }
 
 fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
@@ -370,16 +399,22 @@ fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
             format!("{}{}", column_name(used.1), used.0)
         },
         frozen_rows: tab.frozen_rows,
+        conditional_formats: tab.rules(),
     }
 }
 
 fn cell_line(cell: &StoredCell) -> CellLine {
     let value = cell.value();
+    let look = cell.look();
     CellLine {
         cell: format!("{}{}", column_name(cell.column_number), cell.row_number),
         formula: cell.input.starts_with('=').then(|| cell.input.clone()),
         kind: matches!(value, CellValue::Error(_)).then(|| "error".to_owned()),
         value: json_of(&value),
+        display: cell.display.clone(),
+        number_format: look.format,
+        style: (!look.style.is_plain()).then_some(look.style),
+        conditional_style: cell.conditional_style(),
     }
 }
 
@@ -421,8 +456,22 @@ pub(super) async fn sheet_read(
                 Ok(sheet) => sheet,
                 Err(refusal) => return Ok(refusal),
             };
+        // A named range, or a block naming its tab ("Summary!A1:B9"),
+        // picks the tab itself (C1.20).
+        let pointed = match arguments.range.as_deref() {
+            Some(text) if sheets::ranges::name_of(text).is_some() || text.contains('!') => {
+                sheets::ranges::resolve(&mut connection, sheet.id, text).await?
+            }
+            _ => None,
+        };
+        let named_ranges = sheets::ranges::named(&mut *connection, sheet.id).await?;
         let tabs = sheets::tabs(&mut *connection, sheet.id).await?;
-        let wanted = arguments.tab.as_deref().map(str::trim).unwrap_or_default();
+        let pointed_tab = pointed.as_ref().map(|found| found.tab_id.to_string());
+        let wanted = pointed_tab
+            .as_deref()
+            .or(arguments.tab.as_deref())
+            .map(str::trim)
+            .unwrap_or_default();
         let wanted_id = wanted.parse::<Uuid>().ok();
         let Some(tab) = (if wanted.is_empty() {
             tabs.first()
@@ -451,11 +500,12 @@ pub(super) async fn sheet_read(
             }
             tab_lines.push(tab_line(each, extent));
         }
-        let cells_total =
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sheet_cells WHERE sheet_id = $1")
-                .bind(sheet.id)
-                .fetch_one(&mut *connection)
-                .await?;
+        let cells_total = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM sheet_cells WHERE sheet_id = $1 AND input <> ''",
+        )
+        .bind(sheet.id)
+        .fetch_one(&mut *connection)
+        .await?;
         let summary = SheetSummary {
             id: sheet.id.to_string(),
             name: sheet.name.clone(),
@@ -491,6 +541,7 @@ pub(super) async fn sheet_read(
                     truncated: false,
                     can_edit,
                     url,
+                    named_ranges,
                 }));
             }
             let all = sheets::cells_in(
@@ -499,6 +550,7 @@ pub(super) async fn sheet_read(
                 (1, used.0),
                 (1, used.1),
                 i64::try_from(sheets::MAX_CELLS).unwrap_or(i64::MAX),
+                true,
             )
             .await?;
             let headers: BTreeMap<i32, String> = all
@@ -582,20 +634,22 @@ pub(super) async fn sheet_read(
                 truncated,
                 can_edit,
                 url,
+                named_ranges,
             }));
         }
 
-        let range = match arguments.range.as_deref() {
-            Some(text) => match address::range(text, sheets::MAX_ROWS, sheets::MAX_COLUMNS) {
+        let range = match (pointed.as_ref(), arguments.range.as_deref()) {
+            (Some(found), _) => found.range,
+            (None, Some(text)) => match address::range(text, sheets::MAX_ROWS, sheets::MAX_COLUMNS) {
                 Some(range) => range,
                 None => {
                     return Ok(ToolResult::invalid(
                         "range",
-                        "Name cells in A1 form: \"A1:D20\", \"B:D\", \"2:10\" or \"C4\".",
+                        "Name cells in A1 form (\"A1:D20\", \"B:D\", \"2:10\", \"C4\", \"Tab!A1:D20\") or by a named range of the sheet.",
                     ));
                 }
             },
-            None => address::Range {
+            (None, None) => address::Range {
                 rows: (1, used.0.max(1)),
                 columns: (1, used.1.max(1)),
             },
@@ -614,6 +668,7 @@ pub(super) async fn sheet_read(
             range.rows,
             range.columns,
             MAX_READ_CELLS + 1,
+            true,
         )
         .await?;
         let truncated = found.len() as i64 > MAX_READ_CELLS;
@@ -633,6 +688,7 @@ pub(super) async fn sheet_read(
             truncated,
             can_edit,
             url,
+            named_ranges,
         }))
     }
     .await;
@@ -711,6 +767,92 @@ pub(super) struct TabWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SortKey {
+    /// A column of the range, by its letters (such as "C").
+    pub column: String,
+    /// Largest or last first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SortWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// The block whose rows are sorted, such as "A2:F40" (leave the header
+    /// row out). Only its cells move; formulas that point at one follow it.
+    pub range: String,
+    /// One to three columns to sort by, most important first. Numbers come
+    /// before text, empty cells last.
+    pub by: Vec<SortKey>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ConditionalFormatsWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// All of the tab's rules, in order: the first that applies to a cell
+    /// wins. "when" is lessThan, greaterThan, atLeast, atMost, equals,
+    /// notEquals (with "value"), between or notBetween (with "value" and
+    /// "value2"), textContains, textDoesNotContain, textBeginsWith or
+    /// textEndsWith (with "text"), empty, notEmpty, errors, formula (with
+    /// "formula", such as "=$C2=\"Late\""), top or bottom (with "rank"),
+    /// aboveAverage, belowAverage, duplicates, or colorScale (with "low" and
+    /// "high" colours). "style" sets bold, italic, underline, strike,
+    /// color and fill.
+    pub rules: Vec<sheets::conditional::ConditionalRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FormatWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// The cells, in A1 form: "B2:B40", "C4", "B:D" (whole columns) or
+    /// "1:1" (whole rows); up to 50,000 cells. Empty cells keep the format
+    /// for what's typed in them later.
+    pub range: String,
+    /// A number format, as an Excel format code: "0.00", "#,##0", "0.0%",
+    /// "$#,##0.00", "yyyy-mm-dd" or "@" (text). "" goes back to automatic.
+    /// Typing "10%" or "$5" sets one by itself.
+    pub number_format: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strike: Option<bool>,
+    /// Text color as "#RRGGBB"; "" goes back to the default.
+    pub color: Option<String>,
+    /// Background as "#RRGGBB"; "" removes it.
+    pub fill: Option<String>,
+    /// "left", "center" or "right"; "" goes back to automatic.
+    pub align: Option<String>,
+    /// Wrap long text onto more lines.
+    pub wrap: Option<bool>,
+    /// true puts every format and style back to plain first.
+    pub clear: Option<bool>,
+}
+
+impl FormatWrite {
+    fn look(&self) -> sheets::LookInput {
+        sheets::LookInput {
+            number_format: self.number_format.clone(),
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            strike: self.strike,
+            color: self.color.clone(),
+            fill: self.fill.clone(),
+            align: self.align.clone(),
+            wrap: self.wrap,
+            clear: self.clear,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SheetWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
@@ -732,6 +874,19 @@ pub(super) struct SheetWriteArguments {
     /// Rows to add or change by header, after the cells.
     #[serde(default)]
     pub rows: Vec<RowWrite>,
+    /// Blocks to sort, after the rows. A sort moves cells, so edits that
+    /// check ifRevision on the same tab go in a separate call.
+    #[serde(default)]
+    pub sorts: Vec<SortWrite>,
+    /// Number formats and styles to set on blocks of cells, last. They
+    /// don't change what's typed, values, or the cells' revisions.
+    #[serde(default)]
+    pub formats: Vec<FormatWrite>,
+    /// Replace tabs' conditional formats: rules that colour cells by what
+    /// they hold, such as {"range": "C2:C40", "when": "lessThan", "value": 0,
+    /// "style": {"color": "#C62828"}}. An empty list removes a tab's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<ConditionalFormatsWrite>,
     /// Fill a new sheet from a file instead of tabs, cells and rows: its
     /// tabs and what was typed in them, formulas included.
     pub import: Option<SheetImport>,
@@ -761,6 +916,9 @@ pub(super) struct ChangedCellLine {
     /// The formula, for cells that have one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    /// The value as its number format shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     /// true when the cell was cleared or moved away.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cleared: bool,
@@ -780,15 +938,44 @@ pub(super) struct SheetWriteValue {
     pub cells_changed: usize,
     /// Cells whose computed value changed because of it.
     pub values_changed: usize,
+    /// Cells whose number format or style changed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub formats_changed: usize,
     /// Up to 200 cells that changed, the ones written first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<ChangedCellLine>,
+    /// Set when your role only suggests on this sheet: nothing changed yet,
+    /// and the write waits as this proposal for someone who edits the
+    /// sheet (proposal_list, proposal_decide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    /// The cells the proposal would set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposed: Vec<ProposedCellLine>,
     pub url: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_replay: bool,
 }
 
-/// The changes a call asks for, in order: tabs, then cells, then rows.
+/// A cell a proposal would set.
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProposedCellLine {
+    pub tab: String,
+    /// Such as "B12".
+    pub cell: String,
+    /// Its input now; empty for an empty cell.
+    pub before: String,
+    /// The input proposed; empty clears it.
+    pub after: String,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+/// The changes a call asks for, in order: tabs, then cells, then rows,
+/// then formats.
 fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, String)> {
     let mut changes = Vec::new();
     for (index, tab) in arguments.tabs.iter().enumerate() {
@@ -936,6 +1123,64 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
                 .collect(),
         });
     }
+    for (index, sort) in arguments.sorts.iter().enumerate() {
+        let Some(range) = address::range(&sort.range, sheets::MAX_ROWS, sheets::MAX_COLUMNS) else {
+            return Err((
+                format!("sorts[{index}].range"),
+                "Name the block in A1 form, such as \"A2:F40\".".to_owned(),
+            ));
+        };
+        let mut by = Vec::with_capacity(sort.by.len());
+        for (key, entry) in sort.by.iter().enumerate() {
+            let Some(column) = address::column_number(entry.column.trim()) else {
+                return Err((
+                    format!("sorts[{index}].by[{key}].column"),
+                    "Name a column by its letters, such as \"C\".".to_owned(),
+                ));
+            };
+            by.push((column, entry.descending));
+        }
+        changes.push(Change::Sort {
+            tab: sort.tab.clone(),
+            rows: range.rows,
+            columns: range.columns,
+            by,
+        });
+    }
+    for (index, format) in arguments.formats.iter().enumerate() {
+        let Some(range) = address::range(&format.range, sheets::MAX_ROWS, sheets::MAX_COLUMNS)
+        else {
+            return Err((
+                format!("formats[{index}].range"),
+                "Name cells in A1 form: \"B2:B40\", \"C4\", \"B:D\" or \"1:1\".".to_owned(),
+            ));
+        };
+        let patch = format
+            .look()
+            .patch()
+            .map_err(|(field, message)| (format!("formats[{index}].{field}"), message))?;
+        changes.push(Change::Format {
+            tab: format.tab.clone(),
+            rows: range.rows,
+            columns: range.columns,
+            patch,
+        });
+    }
+    for (index, entry) in arguments.conditional_formats.iter().enumerate() {
+        if let Err((rule, message)) = sheets::conditional::checked(entry.rules.clone()) {
+            return Err((
+                match rule {
+                    Some(rule) => format!("conditionalFormats[{index}].rules[{rule}]"),
+                    None => format!("conditionalFormats[{index}].rules"),
+                },
+                message,
+            ));
+        }
+        changes.push(Change::ConditionalFormats {
+            tab: entry.tab.clone(),
+            rules: entry.rules.clone(),
+        });
+    }
     Ok(changes)
 }
 
@@ -943,7 +1188,16 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
 fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change]) -> String {
     let cells_start = changes
         .iter()
-        .position(|change| matches!(change, Change::Cell { .. } | Change::Row { .. }))
+        .position(|change| {
+            matches!(
+                change,
+                Change::Cell { .. }
+                    | Change::Row { .. }
+                    | Change::Sort { .. }
+                    | Change::Format { .. }
+                    | Change::ConditionalFormats { .. }
+            )
+        })
         .unwrap_or(changes.len());
     if index < cells_start {
         return "tabs".to_owned();
@@ -951,8 +1205,31 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
     let at = index - cells_start;
     if at < arguments.cells.len() {
         format!("cells[{at}]")
-    } else {
+    } else if at < arguments.cells.len() + arguments.rows.len() {
         format!("rows[{}]", at - arguments.cells.len())
+    } else if at < arguments.cells.len() + arguments.rows.len() + arguments.sorts.len() {
+        format!(
+            "sorts[{}]",
+            at - arguments.cells.len() - arguments.rows.len()
+        )
+    } else if at
+        < arguments.cells.len()
+            + arguments.rows.len()
+            + arguments.sorts.len()
+            + arguments.formats.len()
+    {
+        format!(
+            "formats[{}]",
+            at - arguments.cells.len() - arguments.rows.len() - arguments.sorts.len()
+        )
+    } else {
+        format!(
+            "conditionalFormats[{}]",
+            at - arguments.cells.len()
+                - arguments.rows.len()
+                - arguments.sorts.len()
+                - arguments.formats.len()
+        )
     }
 }
 
@@ -969,6 +1246,7 @@ fn changed_lines(applied: &Applied) -> Vec<ChangedCellLine> {
                 .as_ref()
                 .filter(|input| input.starts_with('='))
                 .cloned(),
+            display: cell.display.clone(),
             cleared: cell.input.is_none(),
         })
         .collect()
@@ -1054,10 +1332,25 @@ pub(super) async fn sheet_write(
         // lock only the sheet.
         let project_lock =
             arguments.sheet.is_none() || name.is_some() || arguments.archived.is_some();
-        let mut transaction = match begin_write(state, principal, project_lock).await? {
-            Ok(transaction) => transaction,
-            Err(refusal) => return Ok(refusal),
+        // Only cell contents of an existing sheet can be proposed (C1.11).
+        let suggest_ok = arguments.sheet.is_some()
+            && name.is_none()
+            && description.is_none()
+            && arguments.archived.is_none()
+            && imported.is_none()
+            && !changes.is_empty()
+            && sheets::proposals::only_cells(&changes);
+        let caller = if suggest_ok {
+            let (_, limits) = super::caller_reach(state, principal).await?;
+            Some(crate::access::Caller::of_principal(principal, limits))
+        } else {
+            None
         };
+        let (mut transaction, edits) =
+            match begin_write(state, principal, project_lock, suggest_ok).await? {
+                Ok(started) => started,
+                Err(refusal) => return Ok(refusal),
+            };
         // Bound to the project, not the sheet: a retry finds its first answer
         // even after that write renamed the sheet it named.
         let scope = resource_bound_scope("mcp_sheets", project_id, "sheet_write")?;
@@ -1132,6 +1425,45 @@ pub(super) async fn sheet_write(
                 else {
                     return Ok(ToolResult::not_found("That sheet"));
                 };
+                if !edits {
+                    // The role doesn't edit sheets: edit-own on their own
+                    // sheet writes, suggest keeps it as a proposal.
+                    let own = sqlx::query_scalar::<_, Option<Uuid>>(
+                        "SELECT created_by_actor_id FROM sheets WHERE id = $1",
+                    )
+                    .bind(sheet.id)
+                    .fetch_one(&mut *transaction)
+                    .await?
+                        == Some(principal.actor_id);
+                    let caller = caller.as_ref().ok_or(AppError::Internal("sheet caller"))?;
+                    let mode = crate::access::write_mode_locked(
+                        &mut transaction,
+                        caller,
+                        "sheet",
+                        project_id,
+                        own,
+                        Some("sheets"),
+                    )
+                    .await?
+                    .ok()
+                    .map(|grant| grant.mode);
+                    match mode {
+                        Some(crate::access::WriteMode::Direct) => {}
+                        Some(crate::access::WriteMode::Propose) => {
+                            return propose_cells(
+                                state,
+                                principal,
+                                transaction,
+                                &reservation,
+                                &sheet,
+                                &arguments,
+                                &changes,
+                            )
+                            .await;
+                        }
+                        None => return Ok(ToolResult::denied(EDIT_MESSAGE)),
+                    }
+                }
                 let change = SheetChange {
                     name: name.clone(),
                     description: description.clone(),
@@ -1259,7 +1591,13 @@ pub(super) async fn sheet_write(
                 .as_ref()
                 .map(|applied| applied.values_changed)
                 .unwrap_or(0),
+            formats_changed: applied
+                .as_ref()
+                .map(|applied| applied.looks_changed)
+                .unwrap_or(0),
             changed: applied.as_ref().map(changed_lines).unwrap_or_default(),
+            proposal_id: None,
+            proposed: Vec::new(),
             url: sheet_url(state, project_id, sheet.id),
             idempotent_replay: false,
         };
@@ -1275,6 +1613,81 @@ pub(super) async fn sheet_write(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "sheet_write"))
+}
+
+/// A sheet_write by someone whose role only suggests on the sheet: kept
+/// as a proposal (C1.11), answered and committed here.
+async fn propose_cells(
+    state: &AppState,
+    principal: &McpPrincipal,
+    mut transaction: Transaction<'static, Postgres>,
+    reservation: &crate::idempotency::IdempotencyReservation,
+    sheet: &Sheet,
+    arguments: &SheetWriteArguments,
+    changes: &[Change],
+) -> Result<ToolResult<SheetWriteValue>, AppError> {
+    use sheets::proposals::Proposed;
+    let author = super::memory_tools::writer(principal);
+    let (id, cells) =
+        match sheets::proposals::propose(&mut transaction, author, sheet, changes, None).await? {
+            Proposed::Made { id, cells } => (Some(id), cells),
+            Proposed::Unchanged => (None, Vec::new()),
+            Proposed::Refused(message) => return Ok(ToolResult::denied(message)),
+            Proposed::Problem(problem) => {
+                let at = change_field(arguments, problem.index, changes);
+                let message = format!("Nothing was proposed. {}", problem.message);
+                return Ok(match problem.kind {
+                    ProblemKind::Invalid => ToolResult::invalid(&at, message),
+                    ProblemKind::NotFound => ToolResult::NotFound { message },
+                    ProblemKind::Conflict | ProblemKind::Full => ToolResult::conflict(message),
+                });
+            }
+        };
+    if let Some(id) = id {
+        insert_audit(
+            &mut transaction,
+            principal,
+            sheet.project_id,
+            "sheet.proposal_created",
+            "proposal",
+            id,
+            json!({"sheet": sheet.id, "cells": cells.len()}),
+        )
+        .await?;
+    }
+    let value = SheetWriteValue {
+        id: sheet.id.to_string(),
+        name: sheet.name.clone(),
+        revision: sheet.revision,
+        created: false,
+        archived: sheet.archived,
+        cells_changed: 0,
+        values_changed: 0,
+        formats_changed: 0,
+        changed: Vec::new(),
+        proposal_id: id.map(|id| id.to_string()),
+        proposed: cells
+            .iter()
+            .take(MAX_ECHOED_CELLS)
+            .map(|cell| ProposedCellLine {
+                tab: cell.tab.clone(),
+                cell: cell.address(),
+                before: cell.before.clone(),
+                after: cell.after.clone(),
+            })
+            .collect(),
+        url: sheet_url(state, sheet.project_id, sheet.id),
+        idempotent_replay: false,
+    };
+    crate::idempotency::complete(
+        &mut transaction,
+        reservation,
+        axum::http::StatusCode::OK,
+        &value,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(ToolResult::ok(value))
 }
 
 /// The tabs an import asks for, read and checked, or the field and why not.

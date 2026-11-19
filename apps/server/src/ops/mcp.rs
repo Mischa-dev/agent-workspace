@@ -63,6 +63,12 @@ fn needs(meta: &OpMeta) -> String {
         ),
         None => meta.description.to_owned(),
     };
+    if meta.long {
+        text.push_str(
+            " A big call runs in the background: it answers started with a jobId, and job_get \
+             gives the answer once it is done.",
+        );
+    }
     if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
         text.push_str(
             " Send a clientRequestId to make a retry safe; without one the change runs once \
@@ -111,7 +117,7 @@ pub fn tool_of(meta: &OpMeta) -> Tool {
         Value::Object(object) => object,
         _ => JsonObject::new(),
     };
-    let output = match super::envelope::schema((meta.output_schema)()) {
+    let output = match super::envelope::schema((meta.output_schema)(), meta.long) {
         Value::Object(object) => object,
         _ => JsonObject::new(),
     };
@@ -154,7 +160,13 @@ pub fn listed(
     }
     let switchable =
         crate::modules::manifest::get(meta.module).is_some_and(|module| module.switchable);
-    !switchable || modules.contains(meta.module)
+    // An operation another module also serves (threads in DMs and groups)
+    // is listed wherever either is on, as the call is allowed.
+    !switchable
+        || modules.contains(meta.module)
+        || crate::modules::registry::Registry::global()
+            .also_serving(meta.name)
+            .any(|also| modules.contains(also))
 }
 
 /// Whether `name` is an operation's tool, or an old name for one
@@ -200,7 +212,8 @@ pub async fn call(
     // The old tool answered with its value alone, so an alias does too; a
     // refusal keeps the envelope. Either way `_meta` says what to use.
     let answer = if envelope["outcome"] == "ok" {
-        (old.adapt_out)(name, envelope["value"].take())
+        let replayed = envelope["replayed"].as_bool().unwrap_or(false);
+        (old.adapt_out)(name, envelope["value"].take(), replayed)
     } else {
         envelope
     };
@@ -212,6 +225,22 @@ pub async fn call(
     );
     result.meta = Some(rmcp::model::MetaObject(meta));
     result
+}
+
+/// The MCP task handle for a long call answered `started` (K2.21): its id
+/// is the job id `job_get` and `tasks/get` take.
+pub fn task_handle(result: &CallToolResult) -> Option<rmcp::model::CreateTaskResult> {
+    let envelope = result.structured_content.as_ref()?;
+    if envelope["outcome"] != "started" {
+        return None;
+    }
+    let id = envelope["value"]["jobId"].as_str()?;
+    let created = envelope["value"]["createdAt"].as_str()?;
+    Some(rmcp::model::CreateTaskResult::new(
+        rmcp::model::Task::new(id, rmcp::model::TaskStatus::Working, created, created)
+            .with_ttl_ms(super::long::KEEP_MS)
+            .with_poll_interval_ms(super::long::POLL_INTERVAL_MS),
+    ))
 }
 
 async fn request(
@@ -262,6 +291,9 @@ async fn request(
     };
     let preview = matches!(arguments.remove("preview"), Some(Value::Bool(true)));
     let caller = caller_of(state, principal).await?;
+    // A host's run credential lives only as long as its run, so a long call
+    // through it runs at once rather than as a task that could outlive it.
+    let defer_long = matches!(edge, Edge::Mcp { .. }) && !caller.for_run;
     Ok((
         DispatchRequest {
             caller,
@@ -274,6 +306,9 @@ async fn request(
             unkeyed: super::Unkeyed::RunOnce,
             preview,
             renamed_from: None,
+            // MCP clients follow a long call (`tasks/get`, `job_get`); the
+            // older direct path and automations wait for it.
+            defer_long,
         },
         Value::Object(arguments),
     ))

@@ -49,8 +49,8 @@ const kindNeedles = ["external_agent", "human"].flatMap((kind) => [
 ]);
 const vendorNeedles = ["Codex", "Claude"];
 
-/** `<AppShell` uses left after W1.12a and W1.12b; W1.12c takes it to zero. */
-const CEILING_APP_SHELL = 27;
+/** W1.12c took every page off `<AppShell`; the shell itself is the only frame. */
+const CEILING_APP_SHELL = 0;
 
 const rules: Rule[] = [
   {

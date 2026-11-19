@@ -1,15 +1,16 @@
 // Before the canvas chunk loads: Excalidraw reads its font path as it starts.
 import './assetPath'
 
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { callOp, newRequestId, opPrefix } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { useShellPage } from '../shell/shellStore'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
-import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { useTheme } from '../theme/themeContext'
 import {
@@ -28,7 +29,9 @@ import {
   describeError,
   showToast,
 } from '../ui'
-import type { SaveFailure } from './BoardCanvas'
+import type { DraftHandle, SaveFailure } from './BoardCanvas'
+import { BoardProposalsDialog } from './BoardProposals'
+import { useBoardProposals } from './proposalModel'
 import {
   deleteWhiteboardForever,
   duplicateWhiteboard,
@@ -63,10 +66,9 @@ function useNow() {
 export function WhiteboardPage() {
   const { whiteboardId = '' } = useParams()
   const session = useAuthenticatedSession()
+  useShellPage({ mainClassName: 'aw-main--whiteboard' })
   return (
-    <AppShell mainClassName="aw-main--whiteboard" user={session.user}>
-      <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
-    </AppShell>
+    <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
   )
 }
 
@@ -85,7 +87,13 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [editors, setEditors] = useState<Editor[]>([])
-  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | 'purge' | 'comments' | null>(null)
+  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | 'purge' | 'comments' | 'proposals' | null>(null)
+  // Suggest mode (C1.11): what's drawn here waits until it's sent as a proposal.
+  const draftRef = useRef<DraftHandle | null>(null)
+  const [draftCount, setDraftCount] = useState(0)
+  const [sending, setSending] = useState(false)
+  const reviewable = Boolean(detail.data && (detail.data.canEdit || detail.data.canSuggest))
+  const proposals = useBoardProposals(whiteboardId, reviewable)
   // A board in a project follows the project's layout; one outside any follows the workspace's.
   const projectExperience = useProjectExperience(detail.data?.whiteboard.projectId)
   const workspaceExperience = useWorkspaceExperience(detail.data?.whiteboard.projectId ? null : detail.data?.whiteboard.organizationId)
@@ -106,6 +114,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   }
   const { whiteboard, canEdit, links } = detail.data
   const editable = canEdit && !whiteboard.deleted
+  const suggesting = !canEdit && Boolean(detail.data.canSuggest) && !whiteboard.deleted
   const showComments = (whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
   // Who else has drawn here lately; you're not in your own list.
   const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId && editor.actorId !== viewerId)
@@ -130,6 +139,27 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
         showToast({ tone: 'success', title: isTemplate ? 'New whiteboards can start from this one' : 'No longer a template' })
       })
       .catch((reason: unknown) => toastError('The whiteboard wasn’t changed', reason))
+  const propose = async () => {
+    const elements = draftRef.current?.draft() ?? []
+    if (!elements.length) return
+    setSending(true)
+    try {
+      const sent = await callOp('whiteboard_propose', { whiteboardId: whiteboard.id, elements }, { requestId: newRequestId() })
+      await draftRef.current?.discard()
+      void queryClient.invalidateQueries({ queryKey: opPrefix('proposal_list') })
+      showToast(
+        sent.proposalId
+          ? { tone: 'success', title: 'Sent for review', description: 'Someone who edits this board can accept or reject it.' }
+          : { tone: 'info', title: 'Nothing to send: the board already looks like that' },
+      )
+    } catch (reason) {
+      toastError('The proposal wasn’t sent', reason)
+    } finally {
+      setSending(false)
+    }
+  }
+  const discard = () =>
+    draftRef.current?.discard().catch((reason: unknown) => toastError('The board wasn’t reset', reason))
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
@@ -153,8 +183,18 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           </StatusChip>
         </span>
         <span aria-live="polite" className="aw-wb__save" data-state={saveState}>
-          {editable ? saveLabel(saveState) : 'View only'}
+          {editable ? saveLabel(saveState) : suggesting ? (draftCount ? `${draftCount === 1 ? 'One change' : `${draftCount} changes`} not sent` : 'Suggesting') : 'View only'}
         </span>
+        {suggesting && draftCount ? (
+          <>
+            <Button busy={sending} icon="send" onClick={() => void propose()} size="sm" variant="primary">
+              Propose changes
+            </Button>
+            <Button disabled={sending} onClick={() => void discard()} size="sm" variant="ghost">
+              Discard
+            </Button>
+          </>
+        ) : null}
         <span className="aw-wb__spacer" />
         {agents.length ? (
           <StatusChip dots tone="agent">
@@ -168,6 +208,11 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             />
             <span className="aw-sr-only">Recently edited by {others.map((editor) => editor.name).join(', ')}</span>
           </span>
+        ) : null}
+        {proposals.length ? (
+          <Button onClick={() => setPanel('proposals')} size="sm">
+            {`Proposals (${proposals.length})`}
+          </Button>
         ) : null}
         {showComments ? (
           <Button icon="messages" onClick={() => setPanel(panel === 'comments' ? null : 'comments')} size="sm">
@@ -230,11 +275,14 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
         <Suspense fallback={<PageSkeleton cards={1} decorative label="Loading the canvas" />}>
           <BoardCanvas
             dark={isDarkPreset(preset)}
+            draftRef={draftRef}
             editable={editable}
             initial={scene.data}
+            onDraft={setDraftCount}
             onEditors={setEditors}
             onSaveFailure={setSaveFailure}
             onSaveState={setSaveState}
+            suggesting={suggesting}
             whiteboardId={whiteboard.id}
           />
         </Suspense>
@@ -243,6 +291,9 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
         <SidePanel onClose={() => setPanel(null)} title="Comments">
           <ThingCommentsPanel kind="whiteboard" thingId={whiteboard.id} viewerId={viewerId} />
         </SidePanel>
+      ) : null}
+      {panel === 'proposals' ? (
+        <BoardProposalsDialog canDecide={editable} onClose={() => setPanel(null)} proposals={proposals} userId={viewerId} />
       ) : null}
       <LinksDialog canEdit={canEdit} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'links'} />
       <HistoryDialog canEdit={editable} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'history'} />

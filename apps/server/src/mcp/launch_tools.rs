@@ -69,7 +69,7 @@ pub(super) struct TaskLaunchArguments {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectArguments {
+pub(crate) struct ProjectArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// The project (ID, link or key such as "AWD").
@@ -123,7 +123,7 @@ pub(super) struct LaunchListValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct EnvironmentValue {
+pub(crate) struct EnvironmentValue {
     pub id: String,
     pub name: String,
     pub harness: String,
@@ -168,7 +168,7 @@ pub(super) fn environment_value(
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct EnvironmentListValue {
+pub(crate) struct EnvironmentListValue {
     pub environments: Vec<EnvironmentValue>,
     pub default_environment_id: Option<String>,
 }
@@ -419,7 +419,7 @@ pub(super) async fn launch_cancel(
     }
 }
 
-pub(super) async fn environment_list(
+pub(crate) async fn environment_list(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: ProjectArguments,

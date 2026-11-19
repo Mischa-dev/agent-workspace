@@ -111,6 +111,12 @@ struct MemberView {
     created_at: String,
     execution_profile_readiness: String,
     capabilities: MemberCapabilities,
+    /// W1.37: the roles you could give them, as the role picker's values (a
+    /// built-in role's key or a custom role's ID); empty when you can't
+    /// change their role. The same for people and agents: what decides is
+    /// what you hold yourself (`require_grantable`).
+    #[serde(default)]
+    assignable_roles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -146,12 +152,66 @@ async fn list_members(
         .bind(project_id)
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
+    let grantable = grantable_roles(&state, principal.actor_id, project_id).await?;
     Ok(Json(MembersResponse {
         members: rows
             .into_iter()
-            .map(|row| member_view(row, &principal, &access))
+            .map(|row| {
+                let mut view = member_view(row, &principal, &access);
+                if view.capabilities.change_role {
+                    view.assignable_roles = grantable.clone();
+                }
+                view
+            })
             .collect(),
     }))
+}
+
+/// W1.37: every role of the workspace but Owner that the caller could give
+/// someone in this project, by the test `require_grantable` makes.
+async fn grantable_roles(
+    state: &AppState,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Vec<String>, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let roles = sqlx::query_as::<_, (Uuid, Uuid, String, bool, Option<Vec<String>>)>(
+        r#"
+        SELECT project.organization_id, role.id, role.base_role, role.built_in,
+               workspace_role_permissions(role.id)
+        FROM projects project
+        JOIN workspace_roles role ON role.organization_id = project.organization_id
+        WHERE project.id = $1
+        ORDER BY role.built_in DESC, role.name
+        "#,
+    )
+    .bind(project_id)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let Some((organization_id, ..)) = roles.first() else {
+        return Ok(Vec::new());
+    };
+    let standing = crate::roles::standing(&mut transaction, *organization_id, caller_actor_id)
+        .await?
+        .permissions;
+    let Some(held) =
+        crate::roles::project_holding(&mut transaction, caller_actor_id, project_id).await?
+    else {
+        return Ok(Vec::new());
+    };
+    transaction.commit().await?;
+    Ok(roles
+        .into_iter()
+        // Owner is never given here, nor a custom role on it.
+        .filter(|(_, _, base_role, ..)| settable_role(base_role))
+        .filter_map(|(_, id, base_role, built_in, permissions)| {
+            let custom = (!built_in).then_some(permissions.unwrap_or_default());
+            let grant = RoleGrant::stored(&base_role, custom.as_deref()).ok()?;
+            (grant.permissions().is_subset_of(standing)
+                && crate::roles::project_checked(grant.permissions()).is_subset_of(held))
+            .then(|| if built_in { base_role } else { id.to_string() })
+        })
+        .collect())
 }
 
 async fn update_member(
@@ -552,6 +612,11 @@ pub(crate) async fn pick_custom_role(
     Ok((base, (!built_in).then_some(role_id)))
 }
 
+/// The built-in roles a membership can be set to: every one but Owner.
+fn settable_role(role: &str) -> bool {
+    matches!(role, "admin" | "member" | "viewer")
+}
+
 fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
     if request.expected_version < 1
         || (request.role.is_none() && request.role_id.is_none() && request.enabled.is_none())
@@ -561,7 +626,7 @@ fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
     if request
         .role
         .as_deref()
-        .is_some_and(|role| !matches!(role, "admin" | "member" | "viewer"))
+        .is_some_and(|role| !settable_role(role))
     {
         return Err(AppError::Validation("project membership role"));
     }
@@ -669,6 +734,7 @@ fn member_view(row: MemberRow, principal: &AuthenticatedActor, access: &AccessRo
             disable: manageable && row.enabled,
             enable: manageable && !row.enabled,
         },
+        assignable_roles: Vec::new(),
     }
 }
 

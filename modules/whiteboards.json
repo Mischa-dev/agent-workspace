@@ -16,13 +16,17 @@
     "whiteboard_render": "describe",
     "whiteboard_create": "create",
     "whiteboard_update_elements": "change",
+    "whiteboard_propose": "create",
     "whiteboard_update": "change",
     "whiteboard_trash_empty": "change",
     "whiteboard_duplicate": "create",
     "whiteboard_link": "change"
   },
   "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
-  "events": { "emits": ["whiteboard.scene_changed", "whiteboard.updated", "whiteboard.version_restored"], "listens": [] },
+  "events": {
+    "emits": ["whiteboard.scene_changed", "whiteboard.updated", "whiteboard.version_restored", "whiteboard.proposals_changed"],
+    "listens": []
+  },
   "notifications": [],
   "search": ["whiteboards"],
   "automations": { "triggers": ["whiteboard_changed"], "actions": [] },

@@ -84,12 +84,13 @@ test('creates a task and moves it across the board', async ({ page }) => {
   // the next column, Space drops it. Backlog → Ready.
   // Each step waits for the board's screen-reader announcement, as a person
   // would wait to see the card lift and move.
-  const announced = (text: string) => expect(page.getByText(text, { exact: true })).toBeAttached()
+  const announced = (text: string | RegExp) => expect(page.getByText(text, { exact: true })).toBeAttached()
   await card('Backlog').focus()
   await page.keyboard.press('Space')
   await announced(`Picked up ${key}. Arrow keys move it, Space drops it, Escape puts it back.`)
   await page.keyboard.press('ArrowRight')
-  await announced('Ready, position 1.')
+  // Other specs (live-streams) leave tasks in Ready on the same board, so the card can land below them.
+  await announced(/^Ready, position \d+\.$/)
   await page.keyboard.press('Space')
   await expect(card('Ready')).toBeVisible()
   await expect(card('Backlog')).toHaveCount(0)

@@ -1,12 +1,13 @@
-//! Editing and deleting task comments, for the web and MCP alike. It mirrors
-//! message edits (`crate::message_edits`, migration 0047): each command sets
-//! `aw.comment_command` to the one comment it changes, for its transaction
-//! only. An edit keeps the old and new versions in
-//! `work_item_comment_revisions`; a deletion blanks the comment and every
-//! revision but keeps its place in the task's history, with who deleted it.
+//! Task comments (C1.4): messages in the task's comments conversation
+//! (C1.3), posted through the one send pipeline (`discussion::post`) and
+//! edited and removed through the message commands (`message_edits`). The
+//! task's timeline lists each one in the order it came (an entry a trigger
+//! on messages writes, migration `20261117210100_comments_are_conversations`).
+//! A comment's id is its message's.
 //!
-//! Only the author edits a comment. The author, or a project owner or admin
-//! (a person), deletes it.
+//! Its author edits a comment; the author, or someone whose role moderates
+//! the conversation (a person), removes it. The routes and tools keep the
+//! shapes they had before comments were messages.
 
 use axum::{
     Json, Router,
@@ -19,23 +20,20 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    WorkItemCommentView, authorize_work_item, browser_actor, fetch_comment_actor_rows,
-    fetch_work_item_reference_rows, lock_project_membership, message_content_error,
+    WorkItemCommentView, authorize_task_comment, authorize_work_item, message_content_error,
     project_membership, timeline_entry_view,
 };
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::ActorView,
+    conversations::{ActorView, MessageCommandActor, threads::ThreadCreator},
+    discussion::{CommentBody, CommentPlace, SubjectKind},
     error::{ApiJson, ApiPath, AppError},
-    message_content::{MessageContent, MessageNode},
-    policy::{Action, Permission},
-    work_item_commands::{CommandActor, enqueue_update, record_audit},
+    idempotency::IdempotencyKey,
+    message_content::MessageContent,
+    message_edits::{self, Change, ChangeError, Refused},
+    policy::Action,
 };
-
-/// A comment takes at most this many versions, as messages do.
-pub(crate) const MAX_COMMENT_REVISION: i32 = 1000;
-const MAX_COMMENT_CHARACTERS: usize = 20_000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -49,25 +47,12 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-/// A comment locked for a change.
-#[derive(Debug, FromRow)]
-pub(crate) struct LockedComment {
-    pub(crate) id: Uuid,
-    pub(crate) project_id: Uuid,
-    pub(crate) work_item_id: Uuid,
-    pub(crate) author_actor_id: Uuid,
-    pub(crate) revision: i32,
-    pub(crate) content: serde_json::Value,
-    pub(crate) removed: bool,
-    pub(crate) task_archived: bool,
-}
-
 /// Why a change wasn't made. Each surface words these its own way.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CommentRefusal {
     /// Editing is for the comment's author only.
     NotAuthor,
-    /// Deleting someone else's comment takes a project owner or admin.
+    /// Removing someone else's comment takes a role that moderates here.
     NotModerator,
     Removed,
     /// The comment changed since it was read; carries the current revision.
@@ -76,424 +61,224 @@ pub(crate) enum CommentRefusal {
     TaskArchived,
 }
 
-/// Content a comment can be saved with: its mentions and task references
-/// checked against the project now.
-pub(crate) struct ResolvedComment {
-    pub(crate) content_json: serde_json::Value,
-    pub(crate) plain_text: String,
-    pub(crate) mention_nodes: Vec<(usize, Uuid)>,
-    pub(crate) references: Vec<(usize, Uuid)>,
-}
-
 pub(crate) struct CommentEdit {
     pub(crate) changed: bool,
     pub(crate) revision: i32,
 }
 
-/// Check `content` the way a new comment's is checked: people it mentions
-/// are enabled members, tasks it references are in the project.
-pub(crate) async fn resolve_comment_content(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    content: MessageContent,
-) -> Result<ResolvedComment, AppError> {
-    let mention_ids = content.mentioned_actor_ids();
-    let mention_rows = fetch_comment_actor_rows(transaction, project_id, &mention_ids).await?;
-    let handles = mention_rows
-        .iter()
-        .map(|actor| (actor.id, actor.handle.clone()))
-        .collect::<std::collections::HashMap<_, _>>();
-    let references = content.work_item_references();
-    let reference_ids = references
-        .iter()
-        .map(|(_, work_item_id)| *work_item_id)
-        .collect::<Vec<_>>();
-    let reference_rows =
-        fetch_work_item_reference_rows(transaction, project_id, &reference_ids).await?;
-    let labels = reference_rows
-        .iter()
-        .map(|item| (item.id, item.key.clone()))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mention_nodes = content
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| match node {
-            MessageNode::Mention { actor_id } => Some((index, *actor_id)),
-            MessageNode::Text { .. } | MessageNode::WorkItemRef { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    let (content, plain_text, _) = content
-        .validate_with_resources(
-            |actor_id| handles.get(&actor_id).cloned(),
-            |referenced_id| labels.get(&referenced_id).cloned(),
-        )
-        .map_err(message_content_error)?
-        .into_parts();
-    if plain_text.trim().is_empty() || plain_text.chars().count() > MAX_COMMENT_CHARACTERS {
-        return Err(AppError::Validation("comment content"));
+/// The comment posted, and its place in the task's timeline.
+pub(crate) struct PostedTaskComment {
+    pub(crate) message_id: Uuid,
+    pub(crate) sequence: i64,
+    pub(crate) replayed: bool,
+}
+
+/// Posts a comment on a task, for the web and agent tools alike. The
+/// caller has checked the poster may change the task. `reply_to` is a
+/// comment on the same task that isn't removed (else
+/// `Validation("replyToCommentId")`); `attachments` are the poster's
+/// unsent uploads for a comment on this task.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn post(
+    state: &AppState,
+    actor: MessageCommandActor,
+    creator: ThreadCreator,
+    work_item_id: Uuid,
+    content: serde_json::Value,
+    attachments: &[Uuid],
+    reply_to: Option<Uuid>,
+    key: IdempotencyKey,
+    audit: (&crate::work_item_commands::CommandActor, &'static str),
+) -> Result<PostedTaskComment, AppError> {
+    // The send pipeline audits a message sent with an MCP credential itself;
+    // every other poster (a browser session, a connected app's grant) gets
+    // the task's audit row here.
+    let audited_by_pipeline = actor.mcp_credential.is_some();
+    let posted = crate::discussion::post(
+        state,
+        actor,
+        creator,
+        SubjectKind::Task,
+        work_item_id,
+        CommentPlace::Stream,
+        key,
+        CommentBody::Content(content),
+        attachments,
+        reply_to,
+    )
+    .await
+    .map_err(|error| match error {
+        AppError::Refused {
+            field: "replyToMessageId",
+            ..
+        } => AppError::Validation("replyToCommentId"),
+        other => other,
+    })?;
+    let sequence = sqlx::query_scalar::<_, i64>(
+        "SELECT sequence FROM work_item_timeline_entries WHERE work_item_id = $1 AND message_id = $2",
+    )
+    .bind(work_item_id)
+    .bind(posted.message_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await?
+    .ok_or(AppError::Internal("task comment timeline entry"))?;
+    if !posted.replayed {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        task_changed(&mut transaction, work_item_id).await?;
+        // The audit row names the comment by id only, with the request id
+        // it came with.
+        if !audited_by_pipeline {
+            crate::work_item_commands::record_audit(
+                &mut transaction,
+                audit.0,
+                audit.1,
+                work_item_id,
+                serde_json::json!({ "commentId": posted.message_id }),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
     }
-    let content_json = serde_json::to_value(content)
-        .map_err(|_| AppError::Internal("serialize Work Item comment"))?;
-    Ok(ResolvedComment {
-        content_json,
-        plain_text,
-        mention_nodes,
-        references,
+    Ok(PostedTaskComment {
+        message_id: posted.message_id,
+        sequence,
+        replayed: posted.replayed,
     })
 }
 
-/// Lock one comment (and only it) for an edit or a deletion. None when it
-/// isn't on that task in that project.
-pub(crate) async fn lock_comment(
+/// Tells open boards and task pages that the task's timeline changed, as
+/// any change to the task does (`work_item.updated`).
+async fn task_changed(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
     work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<Option<LockedComment>, AppError> {
-    Ok(sqlx::query_as::<_, LockedComment>(
-        r#"
-        SELECT comment.id, comment.project_id, comment.work_item_id,
-               comment.author_actor_id, comment.revision, comment.content,
-               comment.removed_at IS NOT NULL AS removed,
-               item.archived_at IS NOT NULL AS task_archived
-        FROM work_item_comments comment
-        JOIN task_rows item
-          ON item.project_id = comment.project_id AND item.id = comment.work_item_id
-        WHERE comment.project_id = $1 AND comment.work_item_id = $2 AND comment.id = $3
-        FOR UPDATE OF comment
-        "#,
+) -> Result<(), AppError> {
+    let Some((project_id, version)) = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT project_id, version FROM work_items WHERE id = $1",
     )
-    .bind(project_id)
     .bind(work_item_id)
-    .bind(comment_id)
     .fetch_optional(&mut **transaction)
-    .await?)
+    .await?
+    else {
+        return Ok(());
+    };
+    crate::work_item_commands::enqueue_update(transaction, project_id, work_item_id, version).await
 }
 
-async fn allow_change(
+/// The task's comments conversation, and whether the task is archived.
+/// NotFound("comment") when the task has no comments.
+async fn task_comments(
     transaction: &mut Transaction<'_, Postgres>,
-    comment_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query("SELECT set_config('aw.comment_command', $1, true)")
-        .bind(comment_id.to_string())
-        .execute(&mut **transaction)
-        .await?;
-    Ok(())
-}
-
-async fn insert_projections(
-    transaction: &mut Transaction<'_, Postgres>,
-    locked: &LockedComment,
-    resolved: &ResolvedComment,
-) -> Result<(), AppError> {
-    insert_comment_projections(
-        transaction,
-        locked.project_id,
-        locked.work_item_id,
-        locked.id,
-        resolved,
+    work_item_id: Uuid,
+) -> Result<(Uuid, bool), AppError> {
+    let archived = sqlx::query_scalar::<_, bool>(
+        "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1",
     )
-    .await
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("comment"))?;
+    let comments = crate::conversations::threads::comments_of(transaction, "task", work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("comment"))?;
+    Ok((comments, archived))
 }
 
-/// Write a comment's mention and task-reference rows, which notifications
-/// and "Referenced in" read.
-pub(crate) async fn insert_comment_projections(
+fn refusal(error: ChangeError, change: Change) -> Result<CommentRefusal, AppError> {
+    match error {
+        ChangeError::App(error) => Err(error),
+        ChangeError::Refused(refused) => Ok(match refused {
+            Refused::NotYourMessage if change == Change::Remove => CommentRefusal::NotModerator,
+            Refused::NotYourMessage => CommentRefusal::NotAuthor,
+            Refused::RoleCannotWrite => return Err(AppError::Forbidden),
+            Refused::Removed => CommentRefusal::Removed,
+            Refused::Archived => CommentRefusal::TaskArchived,
+            Refused::RevisionMoved(current) => CommentRefusal::RevisionMoved(current),
+            Refused::TooManyEdits => CommentRefusal::TooManyEdits,
+        }),
+    }
+}
+
+/// Edits a comment on a task that isn't archived: the author only. The
+/// same text again changes nothing. Earlier versions stay in the message's
+/// revisions; mentions and references follow the new text.
+pub(crate) async fn edit(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
+    actor: &MessageCommandActor,
     work_item_id: Uuid,
     comment_id: Uuid,
-    resolved: &ResolvedComment,
-) -> Result<(), AppError> {
-    for (node_index, actor_id) in &resolved.mention_nodes {
-        sqlx::query(
-            "INSERT INTO work_item_comment_mentions (project_id, work_item_id, comment_id, actor_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(actor_id)
-        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut **transaction)
-        .await?;
-    }
-    for (node_index, referenced_id) in &resolved.references {
-        sqlx::query(
-            "INSERT INTO work_item_comment_references (project_id, source_work_item_id, comment_id, referenced_work_item_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(referenced_id)
-        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut **transaction)
-        .await?;
-    }
-    Ok(())
-}
-
-/// Edit a locked comment: the author only, while the task is open. The
-/// first edit keeps the original as revision 1; each edit adds the next.
-/// The same text again changes nothing.
-pub(crate) async fn apply_comment_edit(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    locked: &LockedComment,
-    resolved: ResolvedComment,
+    content: MessageContent,
     expected_revision: Option<i32>,
 ) -> Result<Result<CommentEdit, CommentRefusal>, AppError> {
+    let (comments, archived) = task_comments(transaction, work_item_id).await?;
+    let locked = match message_edits::lock_message_for_change(
+        transaction,
+        actor,
+        Some(comments),
+        comment_id,
+        Change::Edit,
+    )
+    .await
+    {
+        Ok(locked) => locked,
+        Err(ChangeError::App(AppError::NotFound(_))) => return Err(AppError::NotFound("comment")),
+        Err(error) => return refusal(error, Change::Edit).map(Err),
+    };
     if locked.removed {
         return Ok(Err(CommentRefusal::Removed));
     }
-    if locked.author_actor_id != actor.actor_id {
-        return Ok(Err(CommentRefusal::NotAuthor));
-    }
-    if locked.task_archived {
+    if archived {
         return Ok(Err(CommentRefusal::TaskArchived));
     }
-    if expected_revision.is_some_and(|expected| expected != locked.revision) {
-        return Ok(Err(CommentRefusal::RevisionMoved(locked.revision)));
+    match message_edits::apply_edit(transaction, &locked, actor, content, expected_revision).await {
+        Ok(edit) => {
+            if edit.changed {
+                task_changed(transaction, work_item_id).await?;
+            }
+            Ok(Ok(CommentEdit {
+                changed: edit.changed,
+                revision: edit
+                    .entry
+                    .message
+                    .as_ref()
+                    .map_or(locked.revision, |message| message.revision),
+            }))
+        }
+        Err(error) => refusal(error, Change::Edit).map(Err),
     }
-    if resolved.content_json == locked.content {
-        return Ok(Ok(CommentEdit {
-            changed: false,
-            revision: locked.revision,
-        }));
-    }
-    if locked.revision >= MAX_COMMENT_REVISION {
-        return Ok(Err(CommentRefusal::TooManyEdits));
-    }
-    allow_change(transaction, locked.id).await?;
-    if locked.revision == 1 {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_comment_revisions (
-                project_id, work_item_id, comment_id, revision, content, plain_text,
-                written_by_actor_id, via_oauth_grant_id, written_at
-            )
-            SELECT project_id, work_item_id, id, revision, content, plain_text,
-                   author_actor_id, via_oauth_grant_id, created_at
-            FROM work_item_comments
-            WHERE id = $1 AND revision = 1
-            ON CONFLICT (comment_id, revision) DO NOTHING
-            "#,
-        )
-        .bind(locked.id)
-        .execute(&mut **transaction)
-        .await?;
-    }
-    let next_revision = locked.revision + 1;
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_comment_revisions (
-            project_id, work_item_id, comment_id, revision, content, plain_text,
-            written_by_actor_id, via_oauth_grant_id, written_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, current_via_grant(), now())
-        "#,
-    )
-    .bind(locked.project_id)
-    .bind(locked.work_item_id)
-    .bind(locked.id)
-    .bind(next_revision)
-    .bind(&resolved.content_json)
-    .bind(&resolved.plain_text)
-    .bind(actor.actor_id)
-    .execute(&mut **transaction)
-    .await?;
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_item_comments
-        SET content = $3, plain_text = $4, revision = revision + 1, edited_at = now()
-        WHERE id = $1 AND revision = $2 AND removed_at IS NULL
-        "#,
-    )
-    .bind(locked.id)
-    .bind(locked.revision)
-    .bind(&resolved.content_json)
-    .bind(&resolved.plain_text)
-    .execute(&mut **transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal("edit a locked task comment"));
-    }
-    // Projections follow the new text: every row again, at its new place.
-    sqlx::query("DELETE FROM work_item_comment_mentions WHERE comment_id = $1")
-        .bind(locked.id)
-        .execute(&mut **transaction)
-        .await?;
-    sqlx::query("DELETE FROM work_item_comment_references WHERE comment_id = $1")
-        .bind(locked.id)
-        .execute(&mut **transaction)
-        .await?;
-    insert_projections(transaction, locked, &resolved).await?;
-
-    let version = sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
-        .bind(locked.work_item_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    // The update tells open task pages, and the notifier finds the edit by
-    // its time (newly mentioned people hear about it once).
-    enqueue_update(transaction, locked.project_id, locked.work_item_id, version).await?;
-    record_audit(
-        transaction,
-        actor,
-        "work_item.comment_edited",
-        locked.work_item_id,
-        serde_json::json!({"commentId": locked.id, "revision": next_revision}),
-    )
-    .await?;
-    Ok(Ok(CommentEdit {
-        changed: true,
-        revision: next_revision,
-    }))
 }
 
-/// Delete a locked comment for everyone: its text, every version's text,
-/// its mentions and task references and its files go, and the comment's
-/// place in the task's history says who deleted it. The author may delete
-/// their own comment; `moderator` (a project owner or admin, a person) may
-/// delete anyone's. Deleting it again changes nothing. Returns whether it
-/// was already deleted.
-pub(crate) async fn apply_comment_removal(
+/// Removes a comment for everyone: its text, every version's text, its
+/// mentions, references and files go, and its place in the task's history
+/// says who removed it. Returns whether it was already removed.
+pub(crate) async fn remove(
     transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    moderator: bool,
-    locked: &LockedComment,
+    actor: &MessageCommandActor,
+    work_item_id: Uuid,
+    comment_id: Uuid,
 ) -> Result<Result<bool, CommentRefusal>, AppError> {
-    let own = locked.author_actor_id == actor.actor_id;
-    if !own && !moderator {
-        return Ok(Err(CommentRefusal::NotModerator));
-    }
-    if locked.removed {
-        return Ok(Ok(true));
-    }
-    allow_change(transaction, locked.id).await?;
-    sqlx::query(
-        r#"
-        UPDATE work_item_comment_revisions
-        SET content = NULL, plain_text = NULL, redacted_at = now(), redacted_by_actor_id = $2
-        WHERE comment_id = $1 AND redacted_at IS NULL
-        "#,
-    )
-    .bind(locked.id)
-    .bind(actor.actor_id)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query("DELETE FROM work_item_comment_mentions WHERE comment_id = $1")
-        .bind(locked.id)
-        .execute(&mut **transaction)
-        .await?;
-    sqlx::query("DELETE FROM work_item_comment_references WHERE comment_id = $1")
-        .bind(locked.id)
-        .execute(&mut **transaction)
-        .await?;
-    crate::files::forget_comment_files(transaction, locked.id, actor.actor_id).await?;
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_item_comments
-        SET content = '{"version": 1, "nodes": []}'::jsonb, plain_text = '',
-            removed_at = now(), removed_by_actor_id = $2
-        WHERE id = $1 AND removed_at IS NULL
-        "#,
-    )
-    .bind(locked.id)
-    .bind(actor.actor_id)
-    .execute(&mut **transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal("delete a locked task comment"));
-    }
-    scrub_create_replays(transaction, locked).await?;
-    crate::notifications::forget_comment(transaction, locked.project_id, locked.id).await?;
-    let version = sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
-        .bind(locked.work_item_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    enqueue_update(transaction, locked.project_id, locked.work_item_id, version).await?;
-    record_audit(
+    let (comments, _) = task_comments(transaction, work_item_id).await?;
+    let locked = match message_edits::lock_message_for_change(
         transaction,
         actor,
-        "work_item.comment_deleted",
-        locked.work_item_id,
-        serde_json::json!({"commentId": locked.id, "ownComment": own}),
+        Some(comments),
+        comment_id,
+        Change::Remove,
     )
-    .await?;
-    Ok(Ok(false))
-}
-
-/// The stored replays of the comment's creation hold its text (the web's)
-/// or a hash of it (task_comment's): blank the text and swap the hash for
-/// one no request can match, so a retry with the old key is refused instead
-/// of posting the text again, and a database copy can't confirm a guess.
-async fn scrub_create_replays(
-    transaction: &mut Transaction<'_, Postgres>,
-    locked: &LockedComment,
-) -> Result<(), AppError> {
-    let tombstone = crate::idempotency::RequestHash::for_value(&MessageContent {
-        version: 1,
-        nodes: Vec::new(),
-    })?;
-    sqlx::query(
-        r#"
-        UPDATE idempotency_keys
-        SET request_hash = $3,
-            response_body = jsonb_set(
-                jsonb_set(
-                    jsonb_set(response_body, '{comment,content}', '{"version": 1, "nodes": []}'::jsonb),
-                    '{comment,plainText}', '""'::jsonb
-                ),
-                '{comment,mentionedActors}', '[]'::jsonb
-            )
-        WHERE scope = $1 AND response_body->'comment'->>'id' = $2
-        "#,
-    )
-    .bind(crate::idempotency::resource_bound_scope(
-        "work_items",
-        locked.work_item_id,
-        "comment_create",
-    )?)
-    .bind(locked.id.to_string())
-    .bind(tombstone.as_bytes().as_slice())
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE idempotency_keys
-        SET request_hash = $3
-        WHERE scope = $1 AND response_body->>'activityId' = $2
-        "#,
-    )
-    .bind(crate::idempotency::resource_bound_scope(
-        "mcp_work_items",
-        locked.work_item_id,
-        "post_update",
-    )?)
-    .bind(locked.id.to_string())
-    .bind(tombstone.as_bytes().as_slice())
-    .execute(&mut **transaction)
-    .await?;
-    // Replies to it (AWD-95) stored its first lines as their quote.
-    sqlx::query(
-        r#"
-        UPDATE idempotency_keys
-        SET response_body = jsonb_set(
-                jsonb_set(response_body, '{comment,replyTo,text}', 'null'::jsonb),
-                '{comment,replyTo,removed}', 'true'::jsonb
-            )
-        WHERE scope = $1 AND response_body->'comment'->'replyTo'->>'commentId' = $2
-        "#,
-    )
-    .bind(crate::idempotency::resource_bound_scope(
-        "work_items",
-        locked.work_item_id,
-        "comment_create",
-    )?)
-    .bind(locked.id.to_string())
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+    .await
+    {
+        Ok(locked) => locked,
+        Err(ChangeError::App(AppError::NotFound(_))) => return Err(AppError::NotFound("comment")),
+        Err(error) => return refusal(error, Change::Remove).map(Err),
+    };
+    match message_edits::apply_removal(transaction, &locked, actor).await {
+        Ok(removal) => {
+            if !removal.already_removed {
+                task_changed(transaction, work_item_id).await?;
+            }
+            Ok(Ok(removal.already_removed))
+        }
+        Err(error) => refusal(error, Change::Remove).map(Err),
+    }
 }
 
 /// One version of a comment, oldest first in a history.
@@ -542,9 +327,13 @@ pub(crate) async fn comment_revisions(
 ) -> Result<Option<CommentRevisionsView>, AppError> {
     let Some((revision, removed)) = sqlx::query_as::<_, (i32, bool)>(
         r#"
-        SELECT revision, removed_at IS NOT NULL
-        FROM work_item_comments
-        WHERE project_id = $1 AND work_item_id = $2 AND id = $3
+        -- visibility: a comment of a task the reader may see, which is the rule
+        SELECT message.revision, message.removed_at IS NOT NULL
+        FROM messages message
+        JOIN conversations place ON place.id = message.conversation_id
+        WHERE message.id = $3 AND message.project_id = $1
+          AND place.kind = 'comments' AND place.subject_kind = 'task'
+          AND place.subject_id = $2
         "#,
     )
     .bind(project_id)
@@ -562,18 +351,16 @@ pub(crate) async fn comment_revisions(
                membership.display_name, membership.handle,
                revision.written_at::text AS written_at,
                revision.redacted_at IS NOT NULL AS redacted
-        FROM work_item_comment_revisions revision
+        FROM message_revisions revision
         JOIN actors actor ON actor.id = revision.written_by_actor_id
         JOIN project_memberships membership
           ON membership.project_id = revision.project_id
          AND membership.actor_id = revision.written_by_actor_id
-        WHERE revision.project_id = $1 AND revision.work_item_id = $2
-          AND revision.comment_id = $3
+        WHERE revision.project_id = $1 AND revision.message_id = $2
         ORDER BY revision.revision
         "#,
     )
     .bind(project_id)
-    .bind(work_item_id)
     .bind(comment_id)
     .fetch_all(crate::db::scoped(pool))
     .await?
@@ -604,7 +391,7 @@ pub(crate) async fn comment_revisions(
 /// The comment as the task's timeline shows it now, to `viewer`: the tasks
 /// it references without their titles and statuses unless they may see
 /// tasks here (commenting takes only "edit tasks").
-async fn comment_view(
+pub(super) async fn comment_view(
     pool: &PgPool,
     viewer: Uuid,
     project_id: Uuid,
@@ -663,32 +450,28 @@ fn http_refusal(refusal: CommentRefusal) -> AppError {
     }
 }
 
-/// Locks the caller's membership, checks they may comment on the task now
-/// (WorkItemEdit, project not archived) and locks the comment.
-async fn lock_for_change(
+pub(crate) fn browser_message_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
+    MessageCommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: principal.actor_kind.clone(),
+        mcp_credential: None,
+        via_grant_id: None,
+        run_id: None,
+    }
+}
+
+/// Checks the caller may comment on the task now ("comment on tasks",
+/// project not archived). An archived task's comments can still be removed.
+async fn check_commenter(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &AuthenticatedActor,
     project_id: Uuid,
     work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<(LockedComment, bool), AppError> {
-    let membership = lock_project_membership(transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
+) -> Result<(), AppError> {
+    match authorize_task_comment(transaction, principal, project_id, work_item_id).await {
+        Ok(()) | Err(AppError::Conflict("work_item", "archived")) => Ok(()),
+        Err(error) => Err(error),
     }
-    let locked = lock_comment(transaction, project_id, work_item_id, comment_id)
-        .await?
-        .ok_or(AppError::NotFound("comment"))?;
-    let moderator = membership.may(Permission::ChannelsModerate)?;
-    Ok((locked, moderator))
 }
 
 async fn edit_comment_http(
@@ -701,21 +484,13 @@ async fn edit_comment_http(
     require_authenticated_write(&state, &headers, &principal).await?;
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (locked, _) = lock_for_change(
+    check_commenter(&mut transaction, &principal, project_id, work_item_id).await?;
+    let edited = edit(
         &mut transaction,
-        &principal,
-        project_id,
+        &browser_message_actor(&principal),
         work_item_id,
         comment_id,
-    )
-    .await?;
-    let resolved = resolve_comment_content(&mut transaction, project_id, content).await?;
-    let actor = browser_actor(&headers, &principal, project_id)?;
-    let edit = apply_comment_edit(
-        &mut transaction,
-        &actor,
-        &locked,
-        resolved,
+        content,
         request.expected_revision,
     )
     .await?
@@ -730,7 +505,7 @@ async fn edit_comment_http(
             comment_id,
         )
         .await?,
-        changed: edit.changed,
+        changed: edited.changed,
     }))
 }
 
@@ -742,18 +517,15 @@ async fn remove_comment_http(
 ) -> Result<Json<RemoveCommentResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (locked, moderator) = lock_for_change(
+    check_commenter(&mut transaction, &principal, project_id, work_item_id).await?;
+    let already_removed = remove(
         &mut transaction,
-        &principal,
-        project_id,
+        &browser_message_actor(&principal),
         work_item_id,
         comment_id,
     )
-    .await?;
-    let actor = browser_actor(&headers, &principal, project_id)?;
-    let already_removed = apply_comment_removal(&mut transaction, &actor, moderator, &locked)
-        .await?
-        .map_err(http_refusal)?;
+    .await?
+    .map_err(http_refusal)?;
     transaction.commit().await?;
     Ok(Json(RemoveCommentResponse {
         comment: comment_view(
@@ -789,14 +561,14 @@ async fn comment_revisions_http(
     ))
 }
 
-/// Whether `actor` may delete other people's comments in a project: their
-/// role there holds "moderate channels" (owners and admins by default),
-/// whatever kind of account holds it, and an app acting for them keeps it
-/// under its delegation limit (K1.16).
-pub(crate) async fn is_comment_moderator(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor_id: Uuid,
-    project_id: Uuid,
-) -> Result<bool, AppError> {
-    crate::conversations::may_notify_everyone(&mut **transaction, actor_id, project_id).await
+/// For the routes that post a comment: who posts, as the pipeline and the
+/// discussion's audit rows name them.
+pub(crate) fn browser_poster(
+    principal: &AuthenticatedActor,
+    headers: &HeaderMap,
+) -> Result<(MessageCommandActor, ThreadCreator), AppError> {
+    Ok((
+        browser_message_actor(principal),
+        ThreadCreator::browser(principal, headers)?,
+    ))
 }

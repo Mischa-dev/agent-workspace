@@ -1,6 +1,6 @@
 //! Dashboards (T1.32): a project's pages of tiles. A tile shows one of a
 //! collection's views (a chart, one number, the first few records) or a
-//! note. A dashboard is shared with everyone in the project, or personal:
+//! note, or a block of a sheet as a chart (C1.20). A dashboard is shared with everyone in the project, or personal:
 //! only its owner sees it. A tile names a view and never holds its data:
 //! whoever looks reads the view as themselves, so a tile over records they
 //! can't see says so, and the rest of the dashboard still shows.
@@ -39,6 +39,9 @@ pub enum TileKind {
     View,
     /// A note.
     Text,
+    /// A block of a sheet (a named range, or such as Summary!A1:B9) as a
+    /// chart: labels from its first column, numbers from its second.
+    Sheet,
 }
 
 /// A tile as stored.
@@ -55,6 +58,16 @@ pub struct Tile {
     pub view: Option<Uuid>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// A sheet tile's sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<Uuid>,
+    /// A sheet tile's block: a named range's name, or such as "A1:B9" or
+    /// "Summary!A1:B9".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub range: String,
+    /// A sheet tile's look; a bar chart when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<views::ChartStyle>,
     /// Columns of twelve it spans.
     pub width: u8,
     /// Rows it spans, 1 to 4.
@@ -321,6 +334,8 @@ pub enum Unseen {
     Gone,
     /// The records are tasks, which `reader`'s role can't see.
     Tasks,
+    /// A sheet tile's range is gone: its name was removed, or its cells.
+    Range,
 }
 
 /// A view tile's figures as `reader` sees them. `can_view_tasks` is whether
@@ -440,4 +455,109 @@ pub async fn figures(
             .collect();
     }
     Ok(Ok(figures))
+}
+
+/// The most bars, points or slices a sheet tile shows.
+pub const SHEET_TILE_GROUPS: usize = 50;
+
+fn style_name(style: views::ChartStyle) -> &'static str {
+    match style {
+        views::ChartStyle::Bar => "bar",
+        views::ChartStyle::Line => "line",
+        views::ChartStyle::Donut => "donut",
+        views::ChartStyle::Number => "number",
+    }
+}
+
+/// A sheet tile's figures as `reader` sees them (C1.20): each row of the
+/// block is a label (its first column) and a number (its second; the first
+/// when there's one column). A first row whose number is text names the
+/// columns. Rows with the same label add up; rows without a number are
+/// left out.
+pub async fn sheet_figures(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    tile: &Tile,
+    reader: Uuid,
+) -> Result<Result<Figures, Unseen>, AppError> {
+    use crate::sheets::{engine::Value as Cell, ranges, text_of};
+    let Some(sheet_id) = tile.sheet else {
+        return Ok(Err(Unseen::Gone));
+    };
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sheets WHERE id = $1 AND project_id = $2 AND archived_at IS NULL \
+           AND subject_visible_to('sheet', id, $3)",
+    )
+    .bind(sheet_id)
+    .bind(project_id)
+    .bind(reader)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(sheet_name) = name else {
+        return Ok(Err(Unseen::Gone));
+    };
+    let Some(located) = ranges::resolve(&mut *connection, sheet_id, &tile.range).await? else {
+        return Ok(Err(Unseen::Range));
+    };
+    let block = ranges::read_range(&mut *connection, located.tab_id, located.range).await?;
+    let value_column = usize::from(block.rows.first().is_some_and(|row| row.len() > 1));
+    let number = |row: &[Cell]| match row.get(value_column) {
+        Some(Cell::Number(number)) => Some(*number),
+        _ => None,
+    };
+    let headed = block.rows.first().is_some_and(|row| {
+        matches!(row.get(value_column), Some(Cell::Text(_)))
+            && block.rows.iter().skip(1).any(|row| number(row).is_some())
+    });
+    let header = headed
+        .then(|| block.rows[0].get(value_column).map(text_of))
+        .flatten()
+        .filter(|header| !header.trim().is_empty());
+    let mut groups: Vec<FigureGroup> = Vec::new();
+    let mut total = 0;
+    let mut sum = 0.0;
+    for (index, row) in block.rows.iter().enumerate().skip(usize::from(headed)) {
+        let Some(value) = number(row) else {
+            continue;
+        };
+        let label = if value_column == 0 {
+            format!(
+                "Row {}",
+                located.range.rows.0 + i32::try_from(index).unwrap_or(0)
+            )
+        } else {
+            row.first()
+                .map(text_of)
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        total += 1;
+        sum += value;
+        if let Some(group) = groups.iter_mut().find(|group| group.name == label) {
+            group.count += 1;
+            group.value = Some(group.value.unwrap_or(0.0) + value);
+        } else if groups.len() < SHEET_TILE_GROUPS {
+            groups.push(FigureGroup {
+                key: label.clone(),
+                name: label,
+                color: None,
+                count: 1,
+                value: Some(value),
+            });
+        }
+    }
+    Ok(Ok(Figures {
+        view_type: "chart".to_owned(),
+        view_name: located
+            .name
+            .unwrap_or_else(|| format!("{}!{}", located.tab, located.range.name())),
+        collection_name: sheet_name,
+        total,
+        value: Some(sum),
+        style: Some(style_name(tile.style.unwrap_or_default()).to_owned()),
+        measure: Some(format!("sum of {}", header.as_deref().unwrap_or("values"))),
+        groups,
+        records: Vec::new(),
+    }))
 }

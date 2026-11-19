@@ -59,6 +59,7 @@ import {
   type Page,
   type PageRevision,
   type PageSummary,
+  type SavedPage,
   workspacePagesSpace,
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
@@ -335,6 +336,11 @@ export function PageDetailPage() {
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
+/** A page shown as a tab on a channel (C1.26), in the channel's own frame. */
+export function PageInChannel({ pageId, project }: { pageId: string; project: Project }) {
+  return <PageDetail key={pageId} pageId={pageId} project={project} />
+}
+
 type Viewing = { version: number; title: string; body: string }
 
 function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
@@ -357,6 +363,8 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   const [restoring, setRestoring] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const canEdit = Boolean(pages.data?.canEdit)
+  // A role that only suggests writes in the same editor; the save waits as a suggestion.
+  const suggestOnly = !canEdit && Boolean(pages.data?.canSuggest)
   const experience = useProjectExperience(projectId)
   const showsDiscussion = experience.shows('page.comments')
   const discussion = useQuery({
@@ -455,6 +463,10 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
                     Edit
                   </Button>
                 )
+              ) : suggestOnly && !current.archived ? (
+                <Button icon="pencil" onClick={() => setEditing(true)}>
+                  Suggest edits
+                </Button>
               ) : null}
             </>
           )
@@ -477,17 +489,23 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
           Agents read this page when it fits their work: {current.skillDescription}
         </Banner>
       ) : null}
-      {editing && canEdit ? (
+      {editing && (canEdit || suggestOnly) ? (
         <PageEditor
           onCancel={() => setEditing(false)}
           onSaved={async (saved) => {
             await refresh(saved)
             setEditing(false)
-            showToast({ title: 'Page saved' })
+            if (saved.suggestionId) {
+              await queryClient.invalidateQueries({ queryKey: discussionKey(projectId, pageId) })
+              showToast({ title: 'Suggestion sent', description: 'Someone who edits this page can accept it.' })
+            } else {
+              showToast({ title: 'Page saved' })
+            }
           }}
           page={current}
           projectId={projectId}
           space={project.kind === 'workspace'}
+          suggesting={suggestOnly}
         />
       ) : viewing ? (
         <div className="aw-memory__viewing" ref={viewer} tabIndex={-1}>
@@ -591,12 +609,15 @@ function PageEditor({
   page,
   projectId,
   space,
+  suggesting = false,
 }: {
   onCancel: () => void
-  onSaved: (page: Page) => Promise<void>
+  onSaved: (page: SavedPage) => Promise<void>
   page: Page
   projectId: string
   space?: boolean
+  /** Your role only suggests: the title and settings stay as they are. */
+  suggesting?: boolean
 }) {
   // The version this edit started from, kept even when the page refetches
   // underneath, so a save can't quietly replace someone else's newer one.
@@ -693,7 +714,13 @@ function PageEditor({
         </Banner>
       ) : null}
       {error && !newer ? <Banner tone="danger">{error}</Banner> : null}
-      <TextField label="Title" maxLength={200} onChange={(event) => setTitle(event.target.value)} value={title} />
+      {suggesting ? (
+        <Banner tone="info" title="You’re suggesting changes.">
+          Someone who edits this page accepts or declines them.
+        </Banner>
+      ) : (
+        <TextField label="Title" maxLength={200} onChange={(event) => setTitle(event.target.value)} value={title} />
+      )}
       <MarkdownEditor
         hint="Markdown: headings, lists, - [ ] checklists, ``` code, links. Task keys like AWD-12 link to the task."
         label="Page"
@@ -701,7 +728,7 @@ function PageEditor({
         rows={20}
         value={body}
       />
-      {space ? null : (
+      {space || suggesting ? null : (
         <Checkbox
           checked={guide}
           description="The guide is what people and agents read first in this project."
@@ -709,27 +736,31 @@ function PageEditor({
           onChange={setGuide}
         />
       )}
-      <Checkbox
-        checked={isTemplate}
-        description="New pages can start from a copy of it, with {{date}}, {{author}} and {{project}} filled in."
-        label="Use it as a template"
-        onChange={setIsTemplate}
-      />
-      <Checkbox
-        checked={skill}
-        description="Agents see the list of skills in a project and follow one when its description fits their work."
-        label="Agents can use this as a skill"
-        onChange={setSkill}
-      />
-      {skill ? (
-        <TextField
-          hint="One line, starting with when: “Use when deploying the web app.”"
-          label="When agents should use it"
-          maxLength={500}
-          onChange={(event) => setSkillDescription(event.target.value)}
-          value={skillDescription}
-        />
-      ) : null}
+      {suggesting ? null : (
+        <>
+          <Checkbox
+            checked={isTemplate}
+            description="New pages can start from a copy of it, with {{date}}, {{author}} and {{project}} filled in."
+            label="Use it as a template"
+            onChange={setIsTemplate}
+          />
+          <Checkbox
+            checked={skill}
+            description="Agents see the list of skills in a project and follow one when its description fits their work."
+            label="Agents can use this as a skill"
+            onChange={setSkill}
+          />
+          {skill ? (
+            <TextField
+              hint="One line, starting with when: “Use when deploying the web app.”"
+              label="When agents should use it"
+              maxLength={500}
+              onChange={(event) => setSkillDescription(event.target.value)}
+              value={skillDescription}
+            />
+          ) : null}
+        </>
+      )}
       <TextField label="What changed (optional)" maxLength={500} onChange={(event) => setNote(event.target.value)} value={note} />
       <div className="aw-form__actions">
         <Button onClick={() => (dirty ? setDiscarding(true) : onCancel())} variant="secondary">

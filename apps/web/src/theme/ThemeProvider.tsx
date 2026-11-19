@@ -11,6 +11,7 @@ import {
   type AppearancePreferences,
 } from './preferences'
 import { ALL_SLOTS, DERIVED_SLOTS, isClassicPreset, loadClassicThemes, themeProperties, type ThemePreset } from './slots'
+import { applyDirectionPreview } from './directions'
 import { ThemeContext, type ThemeContextValue } from './themeContext'
 import { syncThemeColor } from './themeColor'
 
@@ -29,6 +30,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // A preview shows the preset as it ships; the saved choice and its custom colors stay as they are.
   const shownPreset = previewPreset ?? preset
   const shownOverrides = previewPreset ? NO_OVERRIDES : preferences.overrides
+
+  // W1.40: a visual direction previewed for the owner's pick, if one was asked for.
+  useEffect(applyDirectionPreview, [])
 
   useEffect(() => {
     const query = window.matchMedia?.('(prefers-color-scheme: dark)')

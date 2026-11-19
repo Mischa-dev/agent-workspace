@@ -103,6 +103,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/direct",
     "/api/v1/events",
     "/api/v1/events/catalogue",
+    "/api/v1/files/{id}",
     "/api/v1/files/{id}/content",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
@@ -1848,6 +1849,12 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ]
     };
     cases.push(case(
+        "/api/v1/files/{id}",
+        files(a, ""),
+        files(b, ""),
+        vec![],
+    ));
+    cases.push(case(
         "/api/v1/files/{id}/content",
         [files(a, "/content"), files(a, "/content?download=1")].concat(),
         files(b, "/content"),
@@ -2035,11 +2042,13 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_profile_list",
     "agent_template_list",
     "ai_suggestions_list",
+    "automation_history",
     "automation_list",
-    "automation_runs",
-    "briefing",
+    "briefing_get",
     "bug_report_link_list",
+    "change_list",
     "connection_list",
+    "proposal_list",
     "connection_delivery_list",
     "schedule_list",
     "conversation_list",
@@ -2047,7 +2056,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "conversation_read",
     "credential_list",
     "decision_list",
-    "dependency_graph",
+    "dependency_graph_get",
     "environment_list",
     "event_kind_list",
     "event_list",
@@ -2058,6 +2067,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "history_list",
     "history_show",
     "invite_link_list",
+    "job_get",
     "collection_list",
     "collection_describe",
     "formula_preview",
@@ -2065,6 +2075,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "record_query",
     "sheet_list",
     "sheet_read",
+    "sheet_search",
+    "sheet_view_list",
     "host_list",
     "account_joinable_list",
     "agent_offer_list",
@@ -2080,6 +2092,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "launch_list",
     "message_history",
     "conversation_member_list",
+    "conversation_task_list",
+    "conversation_file_list",
+    "conversation_tab_list",
     "channel_list",
     "channel_get",
     "message_draft_list",
@@ -2092,14 +2107,16 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "module_list",
     "module_open",
     "my_permissions",
-    "my_work",
+    "my_work_get",
     "notification_list",
+    "directory_list",
     "notification_keyword_list",
     "sidebar_list",
     "profile_get",
     "profile_avatar_list",
     "group_list",
     "saved_search_list",
+    "inbox_view_list",
     "place_search",
     "dm_standing_get",
     "account_block_list",
@@ -2115,9 +2132,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "people_search",
     "project_export",
     "project_members",
-    "project_open",
+    "project_get",
     "project_template_list",
-    "projects_list",
+    "project_list",
     "pull_request_get",
     "pull_request_list",
     "repository_get",
@@ -2131,7 +2148,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "run_steps",
     "run_usage",
     "agent_usage_list",
-    "search",
+    "workspace_search",
     "settings_get",
     "space_list",
     "space_open",
@@ -2140,7 +2157,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "skill_get",
     "skill_list",
     "task_list",
-    "task_open",
+    "task_get",
     "task_ready_list",
     "template_list",
     "thing_open",
@@ -2198,18 +2215,18 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     };
     vec![
         case(
-            "briefing",
+            "briefing_get",
             vec![json!({}), json!({"projectId": "WORK"})],
             vec![json!({"projectId": b.project})],
             vec![],
         ),
         case(
-            "projects_list",
+            "project_list",
             vec![json!({}), json!({"includeArchived": true})],
             vec![],
             vec![],
         ),
-        by_project("project_open"),
+        by_project("project_get"),
         // K4.7: another workspace's spaces are out of reach.
         case(
             "space_list",
@@ -2415,7 +2432,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("milestone_list"),
         by_project("task_ready_list"),
-        by_project("dependency_graph"),
+        by_project("dependency_graph_get"),
         case(
             "ai_suggestions_list",
             vec![
@@ -2447,12 +2464,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("automation_list"),
         by_project("bug_report_link_list"),
         case(
-            "automation_runs",
+            "automation_history",
             vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
             vec![
                 json!({"projectId": b.project, "ruleId": b.rule.to_string()}),
                 json!({"projectId": a.project, "ruleId": b.rule.to_string()}),
             ],
+            vec![],
+        ),
+        // K2.21: a long call's answer is its caller's alone.
+        case(
+            "job_get",
+            vec![json!({"jobId": a.job.to_string()})],
+            vec![json!({"jobId": b.job.to_string()})],
             vec![],
         ),
         // K4.26: another workspace's invitation links are out of reach.
@@ -2554,7 +2578,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("template_list"),
         by_project("project_export"),
         case(
-            "my_work",
+            "my_work_get",
             vec![json!({}), json!({"projectId": "WORK"})],
             vec![json!({"projectId": b.project})],
             vec![],
@@ -2563,6 +2587,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("module_list"),
         by_project("package_list"),
         by_project("agent_template_list"),
+        // A's directory lists its own URL list and never B's.
+        case(
+            "directory_list",
+            vec![json!({})],
+            vec![],
+            vec![json!({}), json!({"query": "lists"})],
+        ),
         case(
             "package_preview",
             vec![json!({"package": {
@@ -2682,6 +2713,30 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "conversation_tab_list",
+            vec![json!({"conversationId": a.channel})],
+            vec![json!({"conversationId": b.channel})],
+            vec![],
+        ),
+        case(
+            "conversation_file_list",
+            vec![json!({"conversationId": a.dm})],
+            vec![
+                json!({"conversationId": b.dm}),
+                json!({"conversationId": b.channel}),
+            ],
+            vec![],
+        ),
+        case(
+            "conversation_task_list",
+            vec![json!({"conversationId": a.channel})],
+            vec![
+                json!({"conversationId": b.channel}),
+                json!({"conversationId": b.dm}),
+            ],
+            vec![],
+        ),
+        case(
             "agent_list",
             vec![
                 json!({}),
@@ -2785,6 +2840,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"workspace": b.organization})],
             vec![],
         ),
+        // C2.11: saved inbox views stay in their workspace.
+        case(
+            "inbox_view_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         case(
             "place_search",
             vec![json!({"q": "a"})],
@@ -2832,7 +2894,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
         ),
         case(
-            "task_open",
+            "task_get",
             vec![
                 json!({"taskId": "WORK-1"}),
                 json!({"taskId": a.task.to_string()}),
@@ -2845,7 +2907,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "search",
+            "workspace_search",
             vec![
                 json!({"query": "launch"}),
                 json!({"query": "launch", "projectId": "WORK"}),
@@ -2894,6 +2956,21 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "page_suggestions",
             vec![json!({"pageId": a.page, "includeDecided": true})],
             vec![json!({"pageId": b.page, "includeDecided": true})],
+            vec![],
+        ),
+        case(
+            "change_list",
+            vec![json!({"thingKind": "page", "thingId": a.page})],
+            vec![json!({"thingKind": "page", "thingId": b.page})],
+            vec![],
+        ),
+        case(
+            "proposal_list",
+            vec![
+                json!({"thingKind": "page", "thingId": a.page, "includeDecided": true}),
+                json!({}),
+            ],
+            vec![json!({"thingKind": "page", "thingId": b.page, "includeDecided": true})],
             vec![],
         ),
         case(
@@ -3078,6 +3155,18 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"thing": b.page, "version": 1})],
             vec![],
         ),
+        case(
+            "sheet_search",
+            vec![json!({"sheetId": a.sheet, "query": "Rent"})],
+            vec![json!({"sheetId": b.sheet, "query": "Rent"})],
+            vec![],
+        ),
+        case(
+            "sheet_view_list",
+            vec![json!({"sheetId": a.sheet})],
+            vec![json!({"sheetId": b.sheet})],
+            vec![],
+        ),
     ]
 }
 
@@ -3210,23 +3299,41 @@ pub(super) async fn mcp_post(
     session: &str,
     payload: Value,
 ) -> (StatusCode, String) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(MCP_PATH)
-                .header(header::HOST, "127.0.0.1")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::ACCEPT, "application/json, text/event-stream")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header("mcp-session-id", session)
-                .header("mcp-protocol-version", "2025-06-18")
-                .body(Body::from(serde_json::to_vec(&payload).expect("JSON")))
-                .expect("MCP request"),
-        )
-        .await
-        .expect("MCP response");
+    // The sweeps make more calls with one credential than its per-minute
+    // budget holds; a refused call waits as long as it's told and goes
+    // again, as a real client would.
+    let mut attempts = 0;
+    let response = loop {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(header::HOST, "127.0.0.1")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::ACCEPT, "application/json, text/event-stream")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("mcp-session-id", session)
+                    .header("mcp-protocol-version", "2025-06-18")
+                    .body(Body::from(serde_json::to_vec(&payload).expect("JSON")))
+                    .expect("MCP request"),
+            )
+            .await
+            .expect("MCP response");
+        attempts += 1;
+        if response.status() != StatusCode::TOO_MANY_REQUESTS || attempts > 3 {
+            break response;
+        }
+        let wait = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5)
+            .clamp(1, 65);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+    };
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 8_000_000)
         .await

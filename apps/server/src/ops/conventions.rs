@@ -28,6 +28,10 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "forward",
             "report",
             "install",
+            // A page made from other things (messages, a thread, blocks).
+            "make",
+            // A change kept for someone who edits the thing to decide (C1.11).
+            "propose",
         ],
     ),
     (
@@ -35,10 +39,12 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
         &[
             "update",
             "update_many",
+            "link_many",
             "update_blocks",
             "update_elements",
             "archive",
             "restore",
+            "undo",
             "delete",
             "move",
             "reorder",
@@ -59,6 +65,11 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            // A group's agents take more turns (K2.8).
+            "continue",
+            // An agent passes on, or a person stops, a reply request (K2.9).
+            "pass",
+            "stop",
             // Something already sent goes out again, unchanged (a webhook delivery).
             "redeliver",
             // A harmless signed ping, to check an address answers.
@@ -72,6 +83,14 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "revoke",
             // A credential gets a new value; the old one lapses (K1.23).
             "rotate",
+            // An environment is tried and the result recorded (K2.18).
+            "check",
+            // A repository's copy on the server is made or brought up to
+            // date; a pull request is read again from its code host, or
+            // merged there (K2.18).
+            "prepare",
+            "refresh",
+            "merge",
             // An account stops acting and hearing until resumed (A2.10).
             "pause",
             "resume",
