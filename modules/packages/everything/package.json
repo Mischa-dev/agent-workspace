@@ -1,0 +1,17 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "everything",
+  "version": "1.0.0",
+  "name": "Everything",
+  "description": "Every module on: chat, projects, tasks, pages, whiteboards, collections, sheets, runs, code and automations. Change anything later.",
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": []
+      }
+    }
+  ]
+}

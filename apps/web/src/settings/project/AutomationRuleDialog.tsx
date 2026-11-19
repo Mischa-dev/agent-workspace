@@ -786,7 +786,7 @@ function ActionFields({
       )
     case 'run_operation': {
       // Other operations are made by an agent or a script
-      // (automation_write); the builder for those comes with the operation
+      // (automation_create); the builder for those comes with the operation
       // catalogue.
       const title = typeof action.input.title === 'string' ? action.input.title : ''
       if (action.operation !== 'task_create') return <p className="aw-quiet">Runs {action.operation || 'an operation'} with the input it was saved with.</p>

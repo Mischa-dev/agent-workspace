@@ -60,9 +60,9 @@ fn to_value(value: impl Serialize) -> Result<Value, AppError> {
 // ---------------------------------------------------------------------------
 // My work
 
-#[derive(Clone, Debug, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MyWorkArguments {
+pub(crate) struct MyWorkArguments {
     /// Only this project (ID, link or key). Leave it out for all of yours.
     /// The MCP middleware scopes the call to it.
     #[allow(dead_code)]
@@ -71,7 +71,7 @@ pub(super) struct MyWorkArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MyWorkValue {
+pub(crate) struct MyWorkValue {
     /// Tasks assigned to you that aren't finished, due first.
     pub assigned: Value,
     /// Tasks you, or agents you set up, are working on now.
@@ -83,7 +83,7 @@ pub(super) struct MyWorkValue {
     pub updates: Value,
 }
 
-pub(super) async fn my_work(
+pub(crate) async fn my_work(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: MyWorkArguments,
@@ -120,16 +120,16 @@ pub(super) async fn my_work(
 // ---------------------------------------------------------------------------
 // Templates
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateListArguments {
+pub(crate) struct TemplateListArguments {
     /// The project's ID, link or key.
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TemplateListValue {
+pub(crate) struct TemplateListValue {
     /// Each template: id, name, title, description, type, priority, labels,
     /// acceptanceCriteria, subtasks, estimate.
     pub templates: Vec<Value>,
@@ -138,7 +138,7 @@ pub(super) struct TemplateListValue {
     pub recurring: Vec<Value>,
 }
 
-pub(super) async fn template_list(
+pub(crate) async fn template_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TemplateListArguments,
@@ -169,18 +169,18 @@ pub(super) async fn template_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "template_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateSubtask {
+pub(crate) struct TemplateSubtask {
     /// One line, up to 240 characters.
     pub title: String,
     /// Up to 5,000 characters of Markdown.
     pub description: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateWriteArguments {
+pub(crate) struct TemplateWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The template to change: its name or ID (see template_list). Leave it
@@ -219,7 +219,7 @@ pub(super) struct TemplateWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TemplateWriteValue {
+pub(crate) struct TemplateWriteValue {
     /// The template as it is now, as template_list shows it, with its
     /// version.
     pub template: Value,
@@ -289,7 +289,7 @@ async fn find_type(
     )))
 }
 
-pub(super) async fn template_write(
+pub(crate) async fn template_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TemplateWriteArguments,
@@ -458,9 +458,9 @@ pub(super) async fn template_write(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "template_write"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RecurringWriteArguments {
+pub(crate) struct RecurringWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The schedule to change, pause or delete: its ID from
@@ -502,7 +502,7 @@ pub(super) struct RecurringWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RecurringWriteValue {
+pub(crate) struct RecurringWriteValue {
     /// The schedule as it is now, as template_list shows it: its next run,
     /// whether it's paused and why, who it acts as, and its version.
     /// Absent once it's deleted.
@@ -534,8 +534,20 @@ fn recurring_outcome<T>(
     }
 }
 
-pub(super) async fn recurring_write(
+pub(crate) async fn recurring_write(
     state: &AppState,
+    principal: &McpPrincipal,
+    arguments: RecurringWriteArguments,
+) -> ToolResult<RecurringWriteValue> {
+    recurring_write_in(state, None, principal, arguments).await
+}
+
+/// `recurring_write`, in `outer` when given (an operation's transaction,
+/// which commits the schedule with the call's request id); otherwise in a
+/// transaction of its own.
+pub(crate) async fn recurring_write_in(
+    state: &AppState,
+    outer: Option<&mut sqlx::Transaction<'static, sqlx::Postgres>>,
     principal: &McpPrincipal,
     arguments: RecurringWriteArguments,
 ) -> ToolResult<RecurringWriteValue> {
@@ -601,9 +613,14 @@ pub(super) async fn recurring_write(
         _ => {}
     }
     let project_id = principal.project_id;
+    let mut own = None;
+    let mut commit = false;
     let result = async {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        match check_access_for(&mut transaction, principal, Action::WorkItemCreate).await? {
+        let transaction: &mut sqlx::Transaction<'static, sqlx::Postgres> = match outer {
+            Some(transaction) => transaction,
+            None => own.insert(crate::db::scoped_tx(&state.pool).await?),
+        };
+        match check_access_for(&mut *transaction, principal, Action::WorkItemCreate).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
             WriteAccess::NotFound => return Ok(ToolResult::not_found("That project")),
@@ -618,7 +635,7 @@ pub(super) async fn recurring_write(
         }
         let current = match recurring_id {
             None => None,
-            Some(id) => match templates::list_recurring(&mut transaction, project_id)
+            Some(id) => match templates::list_recurring(&mut *transaction, project_id)
                 .await?
                 .into_iter()
                 .find(|row| row.id == id)
@@ -630,7 +647,7 @@ pub(super) async fn recurring_write(
         let actor = command_actor(principal, project_id);
         if let (Some(current), true) = (&current, arguments.delete == Some(true)) {
             let outcome = templates::delete_recurring_in(
-                &mut transaction,
+                &mut *transaction,
                 &actor,
                 project_id,
                 current.id,
@@ -640,7 +657,7 @@ pub(super) async fn recurring_write(
             if let Err(refusal) = recurring_outcome(outcome) {
                 return Ok(refusal);
             }
-            transaction.commit().await?;
+            commit = true;
             return Ok(ToolResult::ok(RecurringWriteValue {
                 recurring: None,
                 created: false,
@@ -650,7 +667,7 @@ pub(super) async fn recurring_write(
         let assignee = match arguments.assignee.as_deref() {
             None => None,
             Some(value) => {
-                match resolve_assignee(&mut transaction, principal, project_id, value).await? {
+                match resolve_assignee(&mut *transaction, principal, project_id, value).await? {
                     Ok(actor) => Some(actor),
                     Err(problem) => return Ok(ToolResult::invalid("assignee", problem.message())),
                 }
@@ -708,7 +725,7 @@ pub(super) async fn recurring_write(
         let (outcome, created) = match &current {
             None => {
                 let Some(template_id) = find_template(
-                    &mut transaction,
+                    &mut *transaction,
                     project_id,
                     arguments.template.as_deref().unwrap_or_default(),
                 )
@@ -717,7 +734,7 @@ pub(super) async fn recurring_write(
                     return Ok(ToolResult::not_found("That template (see template_list)"));
                 };
                 let outcome = templates::create_recurring_in(
-                    &mut transaction,
+                    &mut *transaction,
                     &actor,
                     project_id,
                     principal.actor_id,
@@ -733,7 +750,7 @@ pub(super) async fn recurring_write(
             }
             Some(current) => {
                 let outcome = templates::change_recurring_in(
-                    &mut transaction,
+                    &mut *transaction,
                     &actor,
                     project_id,
                     current.id,
@@ -758,7 +775,7 @@ pub(super) async fn recurring_write(
             Ok(view) => view,
             Err(refusal) => return Ok(refusal),
         };
-        transaction.commit().await?;
+        commit = true;
         Ok::<_, AppError>(ToolResult::ok(RecurringWriteValue {
             recurring: Some(to_value(view)?),
             created,
@@ -766,12 +783,23 @@ pub(super) async fn recurring_write(
         }))
     }
     .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "recurring_write"))
+    match result {
+        Ok(answer) => {
+            if commit
+                && let Some(own) = own
+                && let Err(error) = own.commit().await
+            {
+                return ToolResult::from_error(error.into(), "recurring_write");
+            }
+            answer
+        }
+        Err(error) => ToolResult::from_error(error, "recurring_write"),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskFromTemplateArguments {
+pub(crate) struct TaskFromTemplateArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// The template's name or ID (see template_list).
@@ -793,7 +821,7 @@ pub(super) struct TaskFromTemplateArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskFromTemplateValue {
+pub(crate) struct TaskFromTemplateValue {
     pub id: String,
     pub key: String,
     pub subtasks: usize,
@@ -805,7 +833,7 @@ pub(super) struct TaskFromTemplateValue {
     pub idempotent_replay: bool,
 }
 
-pub(super) async fn task_from_template(
+pub(crate) async fn task_from_template(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskFromTemplateArguments,
@@ -961,9 +989,9 @@ pub(super) async fn task_from_template(
 // ---------------------------------------------------------------------------
 // Imports and exports
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskImportArguments {
+pub(crate) struct TaskImportArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// An import you started earlier, to read again or commit. Leave it out
@@ -993,7 +1021,7 @@ pub(super) struct TaskImportArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskImportValue {
+pub(crate) struct TaskImportValue {
     /// The import: id, status (fetching, draft, queued, running, completed,
     /// failed, canceled), counts, and while it's a draft a preview of what
     /// each row becomes.
@@ -1001,7 +1029,7 @@ pub(super) struct TaskImportValue {
     pub next_step: String,
 }
 
-pub(super) async fn task_import(
+pub(crate) async fn task_import(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskImportArguments,
@@ -1108,7 +1136,7 @@ pub(super) async fn task_import(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectExportArguments {
+pub(crate) struct ProjectExportArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// Include archived tasks.
@@ -1117,7 +1145,7 @@ pub(super) struct ProjectExportArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectExportValue {
+pub(crate) struct ProjectExportValue {
     /// The project's statuses, types, labels, milestones and tasks (at
     /// most 500 here; use the download links for everything).
     pub export: Value,
@@ -1127,7 +1155,7 @@ pub(super) struct ProjectExportValue {
 
 const MCP_EXPORT_TASKS: usize = 500;
 
-pub(super) async fn project_export(
+pub(crate) async fn project_export(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectExportArguments,

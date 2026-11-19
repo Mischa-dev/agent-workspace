@@ -50,8 +50,8 @@ fn keys(rows: &Value) -> Vec<String> {
 
 /// Where each problem is and what it's about.
 fn problems(result: &Value) -> Vec<(u64, String)> {
-    assert_eq!(result["outcome"], "rejected", "{result}");
-    result["problems"]
+    assert_eq!(result["code"], "rejected", "{result}");
+    result["details"]["current"]["problems"]
         .as_array()
         .unwrap_or_else(|| panic!("no problems: {result}"))
         .iter()
@@ -148,7 +148,15 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let existing = call(
         "task_create",
@@ -316,7 +324,9 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
             (3, "parentRef".to_owned())
         ]
     );
-    let listed = rejected["problems"].as_array().expect("problems");
+    let listed = rejected["details"]["current"]["problems"]
+        .as_array()
+        .expect("problems");
     assert!(
         message(&listed[0]).contains("Statuses: Backlog, Ready"),
         "{rejected}"
@@ -368,7 +378,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     });
     let refused = call("task_create_many", unlabeled.clone()).await;
     assert_eq!(problems(&refused), [(0, "labels".to_owned())]);
-    let says = message(&refused["problems"][0]);
+    let says = message(&refused["details"]["current"]["problems"][0]);
     assert!(
         says.contains("No label called \"Mobile\"") && says.contains("createMissingLabels"),
         "{refused}"
@@ -434,7 +444,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     .await;
     assert_eq!(problems(&deep), [(20, "parentRef".to_owned())]);
     assert!(
-        message(&deep["problems"][0]).contains("20 levels"),
+        message(&deep["details"]["current"]["problems"][0]).contains("20 levels"),
         "{deep}"
     );
 
@@ -452,7 +462,8 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     .await;
     assert_eq!(problems(&under_archived), [(0, "parentId".to_owned())]);
     assert!(
-        message(&under_archived["problems"][0]).contains("PLAN-1 is archived"),
+        message(&under_archived["details"]["current"]["problems"][0])
+            .contains("PLAN-1 is archived"),
         "{under_archived}"
     );
 
@@ -481,7 +492,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
             json!({"projectId": "PLAN", "tasks": [{"title": "Long"}], "clientRequestId": "a".repeat(129)}),
         )
         .await,
-        "clientRequestId",
+        "requestId",
         "128",
     );
 }
@@ -503,7 +514,15 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let created = call(
         "task_create_many",
@@ -533,9 +552,12 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     )
     .await;
     assert_eq!(problems(&all_done), [(2, "status".to_owned())]);
-    assert_eq!(all_done["problems"][0]["task"], "FLOW-3");
+    assert_eq!(
+        all_done["details"]["current"]["problems"][0]["task"],
+        "FLOW-3"
+    );
     assert!(
-        message(&all_done["problems"][0])
+        message(&all_done["details"]["current"]["problems"][0])
             .contains("To reach Done, go Ready, In Progress, Review, Done"),
         "{all_done}"
     );
@@ -612,9 +634,13 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     )
     .await;
     assert_eq!(problems(&stale), [(1, "expectedVersions".to_owned())]);
-    assert_eq!(stale["problems"][0]["currentVersion"], 2);
+    assert_eq!(
+        stale["details"]["current"]["problems"][0]["currentVersion"],
+        2
+    );
     assert!(
-        message(&stale["problems"][0]).contains("Someone changed FLOW-2 first (now version 2)"),
+        message(&stale["details"]["current"]["problems"][0])
+            .contains("Someone changed FLOW-2 first (now version 2)"),
         "{stale}"
     );
     assert_eq!(priority(&setup, r1).await, "urgent");
@@ -659,7 +685,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     .await;
     assert_eq!(problems(&twice), [(1, "taskIds".to_owned())]);
     assert!(
-        message(&twice["problems"][0]).contains("listed twice (also at 0)"),
+        message(&twice["details"]["current"]["problems"][0]).contains("listed twice (also at 0)"),
         "{twice}"
     );
 
@@ -713,7 +739,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     .await;
     assert_eq!(problems(&capped), [(1, "addLabels".to_owned())]);
     assert!(
-        message(&capped["problems"][0]).contains("at most 20 labels"),
+        message(&capped["details"]["current"]["problems"][0]).contains("at most 20 labels"),
         "{capped}"
     );
     let opened = call("task_open", json!({"taskId": "FLOW-1"})).await;
@@ -775,7 +801,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     .await;
     assert_eq!(problems(&refused), [(0, "archived".to_owned())]);
     assert!(
-        message(&refused["problems"][0]).contains("archived: false"),
+        message(&refused["details"]["current"]["problems"][0]).contains("archived: false"),
         "{refused}"
     );
     let restored = call(
@@ -813,7 +839,8 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     .await;
     assert_eq!(problems(&restore_original), [(0, "archived".to_owned())]);
     assert!(
-        message(&restore_original["problems"][0]).contains("FLOW-3 was moved to DEST-1"),
+        message(&restore_original["details"]["current"]["problems"][0])
+            .contains("FLOW-3 was moved to DEST-1"),
         "{restore_original}"
     );
 }
@@ -840,7 +867,15 @@ async fn bulk_tools_check_access_for_every_task() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     for project in ["PLAN", "OTHER"] {
         let created = call(
@@ -866,7 +901,7 @@ async fn bulk_tools_check_access_for_every_task() {
     )
     .await;
     assert_eq!(problems(&across), [(1, "taskIds".to_owned())]);
-    let says = message(&across["problems"][0]);
+    let says = message(&across["details"]["current"]["problems"][0]);
     assert!(
         says.contains("wasn't found, or you can't see it"),
         "{across}"
@@ -884,7 +919,8 @@ async fn bulk_tools_check_access_for_every_task() {
     .await;
     assert_eq!(problems(&foreign_parent), [(0, "parentId".to_owned())]);
     assert!(
-        message(&foreign_parent["problems"][0]).contains("Parent OTHER-1 wasn't found in PLAN"),
+        message(&foreign_parent["details"]["current"]["problems"][0])
+            .contains("Parent OTHER-1 wasn't found in PLAN"),
         "{foreign_parent}"
     );
     assert_eq!(footprint(&setup).await[0], tasks_before);
@@ -893,7 +929,7 @@ async fn bulk_tools_check_access_for_every_task() {
         json!({"projectId": other, "clientRequestId": "n2", "tasks": [{"title": "x"}]}),
     )
     .await;
-    assert_eq!(elsewhere["outcome"], "forbidden", "{elsewhere}");
+    assert_eq!(elsewhere["outcome"], "not_found", "{elsewhere}");
     // An agent's own home is the Messages space, which holds no tasks.
     assert_invalid(
         &nyx_call(
@@ -902,7 +938,7 @@ async fn bulk_tools_check_access_for_every_task() {
         )
         .await,
         "projectId",
-        "Say which project",
+        "Say which space",
     );
 
     // Viewers and read-only apps change nothing, previews included.
@@ -928,7 +964,7 @@ async fn bulk_tools_check_access_for_every_task() {
     assert_eq!(version(&setup, plan_task).await, 1);
 
     // A person connected for their whole account names the project, and a
-    // batch stays in one project.
+    // batch stays in the space of its first task.
     assert_invalid(
         &call(
             "task_create_many",
@@ -936,7 +972,7 @@ async fn bulk_tools_check_access_for_every_task() {
         )
         .await,
         "projectId",
-        "Say which project",
+        "Say which space",
     );
     let mixed = call(
         "task_update_many",
@@ -945,8 +981,7 @@ async fn bulk_tools_check_access_for_every_task() {
     .await;
     assert_eq!(problems(&mixed), [(1, "taskIds".to_owned())]);
     assert!(
-        message(&mixed["problems"][0])
-            .contains("All tasks must be in one project; OTHER-1 is in OTHER."),
+        message(&mixed["details"]["current"]["problems"][0]).contains("OTHER-1 isn't in PLAN."),
         "{mixed}"
     );
     let named = call(
@@ -956,7 +991,7 @@ async fn bulk_tools_check_access_for_every_task() {
     .await;
     assert_eq!(problems(&named), [(0, "taskIds".to_owned())]);
     assert!(
-        message(&named["problems"][0]).contains("OTHER-1 isn't in PLAN."),
+        message(&named["details"]["current"]["problems"][0]).contains("OTHER-1 isn't in PLAN."),
         "{named}"
     );
 
@@ -1002,7 +1037,15 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let label = call(
         "label_write",
@@ -1141,7 +1184,15 @@ async fn big_batches_fit_one_call() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let description = "Context for this step of the plan, as an agent would write it.\n".repeat(50);
     for (batch, request) in [(0, "big-1"), (1, "big-2")] {
@@ -1167,6 +1218,7 @@ async fn big_batches_fit_one_call() {
         );
         let started = Instant::now();
         let created = call("task_create_many", arguments).await;
+        let created = super::support::long::finished(&setup.pool, created).await;
         eprintln!("task_create_many of 100 tasks took {:?}", started.elapsed());
         assert_eq!(created["outcome"], "ok", "{created}");
         assert_eq!(

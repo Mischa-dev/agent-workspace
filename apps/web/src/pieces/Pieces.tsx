@@ -1,9 +1,11 @@
-import { useId, useState, type FormEvent, type ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-import { Button, Checkbox, DetailList, Menu, SelectField, StatusChip, TextField, formatFullDate } from '../ui'
-import type { FieldDecl, FieldValue, Piece, Thing, ThingDecl } from '../modules/contract'
+import { Button, DetailList, Menu, StatusChip, formatFullDate } from '../ui'
+import type { FieldValue, Piece, Thing, ThingDecl } from '../modules/contract'
 import { fieldOf, fieldText, isLink, isMoment, rawValue, words } from './fields'
+import type { FormField, FormValues } from './formFields'
+import { FormPiece } from './FormPiece'
 import { Markdown } from '../ui/markdown'
 import './pieces.css'
 
@@ -44,7 +46,7 @@ const DRAW: Record<Piece['type'], (props: PieceProps) => ReactNode> = {
   board: BoardPiece,
   detail: DetailPiece,
   fields: FieldsPiece,
-  form: FormPiece,
+  form: ModuleFormPiece,
   card: CardPiece,
   actions: ActionsPiece,
 }
@@ -281,67 +283,26 @@ function FieldsPiece({ decl, piece, things }: PieceProps) {
   return <DetailList items={shownFields(piece).map((id) => ({ label: fieldOf(decl, id).label, value: <FieldValueView decl={decl} id={id} thing={thing} /> }))} />
 }
 
-function FormPiece({ decl, label, onSubmit, piece }: PieceProps) {
-  const fields = (piece.fields ?? ['title']).map((id) => fieldOf(decl, id))
-  const [values, setValues] = useState<Record<string, FieldValue>>({})
-  const set = (id: string, value: FieldValue) => setValues((current) => ({ ...current, [id]: value }))
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    onSubmit?.(values)
+/** A module's in-app create: the shared form piece, asking for the fields the manifest names. */
+function ModuleFormPiece({ decl, label, onSubmit, piece }: PieceProps) {
+  const declared = (piece.fields ?? ['title']).map((id) => fieldOf(decl, id))
+  const fields: FormField[] = declared.map((field) => ({
+    id: field.id,
+    label: field.label,
+    type: field.type,
+    required: field.id === 'title',
+    options: field.options?.map((option) => ({ value: option, label: words(option) })),
+  }))
+  const send = (values: FormValues) => {
+    const sent: Record<string, FieldValue> = {}
+    for (const field of declared) {
+      const value = values[field.id]
+      if (value === undefined || value === '') continue
+      sent[field.id] = field.type === 'number' && typeof value === 'string' && Number.isFinite(Number(value)) ? Number(value) : value
+    }
+    return onSubmit?.(sent)
   }
-  return (
-    <form aria-label={label} className="aw-piece__form" onSubmit={submit}>
-      {fields.map((field) => (
-        <FormField field={field} key={field.id} onChange={(value) => set(field.id, value)} value={values[field.id] ?? null} />
-      ))}
-      <div className="aw-piece__form-actions">
-        <Button type="submit" variant="primary">
-          Add {decl.one.toLowerCase()}
-        </Button>
-      </div>
-    </form>
-  )
-}
-
-function FormField({ field, onChange, value }: { field: FieldDecl; onChange: (value: FieldValue) => void; value: FieldValue }) {
-  if (field.type === 'checkbox') return <Checkbox checked={value === true} label={field.label} onChange={onChange} />
-  if (field.type === 'multiple_choice' && field.options?.length) {
-    const chosen = Array.isArray(value) ? value : []
-    return (
-      <fieldset className="aw-piece__choices">
-        <legend className="aw-piece__group-title">{field.label}</legend>
-        {field.options.map((option) => (
-          <Checkbox
-            checked={chosen.includes(option)}
-            key={option}
-            label={words(option)}
-            onChange={(on) => onChange(on ? [...chosen, option] : chosen.filter((entry) => entry !== option))}
-          />
-        ))}
-      </fieldset>
-    )
-  }
-  if (field.type === 'single_choice' && field.options?.length) {
-    return (
-      <SelectField label={field.label} onChange={(event) => onChange(event.target.value || null)} value={typeof value === 'string' ? value : ''}>
-        <option value="">None</option>
-        {field.options.map((option) => (
-          <option key={option} value={option}>
-            {words(option)}
-          </option>
-        ))}
-      </SelectField>
-    )
-  }
-  const type = field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : field.type === 'url' ? 'url' : 'text'
-  return (
-    <TextField
-      label={field.label}
-      onChange={(event) => onChange(event.target.value === '' ? null : type === 'number' ? Number(event.target.value) : event.target.value)}
-      type={type}
-      value={value === null || Array.isArray(value) || typeof value === 'boolean' ? '' : isLink(value) ? value.label : String(value)}
-    />
-  )
+  return <FormPiece fields={fields} label={label} onSubmit={send} submitLabel={`Add ${decl.one.toLowerCase()}`} />
 }
 
 function CardPiece({ decl, piece, things }: PieceProps) {

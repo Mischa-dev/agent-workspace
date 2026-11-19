@@ -1155,6 +1155,7 @@ fn link_principal(link: &ReportLink, kind: &str) -> McpPrincipal {
         authentication_class: "bug_report_link",
         account_wide: false,
         project_explicit: true,
+        workspace_id: None,
     }
 }
 

@@ -213,7 +213,7 @@ async fn old_mcp_revisions_still_shake_hands() {
         assert!(
             listed["result"]["tools"]
                 .as_array()
-                .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "briefing")),
+                .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "briefing_get")),
             "{revision}: {listed}"
         );
         let call = json!({

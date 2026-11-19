@@ -1202,6 +1202,7 @@ async fn make_occurrence(context: &JobContext) -> Result<(), JobError> {
         unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,
         renamed_from: None,
+        defer_long: false,
     };
     let answer = crate::ops::dispatch(
         state,

@@ -11,8 +11,11 @@
   "permissions": [],
   "tools": {
     "automation_list": "query",
-    "automation_write": "change",
-    "automation_runs": "query"
+    "automation_create": "create",
+    "automation_update": "change",
+    "automation_delete": "change",
+    "automation_run_start": "create",
+    "automation_history": "query"
   },
   "routes": ["/api/v1/projects/{project_id}/automations*"],
   "events": {

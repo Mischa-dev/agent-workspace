@@ -38,6 +38,9 @@ pub struct DispatchRequest {
     pub preview: bool,
     /// The old name the caller used (`aliases`), counted once the call is done.
     pub renamed_from: Option<&'static str>,
+    /// A long call (`Operation::runs_long`) is answered `started` and run by
+    /// a job (`long`): the MCP edge, whose clients can follow it.
+    pub defer_long: bool,
 }
 
 /// What a write that arrives without a request id does (ruling R52). An
@@ -91,8 +94,8 @@ pub async fn dispatch(
     call(state, request, input).await
 }
 
-/// A space's key (such as "AWD") in the input's `spaceId` or `projectId`,
-/// replaced by its id, on every edge (MCP's own key resolution does the
+/// A space's key (such as "AWD") in the input's `spaceId` or `projectId`
+/// (or a package's `target.spaceId`), replaced by its id, on every edge (MCP's own key resolution does the
 /// same for its tools). A key resolves only among spaces the caller is an
 /// enabled member of and can reach, in the named workspace when there is
 /// one; an unknown or ambiguous key is left for the input to refuse.
@@ -101,9 +104,9 @@ async fn space_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    for field in ["spaceId", "projectId"] {
+    for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         let Some(key) = input
-            .get(field)
+            .pointer(field)
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|key| {
@@ -139,8 +142,8 @@ async fn space_keys_to_ids(
         .fetch_all(&state.pool)
         .await
         .map_err(|error| OpError::logged("space key", &error.into()))?;
-        if let [id] = found.as_slice() {
-            input[field] = Value::String(id.to_string());
+        if let ([id], Some(slot)) = (found.as_slice(), input.pointer_mut(field)) {
+            *slot = Value::String(id.to_string());
         }
     }
     task_keys_to_ids(state, request, input).await
@@ -157,26 +160,25 @@ async fn task_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    // Single task fields, then each task of a list.
+    // Single task fields, then each task of a list (K2.14: a bulk change's
+    // first task says where it acts) and a link's task.
     let mut places = [
-        "taskId",
-        "workItemId",
-        "parentId",
-        "parentWorkItemId",
-        "duplicateOf",
+        "/taskId",
+        "/workItemId",
+        "/parentId",
+        "/parentWorkItemId",
+        "/duplicateOf",
+        "/links/0/taskId",
     ]
     .iter()
-    .map(|field| ((*field).to_owned(), None))
-    .collect::<Vec<(String, Option<usize>)>>();
+    .map(|field| (*field).to_owned())
+    .collect::<Vec<String>>();
     if let Some(list) = input.get("taskIds").and_then(Value::as_array) {
-        places.extend((0..list.len().min(100)).map(|index| ("taskIds".to_owned(), Some(index))));
+        places.extend((0..list.len().min(100)).map(|index| format!("/taskIds/{index}")));
     }
-    for (field, index) in places {
-        let value = match index {
-            None => input.get(&field),
-            Some(index) => input.get(&field).and_then(|list| list.get(index)),
-        };
-        let Some((space_key, number)) = value
+    for field in places {
+        let Some((space_key, number)) = input
+            .pointer(&field)
             .and_then(Value::as_str)
             .and_then(crate::mcp::split_task_key)
             .map(|(key, number)| (key.to_owned(), number))
@@ -186,20 +188,25 @@ async fn task_keys_to_ids(
         let caller = &request.caller;
         let workspace = request.workspace;
         let found = crate::db::scoped_one(&state.pool, async |connection| {
-            sqlx::query_scalar::<_, Uuid>(
+            sqlx::query_as::<_, (Uuid, i32)>(
                 r#"
-            SELECT found.id FROM (
-                SELECT item.id, 0 AS preference, item.project_id
+            SELECT found.id, min(found.preference) FROM (
+                -- The task with the key now or by an older key, alike (two
+                -- of them is ambiguous); a moved original only for someone
+                -- who can't reach where it went (it is archived, and says
+                -- so).
+                SELECT item.id,
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM work_item_key_aliases moved
+                           WHERE moved.source_work_item_id = item.id
+                       ) THEN 2 ELSE 0 END AS preference,
+                       item.project_id
                 FROM task_rows item
                 JOIN projects project ON project.id = item.project_id
                 WHERE upper(project.project_key) = upper($3) AND item.number = $4
                   AND project.archived_at IS NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM work_item_key_aliases moved
-                      WHERE moved.source_work_item_id = item.id
-                  )
                 UNION ALL
-                SELECT alias.work_item_id, 1, item.project_id
+                SELECT alias.work_item_id, 0, item.project_id
                 FROM work_item_key_aliases alias
                 JOIN task_rows item ON item.id = alias.work_item_id
                 WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
@@ -214,7 +221,7 @@ async fn task_keys_to_ids(
               AND ($6::uuid IS NULL OR project.organization_id = $6)
             GROUP BY found.id
             ORDER BY min(found.preference)
-            LIMIT 2
+            LIMIT 3
             "#,
             )
             .bind(caller.account_id)
@@ -228,8 +235,19 @@ async fn task_keys_to_ids(
         })
         .await
         .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
-        let id = match found.as_slice() {
-            [id] => Value::String(id.to_string()),
+        // The best match only: two tasks tie only across workspaces.
+        let best = found.first().map(|(_, preference)| *preference);
+        let found = found
+            .into_iter()
+            .filter(|(_, preference)| Some(*preference) == best)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        match found.as_slice() {
+            [id] => {
+                if let Some(slot) = input.pointer_mut(&field) {
+                    *slot = Value::String(id.to_string());
+                }
+            }
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(
@@ -238,10 +256,6 @@ async fn task_keys_to_ids(
                      id or link.",
                 ));
             }
-        };
-        match index {
-            None => input[field.as_str()] = id,
-            Some(index) => input[field.as_str()][index] = id,
         }
     }
     Ok(input)
@@ -313,7 +327,8 @@ fn decode_error(error: &serde_json::Error) -> OpError {
 
 /// Where a call acts, located, once the module gate and access let the
 /// caller run `O` there. A call that can't name its workspace gets the one
-/// the caller reaches, when there is one.
+/// the caller reaches, when there is one; a spanning read that names none
+/// lists across every one (`spans`).
 async fn admit<O: Operation>(
     state: &AppState,
     caller: &Caller,
@@ -328,16 +343,40 @@ async fn admit<O: Operation>(
         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     // A call that can't name its workspace needs none named when the
     // caller reaches only one.
+    let mut spans = false;
     if workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
         let reach = access_shim::reach(&mut connection, caller).await?;
         match reach.as_slice() {
             [only] => *workspace = Some(*only),
             [] => {}
+            _ if O::SPANS_WORKSPACES && !writes => spans = true,
             several => return Err(name_the_workspace(&mut connection, several).await),
         }
     }
+    if spans {
+        let located = target::Located {
+            workspace_id: Uuid::nil(),
+            space_id: None,
+        };
+        // Across workspaces only the credential is checked here; the read
+        // keeps to what the caller may see (and has on) in each one.
+        let _grant = crate::access::check(
+            &mut connection,
+            caller,
+            crate::access::Need::SEE,
+            crate::access::Target::Account,
+        )
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+        .map_err(|denied| denied_error::<O>(denied, caller, &located))?;
+        return Ok(Admitted {
+            located,
+            paused: false,
+            spans,
+        });
+    }
     let located = target::locate(&mut connection, target, caller.account_id, *workspace).await?;
-    let module = module_here::<O>(&mut connection, &located).await?;
+    let module = module_here::<O>(&mut connection, caller, &located).await?;
     let need = crate::access::Need::maybe(O::PERMISSION)
         .writing(writes)
         .in_module(module);
@@ -362,14 +401,19 @@ async fn admit<O: Operation>(
             .await
             .map_err(|error| OpError::logged(O::NAME, &error))?;
     drop(connection);
-    Ok(Admitted { located, paused })
+    Ok(Admitted {
+        located,
+        paused,
+        spans,
+    })
 }
 
-/// What `admit` found: where the call lands, and whether the caller is
-/// paused there.
+/// What `admit` found: where the call lands, whether the caller is paused
+/// there, and whether a read spans every workspace the caller reaches.
 struct Admitted {
     located: target::Located,
     paused: bool,
+    spans: bool,
 }
 
 /// Whether `caller` may run `O` on `target`, by the checks a call makes,
@@ -417,11 +461,20 @@ async fn pipeline<O: Operation>(
         serde_json::from_value::<O::Input>(input).map_err(|error| decode_error(&error))?;
     // The input as the operation reads it: what the request id is held to.
     let canonical = serde_json::to_value(&decoded).map_err(|_| OpError::Unavailable)?;
-    let target = decoded.target();
+    let target = match decoded.target() {
+        Target::Workspace(None) if O::HELD_SPACE_BY_DEFAULT => request
+            .caller
+            .confined_space
+            .map_or(Target::Workspace(None), Target::Space),
+        target => target,
+    };
     let writes = O::KIND.writes();
 
-    let Admitted { located, paused } =
-        admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    let Admitted {
+        located,
+        paused,
+        spans,
+    } = admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
     // A2.10: a paused account's changes do nothing here; each answers ok,
     // saying so, so a client that retries doesn't loop on a refusal.
     if paused {
@@ -441,7 +494,7 @@ async fn pipeline<O: Operation>(
     }
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
-    if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
+    if !spans && matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
         state
             .rate_limits
             .check_workspace_call(located.workspace_id)
@@ -449,6 +502,35 @@ async fn pipeline<O: Operation>(
     }
 
     let key = request_id_for::<O>(&request)?;
+    // K2.21: checked, then kept and run by a job; the job dispatches it
+    // again (checked again) as the same caller.
+    if request.defer_long && O::LONG && !request.preview && !spans && O::runs_long(&decoded) {
+        // What the call would be refused for (a thing in another
+        // workspace, a bad field) is answered now, not by the job: an
+        // operation that previews is previewed first, and only a clean
+        // preview is kept to run.
+        if O::PREVIEW {
+            let checked = DispatchRequest {
+                preview: true,
+                renamed_from: None,
+                defer_long: false,
+                ..request.clone()
+            };
+            let preview = Box::pin(pipeline::<O>(state, checked, canonical.clone())).await?;
+            if preview.outcome() != "ok" {
+                return Ok(preview);
+            }
+        }
+        return super::long::start(
+            state,
+            &request,
+            O::NAME,
+            &located,
+            &canonical,
+            key.as_ref().map(IdempotencyKey::as_str),
+        )
+        .await;
+    }
     let ctx = OpContext {
         caller: request.caller,
         edge: request.edge,
@@ -461,6 +543,7 @@ async fn pipeline<O: Operation>(
             .map(|key| key.as_str().to_owned())
             .or(request.request_id),
         op: O::NAME,
+        preview: request.preview,
     };
 
     let mut call = OpCall {
@@ -525,7 +608,8 @@ async fn pipeline<O: Operation>(
         // Dropping the transaction rolls it back.
         return Ok(answer);
     }
-    if let Some(alias) = request.renamed_from {
+    // A spanning read has no one workspace to count its alias use in.
+    if let Some(alias) = request.renamed_from.filter(|_| !spans) {
         let workspace_id = ctx.workspace_id;
         let tx = call.tx().await?;
         super::aliases::count(tx, workspace_id, alias)
@@ -612,12 +696,38 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
 /// The module that must be on where an operation acts: its own, except
 /// that a conversation's follows the space it is in (registered as
 /// conversation filters: Messages in the direct space, Channels in a
-/// project), as the older tools decide.
+/// project), as the older tools decide, and that an operation another
+/// module also serves (`ModuleFilter::AlsoServes`, such as forms' links
+/// under Collections) is held to that module where its own is off.
 async fn module_here<O: Operation>(
     connection: &mut sqlx::PgConnection,
+    caller: &Caller,
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
+    if registry.also_serving(O::NAME).next().is_some() {
+        let modules = match located.space_id {
+            Some(space) => {
+                crate::modules::state::for_project(connection, space, caller.account_id).await
+            }
+            None => crate::modules::state::for_member(
+                connection,
+                located.workspace_id,
+                caller.account_id,
+            )
+            .await
+            .map(Some),
+        }
+        .map_err(|error| OpError::logged(O::NAME, &error))?;
+        if let Some(modules) = modules
+            && !modules.contains(O::MODULE)
+            && let Some(also) = registry
+                .also_serving(O::NAME)
+                .find(|also| modules.contains(also))
+        {
+            return Ok(also);
+        }
+    }
     let Some(space) = located.space_id else {
         return Ok(O::MODULE);
     };

@@ -118,6 +118,18 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
             .any(|member| { member["actorId"].as_str() == Some(&member_actor_id.to_string()) })
     );
     assert!(!members.iter().any(|member| member["role"] == "worker"));
+    // W1.37: the roles the owner may give come from the server, never Owner.
+    let member = members
+        .iter()
+        .find(|member| member["actorId"].as_str() == Some(&member_actor_id.to_string()))
+        .expect("member");
+    let assignable = member["assignableRoles"]
+        .as_array()
+        .expect("assignable roles");
+    for role in ["admin", "member", "viewer"] {
+        assert!(assignable.iter().any(|given| given == role), "{member}");
+    }
+    assert!(!assignable.iter().any(|given| given == "owner"), "{member}");
     let serialized = serde_json::to_string(&listed).expect("serialize member list");
     for forbidden in ["password", "sessionId", "tokenDigest", "codexHomePath"] {
         assert!(!serialized.contains(forbidden));

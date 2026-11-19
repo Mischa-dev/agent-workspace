@@ -36,16 +36,16 @@ pub(super) struct InboxListArguments {
     pub limit: Option<u16>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyClaimArguments {
+pub(crate) struct ReplyClaimArguments {
     /// The reply request to claim, from inbox_list.
     pub request_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplySendArguments {
+pub(crate) struct ReplySendArguments {
     pub request_id: String,
     /// The generation returned by reply_claim.
     pub generation: i32,
@@ -65,9 +65,9 @@ pub(super) struct ReplySendArguments {
     pub client_request_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyProgressArguments {
+pub(crate) struct ReplyProgressArguments {
     pub request_id: String,
     /// The generation returned by reply_claim.
     pub generation: i32,
@@ -76,35 +76,35 @@ pub(super) struct ReplyProgressArguments {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyPassArguments {
+pub(crate) struct ReplyPassArguments {
     pub request_id: String,
     pub generation: Option<i32>,
     /// Optional note on why you have nothing to add. Not shown as a message.
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyReleaseArguments {
+pub(crate) struct ReplyReleaseArguments {
     pub request_id: String,
     pub generation: Option<i32>,
     /// Why you can't answer. Shown to the people in the conversation.
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyRetryArguments {
+pub(crate) struct ReplyRetryArguments {
     /// The agent's reply request to ask again: one that expired, was
     /// released, or was stopped.
     pub request_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReplyStopArguments {
+pub(crate) struct ReplyStopArguments {
     /// The agent's reply request to stop, from conversation_open's reply
     /// requests or a reply.* event.
     pub request_id: String,
@@ -116,7 +116,7 @@ pub(super) struct ReplyStopArguments {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub(super) enum ReplyToolResult<T> {
+pub(crate) enum ReplyToolResult<T> {
     Ok {
         value: T,
     },
@@ -139,6 +139,27 @@ pub(super) enum ReplyToolResult<T> {
 }
 
 impl<T> ReplyToolResult<T> {
+    /// The answer in the shape the other tools and operations use.
+    pub(crate) fn into_tool(self) -> super::common::ToolResult<T> {
+        use super::common::ToolResult;
+        match self {
+            Self::Ok { value } => ToolResult::Ok { value },
+            Self::Conflict { message } => ToolResult::Conflict { message },
+            Self::NotFound { message } => ToolResult::NotFound { message },
+            Self::InvalidRequest { field } => ToolResult::InvalidRequest {
+                message: format!("Check {field}."),
+                field,
+            },
+            Self::PermissionDenied { .. } => ToolResult::PermissionDenied {
+                message: "This connection can't do that with this reply request.".to_owned(),
+                retry_category: None,
+            },
+            Self::TemporarilyUnavailable { .. } => ToolResult::TemporarilyUnavailable {
+                message: "Try again shortly.".to_owned(),
+            },
+        }
+    }
+
     pub(super) fn denied() -> Self {
         Self::PermissionDenied {
             retry_category: "reauthenticate_or_request_scope".to_owned(),
@@ -173,7 +194,7 @@ impl<T> ReplyToolResult<T> {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct InboxItem {
+pub(crate) struct InboxItem {
     request_id: String,
     project_id: String,
     conversation_id: String,
@@ -211,7 +232,7 @@ pub(super) struct InboxProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ContextMessage {
+pub(crate) struct ContextMessage {
     message_id: String,
     author: String,
     author_kind: String,
@@ -233,7 +254,7 @@ pub(super) struct ContextMessage {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ClaimProjection {
+pub(crate) struct ClaimProjection {
     request: InboxItem,
     /// Oldest first. The message you were asked about is `request.messageId`.
     recent_messages: Vec<ContextMessage>,
@@ -249,14 +270,14 @@ pub(super) struct ClaimProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ClaimRun {
+pub(crate) struct ClaimRun {
     run_id: String,
     state: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ClaimSession {
+pub(crate) struct ClaimSession {
     external_ref: String,
     harness: String,
     url: Option<String>,
@@ -265,7 +286,7 @@ pub(super) struct ClaimSession {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProgressProjection {
+pub(crate) struct ProgressProjection {
     request_id: String,
     status: String,
     /// When the claim now runs out unless you report progress or reply again.
@@ -274,7 +295,7 @@ pub(super) struct ProgressProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RetryProjection {
+pub(crate) struct RetryProjection {
     request_id: String,
     /// "pending": back in the agent's inbox, and the agent was woken.
     status: String,
@@ -282,7 +303,7 @@ pub(super) struct RetryProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct StopProjection {
+pub(crate) struct StopProjection {
     request_id: String,
     status: String,
     /// Every request stopped: this one and the agent's follow-ups queued
@@ -292,7 +313,7 @@ pub(super) struct StopProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ResolutionProjection {
+pub(crate) struct ResolutionProjection {
     request_id: String,
     status: String,
     message_id: Option<String>,
@@ -415,7 +436,7 @@ pub(super) async fn inbox_list(
     }
 }
 
-pub(super) async fn reply_claim(
+pub(crate) async fn reply_claim(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyClaimArguments,
@@ -571,7 +592,7 @@ pub(super) async fn reply_claim(
     }
 }
 
-pub(super) async fn reply_send(
+pub(crate) async fn reply_send(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplySendArguments,
@@ -710,7 +731,7 @@ async fn follow_answer(state: &AppState, account_id: Uuid, request_id: Uuid, gen
     }
 }
 
-pub(super) async fn reply_progress(
+pub(crate) async fn reply_progress(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyProgressArguments,
@@ -791,7 +812,7 @@ pub(super) async fn reply_progress(
     }
 }
 
-pub(super) async fn reply_pass(
+pub(crate) async fn reply_pass(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyPassArguments,
@@ -807,7 +828,7 @@ pub(super) async fn reply_pass(
     .await
 }
 
-pub(super) async fn reply_release(
+pub(crate) async fn reply_release(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyReleaseArguments,
@@ -1112,7 +1133,7 @@ async fn open_answer_thread(
 
 /// Stop an account's work on a request, as the Stop button does
 /// (`replies.steer`).
-pub(super) async fn reply_stop(
+pub(crate) async fn reply_stop(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyStopArguments,
@@ -1173,7 +1194,7 @@ pub(super) async fn reply_stop(
 
 /// Ask an account again about a request that expired, was released or
 /// was stopped (`replies.steer`), as the Retry button on its status line does.
-pub(super) async fn reply_retry(
+pub(crate) async fn reply_retry(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyRetryArguments,

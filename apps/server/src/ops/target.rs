@@ -103,6 +103,11 @@ const KINDS: &[(&str, &str)] = &[
              WHERE membership.project_id = project.id AND membership.actor_id = $2 \
                AND membership.enabled)",
     ),
+    // K2.21: a long call's task is found only by its caller.
+    (
+        "operation_task",
+        "SELECT workspace_id, space_id FROM operation_tasks WHERE id = $1 AND account_id = $2",
+    ),
     // K2.7: a scheduled message is found only by its author.
     (
         "scheduled_message",
@@ -233,6 +238,41 @@ const KINDS: &[(&str, &str)] = &[
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // K2.9: a reply request, for the agent it asks (claim, reply, pass,
+    // release); another agent's is not found.
+    (
+        "reply_request",
+        "SELECT project.organization_id, project.id FROM reply_requests request \
+         JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND request.agent_actor_id = $2",
+    ),
+    // K2.9: a reply request for anyone who sees its conversation (stop it,
+    // ask again).
+    (
+        "reply_request_seen",
+        "SELECT project.organization_id, project.id FROM reply_requests request \
+         JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND conversation_visible_to(request.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K2.18: a repository, archived ones too, in its space; the command
+    // checks who may see or manage it.
+    (
+        "repository",
+        "SELECT project.organization_id, project.id FROM repositories repository \
+         JOIN projects project ON project.id = repository.project_id \
+         WHERE repository.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // K2.18: a pull request goes by pull_request_visible_to (one opened
+    // from a private thread stays private).
+    (
+        "pull_request",
+        "SELECT project.organization_id, project.id FROM github_pull_requests pull \
+         JOIN projects project ON project.id = pull.project_id \
+         WHERE pull.id = $1 AND pull_request_visible_to(pull.id, $2)",
+    ),
     // A2.12: a file, in its space; who may read it is `files::readable_file`.
     (
         "file",
@@ -361,6 +401,8 @@ fn what_of(kind: &str) -> &'static str {
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
+        "repository" => "That repository",
+        "pull_request" => "That pull request",
         "file" => "That file",
         _ => "That",
     }

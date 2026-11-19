@@ -6,6 +6,8 @@
 //! workflow checks, version advancement, and exactly-once mutation side
 //! effects inside the caller's transaction.
 
+pub mod claims;
+
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
@@ -2118,10 +2120,12 @@ pub enum CriterionTarget {
 /// counts in the list as it stands after the operations before it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CriteriaOperation {
-    /// Text already normalized. None puts it at the end.
+    /// Text already normalized. None puts it at the end. `completed` adds
+    /// it already checked (AWD-168).
     Add {
         text: String,
         position: Option<i32>,
+        completed: bool,
     },
     Update {
         target: CriterionTarget,
@@ -2260,7 +2264,11 @@ pub fn plan_criteria(
     };
     for (operation_index, operation) in operations.iter().enumerate() {
         match operation {
-            CriteriaOperation::Add { text, position } => {
+            CriteriaOperation::Add {
+                text,
+                position,
+                completed,
+            } => {
                 let max = length(&list).saturating_add(1);
                 let position = position.unwrap_or(max);
                 if !(1..=max).contains(&position) {
@@ -2275,7 +2283,7 @@ pub fn plan_criteria(
                     CriterionState {
                         id,
                         text: text.clone(),
-                        completed: false,
+                        completed: *completed,
                     },
                 );
                 changes.push(PlannedCriterionChange {
@@ -4082,6 +4090,7 @@ mod tests {
         CriteriaOperation::Add {
             text: text.to_owned(),
             position,
+            completed: false,
         }
     }
 

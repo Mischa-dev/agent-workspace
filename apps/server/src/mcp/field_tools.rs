@@ -47,9 +47,9 @@ const MANAGERS_MESSAGE: &str = "Only people whose role can change the workflow (
 // ---------------------------------------------------------------------------
 // field_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FieldListArguments {
+pub(crate) struct FieldListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Also list archived fields, which field_write can restore.
@@ -58,7 +58,7 @@ pub(super) struct FieldListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FieldListValue {
+pub(crate) struct FieldListValue {
     /// The project's task fields in order, then archived ones when asked
     /// for. Set values with task_update's `fields`, by name.
     pub fields: Vec<FieldView>,
@@ -66,7 +66,7 @@ pub(super) struct FieldListValue {
     pub can_manage: bool,
 }
 
-pub(super) async fn field_list(
+pub(crate) async fn field_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FieldListArguments,
@@ -122,9 +122,9 @@ pub(super) async fn field_list(
 // ---------------------------------------------------------------------------
 // field_write
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FieldWriteArguments {
+pub(crate) struct FieldWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The field to change, by ID or current name. Leave it out to add one.
@@ -156,7 +156,7 @@ pub(super) struct FieldWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FieldWriteValue {
+pub(crate) struct FieldWriteValue {
     pub field: FieldView,
     /// False when it already existed, or nothing needed to change.
     pub created: bool,
@@ -167,7 +167,7 @@ pub(super) struct FieldWriteValue {
     pub note: Option<String>,
 }
 
-pub(super) async fn field_write(
+pub(crate) async fn field_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FieldWriteArguments,
@@ -509,7 +509,7 @@ pub(super) async fn field_write(
 /// One of a task's fields as task_open shows it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskFieldValue {
+pub(crate) struct TaskFieldValue {
     pub name: String,
     #[serde(rename = "type")]
     pub field_type: FieldType,
@@ -521,7 +521,7 @@ pub(super) struct TaskFieldValue {
 
 /// A task's values for every active field of its project, in order, empty
 /// ones as null, so an agent sees what it can fill in.
-pub(super) async fn task_fields(
+pub(crate) async fn task_fields(
     connection: &mut PgConnection,
     project_id: Uuid,
     task_id: Uuid,
@@ -557,7 +557,7 @@ pub(super) async fn task_fields(
 }
 
 /// Fills in each task line's `fields` (by name, only the ones with a value).
-pub(super) async fn fill_summary_fields(
+pub(crate) async fn fill_summary_fields(
     connection: &mut PgConnection,
     tasks: &mut [TaskSummary],
 ) -> Result<(), AppError> {
@@ -634,7 +634,7 @@ pub(super) async fn fill_summary_fields(
 
 /// Whose fields a task_create or task_update `fields` argument names.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum FieldsOf {
+pub(crate) enum FieldsOf {
     /// A task being changed, so archived options it already holds may stay
     /// chosen: its own collection's fields.
     Task(Uuid),
@@ -645,7 +645,7 @@ pub(super) enum FieldsOf {
 
 /// What task_create and task_update's `fields` wrote, checked and resolved
 /// in this transaction, as the web app's `fieldValues` are.
-pub(super) async fn written_values(
+pub(crate) async fn written_values(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
@@ -697,7 +697,7 @@ pub(super) async fn written_values(
 /// One task_list field filter as an agent writes it.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FieldFilterArgument {
+pub(crate) struct FieldFilterArgument {
     /// The field, by name or ID (see field_list).
     pub field: String,
     /// is (any of the values), isNot, empty, notEmpty, contains (text),
@@ -712,7 +712,7 @@ pub(super) struct FieldFilterArgument {
 
 /// task_list's field filters for one project, as stored values. The message
 /// says what's wrong and what would work.
-pub(super) async fn filter_clauses(
+pub(crate) async fn filter_clauses(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,

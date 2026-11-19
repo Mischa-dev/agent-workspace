@@ -1218,8 +1218,9 @@ CREATE TABLE directory_entries (
 - Workspace-level sources: allowed on a self-hosted server; on a hosted server only if the
   operator allows (owner call, below).
 
-Operations: `directory_list(query, kind)` (read), `directory_source_write` (operator for
-server-wide; `modules.manage` for workspace sources). The Modules settings page gains
+Operations: `directory_list(query, shapes)` (read), `directory_source_create` and
+`directory_source_remove` (`modules.manage`; a workspace's own URL lists, since the verbs are
+create and remove; server-wide sources come from the operator's settings, not an operation). The Modules settings page gains
 "Installed" and "Available" tabs drawn from `module_list`, `package_list` and
 `directory_list`.
 

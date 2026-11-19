@@ -1,5 +1,5 @@
 use rmcp::schemars;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -10,18 +10,6 @@ use crate::policy::{
 };
 
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RepositoryGetArguments {
-    pub repository_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PullRequestGetArguments {
-    pub identifier: String,
-}
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -174,7 +162,7 @@ pub struct PullRequestProjection {
     /// Suggested because its branch, title or body names this task's key,
     /// and not confirmed yet: task_link with pullRequestId confirms it, and
     /// with remove dismisses it. Confirmed pull requests leave this out.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub suggested: bool,
 }
 

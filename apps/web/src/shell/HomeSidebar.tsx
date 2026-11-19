@@ -15,7 +15,7 @@ export function HomeSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; o
   const href = useWorkspaceHref()
   const badges = { inbox: inboxUnread }
   return (
-    <SidebarFrame id="project-sidebar" label="Home navigation" mobileOpen={mobileOpen} space="home" title="Home">
+    <SidebarFrame id="project-sidebar" label="Home navigation" mobileOpen={mobileOpen} title="Home">
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Home" onNavigate={onNavigate} to={href('/home')} />
         {sidebarRows('home', experience).map((row) => (

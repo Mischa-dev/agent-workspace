@@ -282,7 +282,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
                "fields": {"Severity": "Low"}, "clientRequestId": "mixed"}),
     )
     .await;
-    assert_eq!(mixed["outcome"], "rejected", "{mixed}");
+    assert_eq!(mixed["code"], "rejected", "{mixed}");
 
     // project_open lists the collection.
     let project = call("project_open", json!({"projectId": "WORK"})).await;

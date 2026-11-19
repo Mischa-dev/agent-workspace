@@ -1,25 +1,17 @@
 import { Suspense, type ReactNode } from 'react'
 import { Navigate, Outlet, useLocation, useParams, useRouteError } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { BrandMark } from '../auth/AuthLayout'
 import { ModuleGate } from '../modules/ModuleGate'
-import { useProjects } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
-import { inHomeSpace } from '../shell/homeSpace'
-import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { reportError } from '../telemetry/reportErrors'
 import { Button, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
-import { legacyPathOf } from './href'
 
-/** Around every route: the crash screen, the phone drawer and the toasts. */
+/** Around every route: the crash screen and the toasts. */
 export function RootLayout() {
   return (
     <RoutedErrorBoundary>
-      <MobileNavigationProvider>
-        <Outlet />
-      </MobileNavigationProvider>
+      <Outlet />
       <ToastViewport />
     </RoutedErrorBoundary>
   )
@@ -82,28 +74,15 @@ function PublicRouteFallback() {
   )
 }
 
+/** While a page loads: the shell around it already shows its space, from the route. */
 function AuthenticatedRouteFallback() {
-  const session = useAuthenticatedSession()
-  const { projectId = '' } = useParams()
-  const pathname = legacyPathOf(useLocation().pathname)
-  const projects = useProjects()
-  const project =
-    projects.data?.projects.find((candidate) => candidate.id === projectId) ??
-    null
-  // The same sidebar the page will have, so nothing jumps when it arrives. A
-  // whiteboard's canvas has none.
-  const home = inHomeSpace(pathname) && !pathname.startsWith('/whiteboards/')
-  const direct = pathname === '/messages' || pathname.startsWith('/messages/')
-
   return (
-    <AppShell direct={direct} home={home} mainClassName="aw-main--page" project={project} user={session.user}>
-      <div aria-busy="true" className="aw-page">
-        <p className="visually-hidden" role="status">
-          Loading workspace view.
-        </p>
-        <PageSkeleton decorative />
-      </div>
-    </AppShell>
+    <div aria-busy="true" className="aw-page">
+      <p className="visually-hidden" role="status">
+        Loading workspace view.
+      </p>
+      <PageSkeleton decorative />
+    </div>
   )
 }
 

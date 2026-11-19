@@ -7,7 +7,7 @@ import { ProjectPageError } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
 import type { Project } from '../projects/types'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Button, ButtonLink, EmptyState, Icon, SettingsSkeleton } from '../ui'
 import { useSettingsRegistry } from './api'
 import { isArchiving } from './archiving'
@@ -78,6 +78,7 @@ export default function SettingsArea() {
   const workspace = defaultWorkspace(session)
   const [viewedWorkspace, viewWorkspace] = useViewedWorkspace(session)
   const [navOpen, setNavOpen] = useState(false)
+  useShellPage({ mainClassName: 'aw-main--page' })
 
   const routeProjectId = route.kind === 'page' && route.group === 'project' ? route.projectId : null
   const cameFrom = (location.state as { fromProjectId?: unknown } | null)?.fromProjectId
@@ -124,7 +125,7 @@ export default function SettingsArea() {
     return <Navigate replace state={location.state} to={`${path}${location.search}${hash}`} />
   }
   if (route.group === 'project' && !route.projectId) {
-    if (projectList.isPending) return <SettingsFrame session={session}><SettingsSkeleton label="Loading projects" /></SettingsFrame>
+    if (projectList.isPending) return <SettingsSkeleton label="Loading projects" />
     if (preferredProjectId) return <Navigate replace to={projectSettingsHref(preferredProjectId)} />
   }
 
@@ -185,7 +186,7 @@ export default function SettingsArea() {
   const current = entry ? `${scope} · ${entry.label}` : scope
 
   return (
-    <SettingsFrame session={session}>
+    <>
       <div className={navOpen ? 'aw-settings is-nav-open' : 'aw-settings'}>
         <button
           aria-controls="settings-nav"
@@ -221,15 +222,7 @@ export default function SettingsArea() {
           {content}
         </div>
       </div>
-    </SettingsFrame>
-  )
-}
-
-function SettingsFrame({ children, session }: { children: ReactNode; session: AuthenticatedSession }) {
-  return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      {children}
-    </AppShell>
+    </>
   )
 }
 

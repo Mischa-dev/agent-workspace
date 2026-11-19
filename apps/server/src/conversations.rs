@@ -3,6 +3,7 @@ pub mod channel_ops;
 pub mod ops;
 pub mod sidebar_ops;
 pub mod system_entries;
+pub mod thread_ops;
 
 use std::{
     cmp::Reverse,

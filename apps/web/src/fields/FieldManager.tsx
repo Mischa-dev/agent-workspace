@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 
 import {
   Banner,
@@ -18,13 +18,16 @@ import {
 } from '../ui'
 import { useFieldMutations, useFields, type FieldScope, type OptionInput } from './api'
 import { CATEGORY_LABELS, FIELD_TYPES, STATUS_CATEGORIES, formulaShown, isSystemType, typeLabel, type FieldDefinition, type FieldType, type StatusCategory } from './fieldModel'
-import { ButtonEditor } from './ButtonEditor'
 import { buttonDraft, buttonInput } from './buttonDraft'
-import { FormulaEditor, type FormulaContext } from './FormulaEditor'
+import type { FormulaContext } from './FormulaEditor'
 import { RollupEditor } from './RollupEditor'
 import { rollupDraft } from './rollupDraft'
 import { RulesEditor } from './RulesEditor'
 import { rulesDraft, rulesInput, takesRules } from './rulesDraft'
+
+// A formula's or a button's editor loads when such a field is edited.
+const ButtonEditor = lazy(() => import('./ButtonEditor').then((module) => ({ default: module.ButtonEditor })))
+const FormulaEditor = lazy(() => import('./FormulaEditor').then((module) => ({ default: module.FormulaEditor })))
 
 /** Named colors the server takes, in the order labels offer them. */
 const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'gray'] as const
@@ -356,8 +359,10 @@ export function FieldDialog({
         onChange={(event) => setDescription(event.target.value)}
         value={description}
       />
-      {isFormula && formulas ? <FormulaEditor context={formulas} fieldId={field?.id} onChange={setFormula} value={formula} /> : null}
-      {isButton && formulas ? <ButtonEditor context={formulas} draft={button} onChange={setButton} /> : null}
+      <Suspense fallback={null}>
+        {isFormula && formulas ? <FormulaEditor context={formulas} fieldId={field?.id} onChange={setFormula} value={formula} /> : null}
+        {isButton && formulas ? <ButtonEditor context={formulas} draft={button} onChange={setButton} /> : null}
+      </Suspense>
       {!field && isSystemType(type) ? <p className="aw-pagesection__desc">Filled in from each {records === 'tasks' ? 'task' : 'record'} itself; nobody edits it.</p> : null}
       {!field && status && !options.length ? (
         <p className="aw-pagesection__desc">
