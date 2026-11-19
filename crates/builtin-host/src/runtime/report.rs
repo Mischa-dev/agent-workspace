@@ -205,18 +205,27 @@ impl RunReports {
         Ok(())
     }
 
-    /// Tokens a turn used.
-    pub async fn usage(
-        &self,
-        report_key: &str,
-        model: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-    ) -> Result<(), AppError> {
+    /// Tokens a turn used, and what the harness says they cost (US dollars)
+    /// when it does; the server prices the rest from the workspace's
+    /// catalog. `report_key` is the same on a retry.
+    pub async fn usage(&self, report_key: &str, usage: &Usage<'_>) -> Result<(), AppError> {
+        let mut fields = json!({
+            "reportKey": report_key,
+            "model": usage.model,
+            "inputTokens": usage.input_tokens,
+            "outputTokens": usage.output_tokens,
+            "cachedInputTokens": usage.cached_input_tokens,
+        });
+        if let Some(cost) = usage
+            .cost_usd
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        {
+            fields["cost"] = json!(cost);
+            fields["currency"] = json!("USD");
+        }
         self.call(
             "run_usage_report",
-            json!({"reportKey": report_key, "model": model,
-                   "inputTokens": input_tokens, "outputTokens": output_tokens}),
+            fields,
             &format!(
                 "usage-{}",
                 short(&format!("{}-{report_key}", self.run_id.simple()))
@@ -225,6 +234,16 @@ impl RunReports {
         .await?;
         Ok(())
     }
+}
+
+/// One turn's tokens on one model.
+#[derive(Clone, Copy, Debug)]
+pub struct Usage<'a> {
+    pub model: &'a str,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cost_usd: Option<f64>,
 }
 
 /// The idempotency key of a batch of a run's activities: it names them, so

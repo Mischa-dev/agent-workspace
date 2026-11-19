@@ -1216,6 +1216,9 @@ pub struct UsageInput {
     pub cached_input_tokens: i64,
     pub cost: Option<f64>,
     pub currency: Option<String>,
+    /// The server's own estimate at the workspace's catalog prices, with its
+    /// currency, for a built-in run whose harness gave no cost.
+    pub estimate: Option<(f64, String)>,
 }
 
 #[derive(Clone, Debug)]

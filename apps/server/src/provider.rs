@@ -741,6 +741,12 @@ async fn drive_turn(
     let stopping = || state.supervisors.is_shutting_down() || lease_lost.is_cancelled();
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
+    // The model a turn's tokens were on when the harness doesn't say.
+    let run_model = crate::runs::usage::builtin_scope_of(crate::db::scoped(&state.pool), run_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|scope| scope.model);
     loop {
         tokio::select! {
             event = provider.next_event() => {
@@ -822,7 +828,34 @@ async fn drive_turn(
                         crate::usage::record_run_report(&state, provider.account_id(), report).await;
                     }
                     HarnessEvent::TokensUsed(usage) => {
-                        crate::run_log::record_tokens(&state, run_id, usage).await;
+                        // Reported like any host's usage, so budgets count
+                        // it; usage is a side note to the run, so a failure
+                        // is logged, never the run's.
+                        let model = usage
+                            .model
+                            .clone()
+                            .filter(|model| (1..=200).contains(&model.len()))
+                            .or_else(|| run_model.clone())
+                            .unwrap_or_else(|| "default".to_owned());
+                        let reported = reports
+                            .usage(
+                                &format!("tokens-{}", Uuid::now_v7().simple()),
+                                &agent_workspace_builtin_host::runtime::report::Usage {
+                                    model: &model,
+                                    input_tokens: usage.input_tokens,
+                                    output_tokens: usage.output_tokens,
+                                    cached_input_tokens: usage.cached_input_tokens,
+                                    cost_usd: usage.reported_cost_usd,
+                                },
+                            )
+                            .await;
+                        if let Err(error) = reported {
+                            tracing::warn!(
+                                error_category = AppError::from(error).log_category(),
+                                %run_id,
+                                "run usage not recorded"
+                            );
+                        }
                     }
                     HarnessEvent::Note(text) => {
                         if !text.trim().is_empty() {

@@ -867,6 +867,23 @@ impl Operation for RunUsageReport {
             own_run(call, run_id).await?;
         }
         let reporter = reporter(call);
+        // A built-in run's harness rarely knows its cost: the workspace's
+        // catalog prices it, as the catalog page shows them.
+        let estimate = match run_id {
+            Some(run_id) if input.cost.is_none() => crate::run_log::builtin_estimate(
+                call.state,
+                run_id,
+                &input.model,
+                crate::run_log::Tokens {
+                    input: input.input_tokens.unwrap_or(0),
+                    output: input.output_tokens.unwrap_or(0),
+                    cached_input: input.cached_input_tokens.unwrap_or(0),
+                },
+            )
+            .await
+            .map_err(|error| OpError::logged("run_usage_report", &error))?,
+            _ => None,
+        };
         let tx = call.tx().await?;
         let recorded = ops::record_usage(
             tx,
@@ -882,6 +899,7 @@ impl Operation for RunUsageReport {
                 cached_input_tokens: input.cached_input_tokens.unwrap_or(0),
                 cost: input.cost,
                 currency: input.currency,
+                estimate,
             },
         )
         .await?;

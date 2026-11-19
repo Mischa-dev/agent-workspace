@@ -266,6 +266,7 @@ pub async fn model_turn(
             cached_input_tokens: 0,
             cost: (answer.cost_micros > 0).then(|| answer.cost_micros as f64 / 1_000_000.0),
             currency: (answer.cost_micros > 0).then(|| "USD".to_owned()),
+            estimate: None,
         },
     )
     .await;

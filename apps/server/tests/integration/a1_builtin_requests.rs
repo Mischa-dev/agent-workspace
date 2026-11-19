@@ -242,3 +242,67 @@ fn the_harness_hears_what_was_answered() {
         Outcome::Deny
     );
 }
+
+/// A1.17: a built-in run's tokens go through the host protocol like any
+/// host's, so they count against budgets, and the workspace's catalog
+/// prices them when the harness gives no cost. A retry adds nothing.
+#[tokio::test]
+async fn built_in_tokens_are_reported_priced_and_counted_once() {
+    let Some((setup, seed, _temporary)) = seeded("a1_builtin_tokens").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let run_id = blocked_run(pool, &seed, "builtin-tokens").await;
+    sqlx::query(
+        r#"
+        INSERT INTO harness_models (id, organization_id, adapter_kind, model_id, provider_data)
+        SELECT gen_random_uuid(), $1, account.adapter_kind, 'priced-model',
+               '{"id": "priced-model", "displayName": "Priced",
+                 "prices": {"currency": "USD", "inputPerMillion": 2.0, "outputPerMillion": 10.0}}'::jsonb
+        FROM execution_profiles profile
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE profile.id = $2
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(seed.execution_profile_id)
+    .execute(pool)
+    .await
+    .expect("a priced model");
+    let state = app_state(pool);
+    started(&state, run_id).await;
+    let reports = agent_workspace_server::hosts::builtin::report::open(&state, run_id)
+        .await
+        .expect("the run's reports");
+    let tokens = agent_workspace_builtin_host::runtime::report::Usage {
+        model: "priced-model",
+        input_tokens: 1_000_000,
+        output_tokens: 100_000,
+        cached_input_tokens: 0,
+        cost_usd: None,
+    };
+    reports.usage("turn-1", &tokens).await.expect("reported");
+    // The same report again (a retry) adds nothing.
+    reports.usage("turn-1", &tokens).await.expect("reported again");
+
+    let (input, output, estimated, currency) =
+        sqlx::query_as::<_, (i64, i64, Option<f64>, Option<String>)>(
+            "SELECT input_tokens, output_tokens, estimated_cost, currency FROM run_usage WHERE run_id = $1 AND model = 'priced-model'",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("the run's usage");
+    assert_eq!((input, output), (1_000_000, 100_000));
+    // 1M input at 2.00 and 100k output at 10.00 a million.
+    assert!(estimated.is_some_and(|cost| (cost - 3.0).abs() < 1e-9), "{estimated:?}");
+    assert_eq!(currency.as_deref(), Some("USD"));
+    let counted = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT sum(quantity)::bigint FROM usage_events WHERE workspace_id = $1 AND meter = 'reported_tokens'",
+    )
+    .bind(seed.organization_id)
+    .fetch_one(pool)
+    .await
+    .expect("the budget meter");
+    assert_eq!(counted, Some(1_100_000));
+}
