@@ -79,12 +79,14 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
 async fn idle(pool: &PgPool) -> (i64, i64, String) {
     let (transactions, rows) = counts(pool).await;
     let before = tables(pool).await;
+    let maintenance_before = maintenance(pool).await;
     tokio::time::sleep(WINDOW).await;
     // Busy connections report their statistics within a second of going
     // idle; let the last of them land.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (transactions_after, rows_after) = counts(pool).await;
     let after = tables(pool).await;
+    let maintenance = maintenance(pool).await - maintenance_before;
     // What the server did in the window: jobs it ran, consumers it moved.
     let work = sqlx::query_scalar::<_, Option<String>>(
         "SELECT concat_ws('; ', \
@@ -103,8 +105,28 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     (
         transactions_after - transactions,
         rows_after - rows,
-        format!("{}; {work}", busiest(&before, &after)),
+        format!(
+            "{}; autovacuum passes {maintenance}; {work}",
+            busiest(&before, &after)
+        ),
     )
+}
+
+/// Autovacuum and autoanalyze passes over the test database's tables so
+/// far: each is a transaction of its own, so one landing in a window shows.
+async fn maintenance(pool: &PgPool) -> i64 {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("SELECT pg_stat_clear_snapshot()")
+        .execute(&mut *connection)
+        .await
+        .expect("clear snapshot");
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(sum(autovacuum_count + autoanalyze_count), 0)::bigint \
+         FROM pg_stat_user_tables",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("maintenance statistics")
 }
 
 /// Until the server has caught up with what making the workspaces wrote,
@@ -193,13 +215,15 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
         .await
         .expect("analyze");
     settle(pool).await;
-    // What autovacuum does on a server in time: the log and the queue grew
-    // by a workspace's worth of rows each, and stale statistics would plan
-    // the idle polls by position as scans of the whole table.
-    sqlx::query("ANALYZE events, background_jobs, hosts")
+    // What autovacuum does on a server in time: every table that making the
+    // workspaces wrote to is vacuumed and analyzed once. Stale statistics
+    // would plan the idle polls by position as scans of the whole table,
+    // and autovacuum catching up inside the window is a transaction per
+    // table, which is the batch insert's cost, not idle work.
+    sqlx::query("VACUUM (ANALYZE)")
         .execute(pool)
         .await
-        .expect("analyze the log");
+        .expect("vacuum");
     settle(pool).await;
     let (many_transactions, many_rows, many_tables) = idle(pool).await;
 
