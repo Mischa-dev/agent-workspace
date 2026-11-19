@@ -14,6 +14,7 @@ import {
   type ReactionUpdates,
 } from '../conversations/liveMessages'
 import { cacheContext, RECONNECT, SELF_HANDLED, type Touch } from './handlers'
+import { loadTouchTable } from './handlers/load'
 import { accessChanged } from './live/access'
 import {
   after,
@@ -148,7 +149,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const context = cacheContext(queryClient)
     // What each event makes stale loads with the connection, not the first
     // paint; an event that beats it waits for it.
-    const touchTable = import('./handlers/table')
+    const touchTable = loadTouchTable()
     // A load that fails (or is cut off as the page or a test goes away) is
     // handled where each event awaits it; this keeps it from going unhandled.
     touchTable.catch(() => undefined)

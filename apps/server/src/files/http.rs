@@ -18,9 +18,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, ThingKind, Upload,
-    readable_file, remove_file, served_content_type, store_upload, task_files, thing_destination,
-    upload_limit,
+    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, ThingKind, readable_file,
+    remove_file, served_content_type, store_body, task_files, thing_destination, upload_limit,
 };
 use crate::{
     AppState,
@@ -50,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/files/{id}", get(describe).delete(remove))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
+        .route("/api/v1/files/links/{token}", get(super::links::open_link))
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,19 +104,17 @@ async fn upload_to_conversation(
     let limit = upload_limit(&mut transaction, conversation.place()).await?;
     // Nothing stays locked while the bytes arrive.
     transaction.commit().await?;
-    let bytes = read_body(body, limit).await?;
-    let row = store_upload(
+    let row = store_body(
         &state,
         principal.actor_id,
         Destination::Conversation {
             project_id: conversation.place(),
             conversation_id: conversation.id,
         },
-        Upload {
-            name: query.name,
-            declared_type: declared_type(&headers),
-            bytes,
-        },
+        query.name,
+        declared_type(&headers),
+        body,
+        limit,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(row.view())).into_response())
@@ -140,8 +138,7 @@ async fn upload_to_task(
     authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
-    let bytes = read_body(body, limit).await?;
-    let row = store_upload(
+    let row = store_body(
         &state,
         principal.actor_id,
         Destination::Task {
@@ -149,11 +146,10 @@ async fn upload_to_task(
             work_item_id,
             for_comment,
         },
-        Upload {
-            name: query.name,
-            declared_type: declared_type(&headers),
-            bytes,
-        },
+        query.name,
+        declared_type(&headers),
+        body,
+        limit,
     )
     .await?;
     if !for_comment {
@@ -181,16 +177,14 @@ async fn upload_to_thing(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let limit = upload_limit(&mut transaction, destination.project_id()).await?;
     transaction.commit().await?;
-    let bytes = read_body(body, limit).await?;
-    let row = store_upload(
+    let row = store_body(
         &state,
         principal.actor_id,
         destination,
-        Upload {
-            name: query.name,
-            declared_type: declared_type(&headers),
-            bytes,
-        },
+        query.name,
+        declared_type(&headers),
+        body,
+        limit,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(row.view())).into_response())
@@ -289,8 +283,27 @@ async fn content(
     )
     .await?;
     let download = query.download.is_some() || !row.is_inline_image();
+    // A download can come straight from the store when the workspace says
+    // so; pictures shown inline stay on our own origin, which the content
+    // security policy allows.
+    if download && redirects_downloads(&state, &row).await? {
+        let store = FileStore::resolve(&state, &row.store_id).await?;
+        if let Some(url) = store.presign_get(
+            &row.storage_key,
+            super::links::DEFAULT_TTL,
+            served_content_type(&row),
+            &content_disposition(&row.name, true),
+        )? {
+            let mut response = axum::response::Redirect::to(url.as_str()).into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            return Ok(response);
+        }
+    }
     serve(
         &state,
+        &row.store_id,
         &row.storage_key,
         served_content_type(&row),
         &row.name,
@@ -322,11 +335,12 @@ async fn thumbnail(
             } else {
                 "image/png"
             };
-            serve(&state, key, content_type, &row.name, false).await
+            serve(&state, &row.store_id, key, content_type, &row.name, false).await
         }
         None => {
             serve(
                 &state,
+                &row.store_id,
                 &row.storage_key,
                 &row.content_type,
                 &row.name,
@@ -341,12 +355,13 @@ async fn thumbnail(
 /// them as part of the app: inline only for images, otherwise a download.
 pub(crate) async fn serve(
     state: &AppState,
+    store_id: &str,
     key: &str,
     content_type: &str,
     name: &str,
     download: bool,
 ) -> Result<Response, AppError> {
-    let stored = FileStore::from_config(&state.config).get(key).await?;
+    let stored = FileStore::resolve(state, store_id).await?.get(key).await?;
     let mut response = Response::new(stored.body);
     let headers = response.headers_mut();
     headers.insert(
@@ -389,6 +404,29 @@ pub(crate) fn content_disposition(name: &str, download: bool) -> String {
         "{}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}",
         if download { "attachment" } else { "inline" }
     )
+}
+
+/// Whether the file's workspace sends downloads straight from the store
+/// (`files.redirect_downloads`).
+async fn redirects_downloads(state: &AppState, row: &FileRow) -> Result<bool, AppError> {
+    if row.store_id == super::store::LOCAL {
+        return Ok(false);
+    }
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    let organization_id = super::organization_of(&mut *connection, row.project_id).await?;
+    let effective = crate::settings::resolve(
+        &mut connection,
+        crate::settings::SettingsContext {
+            organization_id,
+            project_id: None,
+            actor_id: None,
+        },
+        &std::collections::BTreeMap::new(),
+    )
+    .await?;
+    Ok(effective
+        .value::<bool>("files.redirect_downloads")
+        .unwrap_or(false))
 }
 
 fn declared_type(headers: &HeaderMap) -> Option<String> {

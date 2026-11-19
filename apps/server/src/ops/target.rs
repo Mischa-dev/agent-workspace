@@ -177,6 +177,15 @@ const KINDS: &[(&str, &str)] = &[
                                WHERE parent.id = thing.access_parent_id) \
                 OR conversation_visible_to(thing.access_parent_id, $2))",
     ),
+    // K5.20: a direct upload, by its uploader alone, while they may still
+    // see its conversation.
+    (
+        "file_upload",
+        "SELECT upload.workspace_id, upload.space_id FROM file_uploads upload \
+         WHERE upload.id = $1 AND upload.uploaded_by_actor_id = $2 \
+           AND (upload.conversation_id IS NULL \
+                OR conversation_visible_to(upload.conversation_id, $2))",
+    ),
     // K4.7: a space its member may bring back, archived or not. Archived
     // spaces are closed to everything else, so only the workspace comes
     // back; `space_restore` checks the space as it was.
@@ -419,6 +428,15 @@ async fn thing(
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?
         .flatten(),
+        ("file_upload", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the upload's conversation was just checked through conversation_visible_to\n\
+                 SELECT conversation_id FROM file_uploads WHERE id = $1 AND space_id IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?
+        .flatten(),
         ("reply_request" | "reply_request_seen", None) => sqlx::query_scalar::<_, Uuid>(
             "-- visibility: the request was just found through its conversation\n\
                  SELECT conversation_id FROM reply_requests WHERE id = $1",
@@ -475,6 +493,7 @@ fn what_of(kind: &str) -> &'static str {
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
+        "file_upload" => "That upload",
         "repository" => "That repository",
         "pull_request" => "That pull request",
         "file" => "That file",

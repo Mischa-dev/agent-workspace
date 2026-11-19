@@ -1276,8 +1276,8 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
         );
     }
     let project_id = project.parse::<Uuid>().expect("project");
-    sqlx::query("INSERT INTO work_item_dependencies (project_id, blocking_project_id, blocking_work_item_id, blocked_work_item_id, created_by_actor_id) SELECT $1, $1, chain.id, chain.next, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, n)) chain WHERE chain.next IS NOT NULL")
-        .bind(project_id).bind(&tasks).execute(&setup.pool).await.expect("chain");
+    sqlx::query("INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id) SELECT thing.workspace_id, chain.id, chain.next, 'blocks', 'explicit', (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, n)) chain JOIN things thing ON thing.id = chain.id WHERE chain.next IS NOT NULL")
+        .bind(&tasks).execute(&setup.pool).await.expect("chain");
     let result = tool(
         &setup.app,
         &token,
@@ -1291,7 +1291,7 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
         "long cycle accepted: {result}"
     );
     let edges: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM work_item_dependencies WHERE project_id = $1")
+        sqlx::query_scalar("SELECT count(*) FROM task_dependencies WHERE project_id = $1")
             .bind(project_id)
             .fetch_one(&setup.pool)
             .await

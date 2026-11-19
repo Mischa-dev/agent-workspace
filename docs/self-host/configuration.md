@@ -52,7 +52,17 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_DATA_ROOT` | `.agent-workspace` | Where uploaded files, artifacts and other data on disk live. |
 | `AGENT_WORKSPACE_DATA_QUOTA_BYTES` | `21474836480` | The most the data root may hold (at least 1 GiB). |
 | `AGENT_WORKSPACE_MINIMUM_FREE_BYTES` | `5368709120` | Free disk the server keeps; uploads are refused below it (at least 1 GiB). |
+| `AGENT_WORKSPACE_FILE_STORE` | `local` | Where new uploads go: `local` (under the data root) or `object` (the S3-compatible store below). Files already stored stay where they are and are still served. |
+| `AGENT_WORKSPACE_S3_ENDPOINT` | none | An S3-compatible store's address, such as `https://s3.us-east-1.amazonaws.com` or a MinIO server's. Set it with the bucket and both key paths, or none of them. |
+| `AGENT_WORKSPACE_S3_BUCKET` | none | The bucket files go in. |
+| `AGENT_WORKSPACE_S3_REGION` | `us-east-1` | The bucket's region (`auto` for stores that ignore it). |
+| `AGENT_WORKSPACE_S3_PREFIX` | none | A folder inside the bucket every key goes under. |
+| `AGENT_WORKSPACE_S3_PATH_STYLE` | `false` | `true` for stores that want `endpoint/bucket/key` addresses (MinIO and most self-hosted ones). |
+| `AGENT_WORKSPACE_S3_ACCESS_KEY_ID_PATH` | none | An owner-only file holding the access key id. |
+| `AGENT_WORKSPACE_S3_SECRET_ACCESS_KEY_PATH` | none | An owner-only file holding the secret access key. |
 | `AGENT_WORKSPACE_SECRETS_KEY_PATH` | none (development: a keyring under `.agent-workspace-secrets/`) | The keyring that seals stored credentials: an owner-only file outside the data root, the web root and any Git work tree. If it names a file that doesn't exist yet in an existing directory, the server creates the keyring there on first start and logs the path (never the key). Back it up apart from database dumps. |
+
+With an object store, clients can also upload straight to it (`file_upload_start`, then `file_upload_finish`): the server signs a 15-minute `PUT` link fixed to the file's size, type and SHA-256 and checks what arrived, so large files never pass through it. Browsers need the bucket's CORS rules to allow `PUT` from the app's address with the `content-type` and `x-amz-checksum-sha256` headers. A workspace can also keep its uploads in a bucket of its own (`workspace_store_set`, for those who may manage its settings): the server writes, reads and deletes a test object there first, keeps the keys sealed in the keyring, and reaches the bucket only at a public address unless `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` is on.
 
 ## Background work and limits
 
@@ -61,10 +71,13 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_JOB_CONCURRENCY` | `4` | Background jobs run at once in this process (1 to 64). |
 | `AGENT_WORKSPACE_LEASE_SECONDS` | `15` | How long a server's hold on single-holder work (the built-in host, the event router) lasts unless renewed (2 to 300). A server that stops without letting go hands its work on after this long. |
 | `AGENT_WORKSPACE_INSTANCE_LABEL` | none | A name for this server process when several share one database, shown with its instances (at most 80 characters). |
-| `AGENT_WORKSPACE_ROLES` | `api,live,work` | What this process does, any of the three, comma separated. `api` serves the app, its API, MCP and GitHub webhooks; `live` holds browsers' live connections; `work` runs background jobs, the event log's sequencer and consumers, replies and the one-off startup work. A process with neither `api` nor `live` answers health checks only. Every role needs at least one process somewhere. |
+| `AGENT_WORKSPACE_ROLES` | `api,live,work` | What this process does, any of the three, comma separated. `api` serves the app, its API, MCP and GitHub webhooks; `live` holds browsers' live connections; `work` runs background jobs, the event log's sequencer and consumers, replies and the one-off startup work. A process with neither `api` nor `live` answers health checks only. Every role needs at least one process somewhere. Only `work` applies database migrations as it starts; an `api` or `live` process starts cold and answers `/health/ready` with 503 until the schema is its release's, or run `agent-workspace-server migrate` first. With the work loop off, `live` processes run the log's sequencer. |
 | `AGENT_WORKSPACE_BUILTIN_HOST` | `on` | Whether a `work` process may run agents on this machine (the built-in host: runs, their recovery, repositories on its disk). One process at a time holds it. `off` on processes whose machine shouldn't. |
 | `AGENT_WORKSPACE_DRAIN_SECONDS` | `5` | When asked to stop, how long this process answers `/health/ready` with 503 before it closes its live connections (browsers reconnect to another process) and stops taking requests (0 to 120). The service manager's stop timeout must be longer than this plus the longest request. |
 | `AGENT_WORKSPACE_HEALTH_ADDR` | the server address | Where a process with neither `api` nor `live` answers `/health/live`, `/health/ready` and `/health/version`. |
+| `AGENT_WORKSPACE_WORK_LOOP` | `on` | Whether a `work` process runs its queue work (jobs, the log's consumers, agents' wake-ups, GitHub jobs) by itself. `off`: only when something calls `POST /internal/work/tick`, so an outside timer can drive it and nothing has to stay awake. The built-in host, when on, keeps running either way. |
+| `AGENT_WORKSPACE_WORK_TICK_SECRET_PATH` | none (no tick) | An owner-only file holding the bearer token `POST /internal/work/tick` requires. Each tick runs one round of work for at most 25 seconds and answers with what it did and `"more": true` when more is due; call it again then. |
+| `AGENT_WORKSPACE_LIVE_URL` | none (this server's own live role) | Where an outside live service implementing `docs/contracts/live.md` takes publishes, such as `http://10.0.0.7:3200`. Set on every process: one `work` process publishes the log there, `api` processes send it presence, typing and streamed text, and a `live` process of this server then takes its frames only from those publishes. |
 | `AGENT_WORKSPACE_LINK_PREVIEWS` | `true` | Whether this server fetches previews of links people post. Off, no workspace gets them, whatever its own setting says. |
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |
@@ -99,6 +112,28 @@ Unset, people sign in with a password and two-factor codes.
 | `AGENT_WORKSPACE_WORKOS_GOOGLE_ENABLED` | `false` | Offer "Sign in with Google". |
 | `AGENT_WORKSPACE_WORKOS_AGENT_REGISTRATION_ENABLED` | `false` | Let agents register through WorkOS (needs the AuthKit domain). |
 | `AGENT_WORKSPACE_WORKOS_API_BASE` | `https://api.workos.com` | Development only: a loopback stand-in for browser tests. |
+
+## Sign-in with OpenID Connect (optional)
+
+One issuer people sign in with: a company identity service, or any provider
+that speaks OpenID Connect. Register this server with it as a confidential
+web client whose redirect address is `<public origin>/auth/oidc/callback`,
+asking for the `openid email profile` scopes. Set all three of the first
+variables together.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_WORKSPACE_OIDC_ISSUER` | none | The issuer's identifier, an `https` URL; its discovery document is read from `<issuer>/.well-known/openid-configuration` on each sign-in. |
+| `AGENT_WORKSPACE_OIDC_CLIENT_ID` | none | This server's client id at the issuer. |
+| `AGENT_WORKSPACE_OIDC_CLIENT_SECRET_PATH` | none | An owner-only file holding the client secret. |
+| `AGENT_WORKSPACE_OIDC_NAME` | `single sign-on` | What the sign-in button says: "Continue with ...". |
+| `AGENT_WORKSPACE_OIDC_ALLOW_SIGNUP` | `false` | Whether someone the issuer vouches for, with a verified email and no account here, gets one. Off, they need an account first (an invitation, or the operator). |
+| `AGENT_WORKSPACE_OIDC_JOIN` | none | `domain=workspace-address`, such as `example.com=acme`: people whose verified email is in the domain join that workspace as members when they first sign in. |
+
+The first sign-in links the issuer's identity to the account whose verified
+email matches, or to the signed-in account when someone links it from
+Account settings. An email the issuer doesn't say it verified never links
+an account and never makes one.
 
 ## GitHub (optional)
 

@@ -16,11 +16,17 @@
     "automation_delete": "change",
     "automation_run_start": "create",
     "automation_preview": "query",
-    "automation_history": "query"
+    "automation_history": "query",
+    "incoming_hook_create": "create",
+    "incoming_hook_list": "query",
+    "incoming_hook_delete": "change"
   },
-  "routes": ["/api/v1/projects/{project_id}/automations*"],
+  "routes": [
+    "/api/v1/projects/{project_id}/automations*",
+    "/api/v1/incoming-hooks*"
+  ],
   "events": {
-    "emits": [],
+    "emits": ["incoming_hook.received"],
     "listens": [
       "task.created",
       "task.updated",
@@ -37,7 +43,10 @@
   },
   "notifications": ["automation", "automation_disabled"],
   "search": [],
-  "automations": { "triggers": ["schedule"], "actions": ["notify", "run_operation"] },
+  "automations": {
+    "triggers": ["schedule", "incoming_hook"],
+    "actions": ["notify", "run_operation"]
+  },
   "things": [
     {
       "kind": "automation",

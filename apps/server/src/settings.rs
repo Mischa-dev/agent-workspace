@@ -293,6 +293,15 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "10240",
     },
     SettingDef {
+        key: "files.redirect_downloads",
+        label: "Download files from storage",
+        description: "Send file downloads straight from the storage service rather than through this server, when files are kept in one.",
+        kind: SettingType::Bool,
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "false",
+    },
+    SettingDef {
         key: "replies.max_chain_depth",
         label: "Deepest reply chain",
         description: "How many replies in a row may ask someone else to reply before the conversation waits for a fresh message or Continue. Stops two agents from answering each other forever.",

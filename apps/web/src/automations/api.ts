@@ -36,6 +36,8 @@ export type Trigger =
   | { kind: 'page_changed'; pageId?: string | null }
   | { kind: 'sheet_changed'; sheetId?: string | null }
   | { kind: 'whiteboard_changed'; whiteboardId?: string | null }
+  /** A signed delivery to one of the project's incoming hooks. */
+  | { kind: 'incoming_hook'; hookId: string }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'

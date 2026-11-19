@@ -12,6 +12,8 @@
 //! Writers that predate the catalogue stage typed change notices with
 //! `outbox::enqueue` (`notice`); they are events like any other.
 
+pub mod activity;
+pub mod archive;
 pub mod catalog;
 pub mod consumer;
 pub mod notice;
@@ -20,7 +22,9 @@ pub mod sequencer;
 pub mod upkeep;
 
 pub use catalog::{EventClass, EventType};
-pub use consumer::{Consumer, ConsumerError, EventFilter, catch_up, read, run_consumer};
+pub use consumer::{
+    Consumer, ConsumerError, EventFilter, LogRound, catch_up, log_round, read, run_consumer,
+};
 pub use route::*;
 
 use serde::Serialize;
@@ -28,6 +32,32 @@ use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+/// The logged event at `position`, if there is one. The caller decides who
+/// may see it (delivery checks an app's limits with it).
+pub async fn logged_at(
+    connection: &mut PgConnection,
+    position: i64,
+) -> Result<Option<LoggedEvent>, sqlx::Error> {
+    sqlx::query_as::<_, LoggedEvent>(&format!(
+        "SELECT {LOGGED_EVENT_COLUMNS} FROM events WHERE position = $1"
+    ))
+    .bind(position)
+    .fetch_optional(connection)
+    .await
+}
+
+/// Events waiting for a position in the log: how many, and the age in
+/// seconds of the oldest (0 when none wait). For the status page and the
+/// metrics, which read the log only through this module.
+pub async fn staged_backlog(connection: &mut PgConnection) -> Result<(i64, f64), sqlx::Error> {
+    sqlx::query_as::<_, (i64, f64)>(
+        "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+         FROM event_staging",
+    )
+    .fetch_one(connection)
+    .await
+}
 
 /// Who is acting in this transaction, for every event it emits: the
 /// account, the credential (and so the app) it came through, who asked for
@@ -227,6 +257,14 @@ impl<'a> NewEvent<'a> {
 /// The largest payload an event may carry.
 pub const MAX_PAYLOAD_BYTES: usize = 8192;
 
+/// The direct scope's fixed id (rulings R19, R20): DMs and groups belong to
+/// the people in them, not to a workspace, and K4.23's reserved
+/// `organizations` row with this id holds them. Its events are heard only
+/// by a conversation's participants or one account (a CHECK on the log
+/// refuses a workspace or space audience), and a reader asks for them
+/// apart from any workspace.
+pub const DIRECT_SCOPE_ID: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_d1ec);
+
 /// Stages one event in the change's transaction; the sequencer gives it a
 /// position once the transaction commits, and a rollback leaves nothing.
 pub async fn emit(
@@ -383,6 +421,16 @@ pub async fn tail(
     .fetch_all(&mut *connection)
     .await?;
     Ok(rows)
+}
+
+/// The oldest position the log still keeps (1 when nothing was dropped).
+pub async fn oldest_position(connection: &mut PgConnection) -> Result<i64, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT min(position) FROM events")
+            .fetch_one(&mut *connection)
+            .await?
+            .unwrap_or(1),
+    )
 }
 
 /// The newest position in the log (0 when it is empty).

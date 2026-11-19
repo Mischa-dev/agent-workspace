@@ -25,6 +25,12 @@ impl CoreModule for Module {
         module.routes(crate::profiles::router);
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
+        module.operations(crate::events::activity::register_ops);
+        module.operations(crate::links::ops::register_ops);
+        module.operations(crate::files::ops::register_ops);
+        module.operations(crate::export::ops::register_ops);
+        module.operations(crate::metering::ops::register_ops);
+        module.routes(crate::export::transfer::router);
         module.operations(crate::accounts::claims::register_ops);
         module.routes(crate::accounts::claims::router);
         module.operations(crate::accounts::credential_ops::register_ops);

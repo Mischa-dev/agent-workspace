@@ -17,6 +17,7 @@ import {
 import '../../automations/automations.css'
 import { TryRuleDialog } from '../../automations/TryRuleDialog'
 import { AUTOMATION_OPERATIONS } from '../../automations/operationForm'
+import { IncomingHooksSection } from '../../automations/IncomingHooksSection'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
 import { priorityLabel } from '../../work-items/constants'
@@ -88,6 +89,8 @@ function describeTrigger(trigger: Trigger): string {
       return trigger.sheetId ? 'When this sheet changes' : 'When a sheet changes'
     case 'whiteboard_changed':
       return trigger.whiteboardId ? 'When this whiteboard changes' : 'When a whiteboard changes'
+    case 'incoming_hook':
+      return 'When a delivery comes in on an incoming hook'
   }
 }
 
@@ -329,6 +332,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
           For example: when a pull request’s checks fail, launch an agent on it.
         </EmptyState>
       )}
+      <IncomingHooksSection manage={manage} projectId={projectId} />
       {editing && (
         <RuleDialog
           onClose={() => setEditing(null)}

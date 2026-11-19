@@ -772,7 +772,7 @@ async fn automatic_apply_stops_for_someone_who_lost_access() {
         let pool = fixture.pool.clone();
         async move {
             sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM work_item_dependencies WHERE blocked_work_item_id = $1",
+                "SELECT count(*) FROM task_dependencies WHERE blocked_work_item_id = $1",
             )
             .bind(id)
             .fetch_one(&pool)

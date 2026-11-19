@@ -19,6 +19,7 @@ use agent_workspace_server::{
     realtime::RealtimeHub,
     router,
     secrets::FileKeyring,
+    test_support::file_link,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -89,6 +90,8 @@ pub(crate) struct World {
     /// The owner's webhook: a connection with an address (A2.6).
     pub(crate) webhook: Uuid,
     pub(crate) rule: Uuid,
+    /// An incoming hook in the project (K3.26).
+    pub(crate) incoming_hook: Uuid,
     pub(crate) whiteboard: Uuid,
     pub(crate) project_whiteboard: Uuid,
     /// A collection (AWD-90) with a field, a saved view and a record whose
@@ -109,12 +112,18 @@ pub(crate) struct World {
     pub(crate) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
     pub(crate) link_preview: Uuid,
+    /// A signed link to `file` for this workspace's owner (K5.12), and one
+    /// for the same owner to the other workspace's file.
+    pub(crate) file_link: String,
+    pub(crate) foreign_file_link: String,
     /// The workspace's own emoji (C2.19), added by `rook`.
     pub(crate) custom_emoji: Uuid,
     /// A built module (M1.6) in the project, holding nothing.
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
     pub(crate) package_install: Uuid,
+    /// A finished export of the workspace (H1.9), by its owner.
+    pub(crate) export: Uuid,
     /// The workspace's own package list (M1.11), never read.
     pub(crate) directory_source: Uuid,
     /// A long call of the owner's (K2.21), answered.
@@ -315,8 +324,23 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     let b_organization = second_workspace_owner(&pool).await;
     let b_browser = login_as(&app, &format!("owner-{MARKER}")).await;
 
-    let a = build_workspace(&app, &pool, "A", "", a_owner.organization_id, a_browser).await;
-    let b = build_workspace(&app, &pool, "B", MARKER, b_organization, b_browser).await;
+    let mut a = build_workspace(&app, &pool, "A", "", a_owner.organization_id, a_browser).await;
+    let mut b = build_workspace(&app, &pool, "B", MARKER, b_organization, b_browser).await;
+    let uploader = |file: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT uploaded_by_actor_id FROM files WHERE id = $1")
+                .bind(file)
+                .fetch_one(&pool)
+                .await
+                .expect("uploader")
+        }
+    };
+    let (a_owner_id, b_owner_id) = (uploader(a.file).await, uploader(b.file).await);
+    a.file_link = file_link(&state, a_owner_id, a.file);
+    a.foreign_file_link = file_link(&state, a_owner_id, b.file);
+    b.file_link = file_link(&state, b_owner_id, b.file);
+    b.foreign_file_link = file_link(&state, b_owner_id, a.file);
     // The link previews' images, as the fetch job would have stored them.
     for world in [&a, &b] {
         let folder = data_root
@@ -328,6 +352,27 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
             tiny_png(),
         )
         .expect("preview image");
+    }
+    // Each owner's finished export (H1.9), so its download is a case.
+    for world in [&mut a, &mut b] {
+        let (status, started) = send(
+            &app,
+            world.browser.request(
+                "POST",
+                &format!(
+                    "/api/v2/w/{}/ops/workspace_export_start",
+                    world.organization
+                ),
+                Some(&format!("fixture-export-{}", world.organization.simple())),
+                json!({}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "export: {status} {started}");
+        world.export = string_at(&started, "/value/id").parse().expect("export id");
+        agent_workspace_server::export::transfer::run_export(&state, world.export)
+            .await
+            .expect("export runs");
     }
     Some(TwoWorkspaces {
         app,
@@ -345,7 +390,9 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     })
 }
 
-async fn second_workspace_owner(pool: &PgPool) -> Uuid {
+/// A second workspace with its own owner, who signs in as
+/// [`second_owner_login`].
+pub(crate) async fn second_workspace_owner(pool: &PgPool) -> Uuid {
     let organization = Uuid::now_v7();
     let actor = Uuid::now_v7();
     let user = Uuid::now_v7();
@@ -390,6 +437,10 @@ async fn second_workspace_owner(pool: &PgPool) -> Uuid {
         .await
         .expect("B owner password");
     organization
+}
+
+pub(crate) fn second_owner_login() -> String {
+    format!("owner-{MARKER}")
 }
 
 pub(crate) async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
@@ -1507,6 +1558,22 @@ async fn build_workspace(
         app,
         browser.request(
             "POST",
+            &format!("/api/v2/w/{organization}/ops/incoming_hook_create"),
+            Some(&format!("incoming-hook-{tag}")),
+            json!({"spaceId": project, "name": format!("Inbound{m}")}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} incoming hook: {status} {created}"
+    );
+    let incoming_hook =
+        Uuid::parse_str(&string_at(&created, "/value/hook/id")).expect("incoming hook id");
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
             &format!("/api/v1/projects/{project}/bug-report-links"),
             None,
             json!({"name": format!("Game{m}")}),
@@ -1879,6 +1946,7 @@ async fn build_workspace(
         import,
         webhook,
         rule,
+        incoming_hook,
         whiteboard,
         project_whiteboard,
         collection,
@@ -1892,9 +1960,12 @@ async fn build_workspace(
         file_message,
         task_file,
         link_preview,
+        file_link: String::new(),
+        foreign_file_link: String::new(),
         custom_emoji,
         module,
         package_install,
+        export: Uuid::nil(),
         job,
         directory_source,
     }

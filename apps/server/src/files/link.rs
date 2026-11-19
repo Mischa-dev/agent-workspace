@@ -155,6 +155,7 @@ async fn fetch(
     let row = readable_file(&state.pool, claims.reader(), claims.file_id).await?;
     super::http::serve(
         &state,
+        &row.store_id,
         &row.storage_key,
         served_content_type(&row),
         &row.name,

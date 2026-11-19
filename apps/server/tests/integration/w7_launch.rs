@@ -218,13 +218,11 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     // Build waits on design.
     sqlx::query(
         r#"
-        INSERT INTO work_item_dependencies (
-            project_id, blocking_project_id, blocking_work_item_id, blocked_work_item_id,
-            created_by_actor_id
-        ) VALUES ($1, $1, $2, $3, $4)
+        INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin,
+                           created_by_account_id)
+        SELECT workspace_id, $1, $2, 'blocks', 'explicit', $3 FROM things WHERE id = $1
         "#,
     )
-    .bind(seed.project_id)
     .bind(design)
     .bind(build)
     .bind(seed.human_actor_id)

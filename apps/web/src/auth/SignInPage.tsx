@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
-import { requestJson } from '../api/client'
+import { apiUrl, requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { Banner, Button, TextField } from '../ui'
-import { offersSignIn } from '../app/clientConfig'
+import { offersSignIn, started } from '../app/clientConfig'
 import { authKeys, startWorkOs, workOsStatus } from './workos'
 import { AuthLayout } from './AuthLayout'
+import { setupKeys, setupStatus } from '../setup/api'
 import {
   installAuthenticatedSession,
   isAuthenticatedSession,
@@ -39,6 +40,8 @@ export function SignInPage() {
     queryKey: authKeys.passwordResetAvailable,
     queryFn: () => requestJson<{ available: boolean }>('/api/v1/auth/password-reset'),
   })
+  // A server nobody has signed in to yet is set up first (H1.14).
+  const setup = useQuery({ queryKey: setupKeys.status, queryFn: setupStatus, retry: false })
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -67,6 +70,10 @@ export function SignInPage() {
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
+
+  useEffect(() => {
+    if (setup.data?.needed || setup.data?.awaitingImport) navigate('/setup', { replace: true })
+  }, [navigate, setup.data])
 
   const workOsSignIn = async (way: 'google' | 'sso' | 'signup') => {
     setBusy(way)
@@ -194,8 +201,13 @@ export function SignInPage() {
   }
 
   const workosError = new URLSearchParams(location.search).get('workosError')
+  const oidcError = new URLSearchParams(location.search).get('oidcError')
   const google = Boolean(workos.data?.googleEnabled)
   const sso = Boolean(workos.data?.enabled)
+  // OpenID Connect (H1.18): a plain link, since the server starts it with a
+  // redirect. Shown only when the server said it offers it.
+  const oidc = started.signInMethods?.includes('oidc') ?? false
+  const oidcStart = apiUrl(`/auth/oidc/start?returnTo=${encodeURIComponent(safeReturnTo(location.search))}`)
   return (
     <AuthLayout
       footer={
@@ -219,6 +231,13 @@ export function SignInPage() {
         </Banner>
       ) : workosError ? (
         <Banner tone="danger">Single sign-on didn’t finish. Try again.</Banner>
+      ) : oidcError === 'unlinked' ? (
+        <Banner tone="danger">
+          There’s no account here for that sign-in yet. Sign in below with your username and password, then link it in
+          Account settings, or ask whoever runs this server.
+        </Banner>
+      ) : oidcError ? (
+        <Banner tone="danger">{started.oidcName ?? 'Single sign-on'} didn’t finish. Try again.</Banner>
       ) : null}
       {error && (
         <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
@@ -269,7 +288,7 @@ export function SignInPage() {
         )}
       </form>
       {/* Below the form, so the field you're typing in doesn't move when these arrive. */}
-      {google || sso ? (
+      {google || sso || oidc ? (
         <div className="aw-auth__sso">
           <p className="aw-auth__divider">
             <span>or</span>
@@ -295,6 +314,11 @@ export function SignInPage() {
             >
               Continue with single sign-on
             </Button>
+          ) : null}
+          {oidc ? (
+            <a aria-disabled={submitting || undefined} className="aw-btn aw-btn--secondary aw-btn--lg aw-auth__submit" href={oidcStart}>
+              <span className="aw-btn__label">Continue with {started.oidcName ?? 'single sign-on'}</span>
+            </a>
           ) : null}
         </div>
       ) : null}
