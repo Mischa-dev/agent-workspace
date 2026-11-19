@@ -1,5 +1,7 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
+import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
 import { parseMessageContent } from '../conversations/messageContentModel'
@@ -573,6 +575,32 @@ export async function createWorkItem(input: {
   idempotencyKey: string
 }) {
   const { projectId, idempotencyKey, ...json } = input
+  // W1.9a: through `task_create`, except custom field values, which it takes by name only.
+  if (!input.fieldValues || !Object.keys(input.fieldValues).length) {
+    const created = await callOp(
+      'task_create',
+      {
+        projectId,
+        title: input.title,
+        description: input.description,
+        type: input.typeId,
+        status: input.statusId,
+        priority: input.priority,
+        assignee: input.assigneeActorId,
+        parentId: input.parentWorkItemId,
+        milestone: input.milestoneId,
+        labels: input.labelIds?.length ? input.labelIds : undefined,
+        startDate: input.startDate,
+        dueDate: input.dueDate,
+        estimate: input.estimate,
+        acceptanceCriteria: input.acceptanceCriteria?.length ? input.acceptanceCriteria : undefined,
+        fromMessageId: input.sourceMessageId,
+        saySo: input.saySo,
+      },
+      { requestId: idempotencyKey },
+    )
+    return getWorkItem(projectId, created.workItemId)
+  }
   return normalizeWorkItem(
     await requestJson<unknown>(
       `/api/v1/projects/${encodeURIComponent(projectId)}/work-items`,
@@ -581,12 +609,51 @@ export async function createWorkItem(input: {
   )
 }
 
+/**
+ * The patch as `task_update` takes it, or null where it can't yet: custom
+ * field values go by name there and by id here, a status change there also
+ * moves the task to the bottom of its column, and a blocked reason isn't
+ * cleared the same way. Those stay on the old route until K2's task
+ * operations carry them (W1.9a).
+ */
+export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskUpdateInput | null {
+  if (patch.fieldValues !== undefined || patch.statusId !== undefined || patch.blockedReason !== undefined) return null
+  const input: TaskUpdateInput = { taskId: workItemId, expectedVersion: patch.expectedVersion }
+  if (patch.title !== undefined) input.title = patch.title
+  if (patch.description !== undefined) input.description = patch.description
+  if (patch.typeId !== undefined) input.type = patch.typeId
+  if (patch.priority !== undefined) input.priority = patch.priority
+  if (patch.assigneeActorId !== undefined) {
+    if (patch.assigneeActorId === null) input.clearAssignee = true
+    else input.assignee = patch.assigneeActorId
+  }
+  if (patch.parentWorkItemId !== undefined) {
+    if (patch.parentWorkItemId === null) input.clearParent = true
+    else input.parentId = patch.parentWorkItemId
+  }
+  if (patch.milestoneId !== undefined) input.milestone = patch.milestoneId ?? 'none'
+  if (patch.startDate !== undefined) input.startDate = patch.startDate ?? ''
+  if (patch.dueDate !== undefined) input.dueDate = patch.dueDate ?? ''
+  if (patch.estimate !== undefined) {
+    if (patch.estimate === null) input.clearEstimate = true
+    else input.estimate = patch.estimate
+  }
+  if (patch.addLabelIds?.length) input.addLabels = patch.addLabelIds
+  if (patch.removeLabelIds?.length) input.removeLabels = patch.removeLabelIds
+  return input
+}
+
 export async function updateWorkItem(input: {
   projectId: string
   workItemId: string
   patch: WorkItemPatch
   idempotencyKey: string
 }) {
+  const operation = taskUpdateInput(input.workItemId, input.patch)
+  if (operation) {
+    await callOp('task_update', operation, { requestId: input.idempotencyKey })
+    return getWorkItem(input.projectId, input.workItemId)
+  }
   return normalizeWorkItem(
     await requestJson<unknown>(
       `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}`,
@@ -595,6 +662,9 @@ export async function updateWorkItem(input: {
   )
 }
 
+// W1.9a: these writes go through the op client; its answers are short, so
+// each reads the task back to hand callers the whole task, as before.
+
 export async function setWorkItemArchived(input: {
   projectId: string
   workItemId: string
@@ -602,17 +672,10 @@ export async function setWorkItemArchived(input: {
   archived: boolean
   idempotencyKey: string
 }) {
-  const command = input.archived ? 'archive' : 'restore'
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/${command}`,
-      {
-        method: 'POST',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion },
-      },
-    ),
-  )
+  const task = { taskId: input.workItemId, expectedVersion: input.expectedVersion }
+  if (input.archived) await callOp('task_archive', task, { requestId: input.idempotencyKey })
+  else await callOp('task_restore', task, { requestId: input.idempotencyKey })
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 /** How many assignable people and agents one search returns. */
@@ -647,6 +710,19 @@ async function assignableActors(projectId: string, parameters: URLSearchParams):
   })
 }
 
+/** One change to a task's acceptance criteria, through `task_criteria_update`. */
+async function changeCriteria(
+  input: { projectId: string; workItemId: string; expectedVersion: number; idempotencyKey: string },
+  operation: CriterionOperationArgument,
+) {
+  await callOp(
+    'task_criteria_update',
+    { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations: [operation] },
+    { requestId: input.idempotencyKey },
+  )
+  return getWorkItem(input.projectId, input.workItemId)
+}
+
 export async function createAcceptanceCriterion(input: {
   projectId: string
   workItemId: string
@@ -654,18 +730,10 @@ export async function createAcceptanceCriterion(input: {
   text: string
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria`,
-      {
-        method: 'POST',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion, text: input.text },
-      },
-    ),
-  )
+  return changeCriteria(input, { op: 'add', text: input.text })
 }
 
+/** Edits, checks or moves one criterion; the task's version covers the one change. */
 export async function updateAcceptanceCriterion(input: {
   projectId: string
   workItemId: string
@@ -676,13 +744,10 @@ export async function updateAcceptanceCriterion(input: {
   completed?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, workItemId, criterionId, idempotencyKey, ...json } = input
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/acceptance-criteria/${encodeURIComponent(criterionId)}`,
-      { method: 'PATCH', idempotencyKey, json },
-    ),
-  )
+  const criterion = input.criterionId
+  if (input.text !== undefined) return changeCriteria(input, { op: 'edit', criterion, text: input.text })
+  if (input.position !== undefined) return changeCriteria(input, { op: 'move', criterion, position: input.position })
+  return changeCriteria(input, { op: input.completed ? 'check' : 'uncheck', criterion })
 }
 
 export async function removeAcceptanceCriterion(input: {
@@ -692,19 +757,9 @@ export async function removeAcceptanceCriterion(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria/${encodeURIComponent(input.criterionId)}`,
-      {
-        method: 'DELETE',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion },
-      },
-    ),
-  )
+  return changeCriteria(input, { op: 'remove', criterion: input.criterionId })
 }
 
-/** A comment needs words; one that is only files says what it attaches. */
 export function commentContent({ attachments, content, text }: { attachments?: { name: string }[]; content: MessageContentV1; text?: string }): MessageContentV1 {
   return text || !attachments?.length
     ? content
@@ -777,7 +832,7 @@ export async function editWorkItemComment(input: {
 
 /** Deletes a comment and every earlier version of its text: your own, or anyone's as a project owner or admin. */
 export async function deleteWorkItemComment(input: { projectId: string; workItemId: string; commentId: string }) {
-  return requestJson<unknown>(commentPath(input.projectId, input.workItemId, input.commentId), { method: 'DELETE' })
+  return callOp('task_comment_delete', { taskId: input.workItemId, commentId: input.commentId })
 }
 
 export async function getWorkItemCommentRevisions(projectId: string, workItemId: string, commentId: string): Promise<CommentRevisions> {
