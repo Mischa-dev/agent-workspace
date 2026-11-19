@@ -1,4 +1,5 @@
-//! K3.12: the link store, copied and mirrored. The silent, costly failures:
+//! K3.12: the link store, copied and mirrored (task dependencies and
+//! relations are written to it directly since K3.16). The silent, costly failures:
 //! a link made through one of today's tools that never reaches `links` (or
 //! arrives with the wrong kind, direction or author), one taken away that
 //! stays, and a copy that loses or doubles what the old stores hold.
@@ -243,11 +244,19 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     .expect("comment link");
     assert_eq!(text, ("message".to_owned(), comment.parse().expect("id")));
 
-    // A fresh copy from the old stores gives the same set.
-    sqlx::query("DELETE FROM links")
-        .execute(pool)
-        .await
-        .expect("clear");
+    // A fresh copy from the old stores gives the same set. Dependencies and
+    // relations between tasks are kept in the store alone (K3.16), so they
+    // stay.
+    let cleared = sqlx::query(
+        "DELETE FROM links \
+         WHERE NOT (origin = 'explicit' AND kind IN ('blocks', 'relates_to', 'duplicates') \
+                    AND from_thing_id IN (SELECT id FROM things WHERE kind = 'task') \
+                    AND to_thing_id IN (SELECT id FROM things WHERE kind = 'task'))",
+    )
+    .execute(pool)
+    .await
+    .expect("clear")
+    .rows_affected();
     let copy_all = || async {
         sqlx::query_scalar::<_, i64>("SELECT links_copy_all()")
             .fetch_one(pool)
@@ -256,7 +265,8 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     };
     let added = copy_all().await;
     assert_eq!(links(pool).await, stored);
-    assert_eq!(usize::try_from(added).expect("count"), stored.len());
+    assert_eq!(u64::try_from(added).expect("count"), cleared);
+    assert_eq!(stored.len() - usize::try_from(cleared).expect("cleared"), 3);
     assert_eq!(copy_all().await, 0, "a second copy adds nothing");
 
     // Taking each away takes its link.

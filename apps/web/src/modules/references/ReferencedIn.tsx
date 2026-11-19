@@ -16,6 +16,8 @@ const KIND_WORDS: Record<string, string> = {
   conversation: 'Conversation',
   project: 'Project',
   record: 'Record',
+  sheet: 'Sheet',
+  collection: 'Collection',
 }
 
 /**
@@ -27,18 +29,20 @@ export default function ReferencedIn({ kind, id }: { kind: string; id: string })
   // Its own key, under the thing's: realtime refetches every list like this
   // when any message, page or task changes, as any of them may link here.
   const query = useQuery({ ...thingQuery(kind, id), queryKey: queryKeys.thingReferences(kind, id) })
-  const references = (query.data?.links ?? []).filter((link) => link.kind === 'about' && link.direction === 'incoming')
+  // Embeds count too: a page showing a sheet inside it references it.
+  const references = (query.data?.links ?? []).filter((link) => (link.kind === 'about' || link.kind === 'embeds') && link.direction === 'incoming')
   if (references.length === 0) return null
   return (
     <Section id={`referenced-in-${id}`} title="Referenced in">
       <RowList label="Referenced in">
-        {references.map(({ other }) => (
+        {references.map(({ kind, other }) => (
           <Row
-            key={`${other.kind}:${other.id}`}
+            key={`${kind}:${other.kind}:${other.id}`}
             leading={<Icon name={thingIcon(other.kind)} size={16} />}
             meta={
               <span className="aw-references__kind">
                 {KIND_WORDS[other.kind] ?? 'Link'}
+                {kind === 'embeds' ? ' · embeds it' : ''}
                 {other.status ? ` · ${other.status}` : ''}
               </span>
             }

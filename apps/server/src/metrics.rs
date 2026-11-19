@@ -504,12 +504,7 @@ async fn render(state: &AppState) -> Result<String, AppError> {
     // The event log (K3.3): events waiting for a position, and how far
     // behind each consumer is.
     let (staged, oldest_staged) = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (i64, f64)>(
-            "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
-         FROM event_staging",
-        )
-        .fetch_one(&mut *connection)
-        .await
+        crate::events::staged_backlog(connection).await
     })
     .await?;
     out.push_str("# HELP aw_event_staging Events waiting for a position in the log.\n");

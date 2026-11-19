@@ -369,6 +369,13 @@
       "default": true
     },
     {
+      "id": "thing.activity",
+      "group": "technical",
+      "label": "Activity",
+      "description": "Who changed a page, when, through which app and for whom.",
+      "default": true
+    },
+    {
       "id": "home.working_now",
       "group": "workspace",
       "label": "Working now, on Home",

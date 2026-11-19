@@ -109,17 +109,28 @@ pub async fn add_partition(pool: &PgPool, lower: i64) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Delete what retention lets go: signals after 7 days, facts after 400.
+/// Delete what retention lets go: signals after 7 days, facts after 400
+/// and only once an archive file holds them (K3.25: history is never cut).
 /// Returns how many rows went.
 pub async fn apply_retention(pool: &PgPool) -> Result<u64, AppError> {
+    retain(pool, SIGNAL_DAYS, FACT_DAYS).await
+}
+
+/// [`apply_retention`] with its periods given.
+pub async fn retain(pool: &PgPool, signal_days: i32, fact_days: i32) -> Result<u64, AppError> {
     let mut deleted = 0;
-    for (class, days) in [("signal", SIGNAL_DAYS), ("fact", FACT_DAYS)] {
+    for (class, days) in [("signal", signal_days), ("fact", fact_days)] {
         loop {
             let gone = crate::db::scoped_one(pool, async |connection| {
                 sqlx::query(
                     "DELETE FROM events WHERE position IN ( \
-                     SELECT position FROM events \
+                     SELECT position FROM events old \
                      WHERE class = $1 AND created_at < now() - make_interval(days => $2) \
+                       AND (class = 'signal' OR EXISTS ( \
+                           SELECT 1 FROM event_archives archive \
+                           WHERE archive.workspace_id = old.workspace_id \
+                             AND old.position BETWEEN archive.first_position \
+                                                  AND archive.last_position)) \
                      ORDER BY position LIMIT $3)",
                 )
                 .bind(class)

@@ -3,9 +3,15 @@
 //! `tail` follows the event log on every instance and feeds the hub (K5.5);
 //! `ephemeral` carries what is never stored between instances.
 
+pub mod contract;
+pub mod documents;
 pub mod ephemeral;
+pub mod follow;
 mod hub;
+pub mod presence;
+mod subscriptions;
 pub mod tail;
 pub mod wake;
+mod wire;
 
 pub use hub::*;

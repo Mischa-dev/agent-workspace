@@ -52,6 +52,7 @@
   "settings/workspace/mailApi.ts": 5,
   "settings/workspace/ModulesPage.tsx": 2,
   "settings/workspace/roles.ts": 7,
+  "setup/api.ts": 3,
   "sheets/api.ts": 6,
   "shell/homeSpace.ts": 1,
   "team/api.ts": 8,

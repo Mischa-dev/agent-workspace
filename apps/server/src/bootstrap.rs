@@ -348,6 +348,7 @@ pub async fn bootstrap_admin(
                 crate::workspace::lifecycle::NewWorkspace {
                     name: organization_name.clone(),
                     slug: Some(organization_slug),
+                    id: None,
                 },
             )
             .await
@@ -441,6 +442,8 @@ pub async fn bootstrap_admin(
         .execute(&mut *transaction)
         .await?;
     }
+    // Someone has an account now: first run in the browser is over (H1.14).
+    crate::setup::forget(&mut transaction).await?;
     transaction.commit().await?;
 
     Ok(BootstrapResult {
