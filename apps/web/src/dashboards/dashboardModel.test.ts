@@ -30,7 +30,7 @@ describe('dashboard tiles', () => {
   })
 
   it('leads a view tile to its collection, opened on its view', () => {
-    expect(tileHref('p1', view)).toBe('/projects/p1/collections/c1?view=v1')
+    expect(tileHref('p1', view)).toBe('/w/-/s/p1/collections/c1?view=v1')
     expect(tileHref('p1', { collection: null, view: null })).toBeNull()
   })
 

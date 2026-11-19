@@ -291,42 +291,45 @@ export function ProjectRail({
           />
         ) : null}
         <span className="aw-rail__divider" role="separator" />
-        <div
-          aria-label="Pinned and recent projects"
-          className="aw-rail__projects project-list"
-          data-dragging={drag ? 'true' : undefined}
-          onDragLeave={(event) => {
-            if (drag?.over && !event.currentTarget.contains(event.relatedTarget as Node | null)) setDrag({ ...drag, over: null })
-          }}
-          onDragOver={dragOver}
-          onDrop={drop}
-          role="group"
-        >
-          {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
-          {visibleProjects.map((project) => {
-            const active = project.id === currentProjectId
-            const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
-            return (
-              <Tooltip key={project.id} label={project.name} side="right">
-                <a
-                  aria-current={active ? 'page' : undefined}
-                  aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
-                  className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}${drag?.id === project.id ? ' is-dragging' : ''}${dropMark}`}
-                  data-rail-project={project.id}
-                  href={projectHref(project)}
-                  onClick={(event) => selectProject(project, event)}
-                  onDragEnd={() => setDrag(null)}
-                  onDragStart={(event) => startDrag(event, project)}
-                >
-                  <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
-                  {project.attentionCount > 0 ? (
-                    <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
-                  ) : null}
-                </a>
-              </Tooltip>
-            )
-          })}
-        </div>
+        {/* Where Projects is off and no space shows, there's nothing to list (W1.39). */}
+        {experience.moduleOn('projects') || visibleProjects.length > 0 ? (
+          <div
+            aria-label={experience.moduleOn('projects') ? 'Pinned and recent projects' : 'Pinned and recent spaces'}
+            className="aw-rail__projects project-list"
+            data-dragging={drag ? 'true' : undefined}
+            onDragLeave={(event) => {
+              if (drag?.over && !event.currentTarget.contains(event.relatedTarget as Node | null)) setDrag({ ...drag, over: null })
+            }}
+            onDragOver={dragOver}
+            onDrop={drop}
+            role="group"
+          >
+            {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
+            {visibleProjects.map((project) => {
+              const active = project.id === currentProjectId
+              const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
+              return (
+                <Tooltip key={project.id} label={project.name} side="right">
+                  <a
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
+                    className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}${drag?.id === project.id ? ' is-dragging' : ''}${dropMark}`}
+                    data-rail-project={project.id}
+                    href={projectHref(project)}
+                    onClick={(event) => selectProject(project, event)}
+                    onDragEnd={() => setDrag(null)}
+                    onDragStart={(event) => startDrag(event, project)}
+                  >
+                    <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
+                    {project.attentionCount > 0 ? (
+                      <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
+                    ) : null}
+                  </a>
+                </Tooltip>
+              )
+            })}
+          </div>
+        ) : null}
         {user.capabilities.createProject && experience.moduleOn('projects') ? (
           <UtilityTile icon="plus" label="New project" onClick={onNavigate} to={href('/projects/new')} />
         ) : null}

@@ -20,7 +20,8 @@
   }
 
   :root {
-    --size-phonetabs: 56px;
+    /* A 44px touch target with room for the label under the icon. */
+    --size-phonetabs: calc(var(--space-12) + var(--space-2));
   }
 
   .aw-phonetabs__tab {
@@ -39,7 +40,7 @@
     --r-focus: var(--sidebar-fg-strong);
   }
 
-  .aw-phonetabs__tab > span:not(.aw-phonetabs__badge) {
+  .aw-phonetabs__tab > span:not(.aw-badge) {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -54,14 +55,6 @@
     position: absolute;
     top: var(--space-1);
     left: calc(50% + var(--space-2));
-    min-width: 18px;
-    padding: 0 var(--space-1);
-    border-radius: var(--radius-full);
-    background: var(--badge-bg);
-    color: var(--badge-fg);
-    font: var(--t-small);
-    line-height: 18px;
-    text-align: center;
   }
 }
 

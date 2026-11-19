@@ -1,20 +1,20 @@
 import { NavLink } from 'react-router-dom'
 
 import { spaceHref } from '../app/href'
-import { useWorkspaceHref } from '../app/workspace'
+import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { phoneTabs, rowLabel } from '../modules/registry'
 import { useProjects } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { Icon } from '../ui'
+import { Badge, Icon } from '../ui'
 import { useInboxUnread } from './homeSpace'
 import './phoneTabs.css'
 
 /** The space a space's tab opens: the one you're in, else the one you opened last. */
-function lastSpace(projects: readonly Project[]) {
+function lastSpace(projects: readonly Project[], workspaceId: string | null) {
   let latest: Project | null = null
   for (const project of projects) {
-    if (project.archivedAt) continue
+    if (project.archivedAt || (workspaceId && project.organizationId !== workspaceId)) continue
     if (!latest || (project.navigation.lastOpenedAt ?? '') > (latest.navigation.lastOpenedAt ?? '')) latest = project
   }
   return latest
@@ -30,7 +30,8 @@ export default function PhoneTabs({ spaceId }: { spaceId: string | null }) {
   const href = useWorkspaceHref()
   const projects = useProjects()
   const inboxUnread = useInboxUnread() ?? 0
-  const space = spaceId ?? lastSpace(projects.data?.projects ?? [])?.id ?? null
+  const workspaceId = useWorkspaceId()
+  const space = spaceId ?? lastSpace(projects.data?.projects ?? [], workspaceId)?.id ?? null
   const tabs = phoneTabs(experience).flatMap((tab) => {
     if (tab.space === 'home') return [{ ...tab, to: href(tab.path), end: false }]
     return space ? [{ ...tab, to: spaceHref(space, tab.path), end: !tab.path }] : []
@@ -47,11 +48,7 @@ export default function PhoneTabs({ spaceId }: { spaceId: string | null }) {
           <NavLink className="aw-phonetabs__tab" end={tab.end} key={`${tab.module}:${tab.id}`} to={tab.to}>
             <Icon name={tab.icon} size={20} />
             <span>{rowLabel(tab, experience)}</span>
-            {count > 0 ? (
-              <span className="aw-phonetabs__badge" aria-label={`${count} unread`}>
-                {count > 99 ? '99+' : count}
-              </span>
-            ) : null}
+            <Badge className="aw-phonetabs__badge" count={count} label={`${count} unread`} />
           </NavLink>
         )
       })}

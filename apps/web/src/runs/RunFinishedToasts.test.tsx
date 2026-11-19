@@ -1,11 +1,11 @@
-import { act, render, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AuthenticatedSessionProvider, type AuthenticatedSession } from '../auth/session'
 import { announceRunFinished } from '../realtime/runFinished'
 import type { RealtimeEnvelope } from '../realtime/realtimeModel'
-import { clearToasts, useToasts } from '../ui'
+import { ToastViewport, clearToasts } from '../ui'
 import { viewRun } from './api'
 import RunFinishedToasts from './RunFinishedToasts'
 
@@ -21,18 +21,12 @@ const session: AuthenticatedSession = {
 const finished = (runId: string) =>
   ({ type: 'run.changed', payload: { runId, change: 'finished', state: 'done' } }) as unknown as RealtimeEnvelope
 
-let shown: ReturnType<typeof useToasts> = []
-function Toasts() {
-  shown = useToasts()
-  return null
-}
-
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthenticatedSessionProvider session={session}>
         <RunFinishedToasts />
-        <Toasts />
+        <ToastViewport />
       </AuthenticatedSessionProvider>
     </MemoryRouter>,
   )
@@ -63,13 +57,9 @@ describe('RunFinishedToasts', () => {
     vi.mocked(viewRun).mockResolvedValue(run({}))
     renderAt('/w/acme/inbox')
     act(() => announceRunFinished(finished('run-1')))
-    await waitFor(() => expect(shown).toHaveLength(1))
-    expect(shown[0]).toMatchObject({
-      title: 'AWD-1 Fix the export finished',
-      tone: 'success',
-      action: { label: 'Open' },
-      link: { label: 'Pull request #7', href: 'https://example.test/pr/7' },
-    })
+    expect(await screen.findByText('AWD-1 Fix the export finished')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Open' })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Pull request #7' })).toHaveAttribute('href', 'https://example.test/pr/7')
   })
 
   it('stays quiet for someone else’s run and on the run’s own page', async () => {
@@ -77,11 +67,11 @@ describe('RunFinishedToasts', () => {
     renderAt('/w/acme/inbox')
     act(() => announceRunFinished(finished('run-1')))
     await waitFor(() => expect(viewRun).toHaveBeenCalled())
-    expect(shown).toHaveLength(0)
+    expect(screen.queryByText(/finished/)).toBeNull()
 
     vi.mocked(viewRun).mockClear()
     renderAt('/w/acme/runs/run-2')
     act(() => announceRunFinished(finished('run-2')))
-    expect(shown).toHaveLength(0)
+    expect(screen.queryByText(/finished/)).toBeNull()
   })
 })

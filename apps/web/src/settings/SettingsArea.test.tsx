@@ -13,6 +13,7 @@ import {
   projectBId,
 } from '../test/appHarness'
 import { parseSettingsPath } from './route'
+import { setCurrentWorkspaceSlug } from '../app/href'
 
 describe('settings addresses', () => {
   installAppShellLifecycle()
@@ -21,12 +22,12 @@ describe('settings addresses', () => {
     ['/settings', '/settings/account/profile'],
     ['/settings/account', '/settings/account/profile'],
     ['/settings/appearance', '/settings/account/appearance'],
-    [`/projects/${projectBId}/settings`, `/settings/projects/${projectBId}/general`],
-    [`/projects/${projectBId}/settings?tab=members`, `/settings/projects/${projectBId}/members`],
-    [`/projects/${projectBId}/settings?tab=agents`, `/settings/projects/${projectBId}/agents`],
-    [`/projects/${projectBId}/settings?tab=codex`, `/settings/projects/${projectBId}/run-requests`],
-    [`/projects/${projectBId}/settings?tab=repositories`, `/settings/projects/${projectBId}/repositories`],
-    [`/projects/${projectBId}/settings?tab=github`, `/settings/projects/${projectBId}/repositories`],
+    [`/projects/${projectBId}/settings`, `/w/mischa/settings/spaces/${projectBId}/general`],
+    [`/projects/${projectBId}/settings?tab=members`, `/w/mischa/settings/spaces/${projectBId}/members`],
+    [`/projects/${projectBId}/settings?tab=agents`, `/w/mischa/settings/spaces/${projectBId}/agents`],
+    [`/projects/${projectBId}/settings?tab=codex`, `/w/mischa/settings/spaces/${projectBId}/run-requests`],
+    [`/projects/${projectBId}/settings?tab=repositories`, `/w/mischa/settings/spaces/${projectBId}/repositories`],
+    [`/projects/${projectBId}/settings?tab=github`, `/w/mischa/settings/spaces/${projectBId}/repositories`],
   ])('sends the old link %s to %s', async (from, to) => {
     installStandardApi()
     window.history.replaceState({}, '', from)
@@ -36,12 +37,12 @@ describe('settings addresses', () => {
   })
 
   it.each([
-    ['/settings/workspace/run-defaults', '/settings/workspace/runs#defaults'],
-    ['/settings/workspace/ai', '/settings/workspace/runs#suggestions'],
-    [`/settings/projects/${projectBId}/environments`, `/settings/projects/${projectBId}/runs#environments`],
-    [`/settings/projects/${projectBId}/ai`, `/settings/projects/${projectBId}/runs#suggestions`],
+    ['/settings/workspace/run-defaults', '/w/mischa/settings/runs#defaults'],
+    ['/settings/workspace/ai', '/w/mischa/settings/runs#suggestions'],
+    [`/settings/projects/${projectBId}/environments`, `/w/mischa/settings/spaces/${projectBId}/runs#environments`],
+    [`/settings/projects/${projectBId}/ai`, `/w/mischa/settings/spaces/${projectBId}/runs#suggestions`],
     // A link to one setting keeps pointing at it.
-    [`/settings/projects/${projectBId}/environments#setting-run.environment`, `/settings/projects/${projectBId}/runs#setting-run.environment`],
+    [`/settings/projects/${projectBId}/environments#setting-run.environment`, `/w/mischa/settings/spaces/${projectBId}/runs#setting-run.environment`],
   ])('sends the moved page %s to %s', async (from, to) => {
     installStandardApi()
     window.history.replaceState({}, '', from)
@@ -50,22 +51,24 @@ describe('settings addresses', () => {
   })
 
   it('completes a Project address without a page and sends unknown ones to the account', () => {
+    // Outside any workspace's pages, addresses are built in the current one.
+    setCurrentWorkspaceSlug(null)
     expect(parseSettingsPath(`projects/${projectBId}`)).toEqual({
       kind: 'redirect',
-      to: `/settings/projects/${projectBId}/general`,
+      to: `/w/-/settings/spaces/${projectBId}/general`,
     })
     expect(parseSettingsPath(`projects/${projectBId}`, '?tab=unknown')).toEqual({
       kind: 'redirect',
-      to: `/settings/projects/${projectBId}/general`,
+      to: `/w/-/settings/spaces/${projectBId}/general`,
     })
     expect(parseSettingsPath('nowhere/at/all')).toEqual({ kind: 'redirect', to: '/settings/account/profile' })
     expect(parseSettingsPath(`projects/${projectBId}/codex-runs`)).toEqual({
       kind: 'redirect',
-      to: `/settings/projects/${projectBId}/run-requests`,
+      to: `/w/-/settings/spaces/${projectBId}/run-requests`,
     })
     expect(parseSettingsPath(`projects/${projectBId}/automation`)).toEqual({
       kind: 'redirect',
-      to: `/settings/projects/${projectBId}/automations`,
+      to: `/w/-/settings/spaces/${projectBId}/automations`,
     })
   })
 
@@ -118,8 +121,8 @@ describe('settings addresses', () => {
     const results = await screen.findByRole('list', { name: 'Matching settings' })
     const links = within(results).getAllByRole('link')
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
-      '/settings/workspace/runs#setting-run.reasoning',
-      `/settings/projects/${projectAId}/runs#setting-run.reasoning`,
+      '/w/mischa/settings/runs#setting-run.reasoning',
+      `/w/mischa/settings/spaces/${projectAId}/runs#setting-run.reasoning`,
     ])
     expect(within(results).getAllByText('Reasoning')).toHaveLength(2)
   })
@@ -160,6 +163,6 @@ describe('settings addresses', () => {
     fireEvent.change(picker, { target: { value: side.id } })
     await screen.findByText(/How Side project sends email/)
     expect(screen.getByLabelText('Server')).toHaveValue('')
-    expect(window.location.pathname).toBe('/settings/workspace/email')
+    expect(window.location.pathname).toBe('/w/side/settings/email')
   })
 })

@@ -60,7 +60,7 @@ describe('Project wire normalization', () => {
       }),
     ).toMatchObject({
       location: { kind: 'project_overview' },
-      href: '/projects/project-a',
+      href: '/w/-/s/project-a',
       version: 4,
     })
 
@@ -72,7 +72,7 @@ describe('Project wire normalization', () => {
       }),
     ).toMatchObject({
       location: { kind: 'project_overview' },
-      href: '/projects/project-a',
+      href: '/w/-/s/project-a',
       version: 5,
     })
 
@@ -88,7 +88,7 @@ describe('Project wire normalization', () => {
       }).navigation,
     ).toMatchObject({
       location: { kind: 'project_overview' },
-      href: '/projects/project-a',
+      href: '/w/-/s/project-a',
       version: 6,
     })
   })

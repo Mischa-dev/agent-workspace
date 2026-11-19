@@ -208,7 +208,7 @@ describe('App Project creation and settings', () => {
         name: /^Beta Project/,
       }),
     )
-    await waitFor(() => expect(window.location.pathname).toBe(`/projects/${projectBId}`))
+    await waitFor(() => expect(window.location.pathname).toBe(`/w/mischa/s/${projectBId}`))
     // Settings never save themselves as the place to come back to.
     expect(navigationWrites.filter((body) => body.includes('"settings"'))).toEqual([])
   })
@@ -354,7 +354,7 @@ describe('App Project creation and settings', () => {
     )
     await waitFor(() => expect(alert).toHaveFocus())
     expect(window.location.pathname).toBe(
-      `/settings/projects/${projectBId}/general`,
+      `/w/mischa/settings/spaces/${projectBId}/general`,
     )
     expect(
       screen.getByRole('link', { name: 'Beta Project' }),

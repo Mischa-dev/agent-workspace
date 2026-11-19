@@ -25,7 +25,7 @@ export const QUEUEABLE: ReadonlySet<OpName> = new Set<OpName>([
 ])
 
 export type OutboundEntry = {
-  /** The request id: a UUIDv7, so entries sort by when they were made. */
+  /** The request id it's sent with, every time. */
   id: string
   owner: string
   op: OpName
@@ -37,6 +37,8 @@ export type OutboundEntry = {
   /** What it was, in words ("Message in #general"). */
   label: string
   createdAt: string
+  /** The order it was made in, among everything waiting. */
+  order: number
   /** The server said no: why, in a sentence. */
   refused?: string
 }
@@ -127,8 +129,12 @@ function emit() {
   for (const listener of listeners) listener()
 }
 
+// Request ids made in the same millisecond don't sort by when; this does.
+let made = 0
+const nextOrder = () => Date.now() * 1_000 + (made++ % 1_000)
+
 function setEntries(next: OutboundEntry[]) {
-  entries = [...next].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+  entries = [...next].sort((left, right) => left.order - right.order)
   emit()
 }
 
@@ -187,7 +193,7 @@ async function forget(id: string) {
 
 /** Whether an earlier write to the same thing is still waiting. */
 function waitingBefore(entry: OutboundEntry) {
-  return Boolean(entry.thing) && entries.some((other) => other.thing === entry.thing && other.id < entry.id)
+  return Boolean(entry.thing) && entries.some((other) => other.thing === entry.thing && other.order < entry.order)
 }
 
 /**
@@ -215,6 +221,7 @@ export async function queueOp<N extends OpName>(
     href: meta.href ?? null,
     label: meta.label,
     createdAt: new Date().toISOString(),
+    order: nextOrder(),
   }
   await keep(entry)
   if (waitingBefore(entry)) return null

@@ -7,6 +7,7 @@ import { queryKeys } from '../../api/queryKeys'
 import { isApiError } from '../../api/errors'
 import { describeError, toastError } from '../../app/mutations'
 import { getOnboarding, onboardingKeys, progressText, updateOnboarding } from '../../onboarding/api'
+import { useWorkspaceExperience } from '../../experience/layout'
 import { roleLabel } from '../../projects/format'
 import {
   Banner,
@@ -54,6 +55,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
     queryFn: () => getWorkspace(organizationId),
     enabled: Boolean(organizationId),
   })
+  const experience = useWorkspaceExperience(organizationId)
   if (!summary) return null
 
   return (
@@ -74,11 +76,13 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
                 { label: 'Your role', value: roleLabel(workspace.data.role) },
                 ...(workspace.data.peopleCount === undefined || workspace.data.agentCount === undefined
                   ? [{ label: 'Members', value: String(workspace.data.memberCount) }]
-                  : [
-                      { label: 'People', value: String(workspace.data.peopleCount) },
-                      { label: 'Agents', value: String(workspace.data.agentCount) },
-                    ]),
-                { label: 'Projects', value: String(workspace.data.projectCount) },
+                  : experience.moduleOn('agents')
+                    ? [
+                        { label: 'People', value: String(workspace.data.peopleCount) },
+                        { label: 'Agents', value: String(workspace.data.agentCount) },
+                      ]
+                    : [{ label: 'People', value: String(workspace.data.peopleCount) }]),
+                ...(experience.moduleOn('projects') ? [{ label: 'Projects', value: String(workspace.data.projectCount) }] : []),
                 {
                   label: 'Created',
                   value: <span title={formatFullDate(workspace.data.createdAt)}>{formatShortDate(workspace.data.createdAt)}</span>,
@@ -92,7 +96,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
           {session.organizations.length > 1 && <DefaultSection current={summary.id} session={session} />}
           {workspace.data.capabilities.transferOwnership && <TransferSection workspace={workspace.data} />}
           <LeaveSection workspace={workspace.data} />
-          {workspace.data.capabilities.delete && <DeleteSection workspace={workspace.data} />}
+          {workspace.data.capabilities.delete && <DeleteSection contents={deletedContents(experience.moduleOn)} workspace={workspace.data} />}
         </>
       )}
     </>
@@ -330,7 +334,7 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
     : null
   return (
     <Section
-      description="You lose access to every project in it. Someone has to invite you again for you to come back."
+      description="You lose access to everything in it. Someone has to invite you again for you to come back."
       id="leave-workspace-heading"
       title="Leave this workspace"
     >
@@ -385,7 +389,22 @@ function LifecycleNotice({ workspace }: { workspace: Workspace }) {
 }
 
 /** Delete the whole workspace after 14 days, or keep it while it's waiting. */
-function DeleteSection({ workspace }: { workspace: Workspace }) {
+/** What deleting the workspace takes with it, in the words of the modules that are on. */
+function deletedContents(moduleOn: (module: string) => boolean) {
+  const things = [
+    moduleOn('projects') ? 'projects' : null,
+    'conversations',
+    moduleOn('tasks') ? 'tasks' : null,
+    'pages',
+    'files',
+    moduleOn('runs') ? 'runs' : null,
+  ].filter((thing): thing is string => thing !== null)
+  const listed = `${things.slice(0, -1).join(', ')} and ${things[things.length - 1]}`
+  const retired = moduleOn('agents') ? 'agents and apps the workspace owns are retired' : 'apps the workspace owns are retired'
+  return `Delete the workspace and everything in it: ${listed}. People keep their accounts; ${retired}.`
+}
+
+function DeleteSection({ workspace, contents }: { workspace: Workspace; contents: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
@@ -430,7 +449,7 @@ function DeleteSection({ workspace }: { workspace: Workspace }) {
   const confirmed = typed.trim().toLowerCase() === workspace.slug
   return (
     <Section
-      description="Delete the workspace and everything in it: projects, conversations, tasks, pages, files and runs. People keep their accounts; agents and apps the workspace owns are retired."
+      description={contents}
       id="delete-workspace-heading"
       title="Delete this workspace"
     >

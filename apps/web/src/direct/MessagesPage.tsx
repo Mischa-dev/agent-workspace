@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { sendConversationMessage } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import type { ComposerSubmission } from '../conversations/composerModel'
@@ -45,6 +46,9 @@ function listNames(names: string[]) {
 export function MessagesPage() {
   const session = useAuthenticatedSession()
   const overview = useDirectOverview()
+  // Where Agents is off, nothing here offers or talks about them (W1.39).
+  const agentsOn = useHomeExperience().moduleOn('agents')
+  const manageAgents = agentsOn && Boolean(overview.data?.capabilities.manageAgents)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -252,7 +256,7 @@ export function MessagesPage() {
         {overview.data && people.length === 0 ? (
           <EmptyState
             action={
-              overview.data.capabilities.manageAgents ? (
+              manageAgents ? (
                 <ButtonLink icon="bot" to={here('/messages/agents')} variant="primary">
                   Add an agent
                 </ButtonLink>
@@ -261,9 +265,11 @@ export function MessagesPage() {
             icon="users"
             title="No one to message yet"
           >
-            {overview.data.capabilities.manageAgents
-              ? 'Add an agent to start. Each one gets its own identity and shows up here.'
-              : 'Ask your workspace owner to add an agent. Each one gets its own identity and shows up here.'}
+            {!agentsOn
+              ? 'People in your workspaces show up here once they join.'
+              : manageAgents
+                ? 'Add an agent to start. Each one gets its own identity and shows up here.'
+                : 'Ask your workspace owner to add an agent. Each one gets its own identity and shows up here.'}
           </EmptyState>
         ) : null}
         {overview.data && people.length > 0 ? (
@@ -292,11 +298,11 @@ export function MessagesPage() {
             </ConversationIntro>
           ) : chosen.length > 1 ? (
             <ConversationIntro icon="users" title={`A group with ${listNames(names)}`}>
-              Your first message starts the group. Agents answer when they’re asked or mentioned.
+              Your first message starts the group.{agentsOn ? ' Agents answer when they’re asked or mentioned.' : ''}
             </ConversationIntro>
           ) : (
             <ConversationIntro icon="compose" title="New message">
-              Choose who it’s to above: one person or agent for a direct message, or several for a group.
+              Choose who it’s to above: {agentsOn ? 'one person or agent' : 'one person'} for a direct message, or several for a group.
             </ConversationIntro>
           )
         ) : null}

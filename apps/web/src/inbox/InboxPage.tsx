@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
-import { useHomeExperience } from '../experience/layout'
+import { useHomeExperience, type Experience } from '../experience/layout'
 import { atPhrase } from '../later/when'
 import { useShellPage } from '../shell/shellStore'
 import {
@@ -63,14 +63,14 @@ const VIEWS: { value: InboxView; label: string }[] = [
 ]
 
 /** Each filter, and what "mark all read" marks under it. */
-const CATEGORIES: { value: InboxCategory; label: string; markRead: string }[] = [
+const CATEGORIES: { value: InboxCategory; label: string; markRead: string; module?: string }[] = [
   { value: 'all', label: 'All', markRead: 'Mark all read' },
   { value: 'mentions', label: 'Mentions', markRead: 'Mark mentions read' },
   { value: 'threads', label: 'Threads', markRead: 'Mark thread replies read' },
-  { value: 'tasks', label: 'Tasks', markRead: 'Mark task updates read' },
-  { value: 'runs', label: 'Runs', markRead: 'Mark run updates read' },
-  { value: 'pull_requests', label: 'Pull requests', markRead: 'Mark pull request updates read' },
-  { value: 'usage', label: 'Usage', markRead: 'Mark usage alerts read' },
+  { value: 'tasks', label: 'Tasks', markRead: 'Mark task updates read', module: 'tasks' },
+  { value: 'runs', label: 'Runs', markRead: 'Mark run updates read', module: 'runs' },
+  { value: 'pull_requests', label: 'Pull requests', markRead: 'Mark pull request updates read', module: 'code' },
+  { value: 'usage', label: 'Usage', markRead: 'Mark usage alerts read', module: 'runs' },
 ]
 
 const PHONE = '(max-width: 860px)'
@@ -531,7 +531,7 @@ export function InboxPage() {
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">
-            {CATEGORIES.map((option) => (
+            {CATEGORIES.filter((option) => !option.module || experience.moduleOn(option.module)).map((option) => (
               <Button
                 aria-pressed={option.value === category}
                 className="aw-inbox__chip"
@@ -579,7 +579,7 @@ export function InboxPage() {
             icon={view === 'archived' ? 'archive' : view === 'snoozed' ? 'clock' : 'circle-check'}
             title={emptyTitle(view)}
           >
-            {emptyText(view, category)}
+            {emptyText(view, category, experience)}
           </EmptyState>
         ) : null}
 
@@ -696,12 +696,18 @@ function emptyTitle(view: InboxView) {
   return 'You’re all caught up'
 }
 
-function emptyText(view: InboxView, category: InboxCategory) {
+function emptyText(view: InboxView, category: InboxCategory, experience: Pick<Experience, 'moduleOn'>) {
   if (category !== 'all') return 'Nothing of this kind here.'
   if (view === 'archived') return 'Archive notifications you’re done with and they’ll wait here.'
   if (view === 'snoozed') return 'Snooze a notification to bring it back later.'
   if (view === 'unread') return 'You’ve read everything in your inbox.'
-  return 'When someone mentions you, assigns you a task, needs your approval or a run of yours ends, it shows up here.'
+  // Only what this workspace has (W1.39).
+  const tasks = experience.moduleOn('tasks')
+  const runs = experience.moduleOn('runs')
+  if (tasks && runs) return 'When someone mentions you, assigns you a task, needs your approval or a run of yours ends, it shows up here.'
+  if (tasks) return 'When someone mentions you, assigns you a task or needs your answer, it shows up here.'
+  if (runs) return 'When someone mentions you, needs your approval or a run of yours ends, it shows up here.'
+  return 'When someone mentions you or needs your answer, it shows up here.'
 }
 
 /** Notifications under the subject they're about. */

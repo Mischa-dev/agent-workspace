@@ -1,4 +1,4 @@
-import { spaceHref } from '../../app/href'
+import { legacyPathOf, spaceHref } from '../../app/href'
 
 /**
  * What an embed in a page shows, from its path (AWD-90). A collection's view
@@ -23,8 +23,10 @@ export function embedTarget(href: string): EmbedTarget {
     return { kind: 'link' }
   }
   if (url.origin !== 'https://app.invalid') return { kind: 'link' }
+  // Either shape of address: /w/<ws>/s/<space>/... or the old /projects/<space>/...
+  const path = legacyPathOf(url.pathname)
   try {
-    const collection = COLLECTION.exec(url.pathname)
+    const collection = COLLECTION.exec(path)
     if (collection) {
       return {
         kind: 'collection',
@@ -33,7 +35,7 @@ export function embedTarget(href: string): EmbedTarget {
         viewId: url.searchParams.get('view') || null,
       }
     }
-    const sheet = SHEET.exec(url.pathname)
+    const sheet = SHEET.exec(path)
     if (sheet) {
       return {
         kind: 'sheet',

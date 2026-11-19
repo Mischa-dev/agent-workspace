@@ -55,9 +55,10 @@ describe('inbox model', () => {
 
   it('keeps hrefs in the app or on https', () => {
     expect(safeHref('/projects/p1', 'p1')).toBe('/projects/p1')
+    expect(safeHref('/w/acme/s/p1', 'p1')).toBe('/w/acme/s/p1')
     expect(safeHref('https://github.com/o/r/pull/1', 'p1')).toBe('https://github.com/o/r/pull/1')
-    expect(safeHref('//evil.example/x', 'p1')).toBe('/projects/p1')
-    expect(safeHref('javascript:alert(1)', 'p1')).toBe('/projects/p1')
+    expect(safeHref('//evil.example/x', 'p1')).toBe('/w/-/s/p1')
+    expect(safeHref('javascript:alert(1)', 'p1')).toBe('/w/-/s/p1')
   })
 
   it('drops malformed rows and reads the page', () => {
@@ -67,7 +68,7 @@ describe('inbox model', () => {
       unreadCount: 3,
     })
     expect(page.notifications).toHaveLength(1)
-    expect(page.notifications[0].href).toBe('/projects/p1')
+    expect(page.notifications[0].href).toBe('/w/-/s/p1')
     // The server says what needs you; anything else reads as FYI.
     expect(page.notifications[0].attention).toBe('needs_you')
     expect(normalizePage({ notifications: [{ ...base, attention: 'maybe' }] }).notifications[0].attention).toBe('fyi')

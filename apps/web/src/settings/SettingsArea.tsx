@@ -78,11 +78,15 @@ export default function SettingsArea() {
   const navigate = useNavigate()
   const route = parseSettingsPath(ws ? workspaceSettingsSplat(splat) : splat, location.search)
   const projectList = useProjects()
-  const projects = useMemo(() => projectList.data?.projects ?? [], [projectList.data])
   const workspace = defaultWorkspace(session)
   const [pickedWorkspace, viewWorkspace] = useViewedWorkspace(session)
-  // In a workspace's address, its settings are the ones shown.
-  const viewedWorkspace = (ws ? session.organizations.find((organization) => organization.slug === ws) : null) ?? pickedWorkspace
+  // In a workspace's address, its settings are the ones shown, and only its spaces.
+  const addressed = ws ? (session.organizations.find((organization) => organization.slug === ws) ?? null) : null
+  const viewedWorkspace = addressed ?? pickedWorkspace
+  const projects = useMemo(
+    () => (projectList.data?.projects ?? []).filter((project) => !addressed || project.organizationId === addressed.id),
+    [projectList.data, addressed],
+  )
   const [navOpen, setNavOpen] = useState(false)
   useShellPage({ mainClassName: 'aw-main--page' })
 
@@ -306,6 +310,8 @@ function SettingsNav({
   const [query, setQuery] = useState('')
   const workspaceId = useId()
   const projectId = useId()
+  // Where Projects is off, the spaces that remain are called spaces (W1.39).
+  const spaceWord = contexts.workspace.modules?.moduleOn('projects') === false ? 'space' : 'project'
   const searching = query.trim().length > 0
 
   const link = (entry: SettingsPage) => {
@@ -358,13 +364,13 @@ function SettingsNav({
           )}
           {projects.length > 0 && (
             <div className="aw-settings__group">
-              <h2 className="aw-settings__grouplabel">{GROUP_LABELS.project}</h2>
+              <h2 className="aw-settings__grouplabel">{spaceWord === 'project' ? GROUP_LABELS.project : 'Space settings'}</h2>
               <div className="aw-settings__picker">
                 <label className="visually-hidden" htmlFor={projectId}>
-                  Project
+                  {spaceWord === 'project' ? 'Project' : 'Space'}
                 </label>
                 <select id={projectId} onChange={(event) => onPickProject(event.target.value)} value={pickerProject?.id ?? ''}>
-                  {!pickerProject && <option value="">Choose a project</option>}
+                  {!pickerProject && <option value="">{`Choose a ${spaceWord}`}</option>}
                   {pickerProject && !projects.some((project) => project.id === pickerProject.id) && (
                     <option value={pickerProject.id}>{pickerProject.name}</option>
                   )}
@@ -377,7 +383,7 @@ function SettingsNav({
                 <Icon name="chevron-down" size={14} />
               </div>
               {pickerProject && (
-                <ul aria-label="Project settings" className="aw-settings__links">
+                <ul aria-label={spaceWord === 'project' ? 'Project settings' : 'Space settings'} className="aw-settings__links">
                   {pagesIn('project', contexts.project).map(link)}
                 </ul>
               )}

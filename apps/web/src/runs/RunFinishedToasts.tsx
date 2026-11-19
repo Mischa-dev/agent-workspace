@@ -11,7 +11,7 @@ import { runTitle } from './runModel'
 const ENDINGS: Partial<Record<string, { tone: ToastTone; said: string }>> = {
   done: { tone: 'success', said: 'finished' },
   failed: { tone: 'danger', said: 'failed' },
-  cancelled: { tone: 'info', said: 'was cancelled' },
+  cancelled: { tone: 'info', said: 'was canceled' },
   interrupted: { tone: 'danger', said: 'was interrupted' },
 }
 

@@ -64,7 +64,7 @@
   "embeds": [],
   "web": { "folder": "projects" },
   "slots": {
-    "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/settings"],
+    "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/*"],
     "parts": [],
     "sidebar": ["rail.projects", "project.overview"],
     "home": ["recent"],
