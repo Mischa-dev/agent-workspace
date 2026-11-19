@@ -252,6 +252,9 @@ pub(super) struct ConversationRow {
     project_id: Uuid,
     project_name: String,
     direct: bool,
+    /// The workspace a DM or group is kept in (the direct scope for a
+    /// personal one), for a credential's limit.
+    workspace_id: Uuid,
     parent_id: Option<Uuid>,
     parent_name: Option<String>,
     parent_kind: Option<String>,
@@ -636,6 +639,7 @@ pub(super) async fn list_rows(
                COALESCE(conversation.project_id, direct_scope_id()) AS project_id,
                COALESCE(project.name, 'Messages') AS project_name,
                conversation.project_id IS NULL AS direct,
+               conversation.workspace_id,
                parent.id AS parent_id, parent.name AS parent_name, parent.kind AS parent_kind,
                conversation.thread_status, conversation.thread_outcome,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
@@ -713,6 +717,20 @@ pub(super) async fn list_rows(
     .bind(limit)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // A DM or group is in no space, so a credential's limit can't narrow
+    // it by `projects`: a kept one follows its workspace's limit, as
+    // opening it would (`access::direct_grant_allows`).
+    let rows = rows
+        .into_iter()
+        .filter(|row| {
+            !row.direct
+                || !crate::policy::agent_limit_hides_direct(
+                    viewer,
+                    row.workspace_id,
+                    crate::policy::Permission::ProjectsView,
+                )
+        })
+        .collect::<Vec<_>>();
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
     let summary = crate::db::scoped_one(&state.pool, async |connection| {
         crate::read_state::unread_by_conversation(

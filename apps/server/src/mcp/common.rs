@@ -199,7 +199,7 @@ pub(super) async fn accessible_project_ids_in(
     if let Some(project_id) = confined_project(principal) {
         return Ok(vec![project_id]);
     }
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    let reachable = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
         FROM projects project
@@ -223,7 +223,21 @@ pub(super) async fn accessible_project_ids_in(
     .bind(principal.external_agent_connection_id)
     .bind(principal.workspace_id)
     .fetch_all(executor)
-    .await?)
+    .await?;
+    // A credential's limit (a token's workspace and spaces, an app's
+    // delegation) keeps the spaces it doesn't reach out; DMs and groups are
+    // narrowed row by row, by the workspace each is kept in.
+    Ok(reachable
+        .into_iter()
+        .filter(|space| {
+            *space == crate::spaces::DIRECT
+                || !crate::access::limit_hides(
+                    principal.actor_id,
+                    *space,
+                    crate::policy::Permission::ProjectsView,
+                )
+        })
+        .collect())
 }
 
 /// The Projects a tool call should look at: the one it named, or every

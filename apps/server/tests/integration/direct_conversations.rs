@@ -1722,6 +1722,23 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     .await;
     assert_eq!(by_id["outcome"], "ok", "{by_id}");
 
+    // Listing conversations shows the personal DM, never the second
+    // workspace's kept one.
+    let listed = call("conversation_list", json!({"kind": "dm", "limit": 50})).await;
+    let listed_ids = listed["value"]["conversations"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(listed_ids.contains(&personal), "{listed}");
+    assert!(
+        !listed_ids.contains(&kept),
+        "a token listed another workspace's DM: {listed}"
+    );
+
     // The token is for the first workspace: the second's groups (a call
     // that needs no permission) stay out of its reach.
     let elsewhere = call("group_list", json!({"workspace": second.to_string()})).await;
