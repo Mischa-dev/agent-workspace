@@ -396,7 +396,8 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   // and when; the toggle shows the last day's.
   const viewerId = useAuthenticatedSession().user.actorId
   const [allEdits, setAllEdits] = useState(false)
-  const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits })
+  const showsRecent = experience.shows('page.recent_edits')
+  const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits, enabled: showsRecent })
   const editedBlocks = useMemo(() => [...recent.shown].map(([blockId, outline]) => ({ blockId, title: outlineTitle(outline) })), [recent.shown])
   const [draft, setDraft] = useState<CommentAnchor | null>(null)
   const [activeThread, setActiveThread] = useState<string | null>(null)
@@ -485,7 +486,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
         actions={
           editing ? null : (
             <>
-              {live ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
+              {live && showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
               {canEdit && !current.archived && !current.isGuide ? (
                 <Button icon={FolderInput} onClick={() => setMoving(true)}>
@@ -574,7 +575,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
         </div>
       ) : live ? (
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
-          <RecentEditsBar canUndo={canEdit} change={recent.newest} kind="page" onUndone={() => void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })} />
+          {showsRecent ? <RecentEditsBar canUndo={canEdit} change={recent.newest} kind="page" onUndone={() => void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })} /> : null}
           <LivePage
             collections={experience.shows('area.collections')}
             discussion={liveDiscussion}

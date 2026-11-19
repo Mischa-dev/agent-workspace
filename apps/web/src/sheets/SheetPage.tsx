@@ -142,7 +142,8 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   // Recent edits (C1.10): cells others just changed are outlined with who
   // and when; the toggle shows the last day's.
   const [allEdits, setAllEdits] = useState(false)
-  const recent = useRecentEdits('sheet', sheetId, body?.sheet.revision, { viewerId: user.actorId, all: allEdits })
+  const showsRecent = experience.shows('page.recent_edits')
+  const recent = useRecentEdits('sheet', sheetId, body?.sheet.revision, { viewerId: user.actorId, all: allEdits, enabled: showsRecent })
   const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
   const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
   const frozenRows = shownTab?.frozenRows ?? 0
@@ -706,7 +707,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
             ) : null}
           </div>
         ) : null}
-        <RecentEditsBar canUndo={editable && !body.sheet.archived} change={recent.newest} kind="sheet" onUndone={() => void refresh()} />
+        {showsRecent ? <RecentEditsBar canUndo={editable && !body.sheet.archived} change={recent.newest} kind="sheet" onUndone={() => void refresh()} /> : null}
         {phone ? (
           <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
@@ -724,7 +725,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
               <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
                 Find
               </Button>
-              <RecentEditsToggle on={allEdits} onChange={setAllEdits} />
+              {showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {proposals.length ? (
                 <Button onClick={() => setReviewing(true)} size="sm" variant="ghost">
                   {`Proposals (${proposals.length})`}

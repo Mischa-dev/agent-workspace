@@ -398,11 +398,27 @@ async fn pdf_embeds(
                 picture.filter(|_| board_pixels <= MAX_PDF_BOARD_PIXELS)
             }
             Some(EmbedTarget::Sheet {
+                sheet_id,
+                chart: Some(chart),
+                ..
+            }) => {
+                if board_pixels >= MAX_PDF_BOARD_PIXELS {
+                    None
+                } else {
+                    let picture = chart_picture(state, principal, sheet_id, chart).await?;
+                    if let Some(pdf::EmbedPicture::Image { width, height, .. }) = &picture {
+                        board_pixels += u64::from(*width) * u64::from(*height);
+                    }
+                    picture.filter(|_| board_pixels <= MAX_PDF_BOARD_PIXELS)
+                }
+            }
+            Some(EmbedTarget::Sheet {
                 project_id,
                 sheet_id,
                 tab_id,
                 range,
                 name,
+                chart: None,
             }) => {
                 sheet_picture(state, principal, project_id, sheet_id, tab_id, range, name).await?
             }
@@ -427,6 +443,8 @@ enum EmbedTarget {
         range: Option<String>,
         /// A named range (C1.20), kept by its name so it follows the range.
         name: Option<String>,
+        /// One of its charts (C1.18), drawn as the page shows it.
+        chart: Option<Uuid>,
     },
 }
 
@@ -457,6 +475,7 @@ fn embed_target(href: &str) -> Option<EmbedTarget> {
                 tab_id: query("tab").and_then(|tab| tab.parse().ok()),
                 range: query("range"),
                 name: query("name"),
+                chart: query("chart").and_then(|chart| chart.parse().ok()),
             })
         }
         ["files", file] => file.parse().ok().map(EmbedTarget::File),
@@ -540,6 +559,43 @@ async fn board_picture(
     );
     Ok(
         crate::whiteboards::render::pixels_within(&rendered.svg, 1.5, MAX_PDF_BOARD_SIDE)
+            .ok()
+            .map(|(rgba, width, height)| pdf::EmbedPicture::Image {
+                rgba,
+                width,
+                height,
+            }),
+    )
+}
+
+/// A sheet's chart as a picture, drawn from its cells as they are now; one
+/// the reader can't see, or that's gone, shows the embed as a link.
+async fn chart_picture(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    sheet_id: Uuid,
+    chart_id: Uuid,
+) -> Result<Option<pdf::EmbedPicture>, AppError> {
+    use crate::sheets::charts;
+    let figured = crate::db::scoped_one(&state.pool, async |connection| {
+        let Some((chart, found_sheet, sheet_name)) =
+            charts::find(connection, chart_id, principal.actor_id).await?
+        else {
+            return Ok::<_, AppError>(None);
+        };
+        if found_sheet != sheet_id {
+            return Ok(None);
+        }
+        let figures = charts::figures(connection, &chart, found_sheet, sheet_name).await?;
+        Ok(Some((chart, figures)))
+    })
+    .await?;
+    let Some((chart, figures)) = figured else {
+        return Ok(None);
+    };
+    let svg = charts::svg(&chart.title, &chart.style, figures.as_ref());
+    Ok(
+        crate::whiteboards::render::pixels_within(&svg, 1.5, MAX_PDF_BOARD_SIDE)
             .ok()
             .map(|(rgba, width, height)| pdf::EmbedPicture::Image {
                 rgba,
@@ -700,6 +756,7 @@ mod tests {
                 tab_id: None,
                 range: Some("A1:B2".to_owned()),
                 name: None,
+                chart: None,
             })
         );
         assert_eq!(
@@ -710,6 +767,18 @@ mod tests {
                 tab_id: None,
                 range: None,
                 name: Some("Totals".to_owned()),
+                chart: None,
+            })
+        );
+        assert_eq!(
+            embed_target(&format!("/projects/{id}/sheets/{id}?chart={id}")),
+            Some(EmbedTarget::Sheet {
+                project_id: id,
+                sheet_id: id,
+                tab_id: None,
+                range: None,
+                name: None,
+                chart: Some(id),
             })
         );
         assert_eq!(

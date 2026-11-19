@@ -13,12 +13,19 @@ const POLL_MS = 20_000
  * the last two minutes), or all of the last day's with `all`. `version` is
  * the thing's version as the editor has it; a new one looks again at once.
  */
-export function useRecentEdits(kind: ChangeKind, thingId: string, version: number | string | undefined, options: { viewerId: string; all: boolean }) {
-  const query = useQuery({ ...opQuery('change_list', { thingKind: kind, thingId, sinceHours: 24 }), refetchInterval: POLL_MS })
+export function useRecentEdits(
+  kind: ChangeKind,
+  thingId: string,
+  version: number | string | undefined,
+  options: { viewerId: string; all: boolean; enabled?: boolean },
+) {
+  // A layout that hides recent edits (page.recent_edits) asks for none.
+  const enabled = options.enabled ?? true
+  const query = useQuery({ ...opQuery('change_list', { thingKind: kind, thingId, sinceHours: 24 }), refetchInterval: enabled ? POLL_MS : false, enabled })
   const { refetch } = query
   useEffect(() => {
-    if (version !== undefined) void refetch()
-  }, [refetch, version])
+    if (version !== undefined && enabled) void refetch()
+  }, [enabled, refetch, version])
   // Outlines that landed a while ago fade out on their own.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

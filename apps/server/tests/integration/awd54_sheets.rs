@@ -937,6 +937,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
             "validations": [{"tab": "Work", "rules": [
                 {"range": "b2:b50", "allow": "list", "choices": ["Yes", "No"], "hint": "Pick one"},
                 {"range": "C2:C50", "allow": "number", "min": 1, "max": 5, "whole": true, "strict": false},
+                {"range": "D2:D50", "allow": "number", "max": 5},
             ]}],
             "clientRequestId": "tracker-1",
         }),
@@ -1006,6 +1007,17 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
     assert_eq!(
         moved["outcome"], "invalid_request",
         "the rule moved: {moved}"
+    );
+    // A number the engine keeps in its own form ("6.0" as "6") is still
+    // checked.
+    let written_otherwise = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "D4", "input": "6.0"}], "clientRequestId": "six"}),
+    )
+    .await;
+    assert_eq!(
+        written_otherwise["outcome"], "invalid_request",
+        "{written_otherwise}"
     );
 }
 

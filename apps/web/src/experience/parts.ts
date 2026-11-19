@@ -48,6 +48,7 @@ export const PART_IDS = [
   'page.comments',
   'page.import_export',
   'page.nesting',
+  'page.recent_edits',
   'page.references',
   'tech.task_keys',
   'tech.run_usage',

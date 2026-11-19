@@ -87,7 +87,7 @@
   "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "page.nesting", "channel.tabs"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "page.nesting", "page.recent_edits", "channel.tabs"],
     "sidebar": [],
     "home": [],
     "settings": [],

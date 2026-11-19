@@ -341,6 +341,13 @@
       "default": true
     },
     {
+      "id": "page.recent_edits",
+      "group": "pages",
+      "label": "Recent edits",
+      "description": "Outlines on what others just changed in pages, sheets and whiteboards, with who and when, and undo for the newest.",
+      "default": true
+    },
+    {
       "id": "page.references",
       "group": "pages",
       "label": "Referenced in",
@@ -485,6 +492,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -527,6 +535,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -617,6 +626,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -663,6 +673,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "home.working_now",
         "workspace.my_work",
@@ -705,6 +716,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -752,6 +764,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -792,6 +805,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -839,6 +853,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "tech.task_keys",
         "workspace.my_work",
@@ -893,6 +908,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "tech.task_keys",
         "workspace.my_work"
@@ -924,6 +940,7 @@
         "page.comments",
         "page.import_export",
         "page.nesting",
+        "page.recent_edits",
         "page.references",
         "workspace.my_work"
       ]

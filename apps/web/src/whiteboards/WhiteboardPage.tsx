@@ -109,7 +109,8 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   // the toggle shows the last day's. A new drawing from anyone looks again.
   const [allEdits, setAllEdits] = useState(false)
   const lastDrawn = editors.reduce((latest, editor) => (editor.at > latest ? editor.at : latest), '')
-  const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits })
+  const showsRecent = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('page.recent_edits')
+  const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits, enabled: showsRecent })
   // Comments on elements (C1.31): pins where threads were started, and
   // comment or ask about what's selected.
   const commentsShown = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
@@ -257,7 +258,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             <span className="aw-sr-only">Recently edited by {others.map((editor) => editor.name).join(', ')}</span>
           </span>
         ) : null}
-        {whiteboard.projectId ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
+        {whiteboard.projectId && showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
         {proposals.length ? (
           <Button onClick={() => setPanel('proposals')} size="sm">
             {`Proposals (${proposals.length})`}
@@ -326,7 +327,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           {saveFailure.message} Keep this page open so they aren’t lost.
         </Banner>
       ) : null}
-      {recent.newest ? (
+      {showsRecent && recent.newest ? (
         <div className="aw-wb__recent">
           <RecentEditsBar canUndo={editable} change={recent.newest} kind="whiteboard" />
         </div>

@@ -2035,6 +2035,21 @@ async fn apply_unbounded(
             _ => Vec::new(),
         })
         .collect::<std::collections::HashSet<_>>();
+    // The engine keeps a number in its own form ("6.0" is kept as "6"), so
+    // a typed number also matches the same number however it's written.
+    let typed_numbers = typed
+        .iter()
+        .filter_map(|text| text.parse::<f64>().ok())
+        .filter(|number| number.is_finite())
+        .map(f64::to_bits)
+        .collect::<std::collections::HashSet<_>>();
+    let was_typed = |input: &str| {
+        let input = input.trim();
+        typed.contains(input)
+            || input
+                .parse::<f64>()
+                .is_ok_and(|number| typed_numbers.contains(&number.to_bits()))
+    };
     if let Some(outputs) = &outputs {
         for (tab, output) in outputs.iter().enumerate() {
             let rules = &working[tab].validations;
@@ -2047,7 +2062,7 @@ async fn apply_unbounded(
                     .map(|stored| stored.input.as_str());
                 if before == Some(cell.input.as_str())
                     || cell.input.is_empty()
-                    || !typed.contains(cell.input.trim())
+                    || !was_typed(&cell.input)
                 {
                     continue;
                 }
