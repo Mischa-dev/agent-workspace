@@ -151,6 +151,17 @@ pub struct ConversationMemberRemovedPayload {
     pub version: i64,
 }
 
+/// Someone was added to a group or private channel (K4.11). IDs and the
+/// conversation's version only; scoped to the conversation, so everyone who
+/// can see it now, the new member included, hears it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMemberAddedPayload {
+    pub conversation_id: Uuid,
+    pub actor_id: Uuid,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentRunUpdatedPayload {
@@ -371,6 +382,16 @@ pub struct CustomEmojiChangedPayload {
     pub emoji_id: Uuid,
 }
 
+/// A workspace's guards changed (A2.27): one made, changed or removed.
+/// Sent to the workspace's own space; guard lists read them again. Ids
+/// only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuardsChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+}
+
 /// Someone's draft changed (C2.28): saved or cleared on one of their
 /// devices. Their id only, delivered to them alone; their open draft lists
 /// read again over HTTP.
@@ -401,6 +422,14 @@ pub struct SidebarChangedPayload {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SavedSearchesChangedPayload {
+    pub actor_id: Uuid,
+}
+
+/// What someone follows changed (A2.9): for them alone; their other tabs
+/// read it again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FollowsChangedPayload {
     pub actor_id: Uuid,
 }
 
@@ -445,6 +474,7 @@ pub enum OutboxEventPayload {
     MessageReactionsUpdated(MessageReactionsUpdatedPayload),
     ReadStateUpdated(ReadStateUpdatedPayload),
     ConversationMemberRemoved(ConversationMemberRemovedPayload),
+    ConversationMemberAdded(ConversationMemberAddedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
     RunChanged(RunChangedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
@@ -461,10 +491,12 @@ pub enum OutboxEventPayload {
     DashboardUpdated(DashboardUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
+    GuardsChanged(GuardsChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
+    FollowsChanged(FollowsChangedPayload),
     InboxViewsChanged(InboxViewsChangedPayload),
     DmRulesChanged(DmRulesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
@@ -482,6 +514,7 @@ impl OutboxEventPayload {
             Self::MessageReactionsUpdated(_) => "conversation.message.reactions.updated",
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::ConversationMemberRemoved(_) => "conversation.member.removed",
+            Self::ConversationMemberAdded(_) => "conversation.member.added",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
             Self::RunChanged(_) => "run.changed",
             Self::WorkItemUpdated(_) => "work_item.updated",
@@ -498,10 +531,12 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(_) => "dashboard.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
+            Self::GuardsChanged(_) => "guards.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
+            Self::FollowsChanged(_) => "follows.changed",
             Self::InboxViewsChanged(_) => "inbox_views.changed",
             Self::DmRulesChanged(_) => "dm_rules.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
@@ -518,6 +553,7 @@ impl OutboxEventPayload {
             Self::MessageUpdated(payload) => Some(payload.conversation_id),
             Self::MessageReactionsUpdated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
+            Self::ConversationMemberAdded(payload) => Some(payload.conversation_id),
             Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
             Self::RunChanged(payload) => payload.conversation_id,
             // The removed actor can no longer see the group, so delivery must
@@ -538,10 +574,12 @@ impl OutboxEventPayload {
             | Self::DashboardUpdated(_)
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
+            | Self::GuardsChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
+            | Self::FollowsChanged(_)
             | Self::InboxViewsChanged(_)
             | Self::DmRulesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
@@ -561,6 +599,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
+            Self::FollowsChanged(payload) => Some(payload.actor_id),
             Self::InboxViewsChanged(payload) => Some(payload.actor_id),
             Self::DmRulesChanged(payload) => Some(payload.actor_id),
             _ => None,
@@ -573,7 +612,8 @@ impl OutboxEventPayload {
             | Self::ConversationUpdated(_)
             | Self::ReplyRequestsUpdated(_)
             | Self::ConversationArchived(_)
-            | Self::ConversationMemberRemoved(_) => OutboxResourceKind::Conversation,
+            | Self::ConversationMemberRemoved(_)
+            | Self::ConversationMemberAdded(_) => OutboxResourceKind::Conversation,
             Self::MessageCreated(_)
             | Self::MessageUpdated(_)
             | Self::MessageReactionsUpdated(_) => OutboxResourceKind::Message,
@@ -585,9 +625,9 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
-            Self::SavedSearchesChanged(_) | Self::InboxViewsChanged(_) => {
-                OutboxResourceKind::Account
-            }
+            Self::SavedSearchesChanged(_)
+            | Self::InboxViewsChanged(_)
+            | Self::FollowsChanged(_) => OutboxResourceKind::Account,
             Self::DmRulesChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
@@ -598,9 +638,9 @@ impl OutboxEventPayload {
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
             Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
-            Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
-                OutboxResourceKind::Project
-            }
+            Self::ProjectModulesUpdated(_)
+            | Self::CustomEmojiChanged(_)
+            | Self::GuardsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
@@ -618,6 +658,7 @@ impl OutboxEventPayload {
             // already carries the Conversation, so the Actor is its resource ID.
             Self::ReadStateUpdated(payload) => payload.actor_id,
             Self::ConversationMemberRemoved(payload) => payload.conversation_id,
+            Self::ConversationMemberAdded(payload) => payload.conversation_id,
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
             Self::RunChanged(payload) => payload.run_id,
             Self::WorkItemUpdated(payload) => payload.work_item_id,
@@ -635,11 +676,13 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(payload) => payload.dashboard_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
+            Self::GuardsChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
+            Self::FollowsChanged(payload) => payload.actor_id,
             Self::InboxViewsChanged(payload) => payload.actor_id,
             Self::DmRulesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
@@ -674,6 +717,11 @@ impl OutboxEventPayload {
                 Err(OutboxEventError::MalformedPayload)
             }
             Self::ConversationMemberRemoved(payload)
+                if payload.actor_id.is_nil() || payload.version < 1 =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
+            Self::ConversationMemberAdded(payload)
                 if payload.actor_id.is_nil() || payload.version < 1 =>
             {
                 Err(OutboxEventError::MalformedPayload)
@@ -759,6 +807,7 @@ impl OutboxEventPayload {
             Self::MessageReactionsUpdated(payload) => serde_json::to_value(payload),
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::ConversationMemberRemoved(payload) => serde_json::to_value(payload),
+            Self::ConversationMemberAdded(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
             Self::RunChanged(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
@@ -775,10 +824,12 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
+            Self::GuardsChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
+            Self::FollowsChanged(payload) => serde_json::to_value(payload),
             Self::InboxViewsChanged(payload) => serde_json::to_value(payload),
             Self::DmRulesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
@@ -819,6 +870,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.member.removed" => Self::ConversationMemberRemoved(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "conversation.member.added" => Self::ConversationMemberAdded(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.agent_run.updated" => Self::AgentRunUpdated(
@@ -866,6 +920,9 @@ impl OutboxEventPayload {
             "custom_emoji.changed" => Self::CustomEmojiChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "guards.changed" => Self::GuardsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
             "message_draft.changed" => Self::MessageDraftChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
@@ -876,6 +933,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "saved_searches.changed" => Self::SavedSearchesChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "follows.changed" => Self::FollowsChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "inbox_views.changed" => Self::InboxViewsChanged(
@@ -955,7 +1015,8 @@ impl OutboxEnvelope {
     /// never was an outbox event (it has no `legacy_type`) or doesn't decode.
     pub fn from_logged(event: &crate::events::LoggedEvent) -> Option<Self> {
         let event_type = event.legacy_type.as_deref()?;
-        let project_id = event.space_id?;
+        // A DM's event has no space; its frame names the direct scope.
+        let project_id = event.place()?;
         let decoded = OutboxEventPayload::from_json(event_type, event.payload.clone()).ok()?;
         Some(Self {
             event_id: event.id,

@@ -65,6 +65,10 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
         "whiteboard.updated",
         "A whiteboard was saved as a new version",
     ),
+    (
+        "incoming_hook.received",
+        "An incoming hook received a delivery",
+    ),
 ];
 
 pub fn is_event_type(value: &str) -> bool {
@@ -80,6 +84,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         Ok(())
     });
     super::upkeep::register_jobs(registry);
+    super::archive::register_jobs(registry);
 }
 
 /// What one event is about. IDs only.
@@ -111,6 +116,11 @@ pub struct Subject {
     pub sheet_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whiteboard_id: Option<Uuid>,
+    /// An incoming hook and one of its deliveries (K3.26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<Uuid>,
     /// For task.updated and record.updated: what changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_fields: Vec<String>,
@@ -171,6 +181,7 @@ fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
         ]
         .into_iter()
         .find_map(|(kind, id)| thing(kind, id)),
+        Some("incoming_hook") => thing("incoming_hook", subject.hook_id),
         _ => None,
     }
 }
@@ -283,6 +294,22 @@ async fn heard(
                 format!("{event_type}:{thing}:{version}"),
                 logged.actor_account_id,
                 subject,
+            )]
+        }
+        // One per accepted delivery: the delivery's id is the key.
+        "incoming_hook.received" => {
+            let Some(delivery) = id_in("deliveryId") else {
+                return Ok(Vec::new());
+            };
+            vec![event(
+                event_type,
+                format!("incoming_hook:{delivery}"),
+                None,
+                Subject {
+                    hook_id: Some(thing),
+                    delivery_id: Some(delivery),
+                    ..Subject::default()
+                },
             )]
         }
         "task.created" => vec![event(
@@ -483,11 +510,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         return Ok(0);
     }
     for event in events {
-        let direct =
-            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                .bind(event.project_id)
-                .fetch_one(crate::db::scoped(&state.pool))
-                .await?;
+        let direct = crate::spaces::kind::holds_messages(event.project_id);
         if shut_out(modules, &event.event_type, direct) {
             continue;
         }
@@ -547,7 +570,8 @@ impl Caller {
     }
 
     pub(crate) fn mcp(principal: &McpPrincipal) -> Self {
-        let account_wide = principal.actor_kind == ActorKind::Human && principal.account_wide;
+        let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's token or grant is scoped by how it was made)
+        let account_wide = person && principal.account_wide;
         Self {
             actor_id: principal.actor_id,
             actor_kind: principal.actor_kind,
@@ -556,8 +580,7 @@ impl Caller {
             external_agent_connection_id: principal.external_agent_connection_id,
             // Agents reach the projects their connection allows; a person's
             // token or project-scoped grant reaches its one project.
-            token_project_id: (!account_wide && principal.actor_kind == ActorKind::Human)
-                .then_some(principal.project_id),
+            token_project_id: (!account_wide && person).then_some(principal.project_id),
             can_write: principal.can_write(),
             channel: "mcp",
             authentication_class: principal.authentication_class,

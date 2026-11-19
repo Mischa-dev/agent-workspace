@@ -229,7 +229,7 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         &t.app,
         &a.app_token,
         &session,
-        "project_create",
+        "space_create",
         json!({"key": "SUSP", "name": "Made while suspended"}),
     )
     .await;
@@ -633,6 +633,12 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         .execute(&t.pool)
         .await
         .expect("set the membership aside");
+    // And the access signals its joining and leaving staged for it in B.
+    sqlx::query("DELETE FROM event_staging WHERE audience_account_id = $1")
+        .bind(traveller)
+        .execute(&t.pool)
+        .await
+        .expect("set the traveller's signals aside");
     let projects_left =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE organization_id = $1")
             .bind(a.organization)
@@ -702,6 +708,155 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
             .await
             .expect("again"),
         None
+    );
+    t.finish().await;
+}
+
+/// K1.33 (ruling R39): while a workspace is being deleted, someone who
+/// manages an agent it owns may take it over; it then outlives the
+/// workspace with its memberships elsewhere, and an agent nobody took is
+/// retired.
+#[tokio::test]
+async fn a_manager_keeps_an_agent_its_deleted_workspace_owned() {
+    let Some(t) = two_workspaces("workspace_lifecycle_take").await else {
+        return;
+    };
+    let (a, b) = (&t.a, &t.b);
+    let b_owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships \
+         WHERE organization_id = $1 AND role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .bind(b.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("B's owner");
+    // Two agents A owns, both also in B; B's owner manages them there.
+    let mut agents = Vec::new();
+    for _ in 0..2 {
+        let agent = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, account_kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'external_agent', 'agent', 'active', $1) RETURNING id",
+        )
+        .bind(a.organization)
+        .fetch_one(&t.pool)
+        .await
+        .expect("agent A owns");
+        for workspace in [a.organization, b.organization] {
+            sqlx::query(
+                "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled) \
+                 VALUES ($1, $2, 'member', true)",
+            )
+            .bind(workspace)
+            .bind(agent)
+            .execute(&t.pool)
+            .await
+            .expect("membership");
+        }
+        sqlx::query(
+            "INSERT INTO account_managers \
+                 (account_id, manager_account_id, workspace_id, added_by_actor_id) \
+             VALUES ($1, $2, $3, $2)",
+        )
+        .bind(agent)
+        .bind(b_owner)
+        .bind(b.organization)
+        .execute(&t.pool)
+        .await
+        .expect("manager in B");
+        agents.push(agent);
+    }
+    let (kept, untaken) = (agents[0], agents[1]);
+
+    // Not while A is open.
+    let (status, body) = op(
+        &t,
+        &b.browser,
+        b.organization,
+        "account_owner_take",
+        json!({"account": kept}),
+    )
+    .await;
+    assert_ne!(
+        body["outcome"], "ok",
+        "taken while A is open: {status} {body}"
+    );
+
+    let a_slug = slug_of(&t.pool, a.organization).await;
+    let (status, body) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_delete",
+        json!({"confirm": a_slug}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // B's owner manages it, so they may take it; A's agent from B's
+    // workspace they don't share isn't found.
+    let (status, body) = op(
+        &t,
+        &b.browser,
+        b.organization,
+        "account_owner_take",
+        json!({"account": a.agent}),
+    )
+    .await;
+    assert_ne!(
+        body["outcome"], "ok",
+        "took an agent not in B: {status} {body}"
+    );
+    let (status, body) = op(
+        &t,
+        &b.browser,
+        b.organization,
+        "account_owner_take",
+        json!({"account": kept}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["value"]["ownerAccount"], json!(b_owner), "{body}");
+
+    let repository_dirs = |repository: Uuid| {
+        ["repositories", "worktrees"]
+            .map(|area| t.data_root.join(area).join(repository.to_string()))
+    };
+    for directory in repository_dirs(a.repository) {
+        std::fs::create_dir_all(directory.join("content")).expect("repository data");
+    }
+    lifecycle::delete_now(&t.state, a.organization, true)
+        .await
+        .expect("delete")
+        .expect("deleted");
+
+    // The one taken keeps working in B, owned by its new owner; the other
+    // is retired, its membership in B ended.
+    let state = |agent: Uuid| {
+        let pool = t.pool.clone();
+        let workspace = b.organization;
+        async move {
+            sqlx::query_as::<_, (String, Option<Uuid>, Option<Uuid>, bool)>(
+                "SELECT account.status, account.owner_account_id, account.owner_workspace_id, \
+                     membership.enabled \
+                 FROM actors account \
+                 JOIN organization_memberships membership \
+                   ON membership.actor_id = account.id AND membership.organization_id = $2 \
+                 WHERE account.id = $1",
+            )
+            .bind(agent)
+            .bind(workspace)
+            .fetch_one(&pool)
+            .await
+            .expect("agent")
+        }
+    };
+    assert_eq!(
+        state(kept).await,
+        ("active".to_owned(), Some(b_owner), None, true)
+    );
+    assert_eq!(
+        state(untaken).await,
+        ("disabled".to_owned(), None, None, false)
     );
     t.finish().await;
 }

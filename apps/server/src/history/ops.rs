@@ -212,6 +212,9 @@ impl Operation for HistoryShow {
         if let Support::Not(reason) = adapter_for(&kind)?.show {
             return Err(not_supported(&kind, "show a version", reason));
         }
+        if kind == "page" {
+            super::cold::warm_page(call.state, id, input.version).await?;
+        }
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
@@ -307,6 +310,7 @@ impl Operation for HistoryRestore {
             let located = Located {
                 workspace_id: call.ctx.workspace_id,
                 space_id: call.ctx.space_id,
+                direct: None,
             };
             let mut connection = crate::db::scoped_tx(&call.state.pool)
                 .await
@@ -330,6 +334,9 @@ impl Operation for HistoryRestore {
             actor_id: call.account_id(),
             files: crate::files::FileStore::from_config(&call.state.config),
         };
+        if kind == "page" {
+            super::cold::warm_page(call.state, id, input.version).await?;
+        }
         let tx = call.tx().await?;
         let version = super::restore(
             tx,

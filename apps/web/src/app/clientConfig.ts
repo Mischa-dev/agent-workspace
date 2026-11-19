@@ -11,14 +11,14 @@
 
 import { origins } from '../api/client'
 
-type Answer = { apiOrigin?: unknown; liveOrigin?: unknown; signIn?: { methods?: unknown } } | null
+type Answer = { apiOrigin?: unknown; liveOrigin?: unknown; signIn?: { methods?: unknown; oidcName?: unknown } } | null
 
 /**
  * What the server said about itself at start (W1.38), beyond where it
  * answers: the ways in it offers. Unknown (null) with no answer, so a reader
  * falls back to asking the server as it always did.
  */
-export const started: { signInMethods: readonly string[] | null } = { signInMethods: null }
+export const started: { signInMethods: readonly string[] | null; oidcName: string | null } = { signInMethods: null, oidcName: null }
 
 /** Whether the server offers this way in; true while it isn't known. */
 export function offersSignIn(method: string) {
@@ -54,6 +54,8 @@ export async function load(): Promise<{ apiOrigin: string | null; liveOrigin: st
   origins.csrf = api ? csrfFrom(api) : undefined
   const methods = answer?.signIn?.methods
   started.signInMethods = Array.isArray(methods) ? methods.filter((method): method is string => typeof method === 'string') : null
+  const oidcName = answer?.signIn?.oidcName
+  started.oidcName = typeof oidcName === 'string' && oidcName.trim() ? oidcName.trim().slice(0, 60) : null
   return { apiOrigin: api, liveOrigin: live }
 }
 

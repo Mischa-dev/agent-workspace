@@ -131,6 +131,17 @@ pub(crate) async fn subject_of_conversation(
     .await?)
 }
 
+/// The kind of thing a conversation discusses: its comments conversation,
+/// or a thread under one. `None` for any other conversation.
+pub(crate) async fn subject_kind_of(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+) -> Result<Option<SubjectKind>, AppError> {
+    Ok(subject_of_conversation(connection, conversation_id)
+        .await?
+        .and_then(|(kind, _)| SubjectKind::parse(&kind)))
+}
+
 /// The thing's comments conversation and its project, made if it doesn't
 /// exist yet, when `creator` may see the thing and it takes comments. A
 /// board outside any project keeps its comments in the workspace space,
@@ -371,7 +382,9 @@ pub(crate) async fn post(
 
     let content = match body {
         CommentBody::Content(content) => content,
-        CommentBody::Text(text) => crate::mcp::content_from_text(state, project_id, &text).await?,
+        CommentBody::Text(text) => {
+            crate::mcp::content_from_text(state, project_id, None, &text).await?
+        }
     };
     let outcome = append_message_command_with(
         state,

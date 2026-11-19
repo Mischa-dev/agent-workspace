@@ -23,9 +23,25 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("actor_id", "actors"),
                     ("project_id", "projects"),
                     ("session_id", "sessions"),
-                    ("mcp_credential_id", "mcp_client_credentials"),
+                    ("mcp_credential_id", "account_credentials"),
                     ("mcp_oauth_grant_id", "mcp_oauth_grants"),
                     ("external_agent_connection_id", "external_agent_connections"),
+                    ("requested_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            // Every link between two things (K3.15): the explicit ones
+            // (dependencies, relations) are only here; text, field and
+            // derived ones are read again from their sources on import.
+            KindDecl {
+                kind: "links",
+                table: "links",
+                references: &[
+                    ("from_thing_id", "things"),
+                    ("to_thing_id", "things"),
+                    ("created_by_account_id", "actors"),
+                    ("requested_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -58,6 +74,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("group_id", "account_groups"),
                     ("account_id", "actors"),
                     ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "role_grants",
+                table: "role_grants",
+                references: &[
+                    ("space_id", "projects"),
+                    ("group_id", "account_groups"),
+                    ("role_id", "workspace_roles"),
+                    ("granted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -270,6 +298,46 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "events",
                 "the server's event log (K3.2): history of this server, not state to move; the rows it describes are exported",
             ),
+            (
+                "event_archives",
+                "the server's event log moved to its store (K3.25): history of this server, like the log itself",
+            ),
+            (
+                "history_archives",
+                "where this server keeps cold page versions (K3.25); an export carries each version's body in its row",
+            ),
+            (
+                "workspace_plans",
+                "the plan this server has the workspace on (H1.25): the destination's own billing decides it",
+            ),
+            (
+                "usage_events",
+                "usage this server counted (H1.25); the destination counts its own from the import on",
+            ),
+            (
+                "usage_counters",
+                "totals of this server's usage ledger (H1.25), kept with it",
+            ),
+            (
+                "limit_notices",
+                "which limit notices this server already gave (H1.25)",
+            ),
+            (
+                "billing_events",
+                "deliveries this server took from its billing provider (H1.33); billing stays with the server that bills",
+            ),
+            (
+                "spend_limits",
+                "nothing sets one yet: H1.27, which adds the operations that do, adds them to the export",
+            ),
+            (
+                "workspace_transfers",
+                "this server's record of exports and imports (H1.9): an archive never carries itself",
+            ),
+            (
+                "workspace_import_ids",
+                "how one import mapped an archive's ids on this server (H1.10)",
+            ),
             ("events_default", "a partition of the server's event log"),
             ("events_p0", "a partition of the server's event log"),
             (
@@ -277,12 +345,24 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
-                "link_previews",
-                "a cache or index derived from other rows, rebuilt on import",
+                "provider_login_ceremonies",
+                "runtime state of this server (a sign-in in progress, ten minutes at most)",
             ),
             (
-                "links",
-                "a cache or index derived from other rows, rebuilt on import (K3.12 mirrors the stores that hold links until K3.13)",
+                "file_objects_pending",
+                "runtime state of this server (bytes being written to a store)",
+            ),
+            (
+                "file_uploads",
+                "runtime state of this server (a direct upload between its start and finish, a day at most)",
+            ),
+            (
+                "workspace_stores",
+                "a bucket reached with keys that never leave; set the bucket again in the new workspace",
+            ),
+            (
+                "link_previews",
+                "a cache or index derived from other rows, rebuilt on import",
             ),
             (
                 "things",
@@ -299,10 +379,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "operation_tasks",
                 "long calls in flight and their answers for a week (K2.21); a call on this server, not the workspace's content",
-            ),
-            (
-                "mcp_client_credentials",
-                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
                 "mcp_oauth_access_tokens",
@@ -323,10 +399,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "secrets",
                 "secret values never leave the server; their names go to needs/secrets.jsonl (H1.9)",
-            ),
-            (
-                "thing_references",
-                "a cache or index derived from other rows, rebuilt on import",
             ),
             (
                 "workos_agent_bindings",
@@ -568,6 +640,28 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "follows",
+                table: "follows",
+                references: &[
+                    ("space_id", "projects"),
+                    ("account_id", "actors"),
+                    ("created_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "guards",
+                table: "guards",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_account_id", "actors"),
+                    ("updated_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_harnesses",
                 table: "custom_harnesses",
                 references: &[
@@ -579,6 +673,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "guard_holds",
+                "runtime state of this server (queues, leases, retries)",
+            ),
             (
                 "agent_schedules",
                 "runtime state of this server (queues, leases, retries)",
@@ -687,6 +785,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("origin_message_id", "messages"),
                     ("archived_by_actor_id", "actors"),
                     ("thread_status_changed_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "conversation_agent_settings",
+                table: "conversation_agent_settings",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("account_id", "actors"),
+                    ("set_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -851,19 +961,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_dependencies",
-                table: "work_item_dependencies",
-                references: &[
-                    ("project_id", "projects"),
-                    ("blocking_work_item_id", "work_items"),
-                    ("blocked_work_item_id", "work_items"),
-                    ("created_by_actor_id", "actors"),
-                    ("blocking_project_id", "projects"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_item_handoffs",
                 table: "work_item_handoffs",
                 references: &[
@@ -904,19 +1001,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("work_item_id", "work_items"),
                     ("project_id", "projects"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_relations",
-                table: "work_item_relations",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("other_project_id", "projects"),
-                    ("other_work_item_id", "work_items"),
                     ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
@@ -968,17 +1052,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "work_item_types",
                 table: "work_item_types",
                 references: &[("project_id", "projects")],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_watchers",
-                table: "work_item_watchers",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("actor_id", "actors"),
-                ],
                 text_references: &[],
                 exclude: &[],
             },
@@ -1037,7 +1110,9 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("agent_session_id", "agent_sessions"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // Where a cold body is kept on this server (K3.25): an
+                // export warms every version first, so each carries its body.
+                exclude: &["archive_id", "body_md5"],
             },
             KindDecl {
                 kind: "document_change_sets",
@@ -1082,7 +1157,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "thing_grants",
+            "who else may see one page, and its share links (a link is a credential); shared again after import",
+        )],
     },
     ExportDecl {
         module: "collections",
@@ -1382,7 +1460,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
         ],
-        not_exported: &[],
+        not_exported: &[
+            (
+                "incoming_hooks",
+                "an address another service signs for with a secret, which never leaves; \
+                 make the hook again in the new workspace",
+            ),
+            ("incoming_hook_deliveries", "a delivery log"),
+        ],
     },
     ExportDecl {
         module: "suggestions",
@@ -1854,8 +1939,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
-                "run_credentials",
-                "short-lived credentials, kept as digests, that end with their run",
+                "access_tokens",
+                "short-lived tokens, kept as digests, that lapse within a day",
             ),
             (
                 "repository_workspaces",

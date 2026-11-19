@@ -388,14 +388,16 @@ const ADD_PATHS: Record<AddPath, { label: string; description: string }> = {
       'Agents you manage in other workspaces. Adding one keeps its identity, token and connections; it gets this workspace’s role for new agents.',
   },
   host: {
-    label: 'Start one on a linked host',
-    description: 'Ways to get a new agent from the hosts you’ve linked. Each host walks you through its own steps.',
+    label: 'Start a new one',
+    description:
+      'This server’s assistant, which thinks with the workspace’s model and needs no setup, and the ways to get a new agent from the hosts you’ve linked. Each host walks you through its own steps.',
   },
 }
 
 /**
  * A2.18: one place to add an agent, whichever way it comes: connect one you
- * run, add one you manage elsewhere, or start one on a linked host (A2.20).
+ * run, add one you manage elsewhere, or start a new one: this server's
+ * assistant (A1.25) or one on a linked host (A2.20).
  * A way shows only when it has something to offer. To reconnect one that
  * lost its token, use its card's setup link or new token.
  */

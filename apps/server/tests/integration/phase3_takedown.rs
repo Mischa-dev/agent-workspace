@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
-    message_edits::{add_person, copies, count, create_channel, direct_space, get, set_role},
+    message_edits::{add_person, copies, count, create_channel, direct_space, get},
     message_reactions::{item, timeline_message},
 };
 
@@ -32,13 +32,14 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let added = call(
-        "project_member_set",
-        json!({"projectId": work, "person": "@mara"}),
+        "space_member_add",
+        json!({"spaceId": work, "account": "@mara"}),
     )
     .await;
     assert_eq!(added["outcome"], "ok", "{added}");
-    // Even an agent with the owner role never moderates.
-    set_role(&setup.pool, &work, mara_id, "owner").await;
+    // Mara is a member: her role doesn't moderate, so she removes only her
+    // own messages (an agent whose role moderates removes anyone's, as a
+    // person does; message_edits.rs covers it).
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
     let mara = |name: &'static str, arguments: Value| {
         let token = mara_token.clone();
@@ -114,7 +115,7 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(
         refused["message"],
-        "Agents can only remove their own messages. Ask a project owner or admin to remove this one."
+        "You can only remove your own messages. Project owners and admins can remove anyone's."
     );
     let refused = mara(
         "message_edit",

@@ -107,8 +107,9 @@ const REVIEW_WHERE: &str = r#"
     AND status.semantic_category IN ('review', 'verification')
     AND item.assignee_actor_id IS DISTINCT FROM $1
     AND (item.created_by_actor_id = $1
-         OR EXISTS (SELECT 1 FROM work_item_watchers watcher
-                     WHERE watcher.work_item_id = item.id AND watcher.actor_id = $1))
+         OR EXISTS (SELECT 1 FROM follows watcher
+                     WHERE watcher.target_kind = 'task' AND watcher.target_id = item.id
+                       AND watcher.account_id = $1))
 "#;
 
 /// Claimed by the reader or by an agent they connected.
@@ -362,7 +363,7 @@ pub(super) async fn get_timeline(
     let dependencies = sqlx::query_as::<_, TimelineLink>(
         r#"
         SELECT blocking_work_item_id AS blocking_id, blocked_work_item_id AS blocked_id
-        FROM work_item_dependencies
+        FROM task_dependencies
         WHERE project_id = $1 AND blocking_project_id = $1
           AND blocked_work_item_id = ANY($2) AND blocking_work_item_id = ANY($2)
         ORDER BY blocking_work_item_id, blocked_work_item_id

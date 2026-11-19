@@ -23,7 +23,10 @@ use uuid::Uuid;
 
 use super::{
     prompts::Prompt,
-    providers::{self, CompletionRequest, ProviderError, ProviderId, ProviderManifest},
+    providers::{
+        self, ChatRequest, CompletionRequest, ModelReply, ModelTurn, ProviderError, ProviderId,
+        ProviderManifest,
+    },
     schema,
 };
 use crate::{
@@ -430,7 +433,8 @@ pub struct Answer<T> {
 
 struct UsageRow<'a> {
     scope: Scope,
-    prompt: &'a Prompt,
+    /// The prompt's id and version.
+    prompt: (&'a str, i32),
     resolved: &'a ResolvedModel,
     tier: Tier,
     input_tokens: i64,
@@ -456,8 +460,8 @@ async fn record_usage(pool: &PgPool, row: UsageRow<'_>) -> Result<(), AppError> 
         .bind(row.scope.organization_id)
         .bind(row.scope.project_id)
         .bind(row.scope.actor_id)
-        .bind(row.prompt.id)
-        .bind(row.prompt.version)
+        .bind(row.prompt.0)
+        .bind(row.prompt.1)
         .bind(row.resolved.manifest.id)
         .bind(row.resolved.model.chars().take(200).collect::<String>())
         .bind(row.tier.as_str())
@@ -547,7 +551,7 @@ pub async fn run_with<T: DeserializeOwned>(
                     &state.pool,
                     UsageRow {
                         scope,
-                        prompt,
+                        prompt: (prompt.id, prompt.version),
                         resolved,
                         tier,
                         input_tokens: 0,
@@ -582,7 +586,7 @@ pub async fn run_with<T: DeserializeOwned>(
             &state.pool,
             UsageRow {
                 scope,
-                prompt,
+                prompt: (prompt.id, prompt.version),
                 resolved,
                 tier,
                 input_tokens: completion.input_tokens,
@@ -620,6 +624,121 @@ pub async fn run_with<T: DeserializeOwned>(
         }
     }
     Err(AiError::InvalidOutput)
+}
+
+/// A1.25: what an assistant's turns are counted under in `ai_usage`.
+pub const ASSISTANT_PROMPT: (&str, i32) = ("assistant_turn", 1);
+/// The most an assistant's turn may write.
+const ASSISTANT_MAX_OUTPUT: u32 = 8_192;
+
+/// A turn's answer and what it cost.
+#[derive(Clone, Debug)]
+pub struct ChatAnswer {
+    pub reply: ModelReply,
+    pub provider: &'static str,
+    /// Millionths of a dollar, from the model's prices (0 when unpriced).
+    pub cost_micros: i64,
+}
+
+/// A1.25: one turn of an assistant's conversation with tools, with the
+/// model `scope`'s settings choose for deep work and the workspace's key.
+/// The key is read here and goes only to the provider. Counted in
+/// `ai_usage`, so the workspace's monthly budget covers it.
+pub async fn chat(state: &AppState, scope: Scope, turn: &ModelTurn) -> Result<ChatAnswer, AiError> {
+    let tier = Tier::Deep;
+    let resolved = resolve(state, scope, tier).await?;
+    let budget = budget_usd(&state.pool, scope.organization_id).await?;
+    if budget > 0
+        && spent_this_month_micros(&state.pool, scope.organization_id).await?
+            >= budget.saturating_mul(1_000_000)
+    {
+        return Err(AiError::OverBudget { budget_usd: budget });
+    }
+    let size = serde_json::to_string(turn)
+        .map_err(|_| AppError::Internal("AI input"))?
+        .chars()
+        .count();
+    if size > MAX_INPUT_CHARS {
+        return Err(AiError::App(AppError::Validation("messages")));
+    }
+    let key = match resolved.key {
+        Some((secret_id, _)) => {
+            let keys = secrets::keyring(&state.config).map_err(|_| {
+                AiError::NotConfigured(
+                    "This server has no secrets keyring, so it can't read the provider's key."
+                        .to_owned(),
+                )
+            })?;
+            Some(secrets::reveal(&state.pool, keys.as_ref(), secret_id, "ai.assistant").await?)
+        }
+        None => None,
+    };
+    let prices = prices(&state.pool, scope.organization_id, &resolved).await?;
+    let client = provider_client(state, &resolved).await?;
+    let request = ChatRequest {
+        model: &resolved.model,
+        turn,
+        max_output_tokens: turn
+            .max_output_tokens
+            .unwrap_or(ASSISTANT_MAX_OUTPUT)
+            .clamp(1, ASSISTANT_MAX_OUTPUT),
+        api_key: key.as_ref(),
+        base_url: resolved.base_url.as_deref(),
+        timeout: tier.timeout(),
+    };
+    let started = std::time::Instant::now();
+    let result = resolved.provider.chat(&client, &request).await;
+    let latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let (row, answer) = match result {
+        Ok(chat) => {
+            let cost = cost_micros(prices.as_ref(), chat.input_tokens, chat.output_tokens);
+            let row = UsageRow {
+                scope,
+                prompt: ASSISTANT_PROMPT,
+                resolved: &resolved,
+                tier,
+                input_tokens: chat.input_tokens,
+                output_tokens: chat.output_tokens,
+                cost,
+                outcome: "succeeded",
+                error: None,
+                latency_ms,
+            };
+            let answer = ChatAnswer {
+                reply: ModelReply {
+                    parts: chat.parts,
+                    stop: chat.stop,
+                    model: resolved.model.clone(),
+                    input_tokens: u64::try_from(chat.input_tokens).unwrap_or(0),
+                    output_tokens: u64::try_from(chat.output_tokens).unwrap_or(0),
+                },
+                provider: resolved.manifest.id,
+                cost_micros: cost,
+            };
+            (row, Ok(answer))
+        }
+        Err(error) => (
+            UsageRow {
+                scope,
+                prompt: ASSISTANT_PROMPT,
+                resolved: &resolved,
+                tier,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: 0,
+                outcome: if error == ProviderError::Refused {
+                    "refused"
+                } else {
+                    "provider_error"
+                },
+                error: Some(error.category()),
+                latency_ms,
+            },
+            Err(AiError::Provider(error)),
+        ),
+    };
+    record_usage(&state.pool, row).await?;
+    answer
 }
 
 #[cfg(test)]

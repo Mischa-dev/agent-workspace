@@ -123,6 +123,15 @@ pub async fn stage(
             Some(p.version),
             None,
         ),
+        P::ConversationMemberAdded(p) => (
+            &catalog::CONVERSATION_MEMBER_ADDED,
+            "conversation",
+            p.conversation_id,
+            None,
+            conversation(p.conversation_id),
+            Some(p.version),
+            None,
+        ),
         P::AgentRunUpdated(p) => (
             if p.state.is_some_and(|state| state.is_terminal()) {
                 &catalog::RUN_FINISHED
@@ -241,6 +250,15 @@ pub async fn stage(
             None,
             Some(p.actor_id),
         ),
+        P::FollowsChanged(p) => (
+            &catalog::FOLLOWS_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
         P::InboxViewsChanged(p) => (
             &catalog::INBOX_VIEWS_CHANGED,
             "account",
@@ -281,6 +299,15 @@ pub async fn stage(
             &catalog::CUSTOM_EMOJI_CHANGED,
             "custom_emoji",
             p.emoji_id,
+            None,
+            Audience::Workspace,
+            None,
+            None,
+        ),
+        P::GuardsChanged(p) => (
+            &catalog::GUARDS_CHANGED,
+            "workspace",
+            p.workspace_id,
             None,
             Audience::Workspace,
             None,
@@ -359,8 +386,10 @@ pub async fn stage(
         NewEvent {
             id: event_id,
             ty,
-            workspace_id: None,
-            space_id: Some(project_id),
+            // A DM or group has no space: its events belong to the direct
+            // scope and are heard by its participants.
+            workspace_id: (project_id == crate::spaces::DIRECT).then_some(project_id),
+            space_id: (project_id != crate::spaces::DIRECT).then_some(project_id),
             thing,
             access_thing: access,
             version,

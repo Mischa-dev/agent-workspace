@@ -417,7 +417,7 @@ function ComposerBox({
                 .catch((): GroupView[] => []),
             ]).then(([actors, groups]) => [
               ...actors
-                .filter((actor) => !peopleOnly || actor.kind === 'human')
+                .filter((actor) => !peopleOnly || actorKind(actor.kind) === 'person')
                 .slice(0, 8)
                 .map((actor): Suggestion => ({ kind: 'mention', actor })),
               ...matchingGroups(groups, trigger.query).map((group): Suggestion => ({ kind: 'group', group })),

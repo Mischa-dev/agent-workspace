@@ -76,7 +76,7 @@ pub async fn ready_tasks_in(
         SELECT item.id, item.project_id, project.name AS project_name,
                project.project_key || '-' || item.number::text AS key,
                item.title, item.priority,
-               (SELECT count(*) FROM work_item_dependencies dependency
+               (SELECT count(*) FROM task_dependencies dependency
                   JOIN task_rows waiting
                     ON waiting.project_id = dependency.project_id
                    AND waiting.id = dependency.blocked_work_item_id
@@ -111,7 +111,7 @@ pub async fn ready_tasks_in(
     .fetch_all(&mut *connection)
     .await?;
     for task in &mut tasks {
-        task.href = format!("/projects/{}/work-items/{}", task.project_id, task.id);
+        task.href = crate::addresses::Target::task(task.project_id, task.id).legacy_path();
     }
     let project_count = sqlx::query_scalar::<_, i64>(
         r#"

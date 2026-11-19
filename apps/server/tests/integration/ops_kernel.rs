@@ -429,11 +429,16 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     );
     matches_schema(&refused.body);
 
-    // An app acting for the person is held to their agent limit.
+    // An app acting for the person is held to their agent limit: it
+    // reaches the space, with nothing allowed there.
     let mut limited = person.clone();
+    let none = agent_workspace_server::access::catalogue::PermissionSet::EMPTY;
     limited.limits = Some(agent_workspace_server::policy::AgentLimits {
         actor_id: owner,
-        ..Default::default()
+        organizations: [(setup.organization_id, none)].into_iter().collect(),
+        projects: [(space.parse::<Uuid>().expect("space"), none)]
+            .into_iter()
+            .collect(),
     });
     let narrowed = ops::dispatch(
         &state,

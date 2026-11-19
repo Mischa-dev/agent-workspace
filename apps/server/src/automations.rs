@@ -213,6 +213,14 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         thing_id: Option<Uuid>,
     },
+    /// An outside service posts to an incoming hook in the project (K3.26),
+    /// with a delivery whose signature checks out. Takes no task conditions;
+    /// its actions can use {{hook.name}}, {{delivery.id}} and
+    /// {{delivery.text}} (the body, cut short).
+    IncomingHook {
+        #[schemars(with = "String")]
+        hook_id: Uuid,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -245,6 +253,7 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "whiteboard_changed",
     "comment_posted",
     "proposal_made",
+    "incoming_hook",
     "schedule",
     "capacity_window",
 ];
@@ -274,6 +283,7 @@ impl Trigger {
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
             Self::CommentPosted { .. } => "comment_posted",
             Self::ProposalMade { .. } => "proposal_made",
+            Self::IncomingHook { .. } => "incoming_hook",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
@@ -291,6 +301,7 @@ impl Trigger {
                 | Self::WhiteboardChanged { .. }
                 | Self::CommentPosted { .. }
                 | Self::ProposalMade { .. }
+                | Self::IncomingHook { .. }
         )
     }
 
@@ -618,7 +629,8 @@ fn check_shape(
         }
         Trigger::PageChanged { .. }
         | Trigger::SheetChanged { .. }
-        | Trigger::WhiteboardChanged { .. } => {
+        | Trigger::WhiteboardChanged { .. }
+        | Trigger::IncomingHook { .. } => {
             if !conditions.is_empty() {
                 return Err(AppError::Invalid(
                     "a page, sheet or board rule has no task conditions: name the one it watches instead",
@@ -799,11 +811,7 @@ async fn module_off(
     }
     // A conversation trigger or action in a project needs Channels; in the
     // direct space, Messages.
-    let direct =
-        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-            .bind(rule.project_id)
-            .fetch_one(&mut *connection)
-            .await?;
+    let direct = crate::spaces::kind::holds_messages(rule.project_id);
     let mut needed = vec![manifest::get("automations")];
     if let Ok(trigger) = rule.trigger() {
         needed.push(in_project_kind(
@@ -970,7 +978,6 @@ async fn reader_access(
     let can_edit = crate::memory::project_access(
         pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         PolicyAction::WorkItemEdit,
     )
@@ -979,7 +986,6 @@ async fn reader_access(
     let admin = crate::memory::project_access(
         pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         PolicyAction::ProjectManage,
     )
@@ -1056,6 +1062,11 @@ async fn check_references(
         if !found {
             return Err(AppError::NotFound(kind));
         }
+    }
+    if let Trigger::IncomingHook { hook_id } = trigger
+        && !crate::incoming_hooks::exists_in(pool, project_id, *hook_id).await?
+    {
+        return Err(AppError::NotFound("incoming hook"));
     }
     let mut conversations = Vec::new();
     if let Trigger::MessagePosted {
@@ -1662,6 +1673,7 @@ pub(crate) async fn run_now(
         work_item_id: request.work_item_id,
         ..Subject::default()
     };
+    let person = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let run_id = queue_fire(
         &mut transaction,
@@ -1672,7 +1684,7 @@ pub(crate) async fn run_now(
         // Through the maker's app or script (MCP or the public API set its
         // agent limit for this call): the run keeps to that limit, inline
         // here and from the job alike, even for a rule made in the browser.
-        caller.actor_kind == ActorKind::Human
+        person
             && crate::policy::current_agent_limit(
                 caller.actor_id,
                 crate::policy::MembershipScope::Project(project_id),
@@ -1784,6 +1796,7 @@ fn summary_for(event: &Event) -> String {
         "message.created" => "A message was posted".to_owned(),
         "comment.created" => "Someone commented".to_owned(),
         "proposal.created" => "Someone proposed a change".to_owned(),
+        "incoming_hook.received" => "A delivery came in".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -1803,6 +1816,7 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "whiteboard.updated" => &["whiteboard_changed"],
         "comment.created" => &["comment_posted"],
         "proposal.created" => &["proposal_made"],
+        "incoming_hook.received" => &["incoming_hook"],
         _ => &[],
     }
 }
@@ -1991,6 +2005,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
                         .is_none_or(|kind| on.is_some_and(|thing| thing.kind == kind))
                     && thing_id.is_none_or(|only| on.is_some_and(|thing| thing.id == only))
             }
+            Trigger::IncomingHook { hook_id } => subject.hook_id == Some(*hook_id),
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
         if !wanted {
@@ -2229,7 +2244,7 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
                EXISTS (
                    SELECT 1 FROM projects WHERE id = $3 AND archived_at IS NOT NULL
                ) AS project_archived,
-               (SELECT credential.id FROM mcp_client_credentials credential
+               (SELECT credential.id FROM account_credentials credential
                 WHERE $4::uuid IS NOT NULL
                   AND credential.external_agent_connection_id = $4
                   AND credential.actor_id = $1
@@ -2275,7 +2290,8 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
             "Turned off because the app it was made through was disconnected.".to_owned(),
         ));
     }
-    if actor_kind == ActorKind::ExternalAgent && row.credential_id.is_none() {
+    let through_connection = actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (an agent acts through its own connection)
+    if through_connection && row.credential_id.is_none() {
         return Ok(Err(format!(
             "Turned off because {who} has no active connection that can make changes."
         )));
@@ -2283,7 +2299,6 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
     let can_edit = crate::memory::project_access(
         pool,
         rule.owner_actor_id,
-        actor_kind,
         rule.project_id,
         PolicyAction::WorkItemEdit,
     )
@@ -2356,7 +2371,7 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
         let place = if in_project {
             Some(rule.project_id)
         } else {
-            crate::direct::space_for_member(
+            crate::spaces::workspace::join(
                 &mut transaction,
                 rule.organization_id,
                 rule.owner_actor_id,
@@ -2372,7 +2387,7 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             r#"
             SELECT membership.actor_id FROM project_memberships membership
             WHERE membership.project_id = $1 AND membership.enabled
-              AND membership.role IN ('owner', 'admin')
+              AND role_allows(membership.role, membership.role_id, 'settings.manage')
               AND actor_can_access_project(membership.actor_id, NULL, $1)
             ORDER BY membership.actor_id LIMIT 20
             "#,
@@ -2399,7 +2414,14 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             detail: json!({
                 "title": format!("Automation \u{201c}{}\u{201d} was turned off", rule.name),
                 "preview": reason,
-                "href": format!("/settings/projects/{}/automations", rule.project_id),
+                "href": crate::addresses::link(
+                    state,
+                    Some(rule.organization_id),
+                    &crate::addresses::Target::SpaceSettings {
+                        space: rule.project_id,
+                        section: "automations",
+                    },
+                ),
                 "place": project_name,
                 "ruleId": rule.id,
             }),
@@ -2713,7 +2735,14 @@ impl Context {
             variables.push(("task.status", text("status")));
             variables.push((
                 "task.url",
-                format!("{origin}/projects/{}/work-items/{id}", rule.project_id),
+                format!(
+                    "{origin}{}",
+                    crate::addresses::link(
+                        state,
+                        Some(rule.organization_id),
+                        &crate::addresses::Target::task(rule.project_id, id),
+                    )
+                ),
             ));
             assignee = task
                 .get("assigneeActorId")
@@ -2758,6 +2787,21 @@ impl Context {
             let text = |key: &str| document[key].as_str().unwrap_or_default().to_owned();
             variables.push((title, text("title")));
             variables.push((url, text("url")));
+        }
+        // An incoming hook's delivery (K3.26): read live from its record,
+        // in the rule's own project, never from the event.
+        if let (Some(hook_id), Some(delivery_id)) = (subject.hook_id, subject.delivery_id)
+            && let Some(delivery) = crate::incoming_hooks::delivery_for_rule(
+                &state.pool,
+                rule.project_id,
+                hook_id,
+                delivery_id,
+            )
+            .await?
+        {
+            variables.push(("hook.name", delivery.hook_name));
+            variables.push(("delivery.id", delivery.key));
+            variables.push(("delivery.text", delivery.text));
         }
         if let Some(run_state) = &subject.state
             && subject.agent_run_id.is_some()
@@ -2982,7 +3026,7 @@ async fn run_action(
                 actor_id: acting.actor_id,
                 actor_kind: acting.actor_kind,
                 via_grant_id: acting.via_grant_id,
-                mcp: acting.actor_kind == ActorKind::ExternalAgent,
+                mcp: acting.actor_kind == ActorKind::ExternalAgent, // kind-check: mechanical (an agent acts through its own connection)
                 session_id: None,
                 request_id: Some(format!("automation:{run_id}")),
                 // An agent's rule posts a hand-off to a runner as the agent,
@@ -3064,7 +3108,8 @@ async fn run_action(
             .map_err(database)?;
             // A rule a person's app or script made: its launches start only
             // within that app's limit when the queue drains.
-            if rule.made_through_app && acting.actor_kind == ActorKind::Human {
+            let person = acting.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+            if rule.made_through_app && person {
                 let ids = result
                     .launches
                     .iter()
@@ -3277,7 +3322,8 @@ async fn notify(
             sqlx::query_scalar::<_, Uuid>(
                 r#"
                 SELECT actor_id FROM project_memberships
-                WHERE project_id = $1 AND enabled AND role IN ('owner', 'admin')
+                WHERE project_id = $1 AND enabled
+                  AND role_allows(role, role_id, 'settings.manage')
                 ORDER BY actor_id LIMIT 20
                 "#,
             )
@@ -3319,7 +3365,14 @@ async fn notify(
             detail: json!({
                 "title": rendered.chars().take(200).collect::<String>(),
                 "preview": format!("From the automation \u{201c}{}\u{201d}", rule.name),
-                "href": format!("/settings/projects/{}/automations", rule.project_id),
+                "href": crate::addresses::link(
+                    state,
+                    Some(rule.organization_id),
+                    &crate::addresses::Target::SpaceSettings {
+                        space: rule.project_id,
+                        section: "automations",
+                    },
+                ),
                 "ruleId": rule.id,
             }),
             group_key: format!("automation:{}:{run_id}:{index}", rule.id),
@@ -3435,7 +3488,7 @@ async fn app_limits(
         return Ok(None);
     }
     let mut connection = crate::db::scoped_tx(pool).await?;
-    let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1")
+    let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1") // kind-check: mechanical (apps act for the person who connected them)
         .bind(rule.owner_actor_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -3475,7 +3528,7 @@ async fn with_limits<F: std::future::Future>(limits: Option<AgentLimits>, call: 
 /// Whether a person is making or changing a rule through an app or script
 /// (MCP or the public API), whose agent limit the rule then keeps.
 fn through_app(caller: &Caller) -> bool {
-    caller.actor_kind == ActorKind::Human && caller.channel == "mcp"
+    caller.actor_kind == ActorKind::Human && caller.channel == "mcp" // kind-check: mechanical (a person's app signs in as that person)
 }
 
 #[cfg(test)]

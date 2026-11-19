@@ -24,6 +24,7 @@ commands below still work for a dry run or a one-off cleanup.
 | Completed temporary GitHub jobs | completed or exhausted at least 30 days ago | delete |
 | Access disagreements (K1's compare mode) | last seen at least 30 days ago | delete |
 | Ended MCP sessions (a digest of each session id a client ended) | ended at least 30 days ago | delete |
+| Incoming hook deliveries (K3.26: accepted bodies and refusals) | received at least 30 days ago | delete |
 
 These windows never make durable product history eligible. Actor attribution,
 audit history, Messages, Work Items, approvals, Agent Runs, provider sessions,

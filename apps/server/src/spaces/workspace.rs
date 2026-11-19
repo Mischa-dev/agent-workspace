@@ -87,3 +87,27 @@ pub async fn join(
         .await?;
     Ok(Some(space_id))
 }
+
+/// Host command support: the own space of a person's current workspace, by
+/// login name, with them in it. Returns the space and the person's account.
+pub async fn home_for_login(
+    pool: &sqlx::PgPool,
+    login_name: &str,
+) -> Result<(Uuid, Uuid), AppError> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let actor_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM users WHERE login_name = $1 AND status = 'active'",
+    )
+    .bind(login_name)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("user"))?;
+    let (workspace, _) = crate::workspace::default_workspace(&mut *transaction, actor_id)
+        .await?
+        .ok_or(AppError::NotFound("organization"))?;
+    let space = join(&mut transaction, workspace, actor_id)
+        .await?
+        .ok_or(AppError::NotFound("organization"))?;
+    transaction.commit().await?;
+    Ok((space, actor_id))
+}

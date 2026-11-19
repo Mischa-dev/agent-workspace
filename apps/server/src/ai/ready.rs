@@ -192,9 +192,9 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
                      AND EXISTS (SELECT 1 FROM project_memberships sees_task
                          WHERE sees_task.project_id = other.project_id
                            AND sees_task.actor_id = $2 AND sees_task.enabled
-                           AND custom_role_allows(sees_task.role_id, 'tasks.view')))
+                           AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))
                  AS visible
-        FROM work_item_dependencies dependency
+        FROM task_dependencies dependency
         -- The end of the dependency outside this project, if any.
         CROSS JOIN LATERAL (
             SELECT CASE WHEN dependency.project_id = $1
@@ -230,7 +230,7 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
         };
         let visible = visible
             && (other == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     other,
                     crate::policy::Permission::TasksView,
@@ -613,7 +613,7 @@ pub async fn readiness_of(
     let blockers = crate::db::scoped_one(pool, async |connection| {
         sqlx::query_as::<_, Row>(&format!(
             r#"{ROW_SELECT}
-        JOIN work_item_dependencies dependency
+        JOIN task_dependencies dependency
           ON dependency.blocking_project_id = item.project_id
          AND dependency.blocking_work_item_id = item.id
         WHERE dependency.project_id = $1 AND dependency.blocked_work_item_id = $2
@@ -623,7 +623,7 @@ pub async fn readiness_of(
                AND EXISTS (SELECT 1 FROM project_memberships sees_task
                    WHERE sees_task.project_id = item.project_id
                      AND sees_task.actor_id = $3 AND sees_task.enabled
-                     AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                     AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         "#
         ))
         .bind(project_id)
@@ -640,7 +640,7 @@ pub async fn readiness_of(
         .into_iter()
         .filter(|blocker| {
             blocker.project_id == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     blocker.project_id,
                     crate::policy::Permission::TasksView,
@@ -654,7 +654,7 @@ pub async fn readiness_of(
     let elsewhere = crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, i64>(
             r#"
-        SELECT count(*) FROM work_item_dependencies dependency
+        SELECT count(*) FROM task_dependencies dependency
         JOIN task_rows item
           ON item.project_id = dependency.blocking_project_id
          AND item.id = dependency.blocking_work_item_id
@@ -838,7 +838,7 @@ pub async fn suggested_blocks(
           AND suggestion.work_item_id = ANY($2)
           AND suggestion.other_work_item_id = ANY($2)
           AND NOT EXISTS (
-              SELECT 1 FROM work_item_dependencies dependency
+              SELECT 1 FROM task_dependencies dependency
               WHERE dependency.project_id = $1
                 AND dependency.blocked_work_item_id = suggestion.work_item_id
                 AND dependency.blocking_work_item_id = suggestion.other_work_item_id

@@ -251,7 +251,7 @@ async fn grant(
                connection.id AS connection_id, c.client_name, c.scopes
         FROM workos_agent_bindings b
         JOIN workos_organizations o USING (client_id, organization_id)
-        JOIN mcp_client_credentials c ON c.id = b.credential_id
+        JOIN account_credentials c ON c.id = b.credential_id
         JOIN external_agent_connections connection ON connection.id = b.connection_id
                 WHERE b.client_id = $1 AND b.subject_id = $2 AND b.kind = $3 AND b.revoked_at IS NULL
           AND o.workos_organization_id = $4
@@ -350,6 +350,7 @@ async fn list(
     principal: AuthenticatedActor,
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
     let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
         .await?;
@@ -374,6 +375,7 @@ async fn attach(
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
     ApiJson(input): ApiJson<Attach>,
 ) -> Result<Json<BindingView>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
     require_authenticated_write(&state, &headers, &principal).await?;
     let config = config(&state)?;
     domain(config)?;
@@ -394,7 +396,7 @@ async fn attach(
     .await?;
     // Hold the local grant locks across provider operations so removal cannot race attachment.
     let (credential, scopes, name): (Uuid, Vec<String>, String) = sqlx::query_as(
-        "SELECT id,scopes,client_name FROM mcp_client_credentials WHERE external_agent_connection_id=$1 AND status='active' AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR SHARE")
+        "SELECT id,scopes,client_name FROM account_credentials WHERE external_agent_connection_id=$1 AND status='active' AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR SHARE")
         .bind(connection).fetch_optional(&mut *tx).await?.ok_or(AppError::InvalidCredentials)?;
     let (kind, subject) = if let Some(registration_id) = input.registration_id {
         if !config.agent_registration_enabled || !valid_id(&registration_id, "agent_reg_") {
@@ -577,6 +579,7 @@ async fn revoke(
     principal: AuthenticatedActor,
     ApiPath((project, connection, binding)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
@@ -896,7 +899,7 @@ mod tests {
         .await
         .expect("WorkOS agent test operation");
         let credential: Uuid = sqlx::query_scalar(
-            "SELECT id FROM mcp_client_credentials WHERE external_agent_connection_id=$1",
+            "SELECT id FROM account_credentials WHERE external_agent_connection_id=$1",
         )
         .bind(agent.connection_id)
         .fetch_one(&pool)
@@ -1000,13 +1003,11 @@ mod tests {
             .execute(&pool)
             .await
             .expect("WorkOS agent test operation");
-        sqlx::query(
-            "UPDATE mcp_client_credentials SET status='revoked',revoked_at=now() WHERE id=$1",
-        )
-        .bind(credential)
-        .execute(&pool)
-        .await
-        .expect("WorkOS agent test operation");
+        sqlx::query("UPDATE account_credentials SET status='revoked',revoked_at=now() WHERE id=$1")
+            .bind(credential)
+            .execute(&pool)
+            .await
+            .expect("WorkOS agent test operation");
         assert!(
             grant(&state, &config, &token)
                 .await

@@ -98,34 +98,17 @@ impl Operation for PageFileUpload {
         }
         let page_id = input.page_id.id();
         let uploader = call.account_id();
-        let authorized = call.ctx.space_id;
-        let tx = call.tx().await?;
-        // The page's row holds it open while the file joins it.
-        let found = sqlx::query_as::<_, (Uuid, bool)>(
-            "SELECT project_id, archived_at IS NULL FROM project_pages WHERE id = $1 FOR SHARE",
-        )
-        .bind(page_id)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(AppError::from)?;
-        let Some((space_id, open)) = found else {
-            return Err(OpError::not_found("That page"));
-        };
-        // The call was allowed in the page's space as it was resolved; a move
-        // that landed since then leaves it with no say over the page.
-        if authorized != Some(space_id) {
-            return Err(OpError::not_found("That page"));
+        let authorized = call
+            .ctx
+            .space_id
+            .ok_or_else(|| OpError::not_found("That page"))?;
+        if bytes.len() > MAX_BYTES {
+            return Err(OpError::TooLarge {
+                limit_bytes: MAX_BYTES,
+            });
         }
-        if !open {
-            return Err(OpError::invalid(
-                "pageId",
-                "That page is archived. Bring it back first.",
-            ));
-        }
-        let limit = files::upload_limit(tx, space_id).await?.min(MAX_BYTES);
-        if bytes.len() > limit {
-            return Err(OpError::TooLarge { limit_bytes: limit });
-        }
+        // The bytes go to the store before any transaction opens; a refusal
+        // below takes them away again.
         let prepared = files::prepare_upload(Upload {
             name: input.name,
             declared_type: input.content_type,
@@ -133,6 +116,46 @@ impl Operation for PageFileUpload {
         })
         .await?;
         let state = call.state;
+        let staged = files::stage_prepared(state, authorized, prepared).await?;
+        let size = staged.incoming();
+        let checked = async {
+            let tx = call.tx().await?;
+            // The page's row holds it open while the file joins it.
+            let found = sqlx::query_as::<_, (Uuid, bool)>(
+                "SELECT project_id, archived_at IS NULL FROM project_pages WHERE id = $1 FOR SHARE",
+            )
+            .bind(page_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(AppError::from)?;
+            let Some((space_id, open)) = found else {
+                return Err(OpError::not_found("That page"));
+            };
+            // The call was allowed in the page's space as it was resolved; a
+            // move that landed since then leaves it with no say over the page.
+            if authorized != space_id {
+                return Err(OpError::not_found("That page"));
+            }
+            if !open {
+                return Err(OpError::invalid(
+                    "pageId",
+                    "That page is archived. Bring it back first.",
+                ));
+            }
+            let limit = files::upload_limit(tx, space_id).await?.min(MAX_BYTES);
+            if usize::try_from(size).unwrap_or(usize::MAX) > limit {
+                return Err(OpError::TooLarge { limit_bytes: limit });
+            }
+            Ok(space_id)
+        }
+        .await;
+        let space_id = match checked {
+            Ok(space_id) => space_id,
+            Err(error) => {
+                files::abandon_staged(state, &staged).await;
+                return Err(error);
+            }
+        };
         let tx = call.tx().await?;
         let row = files::store_prepared(
             state,
@@ -144,7 +167,7 @@ impl Operation for PageFileUpload {
                 thing_id: page_id,
                 purpose: Purpose::Inline,
             },
-            prepared,
+            staged,
         )
         .await?;
         call.audit_target("page", page_id, json!({"file": row.id}));

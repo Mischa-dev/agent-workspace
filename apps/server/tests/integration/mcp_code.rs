@@ -76,21 +76,27 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
         ),
     ]))
     .expect("configuration");
+    crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
     let seed = dev_seed(&pool, &config).await.expect("seed");
-    bootstrap_admin(
-        &pool,
-        BootstrapCommand {
-            login_name: "owner".to_owned(),
-            display_name: "Owner".to_owned(),
-            organization_name: None,
-            organization_slug: None,
-            adopt_actor_id: Some(seed.human_actor_id),
-            organization_id: Some(seed.organization_id),
-        },
-        PASSWORD.to_owned(),
-    )
-    .await
-    .expect("bootstrap owner");
+    // The owner's password is for signing in, which an older schema doesn't
+    // get (below); bootstrapping also ends first-run setup (H1.14), whose
+    // table such a schema doesn't have.
+    if version == i64::MAX {
+        bootstrap_admin(
+            &pool,
+            BootstrapCommand {
+                login_name: "owner".to_owned(),
+                display_name: "Owner".to_owned(),
+                organization_name: None,
+                organization_slug: None,
+                adopt_actor_id: Some(seed.human_actor_id),
+                organization_id: Some(seed.organization_id),
+            },
+            PASSWORD.to_owned(),
+        )
+        .await
+        .expect("bootstrap owner");
+    }
     sqlx::query(
         "UPDATE execution_profiles SET account_state = 'authenticated', version = version + 1 WHERE id = $1",
     )
@@ -906,7 +912,7 @@ async fn agent_list_shows_work_and_never_secrets() {
 
     // No token, prefix, webhook or credential ID for anyone.
     let credentials = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM mcp_client_credentials WHERE external_agent_connection_id = $1",
+        "SELECT id FROM account_credentials WHERE external_agent_connection_id = $1",
     )
     .bind(connection)
     .fetch_all(pool)
@@ -1006,31 +1012,32 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     .await;
     let work = thread(pool, &seed, seed.channel_id, "Fix the mirrors").await;
 
-    // Agents and read-only apps can't spend Codex.
-    for who in [MARA, READER] {
-        let refused = call(
+    // A read-only app can't start runs.
+    let refused = call(
+        READER,
+        "run_start",
+        json!({"threadId": work, "prompt": "Fix it"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // An account with no signed-in provider account of its own, agent or
+    // person, is told so, not asked to retry later: a run spends the
+    // caller's own account, never someone else's.
+    for who in [MARA, DANA] {
+        let no_account = call(
             who,
             "run_start",
             json!({"threadId": work, "prompt": "Fix it"}),
         )
         .await;
-        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+        assert_eq!(no_account["outcome"], "conflict", "{no_account}");
+        assert!(
+            no_account["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("signed-in provider account")),
+            "{no_account}"
+        );
     }
-    // A person with no signed-in account of their own is told so, not asked
-    // to retry later.
-    let no_account = call(
-        DANA,
-        "run_start",
-        json!({"threadId": work, "prompt": "Fix it"}),
-    )
-    .await;
-    assert_eq!(no_account["outcome"], "conflict", "{no_account}");
-    assert!(
-        no_account["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("signed-in provider account")),
-        "{no_account}"
-    );
 
     // A person starts a run on their own account; a retry doesn't start a second.
     let started = call(

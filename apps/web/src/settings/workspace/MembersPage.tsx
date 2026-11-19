@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { can } from '../../auth/can'
 import { describeError, toastError } from '../../app/mutations'
 import { humanize, roleLabel } from '../../projects/format'
 import {
@@ -21,6 +22,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  actorKind,
   countLabel,
   describeLoadError,
   formatFullDate,
@@ -62,10 +64,22 @@ const INVITATION_TONES: Record<WorkspaceInvitation['status'], ChipTone> = {
   expired: 'muted',
 }
 
+/** How a toast names a built-in role. */
+const ROLE_ARTICLE: Record<string, string> = { admin: 'an admin', member: 'a member' }
+/** Built-in roles a role change can be undone back to. */
+const UNDOABLE_ROLES = new Set(['admin', 'member'])
+/** The owner's chip stands out. */
+const ROLE_TONE: Record<string, 'agent'> = { owner: 'agent' }
+/** The built-in roles the invite picker names by key; anything else is a custom role's id. */
+const BUILT_IN_INVITES = new Map<string, 'admin' | 'member'>([
+  ['admin', 'admin'],
+  ['member', 'member'],
+])
+
 /** Workspace › Members: people and agents in the workspace, their roles, and invitations to join it. */
 export default function MembersPage({ workspace }: SettingsPageProps) {
   const organizationId = workspace?.id ?? ''
-  const manager = workspace?.role === 'owner' || workspace?.role === 'admin'
+  const manager = can(workspace, 'members.manage')
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [removing, setRemoving] = useState<WorkspaceMember | null>(null)
@@ -92,9 +106,9 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         title:
           change.enabled === false
             ? `${member.displayName} removed from the workspace`
-            : `${updated.displayName} is now ${updated.role === 'admin' ? 'an admin' : 'a member'}`,
+            : `${updated.displayName} is now ${ROLE_ARTICLE[updated.role] ?? 'a member'}`,
         onUndo:
-          change.role && (member.role === 'admin' || member.role === 'member')
+          change.role && UNDOABLE_ROLES.has(member.role)
             ? () => update.mutate({ member: updated, change: { role: member.role as 'admin' | 'member' } })
             : undefined,
       })
@@ -140,7 +154,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
       <PageHeader icon="users" title="Members">
         People and agents in {workspace.name}. Anyone here can be added to any of its projects.
       </PageHeader>
-      {manager && <InviteSection organizationId={organizationId} role={workspace.role} roles={roles.data} />}
+      {manager && <InviteSection organizationId={organizationId} roles={roles.data} />}
       <Section
         actions={total > 8 ? (
           <TextField
@@ -174,7 +188,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
               <Row
                 actions={
                   <>
-                    {member.capabilities.assignRole && member.role !== 'owner' && roles.data ? (
+                    {member.capabilities.assignRole && roles.data ? (
                       <SelectField
                         aria-label={`Role for ${member.displayName}`}
                         className="aw-field--inline"
@@ -185,14 +199,14 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                         }}
                         value={pickerValue(roles.data.roles, member.role, member.roleId)}
                       >
-                        {rolesFor(roles.data, member, workspace.role === 'owner').map((role) => (
+                        {rolesFor(roles.data, member).map((role) => (
                           <option key={role.id} value={role.id}>
                             {role.name}
                           </option>
                         ))}
                       </SelectField>
                     ) : (
-                      <StatusChip tone={member.role === 'owner' ? 'agent' : 'muted'}>
+                      <StatusChip tone={ROLE_TONE[member.role] ?? 'muted'}>
                         {member.roleName || roleNameFor(roles.data?.roles, member.role, member.roleId) || roleLabel(member.role)}
                       </StatusChip>
                     )}
@@ -217,7 +231,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                 key={member.actorId}
                 leading={
                   <Avatar
-                    kind={member.kind === 'external_agent' ? 'agent' : 'person'}
+                    kind={actorKind(member.kind) === 'agent' ? 'agent' : 'person'}
                     name={member.displayName}
                     seed={member.actorId}
                     size={32}
@@ -234,7 +248,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                 title={
                   <span className="aw-row__titleline">
                     {member.displayName}
-                    {member.kind === 'external_agent' && <ActorTag kind="agent" />}
+                    {actorKind(member.kind) === 'agent' && <ActorTag kind="agent" />}
                     {member.isYou && <StatusChip>You</StatusChip>}
                   </span>
                 }
@@ -277,7 +291,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
       >
         {removing
           ? `${removing.displayName} will be removed from ${workspace.name} and from every project in it. ${
-              removing.kind === 'external_agent' ? 'Its credentials stop working.' : 'They’ll need a new invitation to come back.'
+              actorKind(removing.kind) === 'agent' ? 'Its credentials stop working.' : 'They’ll need a new invitation to come back.'
             }`
           : null}
       </ConfirmDialog>
@@ -285,13 +299,10 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   )
 }
 
-/** The roles a member can be given here: admin-based ones only by owners, and member- or viewer-based ones for agents. */
-function rolesFor(data: RolesResponse, member: WorkspaceMember, owner: boolean) {
+/** The roles a member can be given here: their own, and any the server says you may give (it applies the tiers). */
+function rolesFor(data: RolesResponse, member: WorkspaceMember) {
   return workspaceAssignable(data.roles).filter(
-    (role) =>
-      role.id === member.roleId ||
-      (role.builtIn && role.key === member.role) ||
-      ((role.baseRole !== 'admin' || (owner && member.kind === 'human')) && role.capabilities.assign),
+    (role) => role.id === member.roleId || (role.builtIn && role.key === member.role) || role.capabilities.assign,
   )
 }
 
@@ -371,7 +382,7 @@ function AppsDialog({
   )
 }
 
-function InviteSection({ organizationId, role, roles }: { organizationId: string; role: string; roles: RolesResponse | undefined }) {
+function InviteSection({ organizationId, roles }: { organizationId: string; roles: RolesResponse | undefined }) {
   const queryClient = useQueryClient()
   const invitations = useQuery({
     queryKey: workspaceKeys.invitations(organizationId),
@@ -382,8 +393,8 @@ function InviteSection({ organizationId, role, roles }: { organizationId: string
   // "manage members". Until the roles load, Member is offered.
   const invitable = (roles?.roles ?? []).filter((entry) => entry.capabilities.invite)
   const offersMember = !roles || invitable.some((entry) => entry.builtIn && entry.key === 'member')
-  const offersAdmin = role === 'owner' && invitable.some((entry) => entry.builtIn && entry.key === 'admin')
-  const customRoles = invitable.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || role === 'owner'))
+  const offersAdmin = invitable.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = invitable.filter((entry) => !entry.builtIn)
   // A built-in role's key, or a custom role's ID. Starts with the workspace's
   // default role when you may invite to it, else the first role you may.
   const defaultRole = roles?.roles.find((entry) => entry.isDefault)
@@ -403,8 +414,8 @@ function InviteSection({ organizationId, role, roles }: { organizationId: string
   const create = useMutation({
     mutationFn: () =>
       createWorkspaceInvitation(organizationId, {
-        role: inviteRole === 'admin' ? 'admin' : 'member',
-        roleId: inviteRole === 'admin' || inviteRole === 'member' ? undefined : inviteRole,
+        role: BUILT_IN_INVITES.get(inviteRole) ?? 'member',
+        roleId: BUILT_IN_INVITES.has(inviteRole) ? undefined : inviteRole,
         expiresInHours: hours,
         note: note.trim() || undefined,
       }),

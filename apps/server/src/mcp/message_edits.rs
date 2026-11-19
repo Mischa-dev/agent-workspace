@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::{Place, Target},
     conversations::{
         ActorView, ConversationAccessRow, authorize_conversation_row_for,
         fetch_conversation_access, finish_idempotent_command,
@@ -147,7 +148,8 @@ pub struct RevisionItem {
 }
 
 fn actor_label(actor: &ActorView) -> String {
-    if actor.kind == "external_agent" {
+    let agent = actor.kind == "external_agent"; // kind-check: mechanical (a display label)
+    if agent {
         format!("{} (@{}, agent)", actor.display_name, actor.handle)
     } else {
         format!("{} (@{})", actor.display_name, actor.handle)
@@ -157,22 +159,19 @@ fn actor_label(actor: &ActorView) -> String {
 /// The web address of a message: its conversation's page plus
 /// `#message-<id>`, which message tools accept in place of the ID.
 fn message_url(state: &AppState, conversation: &ConversationAccessRow, message_id: Uuid) -> String {
-    let path = match (conversation.kind.as_str(), conversation.effective_kind()) {
-        ("thread", "dm" | "group") => format!(
-            "/messages/{}?thread={}",
-            conversation.parent_channel_id.unwrap_or(conversation.id),
-            conversation.id
-        ),
-        (_, "dm" | "group") => format!("/messages/{}", conversation.id),
-        ("thread", _) => format!(
-            "/projects/{}/threads/{}",
-            conversation.project_id, conversation.id
-        ),
-        _ => format!(
-            "/projects/{}/channels/{}",
-            conversation.project_id, conversation.id
-        ),
+    let target = match (conversation.kind.as_str(), conversation.effective_kind()) {
+        ("thread", "dm" | "group") => Target::Direct {
+            id: conversation.parent_channel_id.unwrap_or(conversation.id),
+            thread: Some(conversation.id),
+        },
+        (_, "dm" | "group") => Target::Direct {
+            id: conversation.id,
+            thread: None,
+        },
+        ("thread", _) => Target::space(conversation.place(), Place::Thread(conversation.id)),
+        _ => Target::space(conversation.place(), Place::Channel(conversation.id)),
     };
+    let path = crate::addresses::link(state, None, &target);
     public_url(state, &format!("{path}#message-{message_id}"))
 }
 
@@ -200,9 +199,6 @@ fn refusal<T>(error: ChangeError, change: Change) -> Result<ToolResult<T>, AppEr
         }
         (Refused::NotYourMessage, Change::Remove) => ToolResult::denied(
             "You can only remove your own messages. Project owners and admins can remove anyone's.",
-        ),
-        (Refused::OnlyPeopleModerate, _) => ToolResult::denied(
-            "Agents can only remove their own messages. Ask a project owner or admin to remove this one.",
         ),
         (Refused::RoleCannotWrite, _) => {
             ToolResult::denied("Your role in this project can't change messages.")
@@ -266,9 +262,21 @@ pub(super) async fn message_edit(
             "Use letters, numbers, dashes or dots, up to 128 characters.",
         );
     };
+    // A DM's handles are its members' (no space holds them).
+    let conversation = sqlx::query_scalar::<_, Uuid>(
+        "SELECT conversation_id FROM messages \
+         -- visibility: only to name the conversation's members; the edit checks access\n \
+         WHERE id = $1",
+    )
+    .bind(message_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await
+    .ok()
+    .flatten();
     let content = match message_content(
         state,
         principal,
+        conversation,
         arguments.text.as_deref(),
         arguments.content,
         "message_edit",
@@ -572,7 +580,8 @@ pub(super) async fn message_history(
         let Some(conversation_id) = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id = $2 AND conversation_visible_to(conversation_id, $3)
+            WHERE id = $1 AND COALESCE(project_id, direct_scope_id()) = $2
+              AND conversation_visible_to(conversation_id, $3)
             "#,
         )
         .bind(message_id)
@@ -589,10 +598,9 @@ pub(super) async fn message_history(
         else {
             return Ok(ToolResult::not_found("That message"));
         };
-        if conversation.project_id != principal.project_id
+        if conversation.place() != principal.project_id
             || authorize_conversation_row_for(
                 principal.actor_id,
-                principal.actor_kind,
                 &conversation,
                 Action::McpRead,
                 true,

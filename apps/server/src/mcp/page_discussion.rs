@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, insert_audit, parse_id, public_url},
+    common::{ToolResult, insert_audit, link_url, parse_id},
     memory_tools::{page_write_mode, writer},
 };
 use crate::{
@@ -62,15 +62,9 @@ async fn readable(
     let Some(project_id) = project.filter(|project| *project == principal.project_id) else {
         return Ok(None);
     };
-    if memory::project_access(
-        &state.pool,
-        principal.actor_id,
-        principal.actor_kind,
-        project_id,
-        Action::McpRead,
-    )
-    .await
-    .is_err()
+    if memory::project_access(&state.pool, principal.actor_id, project_id, Action::McpRead)
+        .await
+        .is_err()
     {
         return Ok(None);
     }
@@ -78,7 +72,11 @@ async fn readable(
 }
 
 fn page_url(state: &AppState, project_id: Uuid, page_id: Uuid) -> String {
-    public_url(state, &format!("/projects/{project_id}/pages/{page_id}"))
+    link_url(
+        state,
+        None,
+        &crate::addresses::Target::page(project_id, page_id),
+    )
 }
 
 // ---------------------------------------------------------------------------

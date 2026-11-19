@@ -380,6 +380,37 @@ async fn roles_narrow_modules_and_never_widen_them() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
+    // Narrowing the role tells every holder's live connections their access
+    // changed, as a membership change does.
+    let signals = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT (SELECT count(*) FROM event_staging \
+                     WHERE type = 'account.access_changed' AND audience_account_id = $1) \
+                  + (SELECT count(*) FROM events \
+                     WHERE type = 'account.access_changed' AND audience_account_id = $1)",
+        )
+        .bind(bea)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("signals")
+    };
+    let before = signals().await;
+    let (status, body) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("{roles_path}/{}", made["id"].as_str().expect("id")),
+            None,
+            json!({"modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    assert!(
+        signals().await > before,
+        "narrowing a role signals its holders"
+    );
+
     // A role can't turn on what the workspace has off.
     let (status, _) = send(
         app,
@@ -1764,6 +1795,12 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
     assert!(status.is_success(), "{status}: {body}");
     narrow_in_project(&setup, &work, bea, &["pages", "whiteboards"], "p07-narrow").await;
     assert!(off(get(&bea_browser, format!("/api/v1/pages/{page}")).await));
+    // K1.11: the live editor's document follows the role's switches too.
+    assert!(off(get(
+        &bea_browser,
+        format!("/api/v1/pages/{page}/document")
+    )
+    .await));
     assert!(off(get(
         &bea_browser,
         format!("/api/v1/whiteboards/{board}")
@@ -1995,20 +2032,12 @@ async fn a_space_narrows_its_own_modules_only() {
         "{listed}"
     );
 
-    // A preset is for the whole workspace; the hidden DM space and another
-    // workspace's space can't be narrowed.
+    // A preset is for the whole workspace, and another workspace's space
+    // can't be narrowed (DMs live in no space, K4.17).
     let (status, body) = switch(
         &setup,
         &setup.browser,
         json!({"preset": "everything", "space": work}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    let direct = direct_space(&setup).await;
-    let (status, body) = switch(
-        &setup,
-        &setup.browser,
-        json!({"switches": {"whiteboards": false}, "space": direct}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");

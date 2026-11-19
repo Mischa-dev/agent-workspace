@@ -15,12 +15,13 @@ use crate::{
     auth::AuthenticatedActor,
     error::AppError,
     hosts::builtin::http::{self, authorize_project_action},
-    policy::{Action, ProjectScope, Resource},
+    policy::Action,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(crate::auth::router())
+        .merge(crate::setup::router())
         .merge(crate::projects::router())
         .merge(crate::execution::router())
         .merge(crate::external_execution::router())
@@ -39,6 +40,21 @@ pub fn router() -> Router<AppState> {
             post(http::acknowledge_run_failure),
         )
         .route("/api/v1/realtime", get(crate::realtime::websocket))
+        // The live contract (K5.19): tickets and resume on `api`, the
+        // connection and publishes on `live`.
+        .route(
+            "/api/v2/live/ticket",
+            get(crate::realtime::contract::http::ticket),
+        )
+        .route(
+            "/api/v2/live/resume",
+            get(crate::realtime::contract::http::resume),
+        )
+        .route(
+            "/api/v2/live/key",
+            get(crate::realtime::contract::http::key),
+        )
+        .merge(crate::realtime::contract::live::router())
 }
 
 #[derive(Serialize)]
@@ -105,10 +121,6 @@ async fn development_bootstrap(
         bootstrap.membership_role_permissions.as_deref(),
         bootstrap.membership_enabled,
         Action::ProjectView,
-        Resource::Project(ProjectScope::thread(
-            bootstrap.project_id,
-            bootstrap.thread_id,
-        )),
     )?;
 
     Ok(Json(DevelopmentBootstrap {

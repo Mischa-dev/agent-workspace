@@ -117,6 +117,15 @@ pub enum Permission {
     ModulesManage,
     // H1.24: deleting the whole workspace.
     WorkspaceDelete,
+    // K1.19: reading the workspace's audit log.
+    SettingsAudit,
+    // K1.27: groups, and chat's keys of K1 §3.3.
+    MembersGroups,
+    ChannelsBrowse,
+    ChannelsCreatePrivate,
+    ChannelsMentionEveryone,
+    // H1.9: exporting the whole workspace as one archive.
+    WorkspaceExport,
 }
 
 /// Where a permission is checked: in a project (by the role someone has
@@ -202,7 +211,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 68] = [
+pub const PERMISSIONS: [PermissionInfo; 74] = [
     on(
         "space",
         Level::See,
@@ -397,11 +406,38 @@ pub const PERMISSIONS: [PermissionInfo; 68] = [
         WORKERS,
     ),
     permission(
+        Permission::ChannelsCreatePrivate,
+        "channels.create_private",
+        "channels",
+        "Create private channels",
+        "Start channels only their members can find and read.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::ChannelsBrowse,
+        "channels.browse",
+        "channels",
+        "Browse channels",
+        "List the open channels of a project they haven't joined.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
         Permission::ChannelsModerate,
         "channels.moderate",
         "channels",
         "Moderate",
         "Remove anyone's messages and comments.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    permission(
+        Permission::ChannelsMentionEveryone,
+        "channels.mention_everyone",
+        "channels",
+        "Notify everyone",
+        "Reach everyone in a large conversation with @everyone or @here.",
         PermissionScope::Project,
         MANAGERS,
     ),
@@ -884,6 +920,15 @@ pub const PERMISSIONS: [PermissionInfo; 68] = [
         MANAGERS,
     ),
     permission(
+        Permission::MembersGroups,
+        "members.groups",
+        "members",
+        "Manage groups",
+        "Make, change and archive groups, and choose who is in them.",
+        PermissionScope::Workspace,
+        MANAGERS,
+    ),
+    permission(
         Permission::RolesManage,
         "roles.manage",
         "members",
@@ -899,6 +944,15 @@ pub const PERMISSIONS: [PermissionInfo; 68] = [
         "Manage settings",
         "Change workspace and project settings, keys and layouts.",
         PermissionScope::Both,
+        MANAGERS,
+    ),
+    permission(
+        Permission::SettingsAudit,
+        "settings.audit",
+        "settings",
+        "Read the audit log",
+        "See the workspace's audit log: who changed what, and when.",
+        PermissionScope::Workspace,
         MANAGERS,
     ),
     permission(
@@ -946,6 +1000,16 @@ pub const PERMISSIONS: [PermissionInfo; 68] = [
         "settings",
         "Delete the workspace",
         "Schedule the whole workspace for deletion, or cancel that within 14 days.",
+        PermissionScope::Workspace,
+        OWNERS,
+    ),
+    // H1.9: the whole workspace as one archive, to keep or to move.
+    permission(
+        Permission::WorkspaceExport,
+        "workspace.export",
+        "settings",
+        "Export the workspace",
+        "Download the whole workspace as one archive: its spaces, conversations, tasks, pages, files and history, never secrets.",
         PermissionScope::Workspace,
         OWNERS,
     ),
@@ -1032,6 +1096,16 @@ impl PermissionSet {
             .fold(Self::EMPTY, |set, info| set.with(info.permission))
     }
 
+    /// The permissions that act only on the workspace as a whole (members,
+    /// roles, new spaces, deleting it): never reachable from inside one
+    /// space.
+    pub fn workspace_only() -> Self {
+        PERMISSIONS
+            .iter()
+            .filter(|info| matches!(info.scope, PermissionScope::Workspace))
+            .fold(Self::EMPTY, |set, info| set.with(info.permission))
+    }
+
     /// The permissions every role holds.
     pub fn required() -> Self {
         PERMISSIONS
@@ -1055,6 +1129,10 @@ impl PermissionSet {
     #[must_use]
     pub const fn without(self, permission: Permission) -> Self {
         Self(self.0 & !permission.bit())
+    }
+
+    pub const fn without_all(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
     }
 
     pub const fn contains(self, permission: Permission) -> bool {

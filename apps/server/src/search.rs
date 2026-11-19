@@ -6,6 +6,12 @@
 //!
 //! Settled knowledge ranks first: decisions, then pages, thread outcomes and
 //! tasks, then raw messages.
+//!
+//! Each kind is a source (K3.17): a query over the indexed search column its
+//! own rows keep, with its own access rule. A search is one query over the
+//! sources asked for, ranked together (K3.18). There is no second copy of
+//! the text to fall behind or to forget a removal: a removed message, an
+//! archived page or a lost membership leaves the results at once.
 
 use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Utc};
@@ -76,6 +82,22 @@ impl SearchKind {
             Self::Whiteboards => "whiteboards",
             Self::Sheets => "sheets",
             Self::Files => "files",
+        }
+    }
+
+    /// The kind's source: its best matches, ranked, in the columns every
+    /// source shares. `{projects}` is where it may look.
+    fn source(self) -> &'static str {
+        match self {
+            Self::Messages => MESSAGES_SQL,
+            Self::Threads => THREADS_SQL,
+            Self::Tasks => TASKS_SQL,
+            Self::Pages => PAGES_SQL,
+            Self::Decisions => DECISIONS_SQL,
+            Self::Records => RECORDS_SQL,
+            Self::Whiteboards => WHITEBOARDS_SQL,
+            Self::Sheets => SHEETS_SQL,
+            Self::Files => FILES_SQL,
         }
     }
 
@@ -218,18 +240,19 @@ pub async fn resolve(
             r#"
             SELECT conversation.id
             FROM conversations conversation
-            WHERE conversation.project_id = ANY($2)
+            WHERE COALESCE(conversation.project_id, direct_scope_id()) = ANY($2)
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $1)
               AND (
                   (conversation.kind = 'channel'
                    AND (lower(conversation.name) = ANY($3)
                         OR lower(replace(conversation.name, ' ', '-')) = ANY($3)))
+                  -- A DM is in no space (K4.15): the other person goes by
+                  -- their handle in any workspace.
                   OR (conversation.kind = 'dm' AND EXISTS (
                       SELECT 1
                       FROM conversation_members them
-                      JOIN project_memberships person
-                        ON person.project_id = them.project_id AND person.actor_id = them.actor_id
+                      JOIN organization_actor_profiles person ON person.actor_id = them.actor_id
                       WHERE them.conversation_id = conversation.id
                         AND them.actor_id <> $1
                         AND lower(person.handle) = ANY($4)))
@@ -446,8 +469,17 @@ pub async fn search(
     } else {
         Vec::new()
     };
-    let mut hits = Vec::new();
+    // One query: each kind's source finds its best matches against its own
+    // indexed column with its own access rule, and one ranking orders them
+    // all (K3.18).
+    let mut arms = Vec::new();
+    let mut arm_projects = Vec::new();
+    let mut seen = Vec::new();
     for kind in kinds {
+        if seen.contains(kind) {
+            continue;
+        }
+        seen.push(*kind);
         let projects = match kind {
             SearchKind::Messages | SearchKind::Threads => modules.with_conversations(projects),
             SearchKind::Tasks => task_projects.clone(),
@@ -469,76 +501,77 @@ pub async fn search(
         {
             continue;
         }
-        let projects = projects.as_slice();
-        let sql = match kind {
-            SearchKind::Messages => MESSAGES_SQL,
-            SearchKind::Threads => THREADS_SQL,
-            SearchKind::Tasks => TASKS_SQL,
-            SearchKind::Pages => PAGES_SQL,
-            SearchKind::Decisions => DECISIONS_SQL,
-            SearchKind::Records => RECORDS_SQL,
-            SearchKind::Whiteboards => WHITEBOARDS_SQL,
-            SearchKind::Sheets => SHEETS_SQL,
-            SearchKind::Files => FILES_SQL,
-        };
-        let mut query = sqlx::query_as::<_, SearchHit>(sql)
-            .bind(viewer)
-            .bind(projects)
-            .bind(text)
-            .bind(filter.conversation_ids.as_deref())
-            .bind(filter.author_ids.as_deref())
-            .bind(filter.since)
-            .bind(filter.until)
-            .bind(limit);
-        if matches!(kind, SearchKind::Messages | SearchKind::Threads) {
-            query = query.bind(&filter.flags[..]);
-        }
-        if *kind == SearchKind::Files {
-            query = query
-                .bind(&task_projects[..])
-                .bind(&conversation_projects[..])
-                .bind(&filter.flags[..]);
-        }
-        if *kind == SearchKind::Whiteboards {
-            query = query.bind(&board_workspaces[..]);
-        }
-        let rows = query.fetch_all(crate::db::scoped(pool)).await?;
-        hits.extend(rows.into_iter().map(|mut hit| {
-            hit.link(addresses);
-            hit
-        }));
+        let parameter = format!("${}", FIRST_PROJECTS_PARAMETER + arm_projects.len());
+        arms.push(format!(
+            "({})",
+            kind.source().trim().replace("{projects}", &parameter)
+        ));
+        arm_projects.push(projects);
     }
-    hits.sort_by(|left, right| {
-        right
-            .rank
-            .partial_cmp(&left.rank)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| right.at.cmp(&left.at))
+    if arms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT * FROM ({}) hit ORDER BY hit.rank DESC, hit.at COLLATE \"C\" DESC LIMIT $7",
+        arms.join("\nUNION ALL\n")
+    );
+    let mut query = sqlx::query_as::<_, SearchHit>(&sql)
+        .bind(viewer)
+        .bind(text)
+        .bind(filter.conversation_ids.as_deref())
+        .bind(filter.author_ids.as_deref())
+        .bind(filter.since)
+        .bind(filter.until)
+        .bind(limit)
+        .bind(&task_projects[..])
+        .bind(&conversation_projects[..])
+        .bind(&board_workspaces[..])
+        .bind(&filter.flags[..]);
+    for projects in &arm_projects {
+        query = query.bind(&projects[..]);
+    }
+    let mut hits = query.fetch_all(crate::db::scoped(pool)).await?;
+    // A DM or group is in no space, so a credential's limit can't narrow it
+    // by `projects`: a kept one follows its workspace's limit, as opening it
+    // would (`access::direct_grant_allows`).
+    hits.retain(|hit| {
+        hit.project_id != Some(crate::spaces::DIRECT)
+            || !crate::policy::agent_limit_hides_direct(
+                viewer,
+                hit.workspace_id,
+                crate::policy::Permission::ProjectsView,
+            )
     });
-    hits.truncate(usize::try_from(limit).unwrap_or(100));
+    for hit in &mut hits {
+        hit.link(addresses);
+    }
     Ok(hits)
 }
 
-// Every query takes the same parameters:
-// $1 viewer, $2 projects, $3 text ('' when only filters narrow it, for the
-// kinds that allow that), $4 conversations, $5 authors, $6 since, $7 until,
-// $8 limit. Unused ones are compared against NULL so the planner
-// drops them. The files query also takes $9, the projects where the viewer
-// still sees tasks (`projects_showing_tasks`), for files attached to tasks,
-// and $10, the projects whose conversations show with the modules on for
-// the viewer, for files sent in a conversation.
+// Every source shares the query's parameters: $1 viewer, $2 text ('' when
+// only filters narrow it, for the kinds that allow that), $3 conversations,
+// $4 authors, $5 since, $6 until, $7 limit. Unused ones are compared
+// against NULL so the planner drops them. Files also read $8, the projects
+// where the viewer still sees tasks (`projects_showing_tasks`), for files
+// attached to tasks, and $9, the projects whose conversations show with the
+// modules on for the viewer, for files sent in a conversation; whiteboards
+// read $10, the workspaces whose own boards show; messages, threads and
+// files read $11, the grammar's `has:` and `is:` filters. `{projects}`
+// becomes the source's own list of projects, from $12 on.
+const FIRST_PROJECTS_PARAMETER: usize = 12;
 
 const MESSAGES_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'message' AS kind, message.id,
            COALESCE(author.display_name, 'Someone') || ' in ' ||
                CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END AS title,
            NULL::text AS status,
-           CASE WHEN $3 = '' THEN left(message.plain_text, 300)
+           CASE WHEN $2 = '' THEN left(message.plain_text, 300)
                 ELSE ts_headline('english', message.plain_text, query.q,
                                  'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') END AS snippet,
-           message.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(message.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, message.workspace_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            author.display_name AS author, message.created_at::text AS at,
            CASE WHEN space.direct THEN 'direct'
@@ -547,42 +580,42 @@ const MESSAGES_SQL: &str = r#"
                 THEN COALESCE(conversation.parent_channel_id, conversation.id)
                 ELSE conversation.id END AS link_id,
            NULL::uuid AS link_child,
-           (CASE WHEN $3 = '' THEN 0 ELSE ts_rank(message.search_vector, query.q) END)::real AS rank
+           (CASE WHEN $2 = '' THEN 0 ELSE ts_rank(message.search_vector, query.q) END)::real AS rank
     FROM query, messages message
     JOIN conversations conversation ON conversation.id = message.conversation_id
-    JOIN projects project ON project.id = message.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
-    LEFT JOIN project_memberships author
-      ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
-    WHERE ($3 = '' OR message.search_vector @@ query.q)
+    LEFT JOIN projects project ON project.id = message.project_id
+    CROSS JOIN LATERAL (SELECT message.project_id IS NULL AS direct) space
+    LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author ON true
+    WHERE ($2 = '' OR message.search_vector @@ query.q)
       AND message.removed_at IS NULL
-      AND message.project_id = ANY($2)
+      AND COALESCE(message.project_id, direct_scope_id()) = ANY({projects})
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $1)
-      AND ($4::uuid[] IS NULL OR conversation.id = ANY($4) OR conversation.parent_channel_id = ANY($4))
-      AND ($5::uuid[] IS NULL OR message.author_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR message.created_at >= $6)
-      AND ($7::timestamptz IS NULL OR message.created_at <= $7)
-      -- $9 (messages only): the grammar's has: and is: filters.
-      AND ('has:file' <> ALL($9) OR EXISTS (
+      AND ($3::uuid[] IS NULL OR conversation.id = ANY($3) OR conversation.parent_channel_id = ANY($3))
+      AND ($4::uuid[] IS NULL OR message.author_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR message.created_at >= $5)
+      AND ($6::timestamptz IS NULL OR message.created_at <= $6)
+      -- $11 (messages only): the grammar's has: and is: filters.
+      AND ('has:file' <> ALL($11) OR EXISTS (
           SELECT 1 FROM files attached
           WHERE attached.message_id = message.id AND attached.removed_at IS NULL))
-      AND ('has:link' <> ALL($9) OR message.plain_text ~* 'https?://')
-      AND ('has:reaction' <> ALL($9) OR EXISTS (
+      AND ('has:link' <> ALL($11) OR message.plain_text ~* 'https?://')
+      AND ('has:reaction' <> ALL($11) OR EXISTS (
           SELECT 1 FROM message_reactions reaction WHERE reaction.message_id = message.id))
-      AND ('has:pin' <> ALL($9) OR EXISTS (
+      AND ('has:pin' <> ALL($11) OR EXISTS (
           SELECT 1 FROM conversation_pins pin
           WHERE pin.target_kind = 'message' AND pin.target_id = message.id))
-      AND ('has:task' <> ALL($9) OR EXISTS (
-          SELECT 1 FROM thing_references reference
-          WHERE reference.source_kind = 'message' AND reference.source_id = message.id
-            AND reference.target_kind = 'task'))
-      AND ('is:thread' <> ALL($9) OR conversation.kind = 'thread')
-      AND ('is:dm' <> ALL($9) OR space.direct)
-      AND ('is:saved' <> ALL($9) OR EXISTS (
+      AND ('has:task' <> ALL($11) OR EXISTS (
+          SELECT 1 FROM links link
+          JOIN things target ON target.id = link.to_thing_id
+          WHERE link.source_kind = 'message' AND link.source_id = message.id
+            AND target.kind = 'task'))
+      AND ('is:thread' <> ALL($11) OR conversation.kind = 'thread')
+      AND ('is:dm' <> ALL($11) OR space.direct)
+      AND ('is:saved' <> ALL($11) OR EXISTS (
           SELECT 1 FROM saved_items saved
           WHERE saved.actor_id = $1 AND saved.message_id = message.id))
-      AND ('is:unread' <> ALL($9) OR (
+      AND ('is:unread' <> ALL($11) OR (
           message.author_actor_id IS DISTINCT FROM $1
           AND NOT EXISTS (
               SELECT 1
@@ -592,47 +625,48 @@ const MESSAGES_SQL: &str = r#"
               WHERE entry.message_id = message.id
                 AND entry.sequence <= state.highest_seen_sequence)))
     ORDER BY rank DESC, message.created_at DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 const THREADS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'thread' AS kind, thread.id,
            thread.name AS title, thread.thread_status AS status,
            COALESCE(thread.thread_outcome, '') AS snippet,
-           thread.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(thread.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, thread.workspace_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            parent.id AS conversation_id, parent.name AS conversation_name,
            NULL::text AS author,
            COALESCE(thread.thread_status_changed_at, thread.created_at)::text AS at,
            CASE WHEN space.direct THEN 'direct' ELSE 'thread' END AS link_kind,
            CASE WHEN space.direct THEN parent.id ELSE thread.id END AS link_id,
            NULL::uuid AS link_child,
-           (CASE WHEN $3 = '' THEN 0
+           (CASE WHEN $2 = '' THEN 0
                  ELSE ts_rank(to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')),
                               query.q) * 1.5 END)::real AS rank
     FROM query, conversations thread
     JOIN conversations parent ON parent.id = thread.parent_channel_id
-    JOIN projects project ON project.id = thread.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
+    LEFT JOIN projects project ON project.id = thread.project_id
+    CROSS JOIN LATERAL (SELECT thread.project_id IS NULL AS direct) space
     WHERE thread.kind = 'thread'
-      AND ($3 = ''
+      AND ($2 = ''
            OR to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')) @@ query.q)
-      AND thread.project_id = ANY($2)
+      AND COALESCE(thread.project_id, direct_scope_id()) = ANY({projects})
       AND thread.archived_at IS NULL
       AND conversation_visible_to(thread.id, $1)
-      AND ($4::uuid[] IS NULL OR parent.id = ANY($4) OR thread.id = ANY($4))
-      AND ($5::uuid[] IS NULL OR thread.thread_status_changed_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR thread.created_at >= $6)
-      AND ($7::timestamptz IS NULL OR thread.created_at <= $7)
-      -- $9 (threads only): is:dm keeps threads in DMs and groups.
-      AND ('is:dm' <> ALL($9) OR space.direct)
+      AND ($3::uuid[] IS NULL OR parent.id = ANY($3) OR thread.id = ANY($3))
+      AND ($4::uuid[] IS NULL OR thread.thread_status_changed_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR thread.created_at >= $5)
+      AND ($6::timestamptz IS NULL OR thread.created_at <= $6)
+      -- $11 (threads only): is:dm keeps threads in DMs and groups.
+      AND ('is:dm' <> ALL($11) OR space.direct)
     ORDER BY rank DESC, thread.created_at DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 const TASKS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'task' AS kind, item.id,
            project.project_key || '-' || item.number::text || ' ' || item.title AS title,
            status.name AS status,
@@ -652,19 +686,19 @@ const TASKS_SQL: &str = r#"
     -- document (task_rows.search_vector joins the two), so a search whose
     -- words are split between the title and the description still finds it.
     WHERE item.search_vector @@ query.q
-      AND item.project_id = ANY($2)
+      AND item.project_id = ANY({projects})
       AND item.archived_at IS NULL
-      AND $4::uuid[] IS NULL
-      AND ($5::uuid[] IS NULL OR item.assignee_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR item.updated_at >= $6)
-      AND ($7::timestamptz IS NULL OR item.created_at <= $7)
+      AND $3::uuid[] IS NULL
+      AND ($4::uuid[] IS NULL OR item.assignee_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR item.updated_at >= $5)
+      AND ($6::timestamptz IS NULL OR item.created_at <= $6)
       AND $1::uuid IS NOT NULL
     ORDER BY rank DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 const PAGES_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'page' AS kind, page.id, page.title, NULL::text AS status,
            ts_headline('english', page.body, query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
@@ -679,26 +713,27 @@ const PAGES_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.search_vector @@ query.q
-      AND page.project_id = ANY($2)
+      AND page.project_id = ANY({projects})
       AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $1))
       AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
-      AND $4::uuid[] IS NULL
-      AND ($5::uuid[] IS NULL OR page.updated_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR page.updated_at >= $6)
-      AND ($7::timestamptz IS NULL OR page.created_at <= $7)
+      AND $3::uuid[] IS NULL
+      AND ($4::uuid[] IS NULL OR page.updated_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR page.updated_at >= $5)
+      AND ($6::timestamptz IS NULL OR page.created_at <= $6)
       AND $1::uuid IS NOT NULL
     ORDER BY rank DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 const DECISIONS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'decision' AS kind, decision.id,
            decision.title AS title,
            CASE WHEN decision.status = 'superseded' THEN 'superseded' END AS status,
            left(decision.detail, 400) AS snippet,
            decision.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           project.name AS project_name,
            decision.source_conversation_id AS conversation_id, source.name AS conversation_name,
            decider.display_name AS author, decision.created_at::text AS at,
            'decision' AS link_kind,
@@ -711,21 +746,21 @@ const DECISIONS_SQL: &str = r#"
     LEFT JOIN project_memberships decider
       ON decider.project_id = decision.project_id AND decider.actor_id = decision.decided_by_actor_id
     WHERE decision.search_vector @@ query.q
-      AND decision.project_id = ANY($2)
+      AND decision.project_id = ANY({projects})
       AND (decision.source_conversation_id IS NULL
            OR conversation_visible_to(decision.source_conversation_id, $1))
-      AND ($4::uuid[] IS NULL OR decision.source_conversation_id = ANY($4))
-      AND ($5::uuid[] IS NULL OR decision.decided_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR decision.created_at >= $6)
-      AND ($7::timestamptz IS NULL OR decision.created_at <= $7)
+      AND ($3::uuid[] IS NULL OR decision.source_conversation_id = ANY($3))
+      AND ($4::uuid[] IS NULL OR decision.decided_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR decision.created_at >= $5)
+      AND ($6::timestamptz IS NULL OR decision.created_at <= $6)
     ORDER BY rank DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 /// A collection's records (AWD-110), by title and text values, in
 /// collections that aren't archived. The author filter is who changed it last.
 const RECORDS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
     SELECT 'record' AS kind, record.id,
            CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
                 ELSE record.title END AS title,
@@ -744,29 +779,29 @@ const RECORDS_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = record.project_id AND editor.actor_id = record.updated_by_actor_id
     WHERE record.search_vector @@ query.q
-      AND record.project_id = ANY($2)
+      AND record.project_id = ANY({projects})
       AND record.archived_at IS NULL
       AND collection.archived_at IS NULL
       -- M1.6: a built module switched off hides its collections' records.
       AND module_part_on('collection', collection.id)
       -- A task's record (the built-in Tasks collection) is found as the task.
       AND NOT collection.acts_like_task
-      AND $4::uuid[] IS NULL
-      AND ($5::uuid[] IS NULL OR record.updated_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR record.updated_at >= $6)
-      AND ($7::timestamptz IS NULL OR record.created_at <= $7)
+      AND $3::uuid[] IS NULL
+      AND ($4::uuid[] IS NULL OR record.updated_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR record.updated_at >= $5)
+      AND ($6::timestamptz IS NULL OR record.created_at <= $6)
       AND $1::uuid IS NOT NULL
     ORDER BY rank DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 /// Whiteboards by title and the text on them, in projects searched and,
-/// as `$9`, the workspaces whose own boards show. Deleted boards aren't
+/// as `$10`, the workspaces whose own boards show. Deleted boards aren't
 /// found; each board passes its own rule.
 const WHITEBOARDS_SQL: &str = r#"
     WITH query AS (
-        SELECT websearch_to_tsquery('simple', $3) AS q,
-               '%' || replace(replace(replace($3, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        SELECT websearch_to_tsquery('simple', $2) AS q,
+               '%' || replace(replace(replace($2, '\', '\\'), '%', '\%'), '_', '\_') || '%'
                    AS pattern
     )
     SELECT 'whiteboard' AS kind, board.id, board.title, NULL::text AS status,
@@ -790,21 +825,21 @@ const WHITEBOARDS_SQL: &str = r#"
       ON account.actor_id = COALESCE(board.updated_by_actor_id, board.created_by_actor_id)
     WHERE (board.search_vector @@ query.q OR board.title ILIKE query.pattern)
       AND board.deleted_at IS NULL
-      AND (board.project_id = ANY($2)
-           OR (board.project_id IS NULL AND board.organization_id = ANY($9)))
+      AND (board.project_id = ANY({projects})
+           OR (board.project_id IS NULL AND board.organization_id = ANY($10)))
       AND whiteboard_visible_to(board.id, $1)
-      AND $4::uuid[] IS NULL
-      AND ($5::uuid[] IS NULL OR COALESCE(board.updated_by_actor_id, board.created_by_actor_id) = ANY($5))
-      AND ($6::timestamptz IS NULL OR board.updated_at >= $6)
-      AND ($7::timestamptz IS NULL OR board.created_at <= $7)
+      AND $3::uuid[] IS NULL
+      AND ($4::uuid[] IS NULL OR COALESCE(board.updated_by_actor_id, board.created_by_actor_id) = ANY($4))
+      AND ($5::timestamptz IS NULL OR board.updated_at >= $5)
+      AND ($6::timestamptz IS NULL OR board.created_at <= $6)
     ORDER BY rank DESC, board.updated_at DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 /// Sheets by name, description, tab names and text cells, in projects
 /// where Sheets is on. Archived sheets aren't found.
 const SHEETS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('simple', $3) AS q)
+    WITH query AS (SELECT websearch_to_tsquery('simple', $2) AS q)
     SELECT 'sheet' AS kind, sheet.id, sheet.name AS title, NULL::text AS status,
            CASE WHEN sheet.text_content = '' THEN sheet.description
                 ELSE ts_headline('simple', sheet.text_content, query.q,
@@ -819,22 +854,22 @@ const SHEETS_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = sheet.project_id AND editor.actor_id = sheet.updated_by_actor_id
     WHERE sheet.search_vector @@ query.q
-      AND sheet.project_id = ANY($2)
+      AND sheet.project_id = ANY({projects})
       AND sheet.archived_at IS NULL
-      AND $4::uuid[] IS NULL
-      AND ($5::uuid[] IS NULL OR sheet.updated_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR sheet.updated_at >= $6)
-      AND ($7::timestamptz IS NULL OR sheet.created_at <= $7)
+      AND $3::uuid[] IS NULL
+      AND ($4::uuid[] IS NULL OR sheet.updated_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR sheet.updated_at >= $5)
+      AND ($6::timestamptz IS NULL OR sheet.created_at <= $6)
       AND $1::uuid IS NOT NULL
     ORDER BY rank DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 /// Files by name, on messages the viewer can see and on tasks.
 const FILES_SQL: &str = r#"
     WITH query AS (
-        SELECT websearch_to_tsquery('simple', $3) AS q,
-               '%' || replace(replace(replace($3, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        SELECT websearch_to_tsquery('simple', $2) AS q,
+               '%' || replace(replace(replace($2, '\', '\\'), '%', '\%'), '_', '\_') || '%'
                    AS pattern
     )
     SELECT 'file' AS kind, file.id, file.name AS title, NULL::text AS status,
@@ -842,8 +877,9 @@ const FILES_SQL: &str = r#"
                     'In ' || CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END
                 ELSE 'On ' || project.project_key || '-' || item.number::text || ' ' || item.title
            END AS snippet,
-           file.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(file.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, file.organization_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            uploader.display_name AS author, file.created_at::text AS at,
            CASE WHEN file.message_id IS NULL THEN 'task'
@@ -857,16 +893,15 @@ const FILES_SQL: &str = r#"
            (CASE WHEN file.search_vector @@ query.q
                  THEN ts_rank(file.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
     FROM query, files file
-    JOIN projects project ON project.id = file.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
+    LEFT JOIN projects project ON project.id = file.project_id
+    CROSS JOIN LATERAL (SELECT file.project_id IS NULL AS direct) space
     LEFT JOIN conversations conversation ON conversation.id = file.conversation_id
     LEFT JOIN messages message ON message.id = file.message_id
     LEFT JOIN task_rows item
       ON item.project_id = file.project_id AND item.id = file.work_item_id
-    LEFT JOIN project_memberships uploader
-      ON uploader.project_id = file.project_id AND uploader.actor_id = file.uploaded_by_actor_id
+    LEFT JOIN LATERAL place_profile(file.project_id, file.uploaded_by_actor_id) uploader ON true
     WHERE (file.search_vector @@ query.q OR file.name ILIKE query.pattern)
-      AND file.project_id = ANY($2)
+      AND COALESCE(file.project_id, direct_scope_id()) = ANY({projects})
       AND file.attached_at IS NOT NULL
       AND file.removed_at IS NULL
       -- A page's own files are found through the page (C1.28 adds them).
@@ -877,22 +912,22 @@ const FILES_SQL: &str = r#"
           AND conversation_visible_to(conversation.id, $1)
       ))
       AND (file.work_item_id IS NULL OR item.archived_at IS NULL)
-      -- $9 (files only): projects where the viewer still sees tasks, so a
+      -- $8 (files only): projects where the viewer still sees tasks, so a
       -- task's file never names a task they can't open.
-      AND (file.work_item_id IS NULL OR file.project_id = ANY($9))
-      -- $10 (files only): projects whose conversations show (Messages for DMs,
+      AND (file.work_item_id IS NULL OR file.project_id = ANY($8))
+      -- $9 (files only): projects whose conversations show (Messages for DMs,
       -- Channels for a project), so a file never names a conversation whose
       -- module is off.
-      AND (file.conversation_id IS NULL OR file.project_id = ANY($10))
-      AND ($4::uuid[] IS NULL OR conversation.id = ANY($4) OR conversation.parent_channel_id = ANY($4))
-      AND ($5::uuid[] IS NULL OR file.uploaded_by_actor_id = ANY($5))
-      AND ($6::timestamptz IS NULL OR file.created_at >= $6)
-      AND ($7::timestamptz IS NULL OR file.created_at <= $7)
+      AND (file.conversation_id IS NULL OR COALESCE(file.project_id, direct_scope_id()) = ANY($9))
+      AND ($3::uuid[] IS NULL OR conversation.id = ANY($3) OR conversation.parent_channel_id = ANY($3))
+      AND ($4::uuid[] IS NULL OR file.uploaded_by_actor_id = ANY($4))
+      AND ($5::timestamptz IS NULL OR file.created_at >= $5)
+      AND ($6::timestamptz IS NULL OR file.created_at <= $6)
       -- $11 (files only): is:thread and is:dm keep files sent there.
       AND ('is:thread' <> ALL($11) OR conversation.kind = 'thread')
       AND ('is:dm' <> ALL($11) OR (file.conversation_id IS NOT NULL AND space.direct))
     ORDER BY rank DESC, file.created_at DESC
-    LIMIT $8
+    LIMIT $7
 "#;
 
 /// Every Project a person can search from the browser.
@@ -927,7 +962,7 @@ pub async fn projects_allowing(
     .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
-    .filter(|project| !crate::policy::agent_limit_hides(viewer, *project, permission))
+    .filter(|project| !crate::access::limit_hides(viewer, *project, permission))
     .collect())
 }
 
@@ -950,6 +985,10 @@ pub async fn reachable_projects(
           ON membership.project_id = project.id AND membership.actor_id = $1 AND membership.enabled
         WHERE project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
+        -- DMs and groups live in no space (K4.17): their place.
+        UNION ALL
+        SELECT direct_scope_id()
+        WHERE $2::uuid IS NULL OR agent_connection_can_reach_direct($2)
         "#,
     )
     .bind(actor_id)

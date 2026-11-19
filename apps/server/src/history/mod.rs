@@ -7,6 +7,7 @@
 //! messages (list, show), records and tasks (list); sheets (list, show,
 //! restore) since C1.13. C1 fills the rest (record and task field revert).
 
+pub mod cold;
 pub mod ops;
 
 use rmcp::schemars::{self, JsonSchema};
@@ -218,7 +219,14 @@ fn list_sql(kind: &str) -> Option<String> {
                    COALESCE(note, CASE WHEN version = 1 THEN 'Created' ELSE 'Edited' END) AS summary,
                    array_remove(ARRAY[
                        CASE WHEN title IS DISTINCT FROM lag(title) OVER w THEN 'title' END,
-                       CASE WHEN body IS DISTINCT FROM lag(body) OVER w THEN 'body' END
+                       -- An archived body is compared by its digest (K3.25).
+                       CASE WHEN CASE WHEN body IS NOT NULL AND lag(body) OVER w IS NOT NULL
+                                      THEN body IS DISTINCT FROM lag(body) OVER w
+                                      ELSE COALESCE(body_md5, md5(body))
+                                           IS DISTINCT FROM COALESCE(lag(body_md5) OVER w,
+                                                                     md5(lag(body) OVER w))
+                                 END
+                            THEN 'body' END
                    ], NULL) AS changed
             FROM project_page_revisions WHERE page_id = $1
             WINDOW w AS (ORDER BY version)

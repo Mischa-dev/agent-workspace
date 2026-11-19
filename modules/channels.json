@@ -1,14 +1,14 @@
 {
   "id": "channels",
   "name": "Channels",
-  "description": "A project's channels and their threads, for talking with people and agents about the work.",
+  "description": "Channels and their threads, in the workspace's own space and in projects, for talking with people and agents about the work.",
   "version": 1,
   "order": 40,
   "kind": "core",
   "switchable": true,
-  "needs": ["projects", "messages"],
+  "needs": ["messages"],
   "worksWith": ["tasks", "runs"],
-  "permissions": ["channels.post", "channels.create", "channels.moderate", "conversations.see", "conversations.members", "replies.steer"],
+  "permissions": ["channels.post", "channels.create", "channels.create_private", "channels.browse", "channels.moderate", "channels.mention_everyone", "conversations.see", "conversations.members", "replies.steer"],
   "tools": {
     "channel_create": "create",
     "channel_list": "query",
@@ -16,6 +16,8 @@
     "channel_join": "change",
     "channel_leave": "change",
     "channel_update": "change",
+    "conversation_agent_settings_set": "change",
+    "conversation_agent_settings_list": "query",
     "thread_start": "create",
     "thread_update": "change"
   },

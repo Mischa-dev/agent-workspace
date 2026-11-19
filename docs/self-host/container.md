@@ -14,9 +14,9 @@ cd deploy/container
 `init.sh` writes `.env` and three secret files under `secrets/` with random
 values (it never replaces ones that exist), then runs `docker compose up -d`
 (or `podman-compose up -d`). When `docker compose ps` shows the app healthy,
-open the address in `.env` (`http://localhost:3100` by default) and create the
-first account with `docker compose exec app agent-workspace-server
-bootstrap-admin ...` (see the README).
+open the address in `.env` (`http://localhost:3100` by default) and make the
+first account in the browser with the setup code from `docker compose exec
+app cat /var/lib/agent-workspace/setup-code` ([install](install.md)).
 
 To serve anything but localhost, put a TLS proxy in front and set
 `AW_PUBLIC_ORIGIN` to its `https://` address in `.env`. Every other setting is

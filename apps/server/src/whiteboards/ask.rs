@@ -196,46 +196,61 @@ impl Operation for WhiteboardAsk {
             bytes: png,
         })
         .await?;
-        let mut transaction = crate::db::scoped_tx(&state.pool)
-            .await
-            .map_err(AppError::from)?;
+        // The picture's bytes go to the store before any transaction opens;
+        // a retry that finds the first picture takes them away again.
+        let staged = files::stage_prepared(state, project_id, prepared).await?;
+        let mut transaction = match crate::db::scoped_tx(&state.pool).await {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                files::abandon_staged(state, &staged).await;
+                return Err(AppError::from(error).into());
+            }
+        };
         let scope = idempotency::resource_bound_scope("whiteboard", board_id, "ask_picture")?;
         let hash = RequestHash::for_value(&json!({
             "elementIds": ids,
             "accountId": asked,
             "question": question,
         }))?;
-        let picture_id =
-            match idempotency::reserve(&mut transaction, caller.actor_id, &scope, &key, hash)
-                .await?
-            {
-                IdempotencyOutcome::Replay(replay) => replay.decode::<Uuid>()?,
-                IdempotencyOutcome::Reserved(reservation) => {
-                    let row = files::store_prepared(
-                        state,
-                        &mut transaction,
-                        caller.actor_id,
-                        Destination::Conversation {
-                            project_id,
-                            conversation_id: comments_id,
-                        },
-                        prepared,
-                    )
-                    .await?;
-                    idempotency::complete(
-                        &mut transaction,
-                        &reservation,
-                        axum::http::StatusCode::CREATED,
-                        &row.id,
-                    )
-                    .await?;
-                    if let Err(error) = transaction.commit().await {
-                        files::discard_stored(state, &row).await;
-                        return Err(AppError::from(error).into());
-                    }
-                    row.id
+        let reserved =
+            idempotency::reserve(&mut transaction, caller.actor_id, &scope, &key, hash).await;
+        let reserved = match reserved {
+            Ok(IdempotencyOutcome::Reserved(reservation)) => {
+                IdempotencyOutcome::Reserved(reservation)
+            }
+            other => {
+                files::abandon_staged(state, &staged).await;
+                other?
+            }
+        };
+        let picture_id = match reserved {
+            IdempotencyOutcome::Replay(replay) => replay.decode::<Uuid>()?,
+            IdempotencyOutcome::Reserved(reservation) => {
+                let row = files::store_prepared(
+                    state,
+                    &mut transaction,
+                    caller.actor_id,
+                    Destination::Conversation {
+                        project_id,
+                        conversation_id: comments_id,
+                    },
+                    staged,
+                )
+                .await?;
+                idempotency::complete(
+                    &mut transaction,
+                    &reservation,
+                    axum::http::StatusCode::CREATED,
+                    &row.id,
+                )
+                .await?;
+                if let Err(error) = transaction.commit().await {
+                    files::discard_stored(state, &row).await;
+                    return Err(AppError::from(error).into());
                 }
-            };
+                row.id
+            }
+        };
         let content = json!({
             "version": 1,
             "nodes": [

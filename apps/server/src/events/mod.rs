@@ -12,6 +12,8 @@
 //! Writers that predate the catalogue stage typed change notices with
 //! `outbox::enqueue` (`notice`); they are events like any other.
 
+pub mod activity;
+pub mod archive;
 pub mod catalog;
 pub mod consumer;
 pub mod notice;
@@ -20,7 +22,9 @@ pub mod sequencer;
 pub mod upkeep;
 
 pub use catalog::{EventClass, EventType};
-pub use consumer::{Consumer, ConsumerError, EventFilter, catch_up, read, run_consumer};
+pub use consumer::{
+    Consumer, ConsumerError, EventFilter, LogRound, catch_up, log_round, read, run_consumer,
+};
 pub use route::*;
 
 use serde::Serialize;
@@ -28,6 +32,32 @@ use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+/// The logged event at `position`, if there is one. The caller decides who
+/// may see it (delivery checks an app's limits with it).
+pub async fn logged_at(
+    connection: &mut PgConnection,
+    position: i64,
+) -> Result<Option<LoggedEvent>, sqlx::Error> {
+    sqlx::query_as::<_, LoggedEvent>(&format!(
+        "SELECT {LOGGED_EVENT_COLUMNS} FROM events WHERE position = $1"
+    ))
+    .bind(position)
+    .fetch_optional(connection)
+    .await
+}
+
+/// Events waiting for a position in the log: how many, and the age in
+/// seconds of the oldest (0 when none wait). For the status page and the
+/// metrics, which read the log only through this module.
+pub async fn staged_backlog(connection: &mut PgConnection) -> Result<(i64, f64), sqlx::Error> {
+    sqlx::query_as::<_, (i64, f64)>(
+        "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+         FROM event_staging",
+    )
+    .fetch_one(connection)
+    .await
+}
 
 /// Who is acting in this transaction, for every event it emits: the
 /// account, the credential (and so the app) it came through, who asked for
@@ -38,6 +68,8 @@ pub struct EventContext {
     pub actor: Option<Uuid>,
     /// The connected app's OAuth grant, until K1's credentials (K1.22).
     pub via_credential: Option<Uuid>,
+    /// The credential the call came through, whatever its kind (K1.25).
+    pub credential: Option<Uuid>,
     pub requested_by: Option<Uuid>,
     pub run: Option<Uuid>,
     pub request_id: Option<String>,
@@ -63,19 +95,23 @@ pub async fn set_context(
     context: &EventContext,
 ) -> Result<(), AppError> {
     let text = |value: Option<Uuid>| value.map(|value| value.to_string()).unwrap_or_default();
+    // K1.25: what the edge said this call acts as fills what the write path
+    // didn't.
+    let acting = crate::access::acting::current();
     sqlx::query(
         r#"
         SELECT set_config('aw.actor', $1, true),
                CASE WHEN $2 <> '' THEN set_config('aw.via_grant', $2, true) END,
                set_config('aw.requested_by', $3, true),
                set_config('aw.run', $4, true),
-               set_config('aw.request_id', $5, true)
+               set_config('aw.request_id', $5, true),
+               set_config('aw.via_credential', $6, true)
         "#,
     )
     .bind(text(context.actor))
     .bind(text(context.via_credential))
-    .bind(text(context.requested_by))
-    .bind(text(context.run))
+    .bind(text(context.requested_by.or(acting.requested_by)))
+    .bind(text(context.run.or(acting.run)))
     .bind(
         context
             .request_id
@@ -83,6 +119,7 @@ pub async fn set_context(
             .map(|id| id.chars().take(128).collect::<String>())
             .unwrap_or_default(),
     )
+    .bind(text(context.credential.or(acting.credential)))
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -160,13 +197,16 @@ pub struct NewEvent<'a> {
 }
 
 impl<'a> NewEvent<'a> {
-    /// The common case: a fact about one thing, heard by its space.
-    pub fn thing(ty: &'static EventType, space_id: Uuid, kind: &'a str, id: Uuid) -> Self {
+    /// The common case: a fact about one thing, heard by its space. A DM's
+    /// or group's place is the direct scope (K4.12), which is no space: its
+    /// event names that scope as its workspace and has no space.
+    pub fn thing(ty: &'static EventType, place: Uuid, kind: &'a str, id: Uuid) -> Self {
+        let direct = place == crate::spaces::DIRECT;
         Self {
             id: Uuid::now_v7(),
             ty,
-            workspace_id: None,
-            space_id: Some(space_id),
+            workspace_id: direct.then_some(place),
+            space_id: (!direct).then_some(place),
             thing: Some((id, kind)),
             access_thing: None,
             version: None,
@@ -216,6 +256,14 @@ impl<'a> NewEvent<'a> {
 
 /// The largest payload an event may carry.
 pub const MAX_PAYLOAD_BYTES: usize = 8192;
+
+/// The direct scope's fixed id (rulings R19, R20): DMs and groups belong to
+/// the people in them, not to a workspace, and K4.23's reserved
+/// `organizations` row with this id holds them. Its events are heard only
+/// by a conversation's participants or one account (a CHECK on the log
+/// refuses a workspace or space audience), and a reader asks for them
+/// apart from any workspace.
+pub const DIRECT_SCOPE_ID: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_d1ec);
 
 /// Stages one event in the change's transaction; the sequencer gives it a
 /// position once the transaction commits, and a rollback leaves nothing.
@@ -277,8 +325,8 @@ pub async fn emit_on(connection: &mut PgConnection, event: NewEvent<'_>) -> Resu
                     THEN COALESCE($14, COALESCE(parent.visibility, conversation.visibility) <> 'project') END,
                $15,
                COALESCE(NULLIF(current_setting('aw.actor', true), '')::uuid, $16),
-               NULLIF(current_setting('aw.via_grant', true), '')::uuid,
-               NULLIF(current_setting('aw.requested_by', true), '')::uuid,
+               current_via_credential(),
+               current_requested_by(),
                NULLIF(current_setting('aw.run', true), '')::uuid,
                NULLIF(current_setting('aw.request_id', true), ''),
                $17, $18
@@ -343,6 +391,15 @@ pub struct LoggedEvent {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl LoggedEvent {
+    /// Where it happened: its space, or the direct scope for a DM's or
+    /// group's event, which has none.
+    pub fn place(&self) -> Option<Uuid> {
+        self.space_id
+            .or((self.workspace_id == crate::spaces::DIRECT).then_some(crate::spaces::DIRECT))
+    }
+}
+
 /// The columns `LoggedEvent` reads, for queries over `events`.
 pub(crate) const LOGGED_EVENT_COLUMNS: &str = "position, id, workspace_id, space_id, thing_id, \
     thing_kind, access_thing_id, thing_version, type, class, changes, audience, conversation_id, \
@@ -364,6 +421,16 @@ pub async fn tail(
     .fetch_all(&mut *connection)
     .await?;
     Ok(rows)
+}
+
+/// The oldest position the log still keeps (1 when nothing was dropped).
+pub async fn oldest_position(connection: &mut PgConnection) -> Result<i64, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT min(position) FROM events")
+            .fetch_one(&mut *connection)
+            .await?
+            .unwrap_or(1),
+    )
 }
 
 /// The newest position in the log (0 when it is empty).

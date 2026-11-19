@@ -43,6 +43,8 @@ export type Trigger =
   /** A comment on a thing, or a proposed change to one: on any thing, things of one kind, or one thing. */
   | { kind: 'comment_posted'; thingKind?: CommentedKind | null; thingId?: string | null }
   | { kind: 'proposal_made'; thingKind?: 'page' | 'sheet' | 'whiteboard' | null; thingId?: string | null }
+  /** A signed delivery to one of the project's incoming hooks. */
+  | { kind: 'incoming_hook'; hookId: string }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'

@@ -105,6 +105,16 @@ impl Workspace {
             .unwrap_or_else(|| panic!("no project {key}"))
     }
 
+    /// The app again on the same database, with one more configuration
+    /// value (such as a secrets keyring).
+    pub(crate) fn rebuilt_with(
+        &self,
+        key: &str,
+        value: impl Into<String>,
+    ) -> (axum::Router, AppState) {
+        app(&self.db).with(key, value).build()
+    }
+
     /// Drops the workspace's database.
     pub(crate) async fn finish(self) {
         drop(self.app);
@@ -241,7 +251,13 @@ impl WorldBuilder {
         for (handle, role) in &self.agents {
             let (actor, token) = create_agent(&app, &setup.browser, &space, handle, handle).await;
             for project in &project_ids {
-                add_member(&setup, project, actor, role).await;
+                // Adding gives member or viewer; a higher role is set after.
+                if matches!(role.as_str(), "member" | "viewer") {
+                    add_member(&setup, project, actor, role).await;
+                } else {
+                    add_member(&setup, project, actor, "member").await;
+                    set_role(&setup.pool, project, actor, role).await;
+                }
             }
             let connection = sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM external_agent_connections WHERE actor_id = $1 AND status = 'active' ORDER BY created_at LIMIT 1",

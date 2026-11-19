@@ -289,14 +289,6 @@ pub(crate) async fn follow_space(
     .bind(space_id)
     .execute(&mut **tx)
     .await?;
-    sqlx::query(
-        "UPDATE thing_references SET project_id = $3 \
-         WHERE source_kind = $1 AND source_id = $2",
-    )
-    .bind(kind)
-    .bind(id)
-    .bind(space_id)
-    .execute(&mut **tx)
-    .await?;
+    // Links name things, not spaces: they need nothing.
     Ok(())
 }

@@ -700,7 +700,10 @@ pub async fn references<'a>(
 /// importing the file into the same project finds the page again (`find_link`
 /// reads the last ID in a link).
 pub fn exported_page(project_id: Uuid, page_id: Uuid, title: &str) -> String {
-    format!("{title} (/projects/{project_id}/pages/{page_id})")
+    format!(
+        "{title} ({})",
+        crate::addresses::Target::page(project_id, page_id).legacy_path()
+    )
 }
 
 /// What a person, task or page reference reads as for agents and exports:

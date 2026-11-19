@@ -103,14 +103,25 @@ impl Operation for DecisionRecord {
         call: &mut OpCall<'_>,
         input: DecisionRecordInput,
     ) -> Result<DecisionView, OpError> {
-        let space_id = call.ctx.space_id.ok_or_else(|| {
+        let viewer = call.account_id();
+        // From a DM or group (no space): kept in its workspace's own space
+        // (the recorder's default workspace for a personal one), as private
+        // as the conversation it came from.
+        let space_id = match (call.ctx.space_id, call.ctx.direct) {
+            (Some(space), _) => Some(space),
+            (None, Some(conversation)) => {
+                let tx = call.tx().await?;
+                super::direct_home_space(tx, viewer, conversation).await?
+            }
+            (None, None) => None,
+        };
+        let space_id = space_id.ok_or_else(|| {
             OpError::invalid(
                 "spaceId",
                 "Say which space (spaceId), or pass the message or conversation it came from.",
             )
         })?;
         let writer = Writer::from(call.ctx);
-        let viewer = call.account_id();
         let decision = DecisionInput {
             title: input.title,
             detail: input.detail,

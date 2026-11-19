@@ -1,8 +1,13 @@
 //! S8: the workspace's audit log, read.
 //!
-//! `audit_events` is written all over the server; this reads it for one
-//! workspace, newest first, with filters for who, which app, what kind and
-//! when. Owners and admins read it. An event about a conversation or a
+//! Two sources, read together (K3.20): the facts in the event log (a task
+//! changed, a page saved, with who, through which app and for whom) and
+//! `audit_events`, which still records what isn't a change to a thing
+//! (sign-ins, settings, keys) and every refused attempt. A succeeded audit
+//! row gives way to the facts logged about the same thing by the same
+//! request or transaction (same `now()`), which say more and carry no text.
+//! One workspace, newest first, with filters for who, which app, what kind
+//! and when. Owners and admins read it. An event about a conversation or a
 //! message shows only when the reader can see that conversation
 //! (`conversation_visible_to`), so the log never reveals a private
 //! conversation to someone outside it. Metadata holds ids and counts, never
@@ -19,7 +24,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, ApiQuery, AppError},
-    workspace::caller_role,
+    workspace::standing_of,
 };
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -191,16 +196,17 @@ struct EventsResponse {
     next_cursor: Option<String>,
 }
 
-/// Owners and admins of the workspace read its log.
+/// Those whose workspace role holds "Read the audit log" (`settings.audit`;
+/// owners and admins to start with) read it.
 async fn require_reader(
     state: &AppState,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    if caller_role(&mut connection, principal, organization_id, false)
+    if standing_of(&mut connection, principal.actor_id, organization_id, false)
         .await?
-        .manages()
+        .may(crate::policy::Permission::SettingsAudit)
     {
         Ok(())
     } else {
@@ -212,7 +218,7 @@ async fn require_reader(
 /// conversations or messages they can't see. `$1` is the workspace, `$2`
 /// the reader.
 const VISIBLE_EVENTS: &str = r#"
-    FROM audit_events event
+    FROM event
     LEFT JOIN projects project ON project.id = event.project_id
     LEFT JOIN actors actor ON actor.id = event.actor_id
     LEFT JOIN organization_actor_profiles profile
@@ -233,27 +239,16 @@ const VISIBLE_EVENTS: &str = r#"
                AND NOT conversation_visible_to((event.metadata->>'conversationId')::uuid, $2))
 "#;
 
-async fn list_events(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<EventQuery>,
-) -> Result<Json<EventsResponse>, AppError> {
-    require_reader(&state, &principal, organization_id).await?;
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
-    if !(1..=MAX_LIMIT).contains(&limit) {
-        return Err(AppError::Validation("limit"));
-    }
-    let app = query.app.as_deref().map(parse_app).transpose()?;
-    let kind = query.kind.as_deref().map(parse_kind).transpose()?;
-    let before = query.before.as_deref().map(parse_cursor).transpose()?;
-    let (channel, client) = match app {
-        Some(AppFilter::Channel(channel)) => (Some(channel), None),
-        Some(AppFilter::Client(client)) => (None, Some(client)),
-        None => (None, None),
-    };
-    let rows = sqlx::query_as::<_, EventRow>(&format!(
+/// One page of the trail from `source` (`events`, or the log with the
+/// archived files a reader loaded).
+async fn page_of(
+    connection: &mut sqlx::PgConnection,
+    source: &str,
+    page: &Page<'_>,
+) -> Result<Vec<EventRow>, AppError> {
+    Ok(sqlx::query_as::<_, EventRow>(&format!(
         r#"
+        {combined}
         SELECT event.id, event.occurred_at, event.action, event.outcome,
                event.actor_id,
                COALESCE(profile.display_name, user_account.display_name,
@@ -274,22 +269,109 @@ async fn list_events(
           AND ($10::timestamptz IS NULL OR (event.occurred_at, event.id) < ($10, $11))
         ORDER BY event.occurred_at DESC, event.id DESC
         LIMIT $12
-        "#
+        "#,
+        combined = crate::events::activity::audit_relation_from(source),
     ))
-    .bind(organization_id)
-    .bind(principal.actor_id)
-    .bind(query.actor_id)
-    .bind(channel)
-    .bind(client)
-    .bind(kind)
-    .bind(query.project_id)
-    .bind(query.since)
-    .bind(query.until)
-    .bind(before.map(|(time, _)| time))
-    .bind(before.map(|(_, id)| id))
-    .bind(limit + 1)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
+    .bind(page.organization_id)
+    .bind(page.reader)
+    .bind(page.actor_id)
+    .bind(page.channel)
+    .bind(page.client)
+    .bind(page.kind)
+    .bind(page.project_id)
+    .bind(page.since)
+    .bind(page.until)
+    .bind(page.before.map(|(time, _)| time))
+    .bind(page.before.map(|(_, id)| id))
+    .bind(page.limit + 1)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
+struct Page<'a> {
+    organization_id: Uuid,
+    reader: Uuid,
+    actor_id: Option<Uuid>,
+    channel: Option<&'a str>,
+    client: Option<&'a str>,
+    kind: Option<&'a str>,
+    project_id: Option<Uuid>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    before: Option<(DateTime<Utc>, Uuid)>,
+    limit: i64,
+}
+
+async fn list_events(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(organization_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<EventQuery>,
+) -> Result<Json<EventsResponse>, AppError> {
+    require_reader(&state, &principal, organization_id).await?;
+    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(AppError::Validation("limit"));
+    }
+    let app = query.app.as_deref().map(parse_app).transpose()?;
+    let kind = query.kind.as_deref().map(parse_kind).transpose()?;
+    let before = query.before.as_deref().map(parse_cursor).transpose()?;
+    let (channel, client) = match app {
+        Some(AppFilter::Channel(channel)) => (Some(channel), None),
+        Some(AppFilter::Client(client)) => (None, Some(client)),
+        None => (None, None),
+    };
+    let page = Page {
+        organization_id,
+        reader: principal.actor_id,
+        actor_id: query.actor_id,
+        channel,
+        client: client.as_deref(),
+        kind: kind.as_deref(),
+        project_id: query.project_id,
+        since: query.since,
+        until: query.until,
+        before,
+        limit,
+    };
+    let (mut rows, archives) = {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        let rows = page_of(&mut connection, "events", &page).await?;
+        // The cold log's files that start before the page's upper bound,
+        // newest first (K3.25).
+        let upper = match (before.map(|(at, _)| at), query.until) {
+            (Some(before), Some(until)) => Some(before.min(until)),
+            (before, until) => before.or(until),
+        };
+        let archives = crate::events::archive::reaching_back(
+            &mut connection,
+            organization_id,
+            None,
+            None,
+            upper,
+        )
+        .await?;
+        (rows, archives)
+    };
+    // One file at a time while the page is short or a file reaches into
+    // it: slower, never shorter.
+    let mut loaded = Vec::new();
+    for archive in archives {
+        let full = rows.len() as i64 > limit;
+        let oldest = rows.get(limit as usize - 1).map(|row| row.occurred_at);
+        if full && oldest.is_some_and(|oldest| archive.last_at < oldest) {
+            break;
+        }
+        loaded.extend(crate::events::archive::fetch(&state, &archive).await?);
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        crate::events::archive::load(&mut connection, loaded.clone()).await?;
+        rows = page_of(
+            &mut connection,
+            crate::events::archive::WITH_ARCHIVED,
+            &page,
+        )
+        .await?;
+    }
     let has_more = rows.len() as i64 > limit;
     let events = rows
         .into_iter()
@@ -412,7 +494,7 @@ async fn facets(
                actor.kind
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent')
+         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system has no profile)
         LEFT JOIN organization_actor_profiles profile
           ON profile.organization_id = membership.organization_id
          AND profile.actor_id = membership.actor_id
@@ -431,40 +513,45 @@ async fn facets(
             .to_lowercase()
             .cmp(&right.display_name.to_lowercase())
     });
-    let channels = sqlx::query_scalar::<_, String>(
+    let channels = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT channel FROM audit_events
-        WHERE organization_id = $1 AND channel IS NOT NULL
+        {combined}
+        SELECT DISTINCT channel FROM event
+        WHERE channel IS NOT NULL
         ORDER BY 1
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let clients = sqlx::query_scalar::<_, String>(
+    let clients = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT client_name FROM audit_events
-        WHERE organization_id = $1 AND client_name IS NOT NULL
+        {combined}
+        SELECT client_name FROM event
+        WHERE client_name IS NOT NULL
         GROUP BY client_name ORDER BY max(occurred_at) DESC LIMIT 50
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let kinds = sqlx::query_scalar::<_, String>(
+    let kinds = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT split_part(action, '.', 1) FROM audit_events
-        WHERE organization_id = $1
+        {combined}
+        SELECT DISTINCT split_part(action, '.', 1) FROM event
         ORDER BY 1
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let projects = sqlx::query_as::<_, FacetProject>(
         r#"
         SELECT id, name, project_key AS key FROM projects
-        WHERE organization_id = $1 AND kind NOT IN ('direct', 'workspace')
+        WHERE organization_id = $1 AND kind <> 'workspace'
         ORDER BY archived_at NULLS FIRST, lower(name), id
         LIMIT 500
         "#,

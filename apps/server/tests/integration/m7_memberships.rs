@@ -167,7 +167,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
 
     assert_eq!(
         sqlx::query_as::<_, (String, i64, bool)>(
-            "SELECT status, version, revoked_at IS NOT NULL FROM mcp_client_credentials WHERE id = $1",
+            "SELECT status, version, revoked_at IS NOT NULL FROM account_credentials WHERE id = $1",
         )
         .bind(credential_id)
         .fetch_one(&pool)
@@ -239,7 +239,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     assert_eq!(enabled["role"], "viewer");
     assert_eq!(enabled["version"], 3);
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT status FROM mcp_client_credentials WHERE id = $1",)
+        sqlx::query_scalar::<_, String>("SELECT status FROM account_credentials WHERE id = $1",)
             .bind(credential_id)
             .fetch_one(&pool)
             .await
@@ -298,7 +298,17 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .await
         .expect("owner promotion response");
     assert_eq!(promoted.status(), StatusCode::OK);
-    assert_eq!(organization_role(viewer_actor_id).await, "admin");
+    // A project role never changes the workspace role (K1.19): managing
+    // members takes the workspace role too, which is set in the workspace.
+    assert_eq!(organization_role(viewer_actor_id).await, "member");
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin', role_explicit = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.organization_id)
+    .bind(viewer_actor_id)
+    .execute(&pool)
+    .await
+    .expect("make them a workspace admin");
     let (promoted_cookie, _) = login(&application, "m7-viewer").await;
     let candidates = application
         .clone()
@@ -322,7 +332,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .await
         .expect("owner demotion response");
     assert_eq!(demoted.status(), StatusCode::OK);
-    assert_eq!(organization_role(viewer_actor_id).await, "member");
+    assert_eq!(organization_role(viewer_actor_id).await, "admin");
     assert_eq!(organization_role(seed.human_actor_id).await, "owner");
 
     // An Organization owner who is only a Project admin still cannot remove
@@ -432,7 +442,7 @@ async fn add_credentials(pool: &PgPool, project_id: Uuid, actor_id: Uuid) -> Uui
     let credential_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
           id, project_id, actor_id, client_name, token_prefix, token_digest,
           scopes, expires_at
         ) VALUES ($1, $2, $3, 'M7 member client', 'aw_mcp_m7member', $4,

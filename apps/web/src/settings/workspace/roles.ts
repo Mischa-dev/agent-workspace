@@ -75,6 +75,13 @@ export const PERMISSION_KEYS = [
   'modules.build',
   'modules.manage',
   'workspace.delete',
+  'settings.audit',
+  // K1.27: groups, and chat's keys.
+  'members.groups',
+  'channels.browse',
+  'channels.create_private',
+  'channels.mention_everyone',
+  'workspace.export',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]
@@ -100,6 +107,8 @@ export type WorkspaceRoleView = {
   defaults: RoleDefaults
   /** Modules holders don't get, on top of what the workspace has off (AWD-75). */
   modulesOff: string[]
+  /** Holders acting on someone's request stay within what that account could do (K1.25). */
+  actWithinRequester?: boolean
   isDefault: boolean
   version: number
   updatedAt: string
@@ -139,6 +148,8 @@ export type RolesResponse = {
   permissions: PermissionInfo[]
   startingPoints: StartingPoint[]
   canManage: boolean
+  /** May also make or change admin-based roles (the owner tier). */
+  canManageAdminRoles?: boolean
   yourPermissions: PermissionKey[]
 }
 

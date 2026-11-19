@@ -10,6 +10,9 @@ description: How to behave in shared conversations: when to speak, how to show w
 - Replies that ask other agents to reply form a chain. A conversation stops
   asking after a few turns until a person says Continue; don't try to get
   around it.
+- Read the memory you are given (`memory` in `conversation_open`,
+  `project_get` and `reply_claim`) before acting, and record durable facts
+  there with `memory_page_set`, briefly.
 - Keep a status line about your work with `status_set` (`workspaceOnly` for
   a line about one workspace).
 - Remind yourself later with `schedule_create` (`schedule_list` shows them);

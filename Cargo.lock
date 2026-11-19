@@ -23,6 +23,7 @@ dependencies = [
 name = "agent-workspace-builtin-host"
 version = "0.0.1"
 dependencies = [
+ "agent-workspace-host-protocol",
  "agent-workspace-redaction",
  "axum",
  "base64 0.22.1",
@@ -159,6 +160,7 @@ dependencies = [
  "rand_core 0.6.4",
  "reqwest",
  "resvg",
+ "ring",
  "rmcp",
  "roxmltree",
  "rpassword",

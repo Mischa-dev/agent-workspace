@@ -173,16 +173,21 @@ pub(crate) async fn add_for_message(
     if links.is_empty() {
         return Ok(());
     }
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_one(&mut **transaction)
-            .await?;
+    // The message's workspace: its space's, or the direct scope for a DM.
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT workspace_id FROM messages \
+             -- visibility: the workspace of a message just sent by its author\n \
+             WHERE id = $1",
+    )
+    .bind(message_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let project_id = crate::spaces::space_of(project_id);
     let effective = settings::resolve(
         transaction,
         SettingsContext {
             organization_id,
-            project_id: Some(project_id),
+            project_id,
             actor_id: None,
         },
         &BTreeMap::new(),
@@ -321,6 +326,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
                         &mut connection,
                         organization_id,
                         u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                        0,
                     )
                     .await
                     .is_ok(),
@@ -349,7 +355,8 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
                 UPDATE link_previews
                 SET status = 'ready', title = $2, description = $3, site_name = $4,
                     image_key = $5, image_bytes = $6, image_width = $7, image_height = $8,
-                    image_type = $9, failure = NULL, fetched_at = now()
+                    image_type = $9, failure = NULL, fetched_at = now(),
+                    image_store_id = CASE WHEN $5::text IS NULL THEN NULL ELSE $10 END
                 WHERE id = $1 AND status = 'pending'
                 "#,
             )
@@ -374,6 +381,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
                     .map(|(_, _, _, height)| i32::try_from(*height).unwrap_or(i32::MAX)),
             )
             .bind(picture.as_ref().map(|(_, content_type, ..)| *content_type))
+            .bind(store.id())
             .execute(crate::db::scoped(&state.pool))
             .await
         }
@@ -445,10 +453,10 @@ async fn refresh_messages(state: &AppState, preview_id: Uuid) -> Result<(), AppE
 }
 
 /// Deletes stored pictures of previews no message shows any more.
-pub(crate) async fn cleanup(state: &AppState, store: &FileStore) -> Result<u64, AppError> {
-    let orphans = sqlx::query_as::<_, (Uuid, String)>(
+pub(crate) async fn cleanup(state: &AppState) -> Result<u64, AppError> {
+    let orphans = sqlx::query_as::<_, (Uuid, String, String)>(
         r#"
-        SELECT preview.id, preview.image_key
+        SELECT preview.id, preview.image_key, COALESCE(preview.image_store_id, 'local')
         FROM link_previews preview
         WHERE preview.image_key IS NOT NULL
           AND preview.fetched_at < now() - interval '1 day'
@@ -462,8 +470,12 @@ pub(crate) async fn cleanup(state: &AppState, store: &FileStore) -> Result<u64, 
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut deleted = 0;
-    for (id, key) in orphans {
-        if let Err(error) = store.delete(&key).await {
+    for (id, key, store_id) in orphans {
+        let deleted_bytes = match FileStore::named(&state.config, &store_id) {
+            Ok(store) => store.delete(&key).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = deleted_bytes {
             tracing::warn!(preview_id = %id, category = error.log_category(), "preview picture not deleted");
             continue;
         }
@@ -497,9 +509,10 @@ async fn image_http(
     principal: AuthenticatedActor,
     ApiPath(preview_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    let (key, content_type) = sqlx::query_as::<_, (String, String)>(
+    let (key, content_type, store_id) = sqlx::query_as::<_, (String, String, String)>(
         r#"
-        SELECT preview.image_key, preview.image_type
+        SELECT preview.image_key, preview.image_type,
+               COALESCE(preview.image_store_id, 'local')
         FROM link_previews preview
         WHERE preview.id = $1
           AND preview.image_key IS NOT NULL
@@ -529,7 +542,7 @@ async fn image_http(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("link_preview"))?;
-    crate::files::http::serve(&state, &key, &content_type, "preview", false).await
+    crate::files::http::serve(&state, &store_id, &key, &content_type, "preview", false).await
 }
 
 /// Hides one preview from a message: its author, or a moderator.

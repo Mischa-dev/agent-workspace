@@ -350,13 +350,13 @@ const STILL_USEFUL: &str = r#"
         AND (suggestion.kind <> 'blocks'
              OR other_status.semantic_category NOT IN ('completed', 'canceled'))
         AND NOT EXISTS (
-            SELECT 1 FROM work_item_dependencies dependency
+            SELECT 1 FROM task_dependencies dependency
             WHERE (dependency.blocked_work_item_id = suggestion.work_item_id
                    AND dependency.blocking_work_item_id = suggestion.other_work_item_id)
                OR (dependency.blocked_work_item_id = suggestion.other_work_item_id
                    AND dependency.blocking_work_item_id = suggestion.work_item_id))
         AND NOT EXISTS (
-            SELECT 1 FROM work_item_relations relation
+            SELECT 1 FROM task_relations relation
             WHERE (relation.work_item_id = suggestion.work_item_id
                    AND relation.other_work_item_id = suggestion.other_work_item_id)
                OR (relation.work_item_id = suggestion.other_work_item_id
@@ -385,10 +385,7 @@ const WITHIN_APP_LIMIT_11: &str = "$11::uuid[] IS NULL OR (suggestion.project_id
 /// While an app acts for the reader: the projects its limit lets it see
 /// tasks in. None otherwise.
 fn app_limit_projects(reader: Reader) -> Option<Vec<Uuid>> {
-    crate::policy::agent_limit_projects_allowing(
-        reader.actor_id,
-        crate::policy::Permission::TasksView,
-    )
+    crate::access::limited_spaces(reader.actor_id, crate::policy::Permission::TasksView)
 }
 
 fn parse_cursor(cursor: &str) -> Option<(f32, Uuid)> {

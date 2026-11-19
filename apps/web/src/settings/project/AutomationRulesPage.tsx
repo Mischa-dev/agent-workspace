@@ -15,6 +15,7 @@ import {
   type Trigger,
 } from '../../automations/api'
 import '../../automations/automations.css'
+import { IncomingHooksSection } from '../../automations/IncomingHooksSection'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
 import { priorityLabel } from '../../work-items/constants'
@@ -90,6 +91,8 @@ function describeTrigger(trigger: Trigger): string {
       return trigger.thingId ? `When someone comments on this ${trigger.thingKind ?? 'thing'}` : trigger.thingKind ? `When someone comments on a ${trigger.thingKind}` : 'When someone comments'
     case 'proposal_made':
       return trigger.thingId ? `When someone proposes a change to this ${trigger.thingKind ?? 'thing'}` : trigger.thingKind ? `When someone proposes a change to a ${trigger.thingKind}` : 'When someone proposes a change'
+    case 'incoming_hook':
+      return 'When a delivery comes in on an incoming hook'
   }
 }
 
@@ -324,6 +327,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
           For example: when a pull request’s checks fail, launch an agent on it.
         </EmptyState>
       )}
+      <IncomingHooksSection manage={manage} projectId={projectId} />
       {editing && (
         <RuleDialog
           onClose={() => setEditing(null)}

@@ -521,7 +521,7 @@ async fn project_rows(
                    -- The hidden project DMs live in follows the workspace role.
                    (SELECT {project_off} FROM project_memberships membership
                     WHERE membership.project_id = project.id AND membership.actor_id = $2
-                      AND membership.enabled AND project.kind NOT IN ('direct', 'workspace')),
+                      AND membership.enabled AND project.kind <> 'workspace'),
                    (SELECT {workspace_off} FROM organization_memberships membership
                     WHERE membership.organization_id = project.organization_id
                       AND membership.actor_id = $2 AND membership.enabled),
@@ -603,7 +603,7 @@ pub async fn anywhere(
         SELECT membership.project_id FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
-          AND project.kind NOT IN ('direct', 'workspace')
+          AND project.kind <> 'workspace'
         "#,
     )
     .bind(actor_id)
@@ -622,6 +622,11 @@ pub async fn anywhere(
 #[derive(Clone, Debug, Default)]
 pub struct ProjectModules {
     projects: Vec<(Uuid, ModuleSet, bool)>,
+    /// The workspace's own spaces among them, with what the workspace has
+    /// on for the account before the space's shape narrows it: a notice
+    /// about something elsewhere (an automation in a project its maker has
+    /// left) is filed there, and follows the module it is about.
+    homes: Vec<(Uuid, ModuleSet)>,
 }
 
 impl ProjectModules {
@@ -641,21 +646,43 @@ impl ProjectModules {
         organizations.sort();
         organizations.dedup();
         let switches = switches_of(connection, &organizations).await?;
+        let homes = rows
+            .iter()
+            .filter(|row| SpaceKind::from_stored(&row.kind) == Some(SpaceKind::Workspace))
+            .map(|row| {
+                let found = switches
+                    .get(&row.organization_id)
+                    .cloned()
+                    .unwrap_or_default();
+                (row.id, narrowed(&found, &row.role_off))
+            })
+            .collect::<Vec<_>>();
+        let mut found_projects = rows
+            .iter()
+            .map(|row| {
+                let found = switches
+                    .get(&row.organization_id)
+                    .cloned()
+                    .unwrap_or_default();
+                (
+                    row.id,
+                    narrowed(&found, &row.role_off).in_stored(&row.kind),
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        // DMs and groups live in no space (K4.17): there, what any of the
+        // account's workspaces has on for them.
+        if projects.contains(&crate::spaces::DIRECT) {
+            let direct = by_workspace(connection, actor_id)
+                .await?
+                .into_values()
+                .fold(ModuleSet::always_on(), ModuleSet::union);
+            found_projects.push((crate::spaces::DIRECT, direct, true));
+        }
         Ok(Self {
-            projects: rows
-                .iter()
-                .map(|row| {
-                    let found = switches
-                        .get(&row.organization_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    (
-                        row.id,
-                        narrowed(&found, &row.role_off).in_stored(&row.kind),
-                        row.kind == "direct",
-                    )
-                })
-                .collect(),
+            projects: found_projects,
+            homes,
         })
     }
 
@@ -720,7 +747,14 @@ impl ProjectModules {
             Some(module) if Registry::global().governs_conversations(&module.id) => {
                 set.allows_conversations_in(if *direct { "direct" } else { "standard" })
             }
-            Some(module) => set.contains(&module.id),
+            Some(module) => {
+                set.contains(&module.id)
+                    || self
+                        .homes
+                        .iter()
+                        .find(|(home, _)| *home == project_id)
+                        .is_some_and(|(_, unshaped)| unshaped.contains(&module.id))
+            }
             None => true,
         }
     }
@@ -781,9 +815,16 @@ pub fn notification_switches_sql() -> &'static str {
                             .map(required_switches)
                             .unwrap_or_default()
                     };
+                    // A DM's notification has no space row, so only a
+                    // space's conversations reach here (K4.17). Like pages,
+                    // a project's channels need Projects; the workspace
+                    // space's don't (K4.25).
+                    let mut in_projects = switches(false);
+                    in_projects.extend(required_switches("projects"));
                     format!(
-                        "CASE WHEN module_project.kind = 'direct' THEN {} ELSE {} END",
-                        sql_array(&switches(true)),
+                        "CASE WHEN module_project.kind = '{}' THEN {} ELSE {} END",
+                        SpaceKind::Project.stored(),
+                        sql_array(&in_projects),
                         sql_array(&switches(false)),
                     )
                 } else if module.id == "pages" {
@@ -792,7 +833,8 @@ pub fn notification_switches_sql() -> &'static str {
                     let mut in_projects = required_switches("pages");
                     in_projects.extend(required_switches("projects"));
                     format!(
-                        "CASE WHEN module_project.kind = 'standard' THEN {} ELSE {} END",
+                        "CASE WHEN module_project.kind = '{}' THEN {} ELSE {} END",
+                        SpaceKind::Project.stored(),
                         sql_array(&in_projects),
                         sql_array(&required_switches("pages")),
                     )
@@ -821,7 +863,7 @@ pub fn notification_switches_sql() -> &'static str {
                       (SELECT {project_off} FROM project_memberships membership
                        WHERE membership.project_id = module_project.id
                          AND membership.actor_id = n.recipient_actor_id
-                         AND membership.enabled AND module_project.kind NOT IN ('direct', 'workspace')),
+                         AND membership.enabled AND module_project.kind <> 'workspace'),
                       (SELECT {workspace_off} FROM organization_memberships membership
                        WHERE membership.organization_id = module_project.organization_id
                          AND membership.actor_id = n.recipient_actor_id AND membership.enabled),
@@ -843,14 +885,18 @@ mod tests {
     fn module_switch_sql_names_every_notification_kind() {
         let sql = super::notification_switches_sql();
         assert!(sql.contains("WHEN 'assigned' THEN ARRAY['projects', 'tasks']::text[]"));
-        assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
+        // A mention in a project's channel needs Projects; in the workspace
+        // space's, only chat (K4.25).
+        assert!(sql.contains(
+            "WHEN 'mention' THEN CASE WHEN module_project.kind = 'standard' THEN ARRAY["
+        ));
         // The recipient's role narrows it too: their project role, or their
         // workspace role in the direct space.
         assert!(sql.contains("held.modules_off"));
         // A space's own narrowing counts as the workspace's does.
         assert!(sql.contains("module_switch.space_id = module_project.id"));
         assert!(sql.contains("membership.actor_id = n.recipient_actor_id"));
-        assert!(sql.contains("module_project.kind NOT IN ('direct', 'workspace')"));
+        assert!(sql.contains("module_project.kind <> 'workspace'"));
         assert_eq!(
             super::required_switches("runs"),
             ["channels", "code", "messages", "projects", "runs", "tasks"]
@@ -861,7 +907,6 @@ mod tests {
     fn needs_carry_switches_down() {
         let set = ModuleSet::from_switches(|module| module == "projects");
         for module in [
-            "channels",
             "tasks",
             "whiteboards",
             "collections",
@@ -878,6 +923,11 @@ mod tests {
         for module in ["workspace", "messages", "agents", "inbox", "suggestions"] {
             assert!(set.contains(module), "{module} should stay on");
         }
+        // K4.25: channels don't need Projects either. A chat-only workspace
+        // talks in its own space's channels; a project's go with Projects.
+        assert!(set.contains("channels"));
+        assert!(set.in_project(SpaceKind::Workspace).contains("channels"));
+        assert!(!set.in_project(SpaceKind::Project).contains("channels"));
         // AWD-96: pages don't need Projects. They stay on for the
         // workspace's own pages and go with Projects inside a project.
         assert!(set.contains("pages"));

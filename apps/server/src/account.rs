@@ -25,15 +25,12 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
-    policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
-        Subject, authorize,
-    },
+    policy::{Action, MembershipRole, RoleGrant},
     profile_runtime::prepare_private_profile_directory,
     provider::{
         AccountHandle, AccountSummary, HarnessError, LoginCeremonyError, LoginCeremonySnapshot,
         LoginKind, LoginReservation, LoginStart, ProfileHealth, RateLimitSummary,
-        catalog::run_catalog, manifest::AdapterManifest, run_config::RunConfig,
+        catalog::run_catalog, ceremonies, manifest::AdapterManifest, run_config::RunConfig,
     },
 };
 
@@ -1154,11 +1151,14 @@ async fn account_status(
     access: AccountAccess,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
     let account_id = access.account_id;
-    let mut ceremony = state
-        .supervisors
-        .login_ceremony(account_id, principal.actor_id, principal.session_id)
-        .await
-        .map(login_ceremony_view);
+    let mut ceremony = ceremonies::login_ceremony(
+        &state.pool,
+        account_id,
+        principal.actor_id,
+        principal.session_id,
+    )
+    .await?
+    .map(login_ceremony_view);
     if access.disabled() {
         return Ok(Json(AccountStatusResponse {
             ceremony,
@@ -1209,7 +1209,7 @@ async fn account_status(
     };
     persist_account_state(state, account_id, account_state, account_status).await?;
     if account.authenticated {
-        state.supervisors.clear_login(account_id, None).await;
+        ceremonies::clear_login(&state.pool, account_id, None).await?;
         ceremony = None;
     }
     let rate_limits = if account.authenticated {
@@ -1259,17 +1259,16 @@ async fn start_login(
             "this harness does not support that sign-in method",
         ));
     }
-    let reservation = state
-        .supervisors
-        .reserve_login(
-            account_id,
-            principal.actor_id,
-            principal.session_id,
-            idempotency_key.as_str(),
-            kind,
-        )
-        .await
-        .map_err(login_ceremony_error)?;
+    let reservation = ceremonies::reserve_login(
+        &state.pool,
+        account_id,
+        principal.actor_id,
+        principal.session_id,
+        idempotency_key.as_str(),
+        kind,
+    )
+    .await
+    .map_err(login_ceremony_error)?;
     let ceremony_id = match reservation {
         LoginReservation::Replay(snapshot) => return Ok(Json(login_ceremony_view(snapshot))),
         LoginReservation::Reserved(ceremony_id) => ceremony_id,
@@ -1282,20 +1281,14 @@ async fn start_login(
     let mut provider = match provider {
         Ok(provider) => provider,
         Err(error) => {
-            state
-                .supervisors
-                .clear_login(account_id, Some(ceremony_id))
-                .await;
+            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
             return Err(provider_error(account_id, "start login session", error));
         }
     };
     let response = match (kind, api_key) {
         (LoginKind::ApiKey, Some(api_key)) => provider.login_with_api_key(api_key).await,
         (LoginKind::ApiKey, None) => {
-            state
-                .supervisors
-                .clear_login(account_id, Some(ceremony_id))
-                .await;
+            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
             return Err(AppError::Validation("apiKey"));
         }
         (kind, _) => provider.start_login(kind).await,
@@ -1303,16 +1296,11 @@ async fn start_login(
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            state
-                .supervisors
-                .clear_login(account_id, Some(ceremony_id))
-                .await;
+            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
             return Err(provider_error(account_id, "start login", error));
         }
     };
-    let snapshot = state
-        .supervisors
-        .complete_login(account_id, ceremony_id, response)
+    let snapshot = ceremonies::complete_login(&state.pool, account_id, ceremony_id, response)
         .await
         .map_err(login_ceremony_error)?;
     let (account_state, account_status) = if kind == LoginKind::ApiKey {
@@ -1330,10 +1318,13 @@ async fn cancel_login(
     access: AccountAccess,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
     let account_id = access.account_id;
-    let ceremony = state
-        .supervisors
-        .login_ceremony(account_id, principal.actor_id, principal.session_id)
-        .await;
+    let ceremony = ceremonies::login_ceremony(
+        &state.pool,
+        account_id,
+        principal.actor_id,
+        principal.session_id,
+    )
+    .await?;
     let Some(ceremony) = ceremony else {
         persist_account_state(
             state,
@@ -1364,10 +1355,7 @@ async fn cancel_login(
             .await
             .map_err(|error| provider_error(account_id, "cancel login", error))?;
     }
-    state
-        .supervisors
-        .clear_login(account_id, Some(ceremony.ceremony_id))
-        .await;
+    ceremonies::clear_login(&state.pool, account_id, Some(ceremony.ceremony_id)).await?;
     persist_account_state(
         state,
         account_id,
@@ -1391,7 +1379,7 @@ async fn logout(
         .supervisors
         .shutdown_account(&access.adapter_kind, account_id)
         .await;
-    state.supervisors.clear_login(account_id, None).await;
+    ceremonies::clear_login(&state.pool, account_id, None).await?;
     // Always tell the harness, even when the account already reads logged
     // out: a retry after a failed or lost first attempt must still revoke
     // the harness's credentials.
@@ -1466,21 +1454,13 @@ fn may_manage_execution(
     if role.role() == MembershipRole::Worker {
         return false;
     }
-    principal.actor_kind == "human"
-        && matches!(
-            authorize(
-                &Subject::new(
-                    principal.actor_id,
-                    ActorKind::Human,
-                    true,
-                    Some(Membership::project(project_id, role, true)),
-                    None,
-                ),
-                Action::ExecutionProfileManage,
-                Resource::Project(ProjectScope::project(project_id)),
-            ),
-            Decision::Allow
-        )
+    crate::access::membership_allows(
+        principal.actor_id,
+        project_id,
+        role,
+        true,
+        Action::ExecutionProfileManage.permission(),
+    )
 }
 
 /// The caller's own account in the workspace of a project they can manage
@@ -1672,6 +1652,7 @@ fn login_ceremony_error(error: LoginCeremonyError) -> AppError {
             AppError::Conflict("login_ceremony", "host login capacity is reached")
         }
         LoginCeremonyError::NotFound => AppError::NotFound("login_ceremony"),
+        LoginCeremonyError::Store(error) => error,
     }
 }
 

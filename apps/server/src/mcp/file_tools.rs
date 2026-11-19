@@ -230,7 +230,7 @@ async fn list_message(
 ) -> Result<Option<Vec<FileRow>>, AppError> {
     let project_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT project_id FROM messages
+        SELECT COALESCE(project_id, direct_scope_id()) FROM messages
         WHERE id = $1 AND removed_at IS NULL AND conversation_visible_to(conversation_id, $2)
         "#,
     )
@@ -291,6 +291,13 @@ pub(super) struct FileReadValue {
     /// Why the content isn't included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// For a file too large to include: a link that downloads it, with no
+    /// credential, until `downloadExpiresAt` (15 minutes). It stops working
+    /// sooner if the file is removed or you lose access to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_expires_at: Option<String>,
 }
 
 pub(super) async fn file_read(
@@ -312,12 +319,17 @@ pub(super) async fn file_read(
         Err(AppError::NotFound(_)) => return read_result(ToolResult::not_found("That file"), None),
         Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
     };
-    let store = FileStore::from_config(&state.config);
+    let store = match FileStore::resolve(state, &row.store_id).await {
+        Ok(store) => store,
+        Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
+    };
     let mut value = FileReadValue {
         file: FileSummary::from(&row),
         text: None,
         data_base64: None,
         note: None,
+        download_url: None,
+        download_expires_at: None,
     };
     // An image is shown to the agent as an image: the original when it's
     // small enough, else its preview.
@@ -343,8 +355,26 @@ pub(super) async fn file_read(
         };
     }
     if row.byte_size > MCP_FILE_BYTES as i64 {
-        value.note =
-            Some("The file is larger than 4 MiB; open it in the app to download it.".to_owned());
+        match files::links::link(
+            state,
+            reader(principal),
+            row.id,
+            files::links::Variant::Original,
+            files::links::DEFAULT_TTL,
+        ) {
+            Ok((url, expires)) => {
+                value.note =
+                    Some("The file is larger than 4 MiB; download it from downloadUrl.".to_owned());
+                value.download_url = Some(url);
+                value.download_expires_at =
+                    Some(expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            }
+            Err(_) => {
+                value.note = Some(
+                    "The file is larger than 4 MiB; open it in the app to download it.".to_owned(),
+                );
+            }
+        }
         return read_result(ToolResult::ok(value), None);
     }
     match store
@@ -490,23 +520,34 @@ pub(super) async fn file_upload(
             return Err(AppError::PayloadTooLarge);
         }
         let prepared = files::prepare_upload(upload).await?;
-        // The retry key, the file and its row in one transaction on one
-        // connection: a retry waits for this one and answers with its file,
-        // and a crash leaves neither.
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let reservation = match reserve_create(
-            &mut transaction,
-            principal,
-            "files",
-            retry_key.as_ref(),
-            &retried,
-        )
-        .await?
-        {
-            CreateRetry::Fresh(reservation) => reservation,
-            CreateRetry::Replay(file_id, _) => {
+        // The bytes go into the store first, outside any transaction; then
+        // the retry key and the file's row in one transaction: a retry waits
+        // for this one and answers with its file, and a crash leaves neither
+        // (the sweep takes unclaimed bytes away).
+        let staged = files::stage_prepared(state, destination.project_id(), prepared).await?;
+        let reserved = async {
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let reserved = reserve_create(
+                &mut transaction,
+                principal,
+                "files",
+                retry_key.as_ref(),
+                &retried,
+            )
+            .await?;
+            Ok::<_, AppError>((transaction, reserved))
+        }
+        .await;
+        let (mut transaction, reservation) = match reserved {
+            Ok((transaction, CreateRetry::Fresh(reservation))) => (transaction, reservation),
+            Ok((transaction, CreateRetry::Replay(file_id, _))) => {
                 transaction.commit().await?;
+                files::abandon_staged(state, &staged).await;
                 return Ok((file_id, true, destination));
+            }
+            Err(error) => {
+                files::abandon_staged(state, &staged).await;
+                return Err(error);
             }
         };
         let row = files::store_prepared(
@@ -514,7 +555,7 @@ pub(super) async fn file_upload(
             &mut transaction,
             principal.actor_id,
             destination,
-            prepared,
+            staged,
         )
         .await?;
         let kept = complete_create(&mut transaction, reservation.as_ref(), row.id).await;
@@ -649,17 +690,19 @@ async fn conversation_destination(
     )
     .await?;
     require_active_conversation(&conversation)?;
-    let limit = files::upload_limit(&mut transaction, conversation.project_id).await?;
+    let limit = files::upload_limit(&mut transaction, conversation.place()).await?;
     transaction.commit().await?;
-    if !accessible_project_ids(state, principal)
-        .await?
-        .contains(&conversation.project_id)
+    // A DM or group is in no space: seeing it was the check.
+    if let Some(space) = conversation.project_id
+        && !accessible_project_ids(state, principal)
+            .await?
+            .contains(&space)
     {
         return Err(AppError::NotFound("conversation"));
     }
     Ok((
         Destination::Conversation {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
         },
         limit,

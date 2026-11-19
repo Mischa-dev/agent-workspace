@@ -336,6 +336,10 @@ pub async fn admit(
     .await?;
     let admin = MembershipRole::parse(admission.role) == Some(MembershipRole::Admin);
     let explicit = admin || admission.role_id.is_some();
+    if !matches!(existing, Some((_, true))) {
+        crate::metering::admit_member(connection, admission.workspace_id, admission.account_id)
+            .await?;
+    }
     let admitted = match existing {
         Some((_, true)) => return Ok(Admitted::AlreadyMember),
         Some((role, false)) => {

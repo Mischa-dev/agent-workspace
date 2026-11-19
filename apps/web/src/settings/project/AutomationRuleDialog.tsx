@@ -27,6 +27,7 @@ import { launchKeys } from '../../launch/hooks'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
 import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
+import { opQuery } from '../../api/ops'
 import { listProjectTaskViews, viewKeys } from '../../views/api'
 import { workItemPriorities } from '../../work-items/constants'
 import { useWorkItemWorkflow } from '../../work-items/hooks'
@@ -58,6 +59,7 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'whiteboard_changed', label: 'A whiteboard changes' },
   { kind: 'comment_posted', label: 'Someone comments' },
   { kind: 'proposal_made', label: 'Someone proposes a change' },
+  { kind: 'incoming_hook', label: 'A delivery comes in on an incoming hook' },
   { kind: 'schedule', label: 'On a schedule' },
   {
     kind: 'capacity_window',
@@ -81,7 +83,8 @@ const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'sheet_changed' ||
   trigger.kind === 'whiteboard_changed' ||
   trigger.kind === 'comment_posted' ||
-  trigger.kind === 'proposal_made'
+  trigger.kind === 'proposal_made' ||
+  trigger.kind === 'incoming_hook'
 const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
@@ -98,6 +101,8 @@ function defaultTrigger(kind: TriggerKind): Trigger {
     case 'comment_posted':
     case 'proposal_made':
       return { kind, thingKind: null, thingId: null }
+    case 'incoming_hook':
+      return { kind, hookId: '' }
     case 'run_finished':
       return { kind, outcomes: ['failed'] }
     case 'message_posted':
@@ -119,7 +124,8 @@ function defaultTrigger(kind: TriggerKind): Trigger {
   }
 }
 
-function defaultAction(kind: RuleActionKind, records = false): RuleAction {
+function defaultAction(kind: RuleActionKind, records = false, hook = false): RuleAction {
+  if (hook && kind === 'notify') return { kind, recipients: 'owner', message: '{{rule.name}}: {{hook.name}} {{delivery.id}}' }
   if (records && kind === 'notify') return { kind, recipients: 'owner', message: '{{rule.name}}: {{record.title}} in {{collection.name}}' }
   switch (kind) {
     case 'launch':
@@ -194,6 +200,10 @@ export function RuleDialog({
     queryFn: () => listWhiteboards({ projectId }),
     enabled: trigger.kind === 'whiteboard_changed',
   })
+  const hooks = useQuery({
+    ...opQuery('incoming_hook_list', { spaceId: projectId }),
+    enabled: trigger.kind === 'incoming_hook',
+  })
   const documents: DocumentChoice[] =
     trigger.kind === 'page_changed'
       ? (pages.data?.pages ?? []).map((page) => ({ id: page.id, name: page.title }))
@@ -225,7 +235,7 @@ export function RuleDialog({
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!name.trim() || !actions.length) return
+    if (!name.trim() || !actions.length || (trigger.kind === 'incoming_hook' && !trigger.hookId)) return
     save.mutate()
   }
   const setAction = (index: number, action: RuleAction) =>
@@ -236,7 +246,7 @@ export function RuleDialog({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button busy={save.isPending} disabled={!name.trim() || !actions.length} type="submit" variant="primary">
+          <Button busy={save.isPending} disabled={!name.trim() || !actions.length || (trigger.kind === 'incoming_hook' && !trigger.hookId)} type="submit" variant="primary">
             {rule ? 'Save changes' : 'Create rule'}
           </Button>
         </>
@@ -263,7 +273,7 @@ export function RuleDialog({
                 setViewId('')
                 setActions((current) => {
                   const kept = current.filter((action) => RECORD_ACTIONS.includes(action.kind) && !(action.kind === 'notify' && action.recipients === 'assignee'))
-                  return kept.length ? kept : [defaultAction('notify', true)]
+                  return kept.length ? kept : [defaultAction('notify', true, next.kind === 'incoming_hook')]
                 })
               }
             }}
@@ -279,6 +289,7 @@ export function RuleDialog({
             channels={channelList}
             collections={collections.data?.collections ?? []}
             documents={documents}
+            hooks={hooks.data?.hooks ?? []}
             onChange={setTrigger}
             trigger={trigger}
           />
@@ -307,7 +318,7 @@ export function RuleDialog({
                 <SelectField
                   aria-label={`Action ${index + 1}`}
                   id={`rule-action-${index}`}
-                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind, records))}
+                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind, records, trigger.kind === 'incoming_hook'))}
                   value={action.kind}
                 >
                   {ACTIONS.filter((entry) => !records || RECORD_ACTIONS.includes(entry.kind)).map((entry) => (
@@ -339,11 +350,15 @@ export function RuleDialog({
             </div>
           ))}
           {actions.length < MAX_ACTIONS && (
-            <Button icon="plus" onClick={() => setActions((current) => [...current, defaultAction('notify', records)])} size="sm" variant="ghost">
+            <Button icon="plus" onClick={() => setActions((current) => [...current, defaultAction('notify', records, trigger.kind === 'incoming_hook')])} size="sm" variant="ghost">
               Add an action
             </Button>
           )}
-          {records ? (
+          {trigger.kind === 'incoming_hook' ? (
+            <p className="aw-quiet">
+              Text can use {'{{hook.name}}'}, {'{{delivery.id}}'}, {'{{delivery.text}}'} (the body, cut short) and {'{{rule.name}}'}.
+            </p>
+          ) : records ? (
             <p className="aw-quiet">
               Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
             </p>
@@ -367,12 +382,14 @@ function TriggerFields({
   channels,
   collections,
   documents,
+  hooks,
   onChange,
   trigger,
 }: {
   channels: ChannelChoice[]
   collections: { id: string; name: string }[]
   documents: DocumentChoice[]
+  hooks: { id: string; name: string }[]
   onChange: (trigger: Trigger) => void
   trigger: Trigger
 }) {
@@ -439,6 +456,24 @@ function TriggerFields({
         </SelectField>
       )
     }
+    case 'incoming_hook':
+      return (
+        <SelectField
+          hint={hooks.length ? undefined : 'Make one under Incoming hooks on this page first.'}
+          id="rule-trigger-hook"
+          label="Which hook"
+          onChange={(event) => onChange({ ...trigger, hookId: event.target.value })}
+          required
+          value={trigger.hookId}
+        >
+          <option value="">Choose a hook</option>
+          {hooks.map((hook) => (
+            <option key={hook.id} value={hook.id}>
+              {hook.name}
+            </option>
+          ))}
+        </SelectField>
+      )
     case 'record_created':
     case 'record_changed':
       return (

@@ -26,13 +26,11 @@ use crate::{
     conversations::{authorize_conversation_row_for, fetch_conversation_access, parse_actor_kind},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     page_docs,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, ActorKind, RoleGrant},
 };
 
 pub mod make;
+pub mod memory_pages;
 pub mod ops;
 pub mod page_files;
 pub mod page_move;
@@ -56,6 +54,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/pages/{id}",
             get(get_page_http).patch(update_page_http),
         )
+        .route("/api/v1/shared/{token}", get(open_shared_http))
         .route(
             "/api/v1/pages/{id}/revisions/{version}",
             get(get_revision_http),
@@ -328,12 +327,12 @@ struct ProjectAccessRow {
     kind: String,
 }
 
-/// Check that an actor may take an action in a Project. Returns whether the
-/// Project is the hidden Messages space, where pages aren't offered.
+/// Check that an account may take an action in a space, by the access rule
+/// (role, enabled membership, an app's agent limit). Returns whether the
+/// space is the hidden Messages space, where pages aren't offered.
 pub async fn project_access(
     executor: impl sqlx::PgExecutor<'_>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<bool, AppError> {
@@ -361,24 +360,13 @@ pub async fn project_access(
     if row.archived {
         return Err(AppError::NotFound("project"));
     }
-    let subject = Subject::new(
+    let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
+    if !crate::access::membership_allows(
         actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(&row.role, row.role_permissions.as_deref())?,
-            row.enabled,
-        )),
-        None,
-    );
-    if !matches!(
-        authorize(
-            &subject,
-            action,
-            Resource::Project(ProjectScope::project(project_id))
-        ),
-        Decision::Allow
+        project_id,
+        grant,
+        row.enabled,
+        action.permission(),
     ) {
         return Err(AppError::NotFound("project"));
     }
@@ -406,6 +394,9 @@ pub async fn list_pages(
         LEFT JOIN project_memberships editor
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
         WHERE page.project_id = $1 AND ($2 OR page.archived_at IS NULL)
+          -- A conversation's memory page is opened from its conversation
+          -- (A2.16), never listed with the space's pages.
+          AND page.memory_for_kind IS DISTINCT FROM 'conversation'
           AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         ORDER BY page.is_guide DESC, page.updated_at DESC, page.id
         LIMIT 500
@@ -430,6 +421,7 @@ const PAGE_SELECT: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = $1
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
       -- A page that is a part of a module that's off or archived is hidden
       -- with it (M1.6), as collections are.
       AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
@@ -445,6 +437,7 @@ pub async fn get_page(
     let Some(mut page) = sqlx::query_as::<_, PageView>(PAGE_SELECT)
         .bind(page_id)
         .bind(STALE_AFTER_DAYS)
+        .bind(viewer)
         .fetch_optional(crate::db::scoped(pool))
         .await?
     else {
@@ -673,6 +666,8 @@ pub async fn get_revision(
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         {joins}
         WHERE revision.page_id = $1 AND revision.version = $2
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
+               OR page_visible_to(page.id, $3))
           AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
         "#,
         joins = revision_session_joins("$3"),
@@ -919,10 +914,12 @@ pub async fn update_page(
                    archived_at IS NOT NULL, is_template, parent_page_id
             FROM project_pages
             WHERE id = $1 AND module_part_on('page', id) AND module_part_on('skill', id)
+              AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))
             FOR UPDATE
             "#,
     )
     .bind(page_id)
+    .bind(writer.actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("page"))?;
@@ -1341,7 +1338,7 @@ pub async fn record_decision(
         let conversation_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+            WHERE id = $1 AND (project_id = $2 OR project_id IS NULL) AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,
@@ -1358,7 +1355,8 @@ pub async fn record_decision(
         source_conversation_id = Some(conversation_id);
     } else if let Some(conversation_id) = source_conversation_id {
         let visible = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND project_id = $2 AND conversation_visible_to(id, $3))",
+            "SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 \
+             AND (project_id = $2 OR project_id IS NULL) AND conversation_visible_to(id, $3))",
         )
         .bind(conversation_id)
         .bind(project_id)
@@ -1470,7 +1468,6 @@ pub async fn set_pin(
     let conversation = crate::conversations::lock_conversation_for(
         transaction,
         writer.actor_id,
-        writer.actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -1485,7 +1482,7 @@ pub async fn set_pin(
         .bind(target_id)
         .execute(&mut **transaction)
         .await?;
-        return Ok(conversation.project_id);
+        return Ok(conversation.place());
     }
     let exists = match kind {
         "page" => {
@@ -1499,12 +1496,16 @@ pub async fn set_pin(
         }
         "decision" => {
             sqlx::query_scalar::<_, bool>(
-                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1 AND project_id = $2
+                // A DM or group is in no space: it pins the decisions made
+                // from it, which are kept in a workspace's own space.
+                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1
+                   AND (project_id = $2 OR ($2::uuid IS NULL AND source_conversation_id = $4))
                    AND (source_conversation_id IS NULL OR conversation_visible_to(source_conversation_id, $3)))"#,
             )
             .bind(target_id)
             .bind(conversation.project_id)
             .bind(writer.actor_id)
+            .bind(conversation_id)
             .fetch_one(&mut **transaction)
             .await?
         }
@@ -1514,7 +1515,7 @@ pub async fn set_pin(
         "message" => sqlx::query_scalar::<_, i32>(
             r#"
             SELECT 1 FROM messages
-            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+            WHERE id = $1 AND (project_id = $2 OR project_id IS NULL) AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,
@@ -1543,7 +1544,7 @@ pub async fn set_pin(
     .bind(writer.actor_id)
     .execute(&mut **transaction)
     .await?;
-    Ok(conversation.project_id)
+    Ok(conversation.place())
 }
 
 // ---------------------------------------------------------------------------
@@ -1632,11 +1633,9 @@ async fn list_pages_http(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<PagesResponse>, AppError> {
-    let kind = parse_actor_kind(&principal.actor_kind)?;
     project_access(
         &state.pool,
         principal.actor_id,
-        kind,
         project_id,
         Action::ProjectView,
     )
@@ -1644,7 +1643,6 @@ async fn list_pages_http(
     let can_edit = project_access(
         &state.pool,
         principal.actor_id,
-        kind,
         project_id,
         Action::PageEdit,
     )
@@ -1654,7 +1652,7 @@ async fn list_pages_http(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::access::write_mode(
             &mut connection,
-            &crate::access::Caller::person(principal.actor_id, kind),
+            &principal.caller()?,
             "page",
             project_id,
             false,
@@ -1688,7 +1686,6 @@ async fn create_page_http(
     let direct = project_access(
         &mut *transaction,
         writer.actor_id,
-        writer.actor_kind,
         project_id,
         Action::PageEdit,
     )
@@ -1746,12 +1743,24 @@ pub(crate) async fn free_page_title(
         .unwrap_or(base))
 }
 
-pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
-        .bind(page_id)
-        .fetch_optional(crate::db::scoped(pool))
-        .await?
-        .ok_or(AppError::NotFound("page"))
+/// The page's project, for a viewer who may see the page at all: a
+/// conversation's memory page is found only by those who can read the
+/// conversation. Every page route starts here, so its live document,
+/// discussion, versions and exports follow the same rule.
+pub(crate) async fn page_project(
+    pool: &PgPool,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT project_id FROM project_pages WHERE id = $1 \
+         AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2))",
+    )
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .ok_or(AppError::NotFound("page"))
 }
 
 async fn get_page_http(
@@ -1759,20 +1768,54 @@ async fn get_page_http(
     principal: AuthenticatedActor,
     ApiPath(page_id): ApiPath<Uuid>,
 ) -> Result<Json<PageView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
-    project_access(
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
+    if project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )
     .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    .is_err()
+        && !shared_page(&state.pool, principal.actor_id, page_id).await?
+    {
+        return Err(AppError::NotFound("page"));
+    }
     get_page(&state.pool, page_id, principal.actor_id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
+}
+
+/// Whether the page was shared with `account` on its own (K1.32).
+pub(crate) async fn shared_page(
+    pool: &PgPool,
+    account: Uuid,
+    page_id: Uuid,
+) -> Result<bool, AppError> {
+    crate::db::scoped_one(pool, async |connection| {
+        crate::access::sharing::shared_with(connection, account, "page", page_id).await
+    })
+    .await
+}
+
+/// A page opened by a link someone made for it (K1.32): any signed-in
+/// account with the link reads that page and nothing else.
+async fn open_shared_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(token): ApiPath<String>,
+) -> Result<Json<PageView>, AppError> {
+    let Some((kind, page_id)) = crate::access::sharing::by_link(&state.pool, &token).await? else {
+        return Err(AppError::NotFound("link"));
+    };
+    if kind != crate::access::sharing::ThingKind::Page.key() {
+        return Err(AppError::NotFound("link"));
+    }
+    get_page(&state.pool, page_id, principal.actor_id)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound("link"))
 }
 
 /// A page as a save left it; with `suggestionId` when the save was kept
@@ -1795,7 +1838,10 @@ async fn update_page_http(
 ) -> Result<Json<PageSaved>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
+    if let Some(version) = input.restore_version {
+        crate::history::cold::warm_page(&state, page_id, version).await?;
+    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The role decides (C1.8): edit saves; suggest-only keeps new text as
     // a suggestion for someone who edits; neither is refused.
@@ -1937,16 +1983,16 @@ async fn get_revision_http(
     principal: AuthenticatedActor,
     ApiPath((page_id, version)): ApiPath<(Uuid, i64)>,
 ) -> Result<Json<RevisionView>, AppError> {
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )
     .await
     .map_err(|_| AppError::NotFound("page"))?;
+    crate::history::cold::warm_page(&state, page_id, version).await?;
     get_revision(&state.pool, page_id, version, principal.actor_id)
         .await?
         .map(Json)
@@ -1984,18 +2030,14 @@ async fn list_decisions_http(
         Ok(value) => value,
         Err(response) => return response,
     };
-    let can_record = match parse_actor_kind(&principal.actor_kind) {
-        Ok(kind) => project_access(
-            &state.pool,
-            principal.actor_id,
-            kind,
-            project_id,
-            Action::PageEdit,
-        )
-        .await
-        .is_ok(),
-        Err(_) => false,
-    };
+    let can_record = project_access(
+        &state.pool,
+        principal.actor_id,
+        project_id,
+        Action::PageEdit,
+    )
+    .await
+    .is_ok();
     Json(serde_json::json!({
         "decisions": listed["decisions"],
         "canRecord": can_record,
@@ -2046,13 +2088,7 @@ async fn list_pins_http(
     let row = fetch_conversation_access(&state.pool, principal.actor_id, conversation_id)
         .await?
         .ok_or(AppError::NotFound("conversation"))?;
-    authorize_conversation_row_for(
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        &row,
-        Action::ProjectView,
-        false,
-    )?;
+    authorize_conversation_row_for(principal.actor_id, &row, Action::ProjectView, false)?;
     Ok(Json(PinsResponse {
         pins: list_pins(&state.pool, conversation_id, principal.actor_id).await?,
     }))
@@ -2157,7 +2193,6 @@ async fn get_claim_http(
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::WorkItemView,
     )
@@ -2179,6 +2214,36 @@ async fn get_claim_http(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(ClaimResponse { claim }))
+}
+
+/// Where a DM's or group's decision is kept: its workspace's own space, or
+/// for a personal one (in the direct scope) the recorder's default
+/// workspace's. None when there is no such space.
+pub(crate) async fn direct_home_space(
+    transaction: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    conversation: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(workspace) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT workspace_id FROM conversations \
+         -- visibility: its workspace only; the decision checks the conversation is readable\n \
+         WHERE id = $1",
+    )
+    .bind(conversation)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let workspace = if workspace == crate::spaces::DIRECT {
+        match crate::workspace::default_workspace(&mut **transaction, account).await? {
+            Some((workspace, _)) => workspace,
+            None => return Ok(None),
+        }
+    } else {
+        workspace
+    };
+    crate::spaces::workspace::find(transaction, workspace).await
 }
 
 #[cfg(test)]

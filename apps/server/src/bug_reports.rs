@@ -235,16 +235,14 @@ fn form_url(state: &AppState, token: &str) -> String {
 /// Whether the caller can add records in the project (and so make a form
 /// there). Not found unless they can see the project.
 async fn can_add_records(pool: &PgPool, caller: &Caller, project_id: Uuid) -> bool {
-    caller.actor_kind == ActorKind::Human
-        && crate::memory::project_access(
-            pool,
-            caller.actor_id,
-            caller.actor_kind,
-            project_id,
-            PolicyAction::CollectionRecordEdit,
-        )
-        .await
-        .is_ok()
+    crate::memory::project_access(
+        pool,
+        caller.actor_id,
+        project_id,
+        PolicyAction::CollectionRecordEdit,
+    )
+    .await
+    .is_ok()
 }
 
 /// The form checked against its collection's current fields, which must be
@@ -320,28 +318,22 @@ async fn project_rights(
 ) -> Result<Rights, AppError> {
     // Seeing the project is enough to reach its forms (collections only
     // need that); task links also need task view.
-    let direct = crate::memory::project_access(
-        pool,
-        caller.actor_id,
-        caller.actor_kind,
-        project_id,
-        PolicyAction::ProjectView,
-    )
-    .await?;
+    let direct =
+        crate::memory::project_access(pool, caller.actor_id, project_id, PolicyAction::ProjectView)
+            .await?;
     if direct {
         return Err(AppError::NotFound("project"));
     }
     let allowed = async |action| {
-        crate::memory::project_access(pool, caller.actor_id, caller.actor_kind, project_id, action)
+        crate::memory::project_access(pool, caller.actor_id, project_id, action)
             .await
             .is_ok()
     };
-    let human = caller.actor_kind == ActorKind::Human;
     let tasks = allowed(PolicyAction::WorkItemView).await;
     Ok(Rights {
         tasks,
-        can_create: human && tasks && allowed(PolicyAction::WorkItemCreate).await,
-        admin: human && allowed(PolicyAction::ProjectManage).await,
+        can_create: tasks && allowed(PolicyAction::WorkItemCreate).await,
+        admin: allowed(PolicyAction::ProjectManage).await,
     })
 }
 
@@ -418,13 +410,12 @@ pub(crate) async fn list(
     .bind(project_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let human = caller.actor_kind == ActorKind::Human;
     Ok(LinkList {
         links: rows
             .into_iter()
             .filter(|row| tasks || row.collection_id.is_some())
             .map(|row| {
-                let can_manage = human && (admin || row.owner_actor_id == caller.actor_id);
+                let can_manage = admin || row.owner_actor_id == caller.actor_id;
                 view(row, can_manage)
             })
             .collect(),
@@ -942,14 +933,8 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
     for action in actions {
         allowed = allowed
             && matches!(
-                crate::memory::project_access(
-                    pool,
-                    link.owner_actor_id,
-                    ActorKind::Human,
-                    link.project_id,
-                    *action,
-                )
-                .await,
+                crate::memory::project_access(pool, link.owner_actor_id, link.project_id, *action,)
+                    .await,
                 Ok(false)
             );
     }
@@ -1017,6 +1002,16 @@ async fn receive(
         .rate_limits
         .check_workspace_public_submission(link.organization_id)
         .await?;
+    // And the workspace's monthly limit on them, before any work.
+    {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        crate::metering::admit(
+            &mut transaction,
+            crate::metering::Ask::new(link.organization_id, "form_submissions", 1),
+        )
+        .await?;
+        transaction.commit().await?;
+    }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
@@ -1081,6 +1076,7 @@ async fn receive(
         .bind(link.id)
         .execute(crate::db::scoped(&state.pool))
         .await?;
+        count_submission(state, &link).await?;
     }
     let status = if duplicate {
         StatusCode::OK
@@ -1096,6 +1092,32 @@ async fn receive(
         })),
     )
         .into_response())
+}
+
+/// Counts a submission that made something against the workspace's
+/// monthly limit on them (H1.26).
+async fn count_submission(state: &AppState, link: &ReportLink) -> Result<(), AppError> {
+    let key = format!("submission:{}", Uuid::now_v7());
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::metering::record(
+        &mut transaction,
+        crate::metering::Usage {
+            workspace_id: link.organization_id,
+            meter: "form_submissions",
+            quantity: 1,
+            account_id: None,
+            space_id: None,
+            conversation_id: None,
+            recorded: crate::metering::Recorded {
+                source_kind: "bug_report_link",
+                source_id: Some(link.id),
+                dedupe_key: &key,
+            },
+        },
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// The link acting as its maker, through the same tools the app uses.
@@ -1284,6 +1306,7 @@ async fn receive_answer(
         .bind(link.id)
         .execute(crate::db::scoped(&state.pool))
         .await?;
+        count_submission(state, link).await?;
         if taken_today >= limit {
             pause_for_the_day(state, link, collection_id, limit).await?;
         }

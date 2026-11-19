@@ -531,7 +531,7 @@ pub async fn restore_revision(
         .await?
         .ok_or(AppError::NotFound("whiteboard revision"))?;
     let scene_seq = lock(transaction, whiteboard_id).await?;
-    save_revision(
+    let before = save_revision(
         transaction,
         caller,
         whiteboard_id,
@@ -583,7 +583,13 @@ pub async fn restore_revision(
         .map(elements::parse)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| AppError::Internal("stored revision element"))?;
-    write_elements(transaction, caller, whiteboard_id, scene_seq, parsed).await
+    let outcome = write_elements(transaction, caller, whiteboard_id, scene_seq, parsed).await?;
+    // A restore changes the board like an edit does: rules and webhooks on
+    // `whiteboard.updated` hear it (K3.5).
+    if let Some(before) = before {
+        updated(transaction, caller, whiteboard_id, before).await?;
+    }
+    Ok(outcome)
 }
 
 /// Every element row of a board (deleted ones too), in stacking order.

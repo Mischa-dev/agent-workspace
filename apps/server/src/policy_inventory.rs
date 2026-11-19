@@ -25,6 +25,21 @@ pub enum MutationAction {
     OAuthProtocol,
     McpProtocol,
     GithubWebhook,
+    /// A delivery to an incoming hook (K3.26), signed with the hook's
+    /// secret over its timestamp, delivery id and body. It starts the
+    /// rules on that hook, which act as their makers.
+    IncomingHookSignature,
+    /// A delivery from the server's billing provider (H1.33), checked by
+    /// that provider's own signature; it only re-reads the subscription the
+    /// provider names and applies what the provider says.
+    BillingWebhookSignature,
+    /// Frames published to this server's live side (K5.19), signed with
+    /// the server's own live key; they reach only the audiences the
+    /// database side named, and no session or workspace sends them.
+    LivePublishSignature,
+    /// The tick (K5.18): an outside timer with the operator's token runs
+    /// one round of the server's own due work.
+    OperatorWorkToken,
     /// Browser error reports: counted and logged, never stored.
     ClientTelemetry,
     /// A button on a person's own push notification, carrying a short-lived
@@ -46,6 +61,9 @@ pub enum MutationAction {
     /// A host's own call (A1.11): enrolling with a one-time code a person
     /// made, or describing itself, sending a heartbeat or a notice with the
     /// token it got then. It acts only for the agents people bound to it.
+    /// A run's own credential (A1.25) asks the workspace's model for its
+    /// next turn, only for the built-in assistant's runs, within the
+    /// workspace's budget.
     HostCredential,
     /// The generated operation route (K2): the operation it names checks
     /// its own permission, module and target through `ops::dispatch`, the
@@ -276,6 +294,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     boundary_route!(
+        "auth/oidc",
+        Post,
+        "/api/v1/auth/oidc/link",
+        SessionAuthentication
+    ),
+    boundary_route!(
         "auth/workos",
         Patch,
         "/api/v1/account/profile",
@@ -421,6 +445,16 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/default-workspace",
         SessionAuthentication
     ),
+    // First run (H1.14): the setup code makes the first account; the rest
+    // is that account's own, signed in.
+    boundary_route!("setup", Post, "/api/v1/setup", SessionAuthentication),
+    boundary_route!(
+        "setup",
+        Post,
+        "/api/v1/setup/workspace",
+        SessionAuthentication
+    ),
+    boundary_route!("setup", Post, "/api/v1/setup/import", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/login", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/logout", SessionAuthentication),
     boundary_route!(
@@ -1204,6 +1238,30 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/integrations/github/webhook",
         GithubWebhook
     ),
+    boundary_route!(
+        "billing",
+        Post,
+        "/api/v1/billing/webhook",
+        BillingWebhookSignature
+    ),
+    boundary_route!(
+        "incoming_hooks",
+        Post,
+        "/api/v1/incoming-hooks/{hook_id}",
+        IncomingHookSignature
+    ),
+    boundary_route!(
+        "realtime/contract/live",
+        Post,
+        "/live/v1/publish",
+        LivePublishSignature
+    ),
+    boundary_route!(
+        "server/tick",
+        Post,
+        "/internal/work/tick",
+        OperatorWorkToken
+    ),
     policy_route!(
         "invitations",
         Post,
@@ -1331,6 +1389,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "hosts/routes",
         Post,
         "/api/v1/host/commands/{command_id}/ack",
+        HostCredential
+    ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/runs", HostCredential),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/runs/{run_id}/model",
         HostCredential
     ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
@@ -1486,7 +1551,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-        WorkItemEdit
+        WorkItemComment
     ),
     policy_route!(
         "work_items/comments",

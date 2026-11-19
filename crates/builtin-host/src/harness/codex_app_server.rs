@@ -1088,13 +1088,15 @@ fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
             .and_then(Value::as_str)
             .map(|delta| HarnessEvent::MessageDelta(delta.to_owned()))
             .unwrap_or(HarnessEvent::Ignored),
+        // One key for an item's start and its completion: the run log
+        // tells the two apart by step and pairs them by this key.
         "item/started" => HarnessEvent::ItemStarted(HarnessItem {
-            key: provider_event_key(method, &raw),
+            key: provider_event_key("item", &raw),
             kind: item_kind(&raw),
             detail: item_detail(&raw),
         }),
         "item/completed" => HarnessEvent::ItemCompleted(HarnessItem {
-            key: provider_event_key(method, &raw),
+            key: provider_event_key("item", &raw),
             kind: item_kind(&raw),
             detail: item_detail(&raw),
         }),

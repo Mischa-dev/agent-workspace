@@ -435,6 +435,7 @@ async fn may_share(call: &OpCall<'_>) -> Result<(), OpError> {
     let located = Located {
         workspace_id: call.ctx.workspace_id,
         space_id: call.ctx.space_id,
+        direct: None,
     };
     let mut connection = crate::db::scoped_tx(&call.state.pool)
         .await

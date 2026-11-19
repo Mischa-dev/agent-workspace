@@ -84,6 +84,7 @@ const LinkedWhiteboards = lazy(() =>
   import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
 )
 const ReferencedIn = lazy(() => import('../modules/references/ReferencedIn'))
+const ThingActivity = lazy(() => import('../modules/activity/ThingActivity'))
 // The live editor (AWD-53) loads in its own chunks when a page opens for writing.
 const LivePage = lazy(() => import('./live/LivePage'))
 // Comments and suggested changes (AWD-53) load in their own chunk.
@@ -639,6 +640,11 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
       {experience.shows('page.references') ? (
         <Suspense fallback={null}>
           <ReferencedIn id={current.id} kind="page" />
+        </Suspense>
+      ) : null}
+      {experience.shows('thing.activity') ? (
+        <Suspense fallback={null}>
+          <ThingActivity id={current.id} />
         </Suspense>
       ) : null}
       <Section description="Every save is kept. Open an old version to read it or put it back." title="History">

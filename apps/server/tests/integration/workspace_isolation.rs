@@ -105,6 +105,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/events/catalogue",
     "/api/v1/files/{id}",
     "/api/v1/files/{id}/content",
+    "/api/v1/files/links/{token}",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
     "/api/v1/inbox",
@@ -132,6 +133,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/roles",
     "/api/v1/organizations/{organization_id}/secrets",
+    "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
@@ -242,6 +244,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "/api/v1/setup",
+        "first run (H1.14): whether nobody has an account yet, and the built-in shapes; no \
+         workspace's data; covered in first_run",
+    ),
+    (
+        "/api/v1/setup/import/{transfer}",
+        "first run (H1.14): the requester's own import, by its id and their account alone; \
+         covered in first_run",
+    ),
+    (
         "/api/v1/host/commands",
         "a host's own command queue (A1.12), signed in with the host's key, never a \
          person's session; it lists only that host's commands; covered in a1_host_protocol",
@@ -255,6 +267,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
         "/api/v1/realtime",
         "WebSocket upgrade; covered by the realtime part of the fixture test, which \
          subscribes as A and checks no B event arrives",
+    ),
+    (
+        "/api/v1/shared/{token}",
+        "a page opened by a link's secret token, made for that one page; covered in \
+         privacy_inside_workspace (a_shared_page_opens_only_itself)",
     ),
     (
         "/api/v1/forms/{token}",
@@ -299,7 +316,11 @@ const READ_TOUCHES: &[&str] = &[
 
 /// Tools marked read-only that change rows anyway, each with why. The list
 /// only shrinks: fix the tool (or its hint) and take it off.
-const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[];
+const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[(
+    "space_personal_open",
+    "opening your own space makes it the first time (K4 3.9: personal spaces are made on \
+     first use, never eagerly); only the caller's own rows, in their own workspace",
+)];
 
 // ---------------------------------------------------------------------------
 // Coverage guard (no database needed)
@@ -950,6 +971,26 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 "/api/v1/organizations/{}/invitations",
                 b.organization
             )],
+            vec![],
+        ),
+        // H1.9: an export's archive is its requester's alone; B's never
+        // downloads in A, nor A's under B's address.
+        case(
+            "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
+            vec![format!(
+                "/api/v1/organizations/{}/transfers/{}/archive",
+                a.organization, a.export
+            )],
+            vec![
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    b.organization, b.export
+                ),
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    a.organization, b.export
+                ),
+            ],
             vec![],
         ),
         case(
@@ -1851,6 +1892,14 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         files(b, "/content"),
         vec![],
     ));
+    // A signed link is its own credential (K5.12): A's owner's link to A's
+    // file opens; one made for A's owner naming B's file never does.
+    cases.push(case(
+        "/api/v1/files/links/{token}",
+        vec![a.file_link.clone()],
+        vec![a.foreign_file_link.clone()],
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/files/{id}/thumbnail",
         // Only images have one.
@@ -2035,6 +2084,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "ai_suggestions_list",
     "automation_history",
     "automation_list",
+    "incoming_hook_list",
     "briefing_get",
     "bug_report_link_list",
     "change_list",
@@ -2042,9 +2092,14 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "proposal_list",
     "connection_delivery_list",
     "schedule_list",
+    "follow_list",
+    "guard_list",
+    "memory_page_open",
+    "conversation_agent_settings_list",
     "conversation_list",
     "conversation_open",
     "conversation_read",
+    "credential_list",
     "decision_list",
     "dependency_graph_get",
     "environment_list",
@@ -2056,6 +2111,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_link_get",
     "history_list",
     "history_show",
+    "activity_list",
     "invite_link_list",
     "job_get",
     "collection_list",
@@ -2141,6 +2197,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_usage_list",
     "workspace_search",
     "settings_get",
+    "space_list",
+    "space_open",
+    "space_personal_open",
     "status_list",
     "skill_get",
     "skill_list",
@@ -2157,7 +2216,11 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "whiteboard_read",
     "whiteboard_render",
     "workflow_get",
+    "workspace_store_get",
     "workspace_template_list",
+    "workspace_transfer_get",
+    "workspace_transfer_list",
+    "workspace_usage_get",
 ];
 
 pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
@@ -2169,7 +2232,10 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ) -> McpCase {
         McpCase {
             tool,
-            agent_only: matches!(tool, "inbox_list" | "external_event_poll"),
+            agent_only: matches!(
+                tool,
+                "inbox_list" | "external_event_poll" | "credential_list"
+            ),
             own,
             foreign,
             filtered,
@@ -2212,6 +2278,29 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("project_get"),
+        // K4.7: another workspace's spaces are out of reach.
+        case(
+            "space_list",
+            vec![
+                json!({}),
+                json!({"includeArchived": true, "kinds": ["project", "team"]}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "space_open",
+            vec![json!({"spaceId": "WORK"}), json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
+            vec![],
+        ),
+        // K4.9: your own space is in your workspace only.
+        case(
+            "space_personal_open",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("invitation_list"),
@@ -2335,6 +2424,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        by_project("incoming_hook_list"),
         // C1.24: the template galleries of a space or a workspace.
         by_project("page_template_list"),
         case(
@@ -2343,6 +2433,36 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"spaceId": b.project}),
                 json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        // K5.20: B's own bucket never shows in A.
+        case(
+            "workspace_store_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.25: B's usage never shows in A.
+        case(
+            "workspace_usage_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.9: B's exports never show in A.
+        case(
+            "workspace_transfer_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "workspace_transfer_get",
+            vec![json!({"transferId": a.export})],
+            vec![
+                json!({"workspace": b.organization, "transferId": b.export}),
+                json!({"transferId": b.export}),
             ],
             vec![],
         ),
@@ -2643,6 +2763,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"messageId": b.message}),
                 json!({"messageId": b.dm_message}),
             ],
+            vec![],
+        ),
+        // K1.23: an account's secrets. B's agent and B's owner aren't A's
+        // agent's to list.
+        case(
+            "credential_list",
+            vec![json!({})],
+            vec![json!({"account": b.agent}), json!({"account": b.rook})],
             vec![],
         ),
         case(
@@ -3065,6 +3193,35 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![],
         ),
+        // A2.9: what the caller follows, in A; B's space isn't found.
+        case(
+            "follow_list",
+            vec![json!({}), json!({"space": a.project})],
+            vec![json!({"space": b.project})],
+            vec![],
+        ),
+        // A2.27: the guards of the workspace called.
+        case("guard_list", vec![json!({})], vec![], vec![]),
+        // A2.16: memory of A's channel or space; B's aren't found.
+        case(
+            "memory_page_open",
+            vec![
+                json!({"conversation": a.channel}),
+                json!({"space": a.project}),
+            ],
+            vec![
+                json!({"conversation": b.channel}),
+                json!({"space": b.project}),
+            ],
+            vec![],
+        ),
+        // A2.9: ambient mode in A's channel; B's channel isn't found.
+        case(
+            "conversation_agent_settings_list",
+            vec![json!({"conversation": a.channel})],
+            vec![json!({"conversation": b.channel})],
+            vec![],
+        ),
         case(
             "file_list",
             vec![
@@ -3107,6 +3264,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        // K3.20: any thing's activity from the log.
+        case(
+            "activity_list",
+            vec![json!({"thing": a.page}), json!({"thing": a.task})],
+            vec![json!({"thing": b.page}), json!({"thing": b.task})],
             vec![],
         ),
         case(
