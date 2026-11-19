@@ -28,13 +28,13 @@ import { SLASH_COMMANDS } from '../later/slashCommands'
 import { usePlaceSearch, useSavedSearches } from '../memory/savedSearches'
 import { searchWorkItemReferences } from '../work-items/api'
 import { createTaskHref } from '../work-items/links'
-import { BOARD_SHORTCUTS, LIST_SHORTCUTS } from '../work-items/shortcutKeys'
 import { closeCommandMenu, openMarkAllRead, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
 import { markAllRead } from './markAllRead'
 import { pauseChoices, pausedUntilLabel, useNotificationPause } from './notificationPause'
 import { placeIcon, readRecentPlaces } from './recentPlaces'
 import { shortcutOn } from './shortcutModules'
 import { SHORTCUTS } from './shortcutSheet'
+import { VIEW_NAMES, viewKeys, type KeyedView } from '../views/viewKeys'
 import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
 import { projectPath, useRouteProject } from './useRouteProject'
@@ -524,15 +524,16 @@ export function CommandPalette() {
         onClose={closeCommandMenu}
         open={state.open === 'shortcuts'}
         project={current ? projectExperience : null}
-        taskView={taskViewAt(location.pathname, location.search)}
+        taskView={viewAt(location.pathname, location.search)}
       />
       <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} workspaceIds={[...(homeId ? [homeId] : []), ...projects.map((project) => project.organizationId)]} />
     </>
   )
 }
 
-/** The task list or board on screen, whose own keys the sheet lists too. */
-function taskViewAt(pathname: string, search: string): 'list' | 'board' | null {
+/** The view on screen (a task list or board, or a collection), whose own keys the sheet lists too. */
+function viewAt(pathname: string, search: string): KeyedView | null {
+  if (/^\/projects\/[^/]+\/collections\/[^/]+\/?$/.test(pathname)) return 'table'
   if (!/^\/projects\/[^/]+\/work-items\/?$/.test(pathname)) return null
   return new URLSearchParams(search).get('view') === 'board' ? 'board' : 'list'
 }
@@ -551,11 +552,11 @@ function ShortcutSheet({
   onClose: () => void
   open: boolean
   project: Experience | null
-  taskView: 'list' | 'board' | null
+  taskView: KeyedView | null
 }) {
   const groups = ['General', 'Go to', 'Conversations'] as const
   // The sheet already says how to open itself.
-  const taskKeys = (taskView === 'board' ? BOARD_SHORTCUTS : LIST_SHORTCUTS).filter((shortcut) => shortcut.keys.join() !== '?')
+  const taskKeys = taskView ? viewKeys(taskView).filter((shortcut) => shortcut.keys.join() !== '?') : []
   return (
     <Dialog
       description={
@@ -574,14 +575,14 @@ function ShortcutSheet({
       <div className="aw-shortcuts">
         {taskView ? (
           <section>
-            <h3>{taskView === 'board' ? 'Task board' : 'Task list'}</h3>
+            <h3>{VIEW_NAMES[taskView]}</h3>
             <dl>
               {taskKeys.map((shortcut) => (
                 <div className="aw-shortcuts__row" key={shortcut.label} style={{ display: 'contents' }}>
                   <dt>{shortcut.label}</dt>
                   <dd>
                     {shortcut.keys.map((key, index) => (
-                      <kbd key={index}>{key}</kbd>
+                      <kbd key={index}>{shownKey(key)}</kbd>
                     ))}
                   </dd>
                 </div>

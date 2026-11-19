@@ -10,13 +10,15 @@ import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useShellPage } from '../shell/shellStore'
 import { listProjectTaskViews, viewKeys } from '../views/api'
+import { focusViewField, pressViewButton, ViewCommands } from '../views/useViewCommands'
+import type { PageCommand } from '../shell/commandStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ErrorState, ListSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { BoardSkeleton } from './BoardSkeleton'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
-import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
+import { activeFilterKeys, clearFilters, parametersFromRemembered, rememberedState } from './listModel'
 import { notify } from './notice'
 import { TaskPanel } from './TaskPanel'
 import { useListState } from './useListState'
@@ -165,9 +167,29 @@ export function WorkItemsPage() {
       {newButton}
     </>
   )
+  // The view's actions in the command menu (T1.27), beside Create task.
+  const tasksWord = experience.word('task', 'many')
+  const viewCommands: PageCommand[] = (
+    [
+    { id: 'search', label: `Search ${tasksWord}`, icon: 'search', onSelect: () => focusViewField('.aw-filterbar input[type="search"]') },
+    { id: 'filter', label: `Filter ${tasksWord}…`, icon: 'list', onSelect: () => pressViewButton('Filter', '.aw-filterbar') },
+    { id: 'options', label: 'View options…', icon: 'settings', keywords: ['sort', 'group', 'columns'], onSelect: () => pressViewButton('View options', '.aw-filterbar') },
+    ...(hasFilters ? [{ id: 'clear', label: 'Clear filters', icon: 'x' as const, onSelect: () => update((current) => clearFilters(current)) }] : []),
+    ...(board
+      ? [
+          view === 'board'
+            ? { id: 'as-list', label: 'Show as a list', icon: 'list' as const, onSelect: () => update((current) => ({ ...current, view: 'list' as const })) }
+            : { id: 'as-board', label: 'Show as a board', icon: 'board' as const, onSelect: () => update((current) => ({ ...current, view: 'board' as const })) },
+        ]
+      : []),
+    { id: 'done', label: shown.showDone ? `Hide done ${tasksWord}` : `Show done ${tasksWord}`, icon: 'circle-check', onSelect: toggleDone },
+    ...(readOnly ? [] : [{ id: 'labels', label: 'Manage labels…', icon: 'bookmark' as const, onSelect: () => setManagingLabels(true) }]),
+    ] satisfies PageCommand[]
+  ).map((command) => ({ ...command, id: `tasks-view:${command.id}` }))
   return (
     <>
       <div className={view === 'board' ? 'aw-page aw-page--full aw-workpage aw-workpage--board' : 'aw-page aw-page--full aw-workpage'}>
+        <ViewCommands commands={viewCommands} source="tasks-view" />
         <NavigationSyncAlert {...navigationSync} />
         <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')} />
         <WorkTabs current="items" projectId={projectId} />

@@ -13,7 +13,8 @@ import {
   type RecordChange,
   type RecordPage,
 } from './api'
-import { withValues } from './collectionModel'
+import { recordName, withValues } from './collectionModel'
+import { forget, inOrder, remember, type Undoable } from '../views/saveQueue'
 
 function mergeReferences(current: readonly FieldReference[], added: readonly FieldReference[]) {
   const fresh = added.filter((reference) => !current.some((entry) => entry.id === reference.id && entry.kind === reference.kind))
@@ -30,6 +31,24 @@ function withChange(record: CollectionRecord, change: RecordChange): CollectionR
   }
 }
 
+/** What `change` replaces on `record`: the change that takes it back. */
+function inverseOf(record: CollectionRecord, change: RecordChange): RecordChange {
+  return {
+    ...(change.title !== undefined ? { title: record.title } : {}),
+    ...(change.values ? { values: Object.fromEntries(Object.keys(change.values).map((id) => [id, record.values[id] ?? null])) } : {}),
+    ...(change.archived !== undefined ? { archived: record.archived } : {}),
+  }
+}
+
+/** The parts of `record` that `change` touches, to see whether they're still as a save left them. */
+function touched(record: CollectionRecord, change: RecordChange) {
+  return JSON.stringify([
+    change.title !== undefined ? record.title : null,
+    Object.keys(change.values ?? {}).map((id) => record.values[id] ?? null),
+    change.archived !== undefined ? record.archived : null,
+  ])
+}
+
 /**
  * Changes to a collection's records from the table and the record panel.
  * Each shows at once, then saves; one record's changes go one at a time, each
@@ -41,7 +60,6 @@ function withChange(record: CollectionRecord, change: RecordChange): CollectionR
  */
 export function useRecordEdits(projectId: string, collectionId: string) {
   const client = useQueryClient()
-  const queues = useRef(new Map<string, Promise<unknown>>())
   const versions = useRef(new Map<string, number>())
   /** Changes not saved yet, by record, oldest first. */
   const unsaved = useRef(new Map<string, RecordChange[]>())
@@ -82,9 +100,30 @@ export function useRecordEdits(projectId: string, collectionId: string) {
     })
   }, [client, collectionId, patch, projectId, withUnsaved])
 
-  /** Saves a change to one record. `reference` names a person, task or page just picked, so the cell shows it before the save lands. */
+  /** The record as this page holds it now: opened, or in a loaded list. */
+  const cached = useCallback(
+    (recordId: string): CollectionRecord | null => {
+      const opened = client.getQueryData<RecordBody>(collectionKeys.record(projectId, collectionId, recordId))?.record
+      if (opened) return opened
+      for (const [, data] of client.getQueriesData<InfiniteData<RecordPage>>({ queryKey: collectionKeys.allRecords(projectId, collectionId) })) {
+        const found = data?.pages.flatMap((page) => page.records).find((entry) => entry.id === recordId)
+        if (found) return found
+      }
+      return null
+    },
+    [client, collectionId, projectId],
+  )
+
+  // Undo saves through `save` itself, which it can only name once made.
+  const saveRef = useRef<((record: CollectionRecord, change: RecordChange, reference?: FieldReference, undoable?: boolean) => Promise<boolean>) | null>(null)
+
+  /**
+   * Saves a change to one record. `reference` names a person, task or page
+   * just picked, so the cell shows it before the save lands. Once saved,
+   * it's the change Undo takes back (T1.27), unless it is itself an undo.
+   */
   const save = useCallback(
-    (record: CollectionRecord, change: RecordChange, reference?: FieldReference) => {
+    (record: CollectionRecord, change: RecordChange, reference?: FieldReference, undoable = true): Promise<boolean> => {
       unsaved.current.set(record.id, [...(unsaved.current.get(record.id) ?? []), change])
       const settled = () => {
         const rest = (unsaved.current.get(record.id) ?? []).filter((entry) => entry !== change)
@@ -102,10 +141,22 @@ export function useRecordEdits(projectId: string, collectionId: string) {
           return updateRecord(projectId, collectionId, record.id, latest, change)
         }
       }
-      const previous = queues.current.get(record.id) ?? Promise.resolve()
-      const next = previous.catch(() => undefined).then(send)
-      queues.current.set(record.id, next)
-      return next
+      const inverse = inverseOf(record, change)
+      const undo: Undoable | null = undoable
+        ? {
+            label: `Changed ${recordName(record)}`,
+            undo: async () => {
+              // Once the change itself has saved.
+              await inOrder(`record:${record.id}`, async () => undefined)
+              const now = cached(record.id)
+              if (!now || touched(now, change) !== saved) throw new Error(`${recordName(record)} changed since, so it wasn’t undone.`)
+              if (!(await saveRef.current?.(now, inverse, undefined, false))) throw new Error(`${recordName(record)} didn’t change back.`)
+            },
+          }
+        : null
+      let saved = ''
+      if (undo) remember(undo)
+      return inOrder(`record:${record.id}`, send)
         .then((body) => {
           settled()
           versions.current.set(record.id, Math.max(body.record.version, versions.current.get(record.id) ?? 0))
@@ -126,20 +177,22 @@ export function useRecordEdits(projectId: string, collectionId: string) {
             body.references,
           )
           if (overtaken || change.archived !== undefined) void refresh()
+          saved = touched(body.record, change)
           return true
         })
         .catch((error: unknown) => {
           settled()
+          if (undo) forget(undo)
           toastError(`${record.title || `#${record.number}`} didn’t change`, error)
           void refresh()
           return false
         })
-        .finally(() => {
-          if (queues.current.get(record.id) === next) queues.current.delete(record.id)
-        })
     },
-    [collectionId, patch, projectId, refresh, withUnsaved],
+    [cached, collectionId, patch, projectId, refresh, withUnsaved],
   )
+  useEffect(() => {
+    saveRef.current = save
+  }, [save])
 
   /** Adds a record, then refetches the lists so it shows where the view sorts it. */
   const add = useCallback(

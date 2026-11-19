@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { callOp, type OpInput } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { Button, Dialog, Kbd, TextArea, describeError, showToast } from '../ui'
+import { TRIAGE_KEYS } from '../views/viewKeys'
 import { isTypingTarget } from './shortcutKeys'
 import { TaskSearchPicker } from './TaskSearchPicker'
 import { snoozeChoices } from './triageModel'
@@ -63,10 +64,10 @@ export function TriageBar({
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
-      if (key === '1') void decideRef.current({ action: 'accept' }, 'Accepted')
-      else if (key === '2') setAsking('decline')
-      else if (key === '3') setPicking(duplicateButton.current)
-      else if (key === 'h') setAsking('snooze')
+      if (key === TRIAGE_KEYS.accept) void decideRef.current({ action: 'accept' }, 'Accepted')
+      else if (key === TRIAGE_KEYS.decline) setAsking('decline')
+      else if (key === TRIAGE_KEYS.duplicate) setPicking(duplicateButton.current)
+      else if (key === TRIAGE_KEYS.snooze) setAsking('snooze')
       else return
       event.preventDefault()
     }
@@ -129,7 +130,7 @@ export function TriageBar({
       <Dialog description="It leaves the queue and comes back then." onClose={() => setAsking(null)} open={asking === 'snooze'} title="Snooze until">
         <div className="aw-triagebar__snooze">
           {snoozeChoices(new Date()).map((choice, index) => (
-            <Button autoFocus={index === 0} disabled={busy} key={choice.label} onClick={() => void decide({ action: 'snooze', until: choice.until.toISOString() }, `Snoozed until ${choice.label.toLowerCase()}`)}>
+            <Button data-autofocus={index === 0 ? true : undefined} disabled={busy} key={choice.label} onClick={() => void decide({ action: 'snooze', until: choice.until.toISOString() }, `Snoozed until ${choice.label.toLowerCase()}`)}>
               {choice.label}
             </Button>
           ))}
