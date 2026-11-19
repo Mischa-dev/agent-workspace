@@ -266,6 +266,10 @@ pub(crate) struct ClaimProjection {
     /// reply_* calls report on it; `run_update` and `run_append` say more.
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<ClaimRun>,
+    /// The memory page of the thread, else of its channel, with its first
+    /// lines: read it before answering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory: Option<crate::memory::memory_pages::MemoryPointer>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -555,6 +559,21 @@ pub(crate) async fn reply_claim(
         run_id: run.id.to_string(),
         state: run.state,
     });
+    let mut memory = None;
+    for place in thread_id.into_iter().chain([conversation_id]) {
+        memory = crate::memory::memory_pages::pointer(
+            &mut transaction,
+            crate::memory::memory_pages::MemoryFor::Conversation,
+            place,
+            principal.actor_id,
+        )
+        .await
+        .ok()
+        .flatten();
+        if memory.is_some() {
+            break;
+        }
+    }
     if notify_request(
         &mut transaction,
         principal.project_id,
@@ -584,6 +603,7 @@ pub(crate) async fn reply_claim(
             instructions,
             session,
             run,
+            memory,
         },
     }
 }

@@ -1288,14 +1288,18 @@ async fn work_item_changes(
             WHERE event.id = $1 AND event.space_id = $2
         )
         SELECT change.change_id, change.actor_id, change.change,
-               watcher.actor_id AS recipient_actor_id
+               watcher.account_id AS recipient_actor_id
         FROM changes change
-        JOIN work_item_watchers watcher
-          ON watcher.project_id = change.project_id
-         AND watcher.work_item_id = change.work_item_id
-        WHERE watcher.actor_id <> change.actor_id
-          AND actor_can_access_project(watcher.actor_id, NULL, change.project_id)
-        ORDER BY change.change_id, watcher.actor_id
+        JOIN follows watcher
+          ON watcher.target_kind = 'task'
+         AND watcher.target_id = change.work_item_id
+         AND watcher.space_id = change.project_id
+         -- A comment is the task's discussion: only for those who follow
+         -- everything about it.
+         AND (change.change <> 'commented' OR watcher.level = 'everything')
+        WHERE watcher.account_id <> change.actor_id
+          AND actor_can_access_project(watcher.account_id, NULL, change.project_id)
+        ORDER BY change.change_id, watcher.account_id
         "#,
     )
     .bind(event_id)

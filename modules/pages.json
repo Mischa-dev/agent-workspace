@@ -32,6 +32,8 @@
     "thing_share_add": "change",
     "thing_share_remove": "change",
     "thing_link_create": "create",
+    "memory_page_open": "query",
+    "memory_page_set": "change",
     "page_make": "create"
   },
   "routes": [
@@ -89,7 +91,7 @@
   "web": { "folder": "memory" },
   "slots": {
     "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "channel.tabs"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "talk.channel_memory", "channel.tabs"],
     "sidebar": [],
     "home": [],
     "settings": [],

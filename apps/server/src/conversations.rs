@@ -2316,7 +2316,9 @@ pub(crate) async fn append_message_command_with(
         &mentioned_actor_ids,
     )
     .await?;
-    replies::ask_for_replies(
+    // Boxed: asking for replies can start runs, and every send path (an
+    // automation's too) would otherwise carry all of it on its stack.
+    Box::pin(replies::ask_for_replies(
         &mut transaction,
         replies::NewMessage {
             project_id: conversation.place(),
@@ -2327,7 +2329,7 @@ pub(crate) async fn append_message_command_with(
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &mentioned_actor_ids,
         },
-    )
+    ))
     .await?;
     if let Some(mcp) = actor.mcp_credential {
         sqlx::query(
@@ -2608,11 +2610,12 @@ pub(crate) async fn lock_message_conversation(
     // Sent as a run (`runs::say`): the run is the proof, it names the space,
     // and a run's agent needs no workspace membership of its own (a worker
     // on the built-in host has none), though a disabled one still refuses.
-    let run_space = match actor.run_id {
-        Some(run_id) => {
-            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
-        }
-        None => None,
+    let (run_space, run_direct) = match actor.run_id {
+        Some(run_id) => (
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?,
+            crate::runs::store::direct_of_own(&mut **transaction, actor.actor_id, run_id).await?,
+        ),
+        None => (None, None),
     };
     let access_from = if actor.run_id.is_some() {
         let relaxed = ACCESS_FROM.replace(
@@ -2644,8 +2647,13 @@ pub(crate) async fn lock_message_conversation(
                     OR
                     ($4::boolean AND actor.kind = 'external_agent') -- // kind-check: mechanical (signed in through an agent connection)
                     OR
-                    -- A run's agent, in the run's space (`runs::say`).
+                    -- A run's agent, in the run's space (`runs::say`), or
+                    -- in the DM or group (no space) the run answers.
                     ($4::boolean IS NULL AND $5::uuid = conversation.project_id)
+                    OR
+                    ($4::boolean IS NULL AND $6::uuid IS NOT NULL
+                     AND conversation.project_id IS NULL
+                     AND $6 IN (conversation.id, conversation.parent_channel_id))
                 ))
         FOR UPDATE OF conversation
         "#,
@@ -2655,6 +2663,7 @@ pub(crate) async fn lock_message_conversation(
     .bind(&actor.actor_kind)
     .bind(mcp_checked)
     .bind(run_space)
+    .bind(run_direct)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
@@ -2664,7 +2673,7 @@ pub(crate) async fn lock_message_conversation(
         Action::MessageSend => crate::discussion::subject_kind_of(transaction, row.id).await?,
         _ => None,
     };
-    let allowed = if actor.run_id.is_some() {
+    let allowed = if actor.run_id.is_some() && row.project_id.is_some() {
         row.allows_for_run(actor.actor_id, action)?
     } else if let Some(kind) = discussed {
         row.allows_permission(actor.actor_id, kind.comment_permission())?

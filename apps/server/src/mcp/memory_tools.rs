@@ -1447,7 +1447,7 @@ pub(crate) async fn page_edit(
         {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
+        let Some(page) = store::lock_page_for(&mut transaction, page_id, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
         if page.project_id != project_id {

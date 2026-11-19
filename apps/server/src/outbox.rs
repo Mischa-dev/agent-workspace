@@ -382,6 +382,16 @@ pub struct CustomEmojiChangedPayload {
     pub emoji_id: Uuid,
 }
 
+/// A workspace's guards changed (A2.27): one made, changed or removed.
+/// Sent to the workspace's own space; guard lists read them again. Ids
+/// only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuardsChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+}
+
 /// Someone's draft changed (C2.28): saved or cleared on one of their
 /// devices. Their id only, delivered to them alone; their open draft lists
 /// read again over HTTP.
@@ -412,6 +422,14 @@ pub struct SidebarChangedPayload {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SavedSearchesChangedPayload {
+    pub actor_id: Uuid,
+}
+
+/// What someone follows changed (A2.9): for them alone; their other tabs
+/// read it again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FollowsChangedPayload {
     pub actor_id: Uuid,
 }
 
@@ -473,10 +491,12 @@ pub enum OutboxEventPayload {
     DashboardUpdated(DashboardUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
+    GuardsChanged(GuardsChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
+    FollowsChanged(FollowsChangedPayload),
     InboxViewsChanged(InboxViewsChangedPayload),
     DmRulesChanged(DmRulesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
@@ -511,10 +531,12 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(_) => "dashboard.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
+            Self::GuardsChanged(_) => "guards.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
+            Self::FollowsChanged(_) => "follows.changed",
             Self::InboxViewsChanged(_) => "inbox_views.changed",
             Self::DmRulesChanged(_) => "dm_rules.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
@@ -552,10 +574,12 @@ impl OutboxEventPayload {
             | Self::DashboardUpdated(_)
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
+            | Self::GuardsChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
+            | Self::FollowsChanged(_)
             | Self::InboxViewsChanged(_)
             | Self::DmRulesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
@@ -575,6 +599,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
+            Self::FollowsChanged(payload) => Some(payload.actor_id),
             Self::InboxViewsChanged(payload) => Some(payload.actor_id),
             Self::DmRulesChanged(payload) => Some(payload.actor_id),
             _ => None,
@@ -600,9 +625,9 @@ impl OutboxEventPayload {
             Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
-            Self::SavedSearchesChanged(_) | Self::InboxViewsChanged(_) => {
-                OutboxResourceKind::Account
-            }
+            Self::SavedSearchesChanged(_)
+            | Self::InboxViewsChanged(_)
+            | Self::FollowsChanged(_) => OutboxResourceKind::Account,
             Self::DmRulesChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_)
             | Self::AccountStatusChanged(_)
@@ -613,9 +638,9 @@ impl OutboxEventPayload {
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
             Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
-            Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
-                OutboxResourceKind::Project
-            }
+            Self::ProjectModulesUpdated(_)
+            | Self::CustomEmojiChanged(_)
+            | Self::GuardsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
@@ -651,11 +676,13 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(payload) => payload.dashboard_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
+            Self::GuardsChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
+            Self::FollowsChanged(payload) => payload.actor_id,
             Self::InboxViewsChanged(payload) => payload.actor_id,
             Self::DmRulesChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
@@ -797,10 +824,12 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
+            Self::GuardsChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
+            Self::FollowsChanged(payload) => serde_json::to_value(payload),
             Self::InboxViewsChanged(payload) => serde_json::to_value(payload),
             Self::DmRulesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
@@ -891,6 +920,9 @@ impl OutboxEventPayload {
             "custom_emoji.changed" => Self::CustomEmojiChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "guards.changed" => Self::GuardsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
             "message_draft.changed" => Self::MessageDraftChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
@@ -901,6 +933,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "saved_searches.changed" => Self::SavedSearchesChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "follows.changed" => Self::FollowsChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "inbox_views.changed" => Self::InboxViewsChanged(

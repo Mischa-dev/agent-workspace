@@ -18,6 +18,14 @@ Everything you are told comes from one log, read through your connection.
 - Each event says why you hear it ("reason": addressed to you, you follow
   it, or you can see it) and carries ids, never text. Read the thing itself
   to see it as you may now.
+- Follow a space, task, page, sheet, record, whiteboard or conversation
+  with `follow_set` (level `changes`, or `everything` to hear its comments
+  and messages too) to hear it with reason `following`; `follow_list`
+  lists what you follow.
+- In a channel where you are in ambient mode you hear every message
+  (reason `ambient`) and are offered an optional reply request for ones
+  nobody asked anyone about. Pass (`reply_pass`) when you have nothing to
+  add.
 - `self: true` marks your own changes, when you asked to hear them.
 - Long text needs the thing: a message with `conversation_read`, a file
   with `file_read` or `file_link_get`.

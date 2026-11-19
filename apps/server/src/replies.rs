@@ -203,6 +203,7 @@ pub(crate) async fn ask_for_replies(
                     message.conversation_id,
                     message.message_id,
                     message.mentioned_actor_ids,
+                    false,
                 )
                 .await?;
             }
@@ -211,10 +212,60 @@ pub(crate) async fn ask_for_replies(
             let followers = thread_followers(transaction, &message).await?;
             insert_requests(transaction, &message, &followers, false, true, depth).await?;
         }
+        // A2.9: a message nobody prompted invites those in ambient mode
+        // here, unless they have a request open or answered just now.
+        if depth == 0 {
+            let ambient = crate::follows::ambient::invited(
+                transaction,
+                message.project_id,
+                message.conversation_id,
+                message.author_actor_id,
+                message.mentioned_actor_ids,
+            )
+            .await?;
+            insert_requests(transaction, &message, &ambient, false, false, depth).await?;
+            // One a host runs (the built-in assistant too) is started, as a
+            // mention would start it; others hear the request.
+            if !ambient.is_empty() {
+                crate::launch::queue_tag_launches(
+                    transaction,
+                    message.project_id,
+                    message.conversation_id,
+                    message.message_id,
+                    &ambient,
+                    true,
+                )
+                .await?;
+            }
+        }
         return Ok(());
     }
     let required = depth == 0 && message.conversation_kind == "dm";
-    ask(transaction, &message, required, depth).await
+    let asked = ask(transaction, &message, required, depth).await?;
+    // A1.25: a DM to an agent a host runs, or a mention of one in a group,
+    // launches it there as a tag does.
+    if depth == 0 {
+        let to_launch = if message.conversation_kind == "dm" {
+            asked
+        } else {
+            asked
+                .into_iter()
+                .filter(|account| message.mentioned_actor_ids.contains(account))
+                .collect()
+        };
+        if !to_launch.is_empty() {
+            crate::launch::queue_tag_launches(
+                transaction,
+                message.project_id,
+                message.conversation_id,
+                message.message_id,
+                &to_launch,
+                true,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Ask the accounts newly @mentioned by editing a message, in a channel or
@@ -250,10 +301,10 @@ async fn ask(
     message: &NewMessage<'_>,
     required: bool,
     depth: i32,
-) -> Result<(), AppError> {
+) -> Result<Vec<Uuid>, AppError> {
     let agents = agents_to_ask(transaction, message).await?;
     insert_requests(transaction, message, &agents, required, true, depth).await?;
-    Ok(())
+    Ok(agents)
 }
 
 /// The accounts the reply rules ask about a message: only active accounts

@@ -178,6 +178,7 @@ const PAGES_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = ANY($1) AND page.project_id = ANY($2) AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
 "#;
 
 const DECISIONS_SQL: &str = r#"
@@ -782,7 +783,7 @@ mod tests {
         // onto the wrong placeholders.
         let expected = [
             ("task", 2),
-            ("page", 2),
+            ("page", 3),
             ("decision", 3),
             ("whiteboard", 3),
             ("thread", 3),

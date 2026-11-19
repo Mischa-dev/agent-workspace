@@ -42,7 +42,8 @@ impl SpaceKind {
             // workspace's own boards and sheets belong to it. Inbox: a
             // reminder filed in the workspace is kept in its space. Agents:
             // they belong to the workspace (K1.6), and one added without a
-            // project lives here (K4.6).
+            // project lives here (K4.6). Runs: such an agent's runs, answering
+            // a DM or a channel here (A1.25), are kept here too.
             Self::Workspace => Some(&[
                 "pages",
                 "whiteboards",
@@ -50,6 +51,7 @@ impl SpaceKind {
                 "messages",
                 "inbox",
                 "agents",
+                "runs",
             ]),
             // Drafts and notes: pages, boards, sheets and collections; no
             // chat, since nobody else is there.
