@@ -95,7 +95,9 @@ pub fn router() -> Router<AppState> {
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(FIRE_KIND, |context: JobContext| async move {
         let payload: FirePayload = context.job.payload_as()?;
-        fire(&context.state, payload.run_id)
+        // Boxed: a rule's actions run whole operations, too deep a future
+        // to keep on the job's stack.
+        Box::pin(fire(&context.state, payload.run_id))
             .await
             .map_err(|error| JobError::retry(error.log_category()))
     });
@@ -2594,7 +2596,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 return finish(pool, run_id, state_name, Some(&reason), &results).await;
             }
         };
-        let outcome = with_limits(
+        let outcome = Box::pin(with_limits(
             limits,
             run_action(
                 state,
@@ -2607,7 +2609,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 index,
                 action,
             ),
-        )
+        ))
         .await;
         results.push(match outcome {
             Ok(detail) => json!({ "kind": action.kind(), "ok": true, "detail": detail }),
