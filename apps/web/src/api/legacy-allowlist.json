@@ -9,7 +9,7 @@
   "auth/workos.ts": 2,
   "automations/api.ts": 5,
   "collections/api.ts": 8,
-  "conversations/api.ts": 16,
+  "conversations/api.ts": 9,
   "conversations/sidebarApi.ts": 4,
   "direct/api.ts": 5,
   "execution/api.ts": 14,
