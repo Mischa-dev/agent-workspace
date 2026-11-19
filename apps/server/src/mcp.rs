@@ -4715,7 +4715,11 @@ async fn scoped_project(
     // delegation) holds the hand-written tools as it holds operations: a
     // space it doesn't name, or a DM or group kept in a workspace it doesn't
     // name, isn't reached, whatever else the account belongs to.
+    // Only a person's app or a token can be held to some workspaces: an
+    // agent's own connection is checked by its connection's rules above.
+    let may_be_limited = person || principal.is_access_token();
     if let Some(target) = target
+        && may_be_limited
         && let (_, Some(limits)) = caller_reach(state, principal).await?
     {
         let reached = if target == crate::spaces::DIRECT {
