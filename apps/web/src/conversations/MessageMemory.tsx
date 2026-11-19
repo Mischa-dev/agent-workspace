@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Pin, PinOff } from 'lucide-react'
-
+import { FilePlus, Pin, PinOff } from 'lucide-react'
 
 import { toastError } from '../app/mutations'
 import { memoryKeys, pin, unpin } from '../memory/api'
@@ -10,12 +9,14 @@ import { useProjects } from '../projects/hooks'
 import { useProjectExperience } from '../experience/layout'
 import { showToast, type MenuEntry } from '../ui'
 import { LazyDecisionDialog } from './LazyDecisionDialog'
+import { LazyMakePageDialog } from '../memory/LazyMakePageDialog'
 import { LazyRecordFromMessageDialog } from './LazyRecordFromMessageDialog'
 import type { ConversationMessage } from './types'
 
 /**
- * Pin and Save as decision, for a message's More menu. Pin is a toggle that
- * says what it did and can be undone from the toast; a failure says why.
+ * Pin, Save as decision and Make a page, for a message's More menu. Pin is
+ * a toggle that says what it did and can be undone from the toast; a
+ * failure says why.
  */
 export function useMessageMemory({
   conversationId,
@@ -33,6 +34,7 @@ export function useMessageMemory({
   const queryClient = useQueryClient()
   const pins = usePins(enabled ? projectId : '', conversationId)
   const [deciding, setDeciding] = useState<ConversationMessage | null>(null)
+  const [making, setMaking] = useState<ConversationMessage | null>(null)
   const [recording, setRecording] = useState<ConversationMessage | null>(null)
   const records = useProjectExperience(projectId).shows('area.collections')
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.
@@ -68,7 +70,10 @@ export function useMessageMemory({
       },
       ...(direct && decisionProjects.length === 0
         ? []
-        : [{ label: 'Save as decision…', icon: 'checklist' as const, onSelect: () => setDeciding(message) }]),
+        : [
+            { label: 'Save as decision…', icon: 'checklist' as const, onSelect: () => setDeciding(message) },
+            { label: 'Make a page…', icon: FilePlus, onSelect: () => setMaking(message) },
+          ]),
       // C2.21: a record in one of this space's collections, linked back here.
       ...(direct || !records ? [] : [{ label: 'Make a record…', icon: 'table' as const, onSelect: () => setRecording(message) }]),
     ]
@@ -83,6 +88,14 @@ export function useMessageMemory({
           onClose={() => setDeciding(null)}
           projectId={projectId}
           projects={direct ? decisionProjects : null}
+        />
+      ) : null}
+      {making ? (
+        <LazyMakePageDialog
+          onClose={() => setMaking(null)}
+          projectId={projectId}
+          projects={direct ? decisionProjects : null}
+          source={{ kind: 'messages', messageIds: [making.id] }}
         />
       ) : null}
       {recording ? (

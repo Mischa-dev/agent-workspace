@@ -23,10 +23,13 @@
     "page_comment_update": "change",
     "page_suggestions": "query",
     "page_suggestion_decide": "change",
+    "change_list": "query",
+    "change_undo": "change",
     "skill_list": "query",
     "skill_get": "describe",
     "decision_list": "query",
-    "decision_record": "create"
+    "decision_record": "create",
+    "page_make": "create"
   },
   "routes": [
     "/api/v1/pages/*",

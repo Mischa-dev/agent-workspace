@@ -7,6 +7,14 @@
 //! copied). Bold is drawn by stroking the glyphs and italic by slanting
 //! them, since one face is shipped.
 //!
+//! Characters Inter doesn't carry (Chinese, Japanese and Korean text,
+//! emoji, other scripts) fall back to the fonts installed on the host: each
+//! is looked up once per export, and the glyphs used are drawn from their
+//! outlines into small Type 3 fonts, so only what the page uses is embedded
+//! (a CJK font is tens of megabytes). A host with no font for a character
+//! shows the missing-glyph box, as before. Installing a CJK font and an
+//! outline emoji font on the host is enough; nothing to configure.
+//!
 //! Embeds show in the app live; here a board is its picture, a sheet's range
 //! its values as a table (both only when the reader may see them, decided by
 //! the caller, which passes [`EmbedPicture`]s), and anything else its label
@@ -61,7 +69,8 @@ pub fn export(
     origin: Option<&str>,
     embeds: &HashMap<String, EmbedPicture>,
 ) -> Vec<u8> {
-    let font = Face::load();
+    let mut font = Face::load();
+    font.cover(characters(title, blocks, embeds));
     let mut layout = Layout::new(&font, origin, embeds);
     if !title.trim().is_empty() {
         layout.heading(0, &[Inline::text(title.trim(), Marks::default())]);
@@ -72,7 +81,27 @@ pub fn export(
 }
 
 // ---------------------------------------------------------------------------
-// The face
+// The faces
+
+/// Where a character's glyph comes from: the bundled face, or a fallback
+/// face found on the host (its index in [`Face::fallbacks`]).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum Source {
+    Bundled,
+    Fallback(usize),
+}
+
+/// A face found on the host for characters the bundled one lacks.
+struct Fallback {
+    data: Vec<u8>,
+    index: u32,
+}
+
+impl Fallback {
+    fn font(&self) -> Option<FontRef<'_>> {
+        FontRef::from_index(&self.data, self.index).ok()
+    }
+}
 
 struct Face<'a> {
     font: FontRef<'a>,
@@ -80,6 +109,9 @@ struct Face<'a> {
     descent: f32,
     cap_height: f32,
     bounds: [f32; 4],
+    fallbacks: Vec<Fallback>,
+    /// Characters drawn from a fallback face, and their glyph there.
+    fallback_glyphs: HashMap<char, (usize, u16)>,
 }
 
 impl Face<'static> {
@@ -96,40 +128,262 @@ impl Face<'static> {
             cap_height: metrics.cap_height.unwrap_or(metrics.ascent * 0.7),
             bounds,
             font,
+            fallbacks: Vec::new(),
+            fallback_glyphs: HashMap::new(),
         }
     }
 }
 
+/// Whether a face draws a character with an outline (a colour bitmap emoji
+/// face maps it but has nothing to draw here).
+fn draws(font: &FontRef<'_>, character: char) -> Option<u16> {
+    let glyph = font.charmap().map(character)?;
+    if glyph.to_u32() == 0 {
+        return None;
+    }
+    let outline = font.outline_glyphs().get(glyph)?;
+    let mut probe = Probe(false);
+    outline
+        .draw(
+            skrifa::outline::DrawSettings::unhinted(Size::unscaled(), LocationRef::default()),
+            &mut probe,
+        )
+        .ok()?;
+    probe.0.then(|| glyph.to_u32() as u16)
+}
+
+/// Notes whether an outline has any segment at all.
+struct Probe(bool);
+
+impl skrifa::outline::OutlinePen for Probe {
+    fn move_to(&mut self, _x: f32, _y: f32) {}
+    fn line_to(&mut self, _x: f32, _y: f32) {
+        self.0 = true;
+    }
+    fn quad_to(&mut self, _cx0: f32, _cy0: f32, _x: f32, _y: f32) {
+        self.0 = true;
+    }
+    fn curve_to(&mut self, _a: f32, _b: f32, _c: f32, _d: f32, _x: f32, _y: f32) {
+        self.0 = true;
+    }
+    fn close(&mut self) {}
+}
+
 impl Face<'_> {
-    /// The glyph for a character (a space for controls; the font's missing
-    /// glyph when it has none).
-    fn glyph(&self, character: char) -> u16 {
+    /// Finds faces on the host for the characters in `wanted` the bundled
+    /// face lacks. Each installed face is read at most once.
+    fn cover(&mut self, wanted: impl IntoIterator<Item = char>) {
+        let mut missing = wanted
+            .into_iter()
+            .filter(|character| !character.is_control() && !character.is_whitespace())
+            .filter(|character| {
+                self.font
+                    .charmap()
+                    .map(*character)
+                    .is_none_or(|g| g.to_u32() == 0)
+            })
+            .collect::<Vec<_>>();
+        missing.sort_unstable();
+        missing.dedup();
+        if missing.is_empty() {
+            return;
+        }
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let ids = database.faces().map(|face| face.id).collect::<Vec<_>>();
+        for id in ids {
+            if missing.is_empty() {
+                break;
+            }
+            let Some((source, index)) = database.face_source(id) else {
+                continue;
+            };
+            let data = match source {
+                fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
+                fontdb::Source::File(path) => match std::fs::read(path) {
+                    Ok(data) => data,
+                    Err(_) => continue,
+                },
+                // A shared mapping, when another crate turns that on.
+                #[allow(unreachable_patterns)]
+                _ => continue,
+            };
+            let Ok(font) = FontRef::from_index(&data, index) else {
+                continue;
+            };
+            let mut covered = Vec::new();
+            missing.retain(|character| match draws(&font, *character) {
+                Some(glyph) => {
+                    covered.push((*character, glyph));
+                    false
+                }
+                None => true,
+            });
+            if covered.is_empty() {
+                continue;
+            }
+            let slot = self.fallbacks.len();
+            for (character, glyph) in covered {
+                self.fallback_glyphs.insert(character, (slot, glyph));
+            }
+            self.fallbacks.push(Fallback { data, index });
+        }
+    }
+
+    /// The glyph for a character and where it comes from (a space for
+    /// controls; the bundled face's missing glyph when no face has it).
+    fn glyph(&self, character: char) -> (Source, u16) {
         let character = if character.is_control() {
             ' '
         } else {
             character
         };
-        self.font
-            .charmap()
-            .map(character)
-            .map_or(0, |glyph| glyph.to_u32() as u16)
+        match self.font.charmap().map(character) {
+            Some(glyph) if glyph.to_u32() != 0 => (Source::Bundled, glyph.to_u32() as u16),
+            _ => match self.fallback_glyphs.get(&character) {
+                Some((slot, glyph)) => (Source::Fallback(*slot), *glyph),
+                None => (Source::Bundled, 0),
+            },
+        }
     }
 
     /// A glyph's advance in thousandths of an em.
-    fn advance(&self, glyph: u16) -> f32 {
-        self.font
-            .glyph_metrics(Size::new(1000.0), LocationRef::default())
-            .advance_width(GlyphId::new(u32::from(glyph)))
-            .unwrap_or(500.0)
+    fn advance(&self, source: Source, glyph: u16) -> f32 {
+        match source {
+            Source::Bundled => self
+                .font
+                .glyph_metrics(Size::new(1000.0), LocationRef::default())
+                .advance_width(GlyphId::new(u32::from(glyph)))
+                .unwrap_or(500.0),
+            Source::Fallback(slot) => self.fallbacks[slot]
+                .font()
+                .and_then(|font| {
+                    font.glyph_metrics(Size::new(1000.0), LocationRef::default())
+                        .advance_width(GlyphId::new(u32::from(glyph)))
+                })
+                .unwrap_or(1000.0),
+        }
     }
 
     fn width(&self, text: &str, size: f32) -> f32 {
         text.chars()
-            .map(|character| self.advance(self.glyph(character)))
+            .map(|character| {
+                let (source, glyph) = self.glyph(character);
+                self.advance(source, glyph)
+            })
             .sum::<f32>()
             * size
             / 1000.0
     }
+
+    /// A fallback glyph's outline as PDF path operators, in thousandths of
+    /// an em, and its box.
+    fn outline(&self, slot: usize, glyph: u16) -> (String, [f32; 4]) {
+        let mut pen = PathPen::default();
+        if let Some(font) = self.fallbacks[slot].font()
+            && let Some(outline) = font.outline_glyphs().get(GlyphId::new(u32::from(glyph)))
+        {
+            let _ = outline.draw(
+                skrifa::outline::DrawSettings::unhinted(Size::new(1000.0), LocationRef::default()),
+                &mut pen,
+            );
+        }
+        let bounds = pen.bounds.unwrap_or([0.0; 4]);
+        (pen.path, bounds)
+    }
+}
+
+/// Writes an outline as PDF path operators (quadratic curves raised to
+/// cubic ones), keeping its box.
+#[derive(Default)]
+struct PathPen {
+    path: String,
+    at: (f32, f32),
+    bounds: Option<[f32; 4]>,
+}
+
+impl PathPen {
+    fn grow(&mut self, x: f32, y: f32) {
+        let bounds = self.bounds.get_or_insert([x, y, x, y]);
+        bounds[0] = bounds[0].min(x);
+        bounds[1] = bounds[1].min(y);
+        bounds[2] = bounds[2].max(x);
+        bounds[3] = bounds[3].max(y);
+    }
+}
+
+impl skrifa::outline::OutlinePen for PathPen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let _ = write!(self.path, "{x:.1} {y:.1} m ");
+        self.at = (x, y);
+        self.grow(x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        let _ = write!(self.path, "{x:.1} {y:.1} l ");
+        self.at = (x, y);
+        self.grow(x, y);
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let (x0, y0) = self.at;
+        let c1 = (x0 + 2.0 / 3.0 * (cx - x0), y0 + 2.0 / 3.0 * (cy - y0));
+        let c2 = (x + 2.0 / 3.0 * (cx - x), y + 2.0 / 3.0 * (cy - y));
+        self.curve_to(c1.0, c1.1, c2.0, c2.1, x, y);
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let _ = write!(
+            self.path,
+            "{cx0:.1} {cy0:.1} {cx1:.1} {cy1:.1} {x:.1} {y:.1} c "
+        );
+        self.at = (x, y);
+        self.grow(cx0, cy0);
+        self.grow(cx1, cy1);
+        self.grow(x, y);
+    }
+    fn close(&mut self) {
+        self.path.push_str("h ");
+    }
+}
+
+/// Every character a page shows, so the faces for them are found once.
+fn characters(title: &str, blocks: &[Block], embeds: &HashMap<String, EmbedPicture>) -> Vec<char> {
+    fn inline(content: &[Inline], out: &mut Vec<char>) {
+        for piece in content {
+            if let Inline::Text { text, .. } = piece {
+                out.extend(text.chars());
+            }
+        }
+    }
+    fn walk(blocks: &[Block], out: &mut Vec<char>) {
+        for block in blocks {
+            match &block.node {
+                Node::Paragraph(content) | Node::Heading { content, .. } => inline(content, out),
+                Node::CodeBlock { text, .. } => out.extend(text.chars()),
+                Node::Blockquote(blocks) => walk(blocks, out),
+                Node::BulletList(items) | Node::OrderedList { items, .. } => {
+                    for item in items {
+                        walk(&item.content, out);
+                    }
+                }
+                Node::Table(rows) => {
+                    for cell in rows.iter().flatten() {
+                        inline(&cell.content, out);
+                    }
+                }
+                Node::Embed { label, .. } => out.extend(label.chars()),
+                Node::HorizontalRule => {}
+            }
+        }
+    }
+    let mut out = title.chars().collect::<Vec<_>>();
+    walk(blocks, &mut out);
+    for picture in embeds.values() {
+        if let EmbedPicture::Table(rows) = picture {
+            for cell in rows.iter().flatten() {
+                out.extend(cell.chars());
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -853,7 +1107,7 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u
     // link annotations.
     let image_base = 9;
     let page_base = image_base + images.len() * 2;
-    let mut used = BTreeMap::<u16, char>::new();
+    let mut used = Used::default();
     let mut page_ids = Vec::new();
     let mut next = page_base;
     let mut contents = Vec::new();
@@ -868,6 +1122,26 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u
         let content = content_stream(face, page, &mut used);
         contents.push((page_id, content_id, link_ids, content));
     }
+    // The fallback glyphs' Type 3 fonts, 256 glyphs each: the font, its
+    // ToUnicode map, and one drawing per glyph.
+    let mut type3 = Vec::new();
+    for (number, glyphs) in used.fallback_fonts().into_iter().enumerate() {
+        let font_id = next;
+        let map_id = next + 1;
+        let proc_ids = (0..glyphs.len())
+            .map(|index| next + 2 + index)
+            .collect::<Vec<_>>();
+        next += 2 + glyphs.len();
+        type3.push((number + 2, font_id, map_id, proc_ids, glyphs));
+    }
+    let font_resources = std::iter::once("/F1 3 0 R".to_owned())
+        .chain(
+            type3
+                .iter()
+                .map(|(name, font_id, ..)| format!("/F{name} {font_id} 0 R")),
+        )
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let kids = page_ids
         .iter()
@@ -887,8 +1161,12 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u
         "<< /Type /Font /Subtype /Type0 /BaseFont /Inter-Regular /Encoding /Identity-H /DescendantFonts [4 0 R] /ToUnicode 7 0 R >>",
     );
     let mut widths = String::new();
-    for glyph in used.keys() {
-        let _ = write!(widths, "{glyph} [{:.0}] ", face.advance(*glyph));
+    for glyph in used.bundled.keys() {
+        let _ = write!(
+            widths,
+            "{glyph} [{:.0}] ",
+            face.advance(Source::Bundled, *glyph)
+        );
     }
     writer.object(
         4,
@@ -905,7 +1183,73 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u
         ),
     );
     writer.stream(6, "/Subtype /OpenType", FONT, true);
-    writer.stream(7, "", to_unicode(&used).as_bytes(), false);
+    writer.stream(
+        7,
+        "",
+        to_unicode(
+            1,
+            4,
+            used.bundled
+                .iter()
+                .map(|(glyph, character)| (u32::from(*glyph), *character)),
+        )
+        .as_bytes(),
+        false,
+    );
+    for (name, font_id, map_id, proc_ids, glyphs) in &type3 {
+        let mut procs = String::new();
+        let mut differences = String::new();
+        let mut widths = String::new();
+        let mut font_box = [0.0f32; 4];
+        for (code, ((slot, glyph, _), proc_id)) in glyphs.iter().zip(proc_ids).enumerate() {
+            let advance = face.advance(Source::Fallback(*slot), *glyph);
+            let (path, bounds) = face.outline(*slot, *glyph);
+            for corner in 0..2 {
+                font_box[corner] = font_box[corner].min(bounds[corner]);
+                font_box[corner + 2] = font_box[corner + 2].max(bounds[corner + 2]);
+            }
+            let drawing = if path.is_empty() {
+                format!("{advance:.0} 0 0 0 0 0 d1\n")
+            } else {
+                format!(
+                    "{advance:.0} 0 {:.0} {:.0} {:.0} {:.0} d1\n{path}f\n",
+                    bounds[0].floor(),
+                    bounds[1].floor(),
+                    bounds[2].ceil(),
+                    bounds[3].ceil()
+                )
+            };
+            writer.stream(*proc_id, "", drawing.as_bytes(), true);
+            let _ = write!(procs, "/g{code} {proc_id} 0 R ");
+            let _ = write!(differences, "/g{code} ");
+            let _ = write!(widths, "{advance:.0} ");
+        }
+        writer.object(
+            *font_id,
+            &format!(
+                "<< /Type /Font /Subtype /Type3 /FontBBox [{:.0} {:.0} {:.0} {:.0}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [0 {differences}] >> /FirstChar 0 /LastChar {} /Widths [{widths}] /ToUnicode {map_id} 0 R /Resources << >> >>",
+                font_box[0].floor(),
+                font_box[1].floor(),
+                font_box[2].ceil(),
+                font_box[3].ceil(),
+                glyphs.len() - 1
+            ),
+        );
+        writer.stream(
+            *map_id,
+            "",
+            to_unicode(
+                *name,
+                2,
+                glyphs
+                    .iter()
+                    .enumerate()
+                    .map(|(code, (_, _, character))| (code as u32, *character)),
+            )
+            .as_bytes(),
+            false,
+        );
+    }
     writer.object(
         8,
         &format!(
@@ -959,7 +1303,7 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u
         writer.object(
             page_id,
             &format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PAGE_WIDTH} {PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R >> /XObject << {image_resources} >> >> /Contents {content_id} 0 R{annotations} >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PAGE_WIDTH} {PAGE_HEIGHT}] /Resources << /Font << {font_resources} >> /XObject << {image_resources} >> >> /Contents {content_id} 0 R{annotations} >>"
             ),
         );
         writer.stream(content_id, "", content.as_bytes(), false);
@@ -1011,7 +1355,35 @@ fn literal(value: &str) -> String {
     out
 }
 
-fn content_stream(face: &Face<'_>, page: &Page, used: &mut BTreeMap<u16, char>) -> String {
+/// The glyphs a document draws: the bundled face's, and the fallback ones
+/// with the Type 3 font and code each was given (256 to a font, in order of
+/// first use).
+#[derive(Default)]
+struct Used {
+    bundled: BTreeMap<u16, char>,
+    fallback: HashMap<(usize, u16), (usize, u8)>,
+    fallback_order: Vec<(usize, u16, char)>,
+}
+
+impl Used {
+    /// The font (`/F2` is 0) and code for a fallback glyph.
+    fn fallback_code(&mut self, slot: usize, glyph: u16, character: char) -> (usize, u8) {
+        if let Some(code) = self.fallback.get(&(slot, glyph)) {
+            return *code;
+        }
+        let index = self.fallback_order.len();
+        let code = (index / 256, (index % 256) as u8);
+        self.fallback.insert((slot, glyph), code);
+        self.fallback_order.push((slot, glyph, character));
+        code
+    }
+
+    fn fallback_fonts(&self) -> Vec<Vec<(usize, u16, char)>> {
+        self.fallback_order.chunks(256).map(<[_]>::to_vec).collect()
+    }
+}
+
+fn content_stream(face: &Face<'_>, page: &Page, used: &mut Used) -> String {
     let mut out = String::new();
     for draw in &page.draws {
         match draw {
@@ -1065,12 +1437,31 @@ fn content_stream(face: &Face<'_>, page: &Page, used: &mut BTreeMap<u16, char>) 
                 } else {
                     (0.1, 0.1, 0.12)
                 };
-                let mut glyphs = String::new();
+                // Runs of glyphs from one font each; each run's show moves
+                // the pen on by its width.
+                let mut runs: Vec<(usize, String)> = Vec::new();
                 for character in text.chars() {
-                    let glyph = face.glyph(character);
-                    used.entry(glyph).or_insert(character);
-                    let _ = write!(glyphs, "{glyph:04X}");
+                    let (font, code) = match face.glyph(character) {
+                        (Source::Bundled, glyph) => {
+                            used.bundled.entry(glyph).or_insert(character);
+                            (1, format!("{glyph:04X}"))
+                        }
+                        (Source::Fallback(slot), glyph) => {
+                            let (number, code) = used.fallback_code(slot, glyph, character);
+                            (number + 2, format!("{code:02X}"))
+                        }
+                    };
+                    match runs.last_mut() {
+                        Some((run_font, codes)) if *run_font == font => codes.push_str(&code),
+                        _ => runs.push((font, code)),
+                    }
                 }
+                let size = style.size;
+                let shows = runs
+                    .iter()
+                    .map(|(font, codes)| format!("/F{font} {size:.2} Tf <{codes}> Tj"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let skew = if style.italic { 0.2 } else { 0.0 };
                 let render = if style.bold {
                     format!(
@@ -1082,8 +1473,7 @@ fn content_stream(face: &Face<'_>, page: &Page, used: &mut BTreeMap<u16, char>) 
                 };
                 let _ = writeln!(
                     out,
-                    "q {red:.2} {green:.2} {blue:.2} rg BT /F1 {:.2} Tf {render}1 0 {skew:.2} 1 {x:.2} {y:.2} Tm <{glyphs}> Tj ET Q",
-                    style.size
+                    "q {red:.2} {green:.2} {blue:.2} rg BT {render}1 0 {skew:.2} 1 {x:.2} {y:.2} Tm {shows} ET Q",
                 );
                 if style.strike || style.link.is_some() {
                     let line_y = if style.strike {
@@ -1103,21 +1493,29 @@ fn content_stream(face: &Face<'_>, page: &Page, used: &mut BTreeMap<u16, char>) 
     out
 }
 
-/// The map from glyphs back to text, so the PDF can be searched and copied.
-fn to_unicode(used: &BTreeMap<u16, char>) -> String {
-    let mut out = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+/// The map from a font's codes back to text, so the PDF can be searched and
+/// copied. `digits` is the code width in hex digits (4 for the bundled
+/// face's two-byte codes, 2 for a Type 3 font's). The comment names the
+/// font, for [`text_of`].
+fn to_unicode(font: usize, digits: usize, codes: impl Iterator<Item = (u32, char)>) -> String {
+    let range = if digits == 4 {
+        "<0000> <FFFF>"
+    } else {
+        "<00> <FF>"
+    };
+    let mut out = format!(
+        "%font F{font}\n/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n{range}\nendcodespacerange\n",
     );
-    let entries = used.iter().collect::<Vec<_>>();
+    let entries = codes.collect::<Vec<_>>();
     for chunk in entries.chunks(100) {
         let _ = writeln!(out, "{} beginbfchar", chunk.len());
-        for (glyph, character) in chunk {
+        for (code, character) in chunk {
             let mut units = String::new();
             let mut buffer = [0u16; 2];
             for unit in character.encode_utf16(&mut buffer) {
                 let _ = write!(units, "{unit:04X}");
             }
-            let _ = writeln!(out, "<{glyph:04X}> <{units}>");
+            let _ = writeln!(out, "<{code:0digits$X}> <{units}>");
         }
         out.push_str("endbfchar\n");
     }
@@ -1130,34 +1528,58 @@ fn to_unicode(used: &BTreeMap<u16, char>) -> String {
 /// module writes (uncompressed text, one run per line), for checking them.
 pub fn text_of(pdf: &[u8]) -> String {
     let source = String::from_utf8_lossy(pdf);
-    let mut map = HashMap::new();
+    // Each ToUnicode map, by the font its comment names.
+    let mut maps: HashMap<String, HashMap<u32, char>> = HashMap::new();
+    let mut font = String::new();
     for line in source.lines() {
-        if let Some((glyph, unicode)) = line
+        if let Some(name) = line.strip_prefix("%font ") {
+            font = name.trim().to_owned();
+        } else if let Some((code, unicode)) = line
             .strip_prefix('<')
             .and_then(|rest| rest.split_once("> <"))
             && let Some(unicode) = unicode.strip_suffix('>')
-            && glyph.len() == 4
-            && let (Ok(glyph), Ok(unit)) = (
-                u16::from_str_radix(glyph, 16),
+            && let (Ok(code), Ok(unit)) = (
+                u32::from_str_radix(code, 16),
                 u32::from_str_radix(&unicode[..4.min(unicode.len())], 16),
             )
         {
-            map.insert(glyph, char::from_u32(unit).unwrap_or('?'));
+            let mut character = char::from_u32(unit);
+            if unicode.len() == 8
+                && let Ok(low) = u32::from_str_radix(&unicode[4..], 16)
+            {
+                character = char::decode_utf16([unit as u16, low as u16])
+                    .next()
+                    .and_then(Result::ok);
+            }
+            maps.entry(font.clone())
+                .or_default()
+                .insert(code, character.unwrap_or('?'));
         }
     }
     let mut text = String::new();
     for line in source.lines() {
-        if let Some(start) = line.find("Tm <")
-            && let Some(end) = line[start + 4..].find('>')
-        {
-            let hex = &line[start + 4..start + 4 + end];
-            for index in (0..hex.len()).step_by(4) {
-                if let Ok(glyph) = u16::from_str_radix(&hex[index..index + 4], 16) {
-                    text.push(map.get(&glyph).copied().unwrap_or('?'));
+        if !line.contains(" Tm ") {
+            continue;
+        }
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        let mut current = "F1";
+        for (index, token) in tokens.iter().enumerate() {
+            if token.starts_with("/F") && tokens.get(index + 2) == Some(&"Tf") {
+                current = &token[1..];
+            } else if let Some(hex) = token.strip_prefix('<').and_then(|t| t.strip_suffix('>'))
+                && tokens.get(index + 1) == Some(&"Tj")
+            {
+                let width = if current == "F1" { 4 } else { 2 };
+                let map = maps.get(current);
+                for at in (0..hex.len()).step_by(width) {
+                    if let Ok(code) = u32::from_str_radix(&hex[at..(at + width).min(hex.len())], 16)
+                    {
+                        text.push(map.and_then(|map| map.get(&code)).copied().unwrap_or('?'));
+                    }
                 }
             }
-            text.push(' ');
         }
+        text.push(' ');
     }
     text
 }
@@ -1195,6 +1617,34 @@ mod tests {
             text.contains("https://app.test/projects/p/work-items/t"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn characters_the_bundled_face_lacks_come_from_the_host_fonts() {
+        let markdown = "# 発売計画\n\nWe ship 今週の金曜日 🚀 with Ω.\n";
+        let pdf = export("计划", &from_markdown(markdown), None, &HashMap::new());
+        assert!(pdf.starts_with(b"%PDF-") && pdf.ends_with(b"%%EOF\n"));
+        let text = text_of(&pdf);
+        assert!(text.contains("We") && text.contains("ship"), "{text}");
+        // Only a host with a CJK font installed can show these; without one
+        // they are the missing-glyph box, as before.
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let has_cjk = database.faces().any(|face| {
+            database
+                .with_face_data(face.id, |data, index| {
+                    skrifa::FontRef::from_index(data, index)
+                        .ok()
+                        .and_then(|font| super::draws(&font, '発'))
+                        .is_some()
+                })
+                .unwrap_or(false)
+        });
+        if has_cjk {
+            assert!(text.contains("発売計画"), "{text}");
+            assert!(text.contains("今週の金曜日"), "{text}");
+            assert!(String::from_utf8_lossy(&pdf).contains("/Subtype /Type3"));
+        }
     }
 
     #[test]

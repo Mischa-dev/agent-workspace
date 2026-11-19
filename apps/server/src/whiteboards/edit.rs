@@ -33,6 +33,10 @@ pub struct EditOutcome {
     /// The revision saved before this edit, if one was: restore it to undo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_revision: Option<i32>,
+    /// Set when your role only suggests here: nothing was drawn, and the
+    /// change waits as this proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
 }
 
 /// Why an edit was refused, in words for the agent.
@@ -55,17 +59,26 @@ impl From<sqlx::Error> for EditError {
     }
 }
 
-/// Runs operations against a board the caller may edit. With
+/// What operations would do to a board, worked out on the scene in memory:
+/// the board's change counter (the board is locked until the caller
+/// commits), each operation's result, the elements they change, and how
+/// many elements were live before.
+pub struct Planned {
+    pub scene_seq: i64,
+    pub results: Vec<OperationResult>,
+    pub changed: Vec<scene::Object>,
+    pub live_before: usize,
+}
+
+/// Locks the board and runs `operations` on its scene in memory. With
 /// `expected_scene_seq`, an operation that touches an element someone else
-/// changed after that point is refused instead of applied on top.
-pub async fn apply(
+/// changed after that point is refused.
+pub async fn plan(
     transaction: &mut Transaction<'_, Postgres>,
-    caller: &Caller,
     whiteboard_id: Uuid,
     operations: &[Operation],
     expected_scene_seq: Option<i64>,
-    confirm_delete: bool,
-) -> Result<EditOutcome, EditError> {
+) -> Result<Planned, EditError> {
     if operations.is_empty() {
         return Err(EditError::Invalid(
             "Pass at least one operation.".to_owned(),
@@ -112,6 +125,40 @@ pub async fn apply(
             expected_scene_seq.unwrap_or_default()
         )));
     }
+    Ok(Planned {
+        scene_seq,
+        results,
+        changed,
+        live_before,
+    })
+}
+
+/// The planned elements as the board's write path takes them.
+pub fn parsed(changed: Vec<scene::Object>) -> Result<Vec<elements::Element>, EditError> {
+    changed
+        .into_iter()
+        .map(|element| elements::parse(serde_json::Value::Object(element)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EditError::Invalid)
+}
+
+/// Runs operations against a board the caller may edit. With
+/// `expected_scene_seq`, an operation that touches an element someone else
+/// changed after that point is refused instead of applied on top.
+pub async fn apply(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    whiteboard_id: Uuid,
+    operations: &[Operation],
+    expected_scene_seq: Option<i64>,
+    confirm_delete: bool,
+) -> Result<EditOutcome, EditError> {
+    let Planned {
+        scene_seq,
+        results,
+        changed,
+        live_before,
+    } = plan(transaction, whiteboard_id, operations, expected_scene_seq).await?;
     let removed = changed
         .iter()
         .filter(|element| scene::is_deleted(element))
@@ -134,11 +181,7 @@ pub async fn apply(
         .iter()
         .map(|element| scene::id(element).to_owned())
         .collect::<Vec<_>>();
-    let parsed = changed
-        .into_iter()
-        .map(|element| elements::parse(serde_json::Value::Object(element)))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(EditError::Invalid)?;
+    let parsed = parsed(changed)?;
     let outcome =
         store::write_elements(transaction, caller, whiteboard_id, scene_seq, parsed).await?;
     if let Some(revision) = saved_revision {
@@ -149,5 +192,6 @@ pub async fn apply(
         results,
         changed: ids,
         saved_revision,
+        proposal_id: None,
     })
 }

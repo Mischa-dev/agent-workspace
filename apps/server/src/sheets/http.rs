@@ -131,11 +131,58 @@ async fn reader(
     Ok(allows(&actor, &membership, Action::SheetEdit)? && membership.project_archived_at.is_none())
 }
 
+/// How someone whose role doesn't edit sheets may change this one's cells
+/// (C1.11): directly with edit-own on a sheet they made, as a proposal with
+/// suggest, or not at all.
+async fn cell_mode(
+    connection: &mut PgConnection,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    sheet_id: Uuid,
+) -> Result<Option<crate::access::WriteMode>, AppError> {
+    let own = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT created_by_actor_id FROM sheets WHERE id = $1",
+    )
+    .bind(sheet_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .flatten()
+        == Some(principal.actor_id);
+    let caller =
+        crate::access::Caller::person(principal.actor_id, parse_actor_kind(&principal.actor_kind)?);
+    Ok(crate::access::write_mode(
+        connection,
+        &caller,
+        "sheet",
+        project_id,
+        own,
+        Some("sheets"),
+    )
+    .await?
+    .ok()
+    .map(|grant| grant.mode))
+}
+
+/// What a proposed cell change answers.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposedBody {
+    /// Unchanged: nothing is written until someone who edits accepts.
+    revision: i64,
+    /// None when it wouldn't change any cell.
+    proposal_id: Option<Uuid>,
+    proposed: Vec<super::proposals::ProposedCell>,
+}
+
 /// A write that holds the project lock and an idempotency reservation.
 struct Write {
     transaction: Transaction<'static, Postgres>,
     reservation: IdempotencyReservation,
     actor: CommandActor,
+    /// Whether the role edits sheets. Only a change to a sheet's cells gets
+    /// this far without it, to be kept as a proposal or allowed on the
+    /// caller's own sheet (C1.11).
+    edits: bool,
 }
 
 impl Write {
@@ -207,7 +254,8 @@ async fn start_write<T: Serialize>(
     if !holds_sheets(&mut transaction, project_id).await? {
         return Err(AppError::NotFound("project"));
     }
-    if !allows(&actor, &membership, Action::SheetEdit)? {
+    let edits = allows(&actor, &membership, Action::SheetEdit)?;
+    if !edits && !matches!(lock, ProjectLock::Membership) {
         return Err(AppError::Forbidden);
     }
     if membership.project_archived_at.is_some() {
@@ -233,6 +281,7 @@ async fn start_write<T: Serialize>(
             transaction,
             reservation,
             actor,
+            edits,
         }))),
     }
 }
@@ -298,6 +347,8 @@ struct TabBody {
     frozen_rows: i32,
     /// `{"<column number>": width}` for columns not at the default width.
     column_widths: Json_,
+    /// Its conditional formats, the first that applies winning.
+    conditional_formats: Json_,
     /// The last row and column holding something (0 when it's empty).
     rows: i32,
     columns: i32,
@@ -308,10 +359,21 @@ struct TabBody {
 struct CellBody {
     row: i32,
     column: i32,
+    /// Empty for a cell that only has a look.
     input: String,
     kind: String,
     value: Json_,
     revision: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<Json_>,
+    /// The value as its number format shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
+    /// How it looks once conditional formats apply, when that differs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conditional: Option<Json_>,
 }
 
 impl From<StoredCell> for CellBody {
@@ -323,6 +385,10 @@ impl From<StoredCell> for CellBody {
             kind: cell.kind,
             value: cell.value,
             revision: cell.revision,
+            format: cell.format,
+            style: cell.style,
+            display: cell.display,
+            conditional: cell.conditional,
         }
     }
 }
@@ -337,19 +403,25 @@ struct SheetBody {
     tab: Uuid,
     cells: Vec<CellBody>,
     can_edit: bool,
+    /// The role only suggests here: cell changes are kept as a proposal
+    /// for someone who edits the sheet (C1.11).
+    can_suggest: bool,
+    /// The sheet's named ranges, by name (C1.20).
+    ranges: Vec<super::ranges::NamedRange>,
 }
 
 async fn sheet_body(
     connection: &mut PgConnection,
     sheet: &Sheet,
     tab: Option<&str>,
-    can_edit: bool,
+    (can_edit, can_suggest): (bool, bool),
 ) -> Result<SheetBody, AppError> {
     let tabs = super::tabs(&mut *connection, sheet.id).await?;
     let chosen = pick_tab(&tabs, tab).ok_or(AppError::NotFound("tab"))?;
     let chosen_id = chosen.id;
     let extents = sqlx::query_as::<_, (Uuid, i32, i32, i64)>(
-        "SELECT tab_id, max(row_number), max(column_number), count(*) \
+        "SELECT tab_id, max(row_number), max(column_number), \
+                count(*) FILTER (WHERE input <> '') \
          FROM sheet_cells WHERE sheet_id = $1 GROUP BY tab_id",
     )
     .bind(sheet.id)
@@ -362,8 +434,10 @@ async fn sheet_body(
         (1, super::MAX_ROWS),
         (1, super::MAX_COLUMNS),
         super::MAX_CELLS as i64,
+        false,
     )
     .await?;
+    let ranges = super::ranges::named(&mut *connection, sheet.id).await?;
     Ok(SheetBody {
         sheet: SheetSummary {
             id: sheet.id.to_string(),
@@ -391,6 +465,7 @@ async fn sheet_body(
                     structure_revision: tab.structure_revision,
                     frozen_rows: tab.frozen_rows,
                     column_widths: tab.column_widths,
+                    conditional_formats: tab.conditional_formats,
                     rows,
                     columns,
                 }
@@ -401,6 +476,8 @@ async fn sheet_body(
         // Whether this person may change sheets: an archived one they can
         // restore. The screen keeps its cells read only while archived.
         can_edit,
+        can_suggest,
+        ranges,
     })
 }
 
@@ -463,8 +540,18 @@ async fn get_sheet(
         .await?
         .filter(|sheet| sheet.id == sheet_id)
         .ok_or(AppError::NotFound("sheet"))?;
+    let mode = if can_edit {
+        None
+    } else {
+        cell_mode(&mut connection, &principal, project_id, sheet.id).await?
+    };
+    let open = !sheet.archived;
+    let access = (
+        can_edit || (open && mode == Some(crate::access::WriteMode::Direct)),
+        open && mode == Some(crate::access::WriteMode::Propose),
+    );
     Ok(Json(
-        sheet_body(&mut connection, &sheet, query.tab.as_deref(), can_edit).await?,
+        sheet_body(&mut connection, &sheet, query.tab.as_deref(), access).await?,
     ))
 }
 
@@ -540,7 +627,7 @@ async fn create_sheet(
     .await?;
     outbox::enqueue_sheet_updated(&mut write.transaction, project_id, sheet.id, sheet.revision)
         .await?;
-    let body = sheet_body(&mut write.transaction, &sheet, None, true).await?;
+    let body = sheet_body(&mut write.transaction, &sheet, None, (true, false)).await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 
@@ -632,7 +719,13 @@ async fn update_sheet(
                 ));
             }
         };
-    let body = sheet_body(&mut write.transaction, &sheet, request.tab.as_deref(), true).await?;
+    let body = sheet_body(
+        &mut write.transaction,
+        &sheet,
+        request.tab.as_deref(),
+        (true, false),
+    )
+    .await?;
     write.finish(StatusCode::OK, &body).await
 }
 
@@ -687,11 +780,36 @@ enum ChangeRequest {
         /// Pixels; null puts the column back to the default.
         width: Option<i32>,
     },
+    /// Sort a block's rows by its columns: `by` is `[column, descending]`
+    /// pairs, most important first.
+    #[serde(rename_all = "camelCase")]
+    Sort {
+        tab: String,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        by: Vec<(i32, bool)>,
+    },
+    /// Number format and style for a block, `[first, last]` rows and
+    /// columns.
+    #[serde(rename_all = "camelCase")]
+    Format {
+        tab: String,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        look: super::LookInput,
+    },
+    /// Replace a tab's conditional formats.
+    #[serde(rename_all = "camelCase")]
+    ConditionalFormats {
+        tab: String,
+        rules: Vec<super::conditional::ConditionalRule>,
+    },
 }
 
 impl ChangeRequest {
-    fn into_change(self) -> Change {
-        match self {
+    /// The change, or the look field that's wrong and why.
+    fn into_change(self) -> Result<Change, (&'static str, String)> {
+        Ok(match self {
             Self::Cell {
                 tab,
                 row,
@@ -744,7 +862,33 @@ impl ChangeRequest {
                 column,
                 width,
             },
-        }
+            Self::Sort {
+                tab,
+                rows,
+                columns,
+                by,
+            } => Change::Sort {
+                tab: Some(tab),
+                rows,
+                columns,
+                by,
+            },
+            Self::Format {
+                tab,
+                rows,
+                columns,
+                look,
+            } => Change::Format {
+                tab: Some(tab),
+                rows,
+                columns,
+                patch: look.patch()?,
+            },
+            Self::ConditionalFormats { tab, rules } => Change::ConditionalFormats {
+                tab: Some(tab),
+                rules,
+            },
+        })
     }
 }
 
@@ -763,6 +907,14 @@ struct ChangedCellBody {
     input: Option<String>,
     kind: &'static str,
     value: Json_,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<super::CellStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conditional: Option<super::CellStyle>,
 }
 
 #[derive(Debug, Serialize)]
@@ -774,6 +926,8 @@ struct ChangeSheetBody {
     previous_revision: i64,
     inputs_changed: usize,
     values_changed: usize,
+    /// Cells whose number format or style changed.
+    looks_changed: usize,
     /// Tabs were added, removed, renamed, moved or resized, or rows and
     /// columns moved: read the sheet again rather than patching cells.
     tabs_changed: bool,
@@ -820,12 +974,29 @@ async fn change_sheet(
             Json_::Null,
         ));
     }
-    let changes = request
-        .changes
-        .iter()
-        .cloned()
-        .map(ChangeRequest::into_change)
-        .collect::<Vec<_>>();
+    let mut changes = Vec::with_capacity(request.changes.len());
+    for (index, change) in request.changes.iter().cloned().enumerate() {
+        match change.into_change() {
+            Ok(change) => changes.push(change),
+            Err((field, message)) => {
+                return Ok(refusal(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "validation_failed",
+                    format!("Nothing was saved. {message}"),
+                    json!({ "field": format!("changes[{index}].look.{field}"), "index": index }),
+                ));
+            }
+        }
+    }
+    if !write.edits {
+        match cell_mode(&mut write.transaction, &principal, project_id, sheet.id).await? {
+            Some(crate::access::WriteMode::Direct) => {}
+            Some(crate::access::WriteMode::Propose) => {
+                return propose_changes(write, &principal, &sheet, &changes).await;
+            }
+            None => return Err(AppError::Forbidden),
+        }
+    }
     let applied = match super::apply(
         &mut write.transaction,
         &sheet,
@@ -874,8 +1045,10 @@ async fn change_sheet(
         previous_revision: sheet.revision,
         inputs_changed: applied.inputs_changed,
         values_changed: applied.values_changed,
+        looks_changed: applied.looks_changed,
         tabs_changed: applied.tabs_changed,
-        truncated: applied.changed.len() < applied.inputs_changed + applied.values_changed,
+        truncated: applied.changed.len()
+            < applied.inputs_changed + applied.values_changed + applied.looks_changed,
         changed: applied
             .changed
             .into_iter()
@@ -886,8 +1059,75 @@ async fn change_sheet(
                 input: cell.input,
                 kind: cell.value.kind(),
                 value: cell.value.to_json(),
+                format: cell.look.format,
+                style: (!cell.look.style.is_plain()).then_some(cell.look.style),
+                display: cell.display,
+                conditional: cell.conditional,
             })
             .collect(),
+    };
+    write.finish(StatusCode::OK, &body).await
+}
+
+/// Cell changes from someone whose role only suggests: kept as a proposal
+/// for someone who edits the sheet (C1.11).
+async fn propose_changes(
+    mut write: Write,
+    principal: &AuthenticatedActor,
+    sheet: &Sheet,
+    changes: &[Change],
+) -> Result<Response, AppError> {
+    use super::proposals::Proposed;
+    let author = crate::memory::browser_writer(principal)?;
+    let (proposal_id, proposed) = match super::proposals::propose(
+        &mut write.transaction,
+        author,
+        sheet,
+        changes,
+        None,
+    )
+    .await?
+    {
+        Proposed::Made { id, cells } => (Some(id), cells),
+        Proposed::Unchanged => (None, Vec::new()),
+        Proposed::Refused(message) => {
+            return Ok(refusal(
+                StatusCode::FORBIDDEN,
+                "suggest_only",
+                message,
+                Json_::Null,
+            ));
+        }
+        Proposed::Problem(problem) => {
+            let (status, code) = match problem.kind {
+                ProblemKind::Invalid => (StatusCode::UNPROCESSABLE_ENTITY, "validation_failed"),
+                ProblemKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                ProblemKind::Conflict => (StatusCode::CONFLICT, "sheet_conflict"),
+                ProblemKind::Full => (StatusCode::CONFLICT, "sheet_limit"),
+            };
+            return Ok(refusal(
+                status,
+                code,
+                format!("Nothing was proposed. {}", problem.message),
+                json!({ "field": format!("changes[{}]", problem.index), "index": problem.index }),
+            ));
+        }
+    };
+    if let Some(id) = proposal_id {
+        record_audit_for(
+            &mut write.transaction,
+            &write.actor,
+            "proposal",
+            "sheet.proposal_created",
+            id,
+            json!({ "sheet": sheet.id, "cells": proposed.len() }),
+        )
+        .await?;
+    }
+    let body = ProposedBody {
+        revision: sheet.revision,
+        proposal_id,
+        proposed,
     };
     write.finish(StatusCode::OK, &body).await
 }
@@ -1035,7 +1275,7 @@ async fn import_sheet(
     )
     .await?;
     let sheet = write.sheet(sheet.id).await?;
-    let body = sheet_body(&mut write.transaction, &sheet, None, true).await?;
+    let body = sheet_body(&mut write.transaction, &sheet, None, (true, false)).await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 
@@ -1109,7 +1349,7 @@ async fn export_sheet(
         Format::Xlsx => {
             let inputs = tabs
                 .iter()
-                .map(|tab| transfer::input_of(&tab.name, &of(tab)))
+                .map(|tab| transfer::input_of(&tab.name, &of(tab), tab.rules()))
                 .collect::<Vec<_>>();
             let bytes = tokio::task::spawn_blocking(move || {
                 use super::engine::FormulaEngine;
@@ -1166,7 +1406,7 @@ mod tests {
         }))
         .expect("changes parse");
         assert!(matches!(
-            request.changes[0].clone().into_change(),
+            request.changes[0].clone().into_change().expect("cell"),
             Change::Cell {
                 row: 2,
                 column: 3,
@@ -1175,9 +1415,34 @@ mod tests {
             }
         ));
         assert!(matches!(
-            request.changes[2].clone().into_change(),
+            request.changes[2].clone().into_change().expect("width"),
             Change::ColumnWidth { width: None, .. }
         ));
+        let format: ChangeSheetRequest = serde_json::from_value(json!({
+            "changes": [
+                {"type": "format", "tab": "Sheet1", "rows": [2, 40], "columns": [2, 2],
+                 "look": {"numberFormat": "0.0%", "bold": true, "fill": "#ffeeaa"}},
+                {"type": "format", "tab": "Sheet1", "rows": [1, 1], "columns": [1, 1],
+                 "look": {"fill": "yellow"}},
+            ]
+        }))
+        .expect("formats parse");
+        let Change::Format { rows, patch, .. } =
+            format.changes[0].clone().into_change().expect("format")
+        else {
+            panic!("a format change");
+        };
+        assert_eq!(rows, (2, 40));
+        assert_eq!(patch.format, Some(Some("0.0%".to_owned())));
+        assert_eq!(patch.fill, Some(Some("#FFEEAA".to_owned())));
+        assert_eq!(
+            format.changes[1]
+                .clone()
+                .into_change()
+                .err()
+                .map(|(field, _)| field),
+            Some("fill")
+        );
         let unknown = serde_json::from_value::<ChangeSheetRequest>(json!({
             "changes": [{"type": "cell", "tab": "Sheet1", "row": 1, "column": 1, "input": "", "extra": 1}]
         }));
@@ -1200,6 +1465,7 @@ mod tests {
             structure_revision: 1,
             frozen_rows: 1,
             column_widths: Json_::Object(Map::new()),
+            conditional_formats: Json_::Array(Vec::new()),
         };
         let tabs = vec![tab("Summary"), tab("Data")];
         assert_eq!(

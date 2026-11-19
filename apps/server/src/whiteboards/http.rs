@@ -177,6 +177,8 @@ struct BoardDetail {
     whiteboard: BoardSummary,
     links: Vec<LinkView>,
     can_edit: bool,
+    /// The role only suggests here: drawing waits as a proposal (C1.11).
+    can_suggest: bool,
     revisions: Vec<store::RevisionSummary>,
 }
 
@@ -187,11 +189,23 @@ async fn detail(
 ) -> Result<BoardDetail, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut connection, caller, whiteboard_id, false).await?;
+    let can_suggest = !board.can_edit
+        && crate::access::write_mode(
+            &mut connection,
+            &crate::access::Caller::person(caller.actor_id, caller.actor_kind),
+            "whiteboard",
+            board.project_id,
+            false,
+            Some("whiteboards"),
+        )
+        .await?
+        .is_ok_and(|grant| grant.mode == crate::access::WriteMode::Propose);
     drop(connection);
     Ok(BoardDetail {
         whiteboard: super::summary(&state.pool, whiteboard_id).await?,
         links: super::links(&state.pool, caller, whiteboard_id).await?,
         can_edit: board.can_edit,
+        can_suggest,
         revisions: store::revisions(&state.pool, whiteboard_id, 30).await?,
     })
 }

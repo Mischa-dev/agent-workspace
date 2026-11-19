@@ -2296,7 +2296,6 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             conversation_id: None,
             message_id: None,
             work_item_id: None,
-            comment_id: None,
             agent_run_id: None,
             pull_request_id: None,
             detail: json!({
@@ -3217,7 +3216,6 @@ async fn notify(
             conversation_id: None,
             message_id: None,
             work_item_id: context.work_item_id,
-            comment_id: None,
             agent_run_id: context.agent_run_id,
             pull_request_id: context.pull_request_id,
             detail: json!({

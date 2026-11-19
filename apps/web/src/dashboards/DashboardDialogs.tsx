@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { DashboardEntry, TileEntry, TileInput } from '../api/generated/operations'
 import { opQuery, useOp } from '../api/ops'
 import { useCollections } from '../collections/api'
+import { useSheet, useSheets } from '../sheets/api'
 import { Banner, Button, Dialog, SegmentedControl, SelectField, Switch, TextArea, TextField, describeError } from '../ui'
 import { TILE_WIDTHS, widthLabel } from './dashboardModel'
 
@@ -86,12 +87,13 @@ export function DashboardDetailsDialog({
   )
 }
 
-type Kind = 'view' | 'text'
+type Kind = 'view' | 'sheet' | 'text'
+type Style = 'bar' | 'line' | 'donut' | 'number'
 
 /**
  * Adds a tile, or changes one: a view of one of the project's collections
- * (a chart view shows as its chart), or a note. A shared dashboard offers
- * shared views only.
+ * (a chart view shows as its chart), a block of a sheet as a chart (C1.20),
+ * or a note. A shared dashboard offers shared views only.
  */
 export function TileDialog({
   onClose,
@@ -111,16 +113,23 @@ export function TileDialog({
   const [view, setView] = useState(tile?.view ?? '')
   const [title, setTitle] = useState(tile?.title ?? '')
   const [text, setText] = useState(tile?.text ?? '')
+  const [sheet, setSheet] = useState(tile?.sheet ?? '')
+  const [range, setRange] = useState(tile?.range ?? '')
+  const [style, setStyle] = useState<Style>(tile?.style ?? 'bar')
   const [width, setWidth] = useState(tile?.width ?? 6)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const collections = useCollections(projectId)
   const views = useQuery({ ...opQuery('view_list', { collection }), enabled: kind === 'view' && Boolean(collection) })
   const offered = (views.data?.views ?? []).filter((entry) => !shared || entry.shared)
+  const sheets = useSheets(kind === 'sheet' ? projectId : '')
+  const chosenSheet = useSheet(projectId, kind === 'sheet' ? sheet : '', '')
+  const named = chosenSheet.data && chosenSheet.data.sheet.id === sheet ? chosenSheet.data.ranges : []
   const submit = async () => {
     setProblem(null)
     if (kind === 'view' && !view) return setProblem('Pick a view to show.')
     if (kind === 'text' && !text.trim()) return setProblem('Write the note.')
+    if (kind === 'sheet' && (!sheet || !range.trim())) return setProblem('Pick a sheet and the cells to chart.')
     setBusy(true)
     try {
       await onSave({
@@ -129,6 +138,9 @@ export function TileDialog({
         title: title.trim() || null,
         view: kind === 'view' ? view : null,
         text: kind === 'text' ? text.trim() : null,
+        sheet: kind === 'sheet' ? sheet : null,
+        range: kind === 'sheet' ? range.trim() : null,
+        style: kind === 'sheet' ? style : null,
         width,
         height: tile?.height ?? (kind === 'text' ? 1 : 2),
       })
@@ -166,6 +178,7 @@ export function TileDialog({
           onChange={setKind}
           options={[
             { value: 'view', label: 'A view' },
+            { value: 'sheet', label: 'A sheet' },
             { value: 'text', label: 'A note' },
           ]}
           value={kind}
@@ -209,10 +222,58 @@ export function TileDialog({
             ))}
           </SelectField>
         </>
+      ) : kind === 'sheet' ? (
+        <>
+          <SelectField
+            label="Sheet"
+            onChange={(event) => {
+              setSheet(event.target.value)
+              setRange('')
+            }}
+            required
+            value={sheet}
+          >
+            <option value="">{sheets.isPending ? 'Loading…' : 'Pick a sheet'}</option>
+            {(sheets.data?.sheets ?? [])
+              .filter((entry) => !entry.archived || entry.id === sheet)
+              .map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+          </SelectField>
+          {named.length ? (
+            <SelectField label="Named range" onChange={(event) => setRange(event.target.value)} value={named.some((entry) => entry.name === range) ? range : ''}>
+              <option value="">Other cells</option>
+              {named.map((entry) => (
+                <option key={entry.name} value={entry.name}>
+                  {entry.name} ({entry.tab} {entry.range})
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
+          {named.some((entry) => entry.name === range) ? null : (
+            <TextField
+              disabled={!sheet}
+              hint="Labels in the first column, numbers in the second, such as A1:B12 or Costs!A1:B12. Name a range in the sheet to keep the tile on it as rows move."
+              label="Cells"
+              maxLength={100}
+              onChange={(event) => setRange(event.target.value)}
+              required
+              value={range}
+            />
+          )}
+          <SelectField label="Chart" onChange={(event) => setStyle(event.target.value as Style)} value={style}>
+            <option value="bar">Bars</option>
+            <option value="line">A line</option>
+            <option value="donut">A donut</option>
+            <option value="number">One number: the total</option>
+          </SelectField>
+        </>
       ) : (
         <TextArea label="Note" maxLength={2000} onChange={(event) => setText(event.target.value)} required rows={4} value={text} />
       )}
-      <TextField hint={kind === 'view' ? 'Optional; the view’s name when left empty.' : 'Optional.'} label="Title" maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
+      <TextField hint={kind === 'view' ? 'Optional; the view’s name when left empty.' : kind === 'sheet' ? 'Optional; the range’s name when left empty.' : 'Optional.'} label="Title" maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
       <SelectField label="Width" onChange={(event) => setWidth(Number(event.target.value))} value={String(width)}>
         {TILE_WIDTHS.map((option) => (
           <option key={option} value={option}>

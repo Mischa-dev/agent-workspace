@@ -126,6 +126,28 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     .await;
     assert_eq!(self_accept["outcome"], "permission_denied", "{self_accept}");
 
+    // Both are proposals (C1.7): Mara lists her own, and deciding through
+    // proposal_decide follows the same rule.
+    let mine = call("proposal_list", json!({})).await;
+    assert_eq!(mine["outcome"], "ok", "{mine}");
+    let proposals = mine["value"]["proposals"].as_array().expect("proposals");
+    assert_eq!(proposals.len(), 2, "{mine}");
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| proposal["thingKind"] == "page"
+                && proposal["thingId"] == page.as_str()
+                && proposal["operation"] == "page_edit"
+                && proposal["status"] == "pending"),
+        "{mine}"
+    );
+    let self_accept = call(
+        "proposal_decide",
+        json!({"proposalId": first, "decision": "accept", "clientRequestId": "self-accept"}),
+    )
+    .await;
+    assert_eq!(self_accept["outcome"], "permission_denied", "{self_accept}");
+
     // The owner accepts the first: the page changes as Mara's edit, with
     // the owner named in the note.
     let (status, accepted) = send(
@@ -156,6 +178,17 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         note.starts_with("Fix the risk (Suggestion accepted by"),
         "{note}"
     );
+    let applied = sqlx::query_scalar::<_, bool>(
+        "SELECT proposal.applied_change_set_id = change.id \
+         FROM proposals proposal JOIN document_change_sets change \
+           ON change.proposal_id = proposal.id \
+         WHERE proposal.id = $1::uuid",
+    )
+    .bind(&first)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("accepting made a change set");
+    assert!(applied);
 
     // The owner edits the last paragraph by hand; the second suggestion,
     // made against the old text, no longer applies and stays pending.
@@ -185,11 +218,12 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     assert!(body.contains("Ship it soon."), "{body}");
     assert!(!body.contains("Friday"), "{body}");
     let withdrawn = call(
-        "page_suggestion_decide",
-        json!({"pageId": page, "suggestionId": second, "decision": "withdraw"}),
+        "proposal_decide",
+        json!({"proposalId": second, "decision": "withdraw", "clientRequestId": "withdraw-second"}),
     )
     .await;
     assert_eq!(withdrawn["value"]["status"], "withdrawn", "{withdrawn}");
+    assert_eq!(withdrawn["value"]["thingId"], page.as_str(), "{withdrawn}");
     let pending = discussion().await;
     assert!(
         pending["suggestions"]
@@ -215,6 +249,56 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     assert!(appended["value"]["suggestion"].is_null(), "{appended}");
     assert_eq!(appended["value"]["version"], 2, "{appended}");
 
+    // Change sets (C1.9): the append is one change Mara can undo, and the
+    // undo is a change she can undo in turn.
+    let own_body = || async {
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&own_page)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("own page")
+    };
+    let changes = call(
+        "change_list",
+        json!({"thingKind": "page", "thingId": own_page}),
+    )
+    .await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let latest = changes["value"]["changes"][0].clone();
+    assert_eq!(latest["versionTo"], 2, "{changes}");
+    assert_eq!(latest["undoable"], true, "{changes}");
+    let undone = call(
+        "change_undo",
+        json!({"changeSetId": latest["id"], "clientRequestId": "undo-append"}),
+    )
+    .await;
+    assert_eq!(undone["outcome"], "ok", "{undone}");
+    assert_eq!(undone["value"]["version"], 3, "{undone}");
+    assert!(!own_body().await.contains("Two"));
+    let again = call(
+        "change_undo",
+        json!({"changeSetId": latest["id"], "clientRequestId": "undo-append-again"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    let redone = call(
+        "change_undo",
+        json!({"changeSetId": undone["value"]["change"]["id"], "clientRequestId": "undo-the-undo"}),
+    )
+    .await;
+    assert_eq!(redone["outcome"], "ok", "{redone}");
+    assert!(own_body().await.contains("Two"));
+    // On the owner's page Mara only suggests, so she can't undo there.
+    let theirs = call("change_list", json!({"thingKind": "page", "thingId": page})).await;
+    let theirs = theirs["value"]["changes"][0]["id"].clone();
+    assert!(theirs.is_string(), "the owner's edits are change sets");
+    let denied = call(
+        "change_undo",
+        json!({"changeSetId": theirs, "clientRequestId": "undo-theirs"}),
+    )
+    .await;
+    assert_eq!(denied["outcome"], "permission_denied", "{denied}");
+
     // Comments: Mara quotes words in a block; quoting words that aren't
     // there is refused.
     let reread = call("page_blocks", json!({"pageId": page})).await;
@@ -235,8 +319,11 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         .as_str()
         .expect("thread")
         .to_owned();
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("catch up with the log");
     let notified = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM notifications WHERE kind = 'page_comment' AND subject_id = $1::uuid",
+        "SELECT count(*) FROM notifications WHERE kind = 'thing_comment' AND detail->>'subjectId' = $1",
     )
     .bind(&page)
     .fetch_one(&setup.pool)
@@ -396,4 +483,128 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// C1.22: a comment asks for a change, and the change answers in its
+/// thread: linked there with Undo, and only to a thread on that page.
+#[tokio::test]
+async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
+    let Some(setup) = setup("c122_ask_in_comment").await else {
+        return;
+    };
+    let app = &setup.app;
+    let browser = &setup.browser;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let new_page = |title: &'static str| {
+        let work = work.clone();
+        async move {
+            let (status, page) = send(
+                app,
+                browser.request(
+                    "POST",
+                    &format!("/api/v1/projects/{work}/pages"),
+                    None,
+                    json!({"title": title, "body": BODY}),
+                ),
+            )
+            .await;
+            assert!(status.is_success(), "{page}");
+            page["id"].as_str().expect("page").to_owned()
+        }
+    };
+    let page = new_page("Plan").await;
+    let other = new_page("Other").await;
+    let ask = |page: String| async move {
+        let (status, asked) = send(
+            app,
+            browser.request(
+                "POST",
+                &format!("/api/v1/pages/{page}/comments"),
+                None,
+                json!({"body": "Can someone make the risks clearer?"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{asked}");
+    };
+    ask(page.clone()).await;
+    ask(other.clone()).await;
+    let discussion = |page: String| async move {
+        let (status, body) = send(
+            app,
+            browser.request(
+                "GET",
+                &format!("/api/v1/pages/{page}/discussion"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    };
+    let thread = discussion(page.clone()).await["threads"][0]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    let elsewhere = discussion(other.clone()).await["threads"][0]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+
+    let helper = super::agent_interface::connect_app(app, &setup.browser, "Helper", "full").await;
+    let session = initialize(app, &helper).await.expect("Helper MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = helper.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let read = call("page_blocks", json!({"pageId": page})).await;
+    let risk = read["value"]["blocks"][3].clone();
+    let edit = |thread: String| {
+        let page = page.clone();
+        let risk = risk.clone();
+        async move {
+            call(
+                "page_edit",
+                json!({"pageId": page, "threadId": thread, "edits": [{
+                    "op": "replace", "blockId": risk["id"], "hash": risk["hash"],
+                    "markdown": "- slow CI: builds take 40 minutes"
+                }]}),
+            )
+            .await
+        }
+    };
+
+    // A thread on another page isn't this page's.
+    let wrong = edit(elsewhere).await;
+    assert_eq!(wrong["outcome"], "not_found", "{wrong}");
+
+    let edited = edit(thread.clone()).await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let shown = discussion(page.clone()).await;
+    let changes = &shown["threads"][0]["changes"];
+    assert_eq!(changes.as_array().map(Vec::len), Some(1), "{shown}");
+    assert_eq!(changes[0]["undone"], false, "{shown}");
+    let change_set = changes[0]["changeSetId"]
+        .as_str()
+        .expect("change set")
+        .to_owned();
+    assert_eq!(
+        discussion(other.clone()).await["threads"][0].get("changes"),
+        None
+    );
+
+    // Undo from the thread puts the words back.
+    let undone = call("change_undo", json!({"changeSetId": change_set})).await;
+    assert_eq!(undone["outcome"], "ok", "{undone}");
+    let shown = discussion(page.clone()).await;
+    assert_eq!(shown["threads"][0]["changes"][0]["undone"], true, "{shown}");
+    let body =
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("page");
+    assert!(body.contains("- slow CI\n"), "{body}");
 }

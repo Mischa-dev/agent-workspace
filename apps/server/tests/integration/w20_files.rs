@@ -661,3 +661,146 @@ async fn link_previews_show_once_ready_and_stay_hidden() {
     let entry = timeline_entry(&setup, &rook, &channel, &message).await;
     assert!(entry["message"].get("linkPreviews").is_none(), "{entry}");
 }
+
+/// C1.33: a page keeps files of its own, such as a picture pasted into it.
+/// They open for whoever can see the page and for nobody else, by browser
+/// or over MCP; message and task files read as before (above).
+#[tokio::test]
+async fn a_page_keeps_its_own_files() {
+    let Some((setup, _root)) = with_data_root("c133_page_files").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTH", "Other").await;
+    let (_rook_id, rook) = add_person(&setup, &[&space, &work], "rook").await;
+    let (_mara_id, mara) = add_person(&setup, &[&space, &other], "mara").await;
+    let owner = &setup.browser;
+    let (status, page) = send(
+        &setup.app,
+        owner.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Plan", "body": "Hello"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+
+    // A picture of the page, and a text file with a preview.
+    let png = super::support::two_workspaces::tiny_png();
+    let (status, picture) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=plan.png"),
+        "image/png",
+        &png,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{picture}");
+    assert!(picture["width"].as_i64().is_some(), "{picture}");
+    let picture = picture["id"].as_str().expect("file").to_owned();
+    let (status, notes) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=notes.md"),
+        "text/markdown",
+        b"# Notes\n\nline two",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{notes}");
+    assert_eq!(notes["preview"], "# Notes\n\nline two", "{notes}");
+    let notes = notes["id"].as_str().expect("file").to_owned();
+
+    // Someone outside the page's project can't add to it, and a kind that
+    // keeps no files is refused.
+    let (status, _) = upload(
+        &setup,
+        &mara,
+        &format!("/api/v1/things/page/{page}/files?name=x.txt"),
+        "text/plain",
+        b"x",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/things/sheet/{page}/files?name=x.txt"),
+        "text/plain",
+        b"x",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Readable by the page's readers only.
+    assert_eq!(
+        read(&setup, &rook, &picture).await.expect("Rook reads"),
+        png
+    );
+    assert_eq!(
+        read(&setup, &mara, &picture).await,
+        Err(StatusCode::NOT_FOUND)
+    );
+    for (browser, expected) in [(&rook, StatusCode::OK), (&mara, StatusCode::NOT_FOUND)] {
+        let (status, described) = send(
+            &setup.app,
+            browser.request("GET", &format!("/api/v1/files/{notes}"), None, Value::Null),
+        )
+        .await;
+        assert_eq!(status, expected, "{described}");
+    }
+
+    // An agent in the project adds one over MCP and reads it back.
+    let (agent, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, agent, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let added = tool(
+        &setup.app,
+        &token,
+        &session,
+        "file_upload",
+        json!({"thing": {"kind": "page", "id": page}, "name": "run.log", "text": "all green"}),
+    )
+    .await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    let read_back = tool(
+        &setup.app,
+        &token,
+        &session,
+        "file_read",
+        json!({"fileId": added["value"]["fileId"]}),
+    )
+    .await;
+    assert_eq!(read_back["outcome"], "ok", "{read_back}");
+
+    // Its uploader removes a page's file; nobody else does.
+    let (status, _) = send(
+        &setup.app,
+        rook.request(
+            "DELETE",
+            &format!("/api/v1/files/{notes}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send(
+        &setup.app,
+        owner.request(
+            "DELETE",
+            &format!("/api/v1/files/{notes}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        read(&setup, owner, &notes).await,
+        Err(StatusCode::NOT_FOUND)
+    );
+}

@@ -473,28 +473,41 @@ async fn mentioned_events(
         )
         .await;
     assert_eq!(page["outcome"], "ok", "{page}");
-    page["value"]["events"]
+    let mut found = Vec::new();
+    for event in page["value"]["events"]
         .as_array()
         .expect("events")
         .iter()
-        .filter(|event| event["type"] == "comment.mentioned")
-        .map(|event| {
-            let data = &event["data"];
-            assert!(!event.to_string().contains("thoughts"), "ids only: {event}");
-            (
-                data["commentKind"].as_str().expect("kind").to_owned(),
-                data["commentId"]
-                    .as_str()
-                    .and_then(|id| id.parse().ok())
-                    .expect("comment"),
-                data["thing"]["id"].as_str().expect("thing").to_owned(),
-            )
-        })
-        .collect()
+        .filter(|event| event["type"] == "message.mentioned")
+    {
+        assert!(!event.to_string().contains("thoughts"), "ids only: {event}");
+        let data = &event["data"];
+        let message: Uuid = data["messageId"]
+            .as_str()
+            .and_then(|id| id.parse().ok())
+            .expect("message");
+        // The thing the comment is on.
+        let (kind, thing) = sqlx::query_as::<_, (String, Uuid)>(
+            r#"
+            SELECT COALESCE(parent.subject_kind, place.subject_kind),
+                   COALESCE(parent.subject_id, place.subject_id)
+            FROM messages message
+            JOIN conversations place ON place.id = message.conversation_id
+            LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
+            WHERE message.id = $1
+            "#,
+        )
+        .bind(message)
+        .fetch_one(pool)
+        .await
+        .expect("the comment's thing");
+        found.push((kind, message, thing.to_string()));
+    }
+    found
 }
 
 /// C1.1: a task or page comment that mentions an agent tells it with one
-/// `comment.mentioned` event, carrying the thing's and the comment's ids and
+/// `message.mentioned` event (comments are messages since C1.4), carrying ids and
 /// no words; an agent not in the project, and the author, get none. A task
 /// comment is one path for the web and agent tools.
 #[tokio::test]
@@ -558,7 +571,7 @@ async fn comments_that_mention_agents_tell_them() {
         Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0].0, "work_item_comment");
+    assert_eq!(events[0].0, "task");
     assert_eq!(events[0].1, comment_id);
     assert_eq!(events[0].2, task_id);
 
@@ -603,7 +616,7 @@ async fn comments_that_mention_agents_tell_them() {
     let page_comment = created["id"].as_str().expect("comment").to_owned();
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 2, "{events:?}");
-    assert_eq!(events[1].0, "page_comment");
+    assert_eq!(events[1].0, "page");
     assert_eq!(events[1].1.to_string(), page_comment);
     assert_eq!(events[1].2, page_id);
     assert!(mentioned_events(app, pool, kite).await.is_empty());
@@ -733,4 +746,266 @@ async fn sheet_anchor_follows_a_row_insert() {
         threads.iter().all(|thread| thread["messageCount"] == 1),
         "{listed}"
     );
+}
+
+/// Follow-up from #287's review: a board's discussion moves with the board,
+/// to another space and to the workspace, with its threads, replies and
+/// reactions, and the new space's members can read and add to it.
+#[tokio::test]
+async fn a_boards_discussion_moves_with_it() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("OTHER")
+        .person("lena", "member")
+        .person("nina", "member")
+        .build("d2_board_discussion_moves")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let other = Uuid::parse_str(world.project("OTHER")).expect("other");
+    let lena = &world.people["lena"];
+    let nina = &world.people["nina"];
+    // Nina is only in OTHER.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(nina.actor)
+    .execute(pool)
+    .await
+    .expect("nina leaves WORK");
+
+    let (_, board) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_create",
+        json!({
+            "title": "Flow",
+            "projectId": work,
+            "operations": [{"op": "add", "type": "rectangle", "id": "start", "text": "Start"}],
+        }),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let thing = json!({"kind": "whiteboard", "id": board});
+    let (_, first) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Start smaller.", "anchor": {"kind": "elements", "elementIds": ["start"], "at": {"x": 1, "y": 2}}}),
+    )
+    .await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let thread = first["value"]["threadId"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    let (_, reply) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "And label it.", "threadId": thread}),
+    )
+    .await;
+    assert_eq!(reply["outcome"], "ok", "{reply}");
+    let (_, stream) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Looks good overall."}),
+    )
+    .await;
+    assert_eq!(stream["outcome"], "ok", "{stream}");
+    let comments = Uuid::parse_str(
+        stream["value"]["conversationId"]
+            .as_str()
+            .expect("comments"),
+    )
+    .expect("comments id");
+
+    // Nina can't see it while the board is in WORK.
+    let (_, hidden) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+
+    // Lena moves the board to OTHER: the whole discussion goes with it.
+    let (_, moved) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "projectId": other}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let places = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT project_id FROM conversations WHERE id = $1 OR parent_channel_id = $1 \
+         UNION SELECT DISTINCT project_id FROM messages WHERE conversation_id IN \
+             (SELECT id FROM conversations WHERE id = $1 OR parent_channel_id = $1)",
+    )
+    .bind(comments)
+    .fetch_all(pool)
+    .await
+    .expect("places");
+    assert_eq!(places, vec![other]);
+    let (_, listed) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["threads"][0]["messageCount"], 2, "{listed}");
+    assert_eq!(listed["value"]["messageCount"], 1, "{listed}");
+    let (_, nina_says) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Agreed.", "threadId": thread}),
+    )
+    .await;
+    assert_eq!(nina_says["outcome"], "ok", "{nina_says}");
+
+    // And to the whole workspace: into the workspace's own space.
+    let (_, workspace_wide) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "workspaceWide": true}),
+    )
+    .await;
+    assert_eq!(workspace_wide["outcome"], "ok", "{workspace_wide}");
+    let (board_space, comments_space) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT board.project_id, conversation.project_id FROM whiteboards board, conversations conversation \
+         WHERE board.id = $1::uuid AND conversation.id = $2",
+    )
+    .bind(&board)
+    .bind(comments)
+    .fetch_one(pool)
+    .await
+    .expect("spaces");
+    assert_eq!(board_space, comments_space);
+    assert_ne!(comments_space, other);
+    let (_, after) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(after["value"]["threads"][0]["messageCount"], 3, "{after}");
+}
+
+/// A task's discussion (its comments, their threads and their files) stays
+/// with whoever sees tasks: an app whose agent limit keeps tasks from it
+/// can't list it, read it or fetch its files, though its person can.
+#[tokio::test]
+async fn task_discussions_keep_the_task_limit() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("laptop")
+        .build("c1_4_task_discussion_limit")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let laptop = &world.apps["laptop"];
+    let call = |name: &'static str, arguments: Value| async move {
+        laptop.call(app, Call::Tool { name, arguments }).await.1
+    };
+
+    let made = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Ship it", "clientRequestId": "limit-task"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let task = made["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
+    let upload = call(
+        "file_upload",
+        json!({"taskId": task, "forComment": true, "name": "trace.log", "text": "trace"}),
+    )
+    .await;
+    assert_eq!(upload["outcome"], "ok", "{upload}");
+    let file = upload["value"]["fileId"].as_str().expect("file").to_owned();
+    let commented = call(
+        "task_comment",
+        json!({"taskId": task, "text": "Trace attached", "clientRequestId": "limit-comment",
+               "attachmentIds": [file]}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let listed = call(
+        "comment_list",
+        json!({"thing": {"kind": "task", "id": task}}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let conversation = listed["value"]["conversationId"]
+        .as_str()
+        .expect("comments")
+        .to_owned();
+    let read = call("conversation_read", json!({"conversationId": conversation})).await;
+    assert!(read.to_string().contains("Trace attached"), "{read}");
+    let fetched = call("file_read", json!({"fileId": file})).await;
+    assert_eq!(fetched["outcome"], "ok", "{fetched}");
+
+    // Keep tasks from the person's apps: the same reads find nothing.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = $1 WHERE organization_id = $2 AND actor_id = $3",
+    )
+    .bind(vec!["projects.view", "channels.post"])
+    .bind(world.organization)
+    .bind(laptop.person)
+    .execute(world.pool())
+    .await
+    .expect("keep tasks from the apps");
+    let listed = call(
+        "comment_list",
+        json!({"thing": {"kind": "task", "id": task}}),
+    )
+    .await;
+    assert_ne!(listed["outcome"], "ok", "{listed}");
+    let read = call("conversation_read", json!({"conversationId": conversation})).await;
+    assert_ne!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Trace attached"), "{read}");
+    let opened = call("conversation_open", json!({"conversationId": conversation})).await;
+    assert_ne!(opened["outcome"], "ok", "{opened}");
+    let fetched = call("file_read", json!({"fileId": file})).await;
+    assert_ne!(fetched["outcome"], "ok", "{fetched}");
+    let posted = call(
+        "comment_create",
+        json!({"thing": {"kind": "task", "id": task}, "text": "Still here?"}),
+    )
+    .await;
+    assert_ne!(posted["outcome"], "ok", "{posted}");
+    world.finish().await;
 }

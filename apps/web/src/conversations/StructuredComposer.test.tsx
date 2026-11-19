@@ -68,6 +68,7 @@ describe('StructuredComposer', () => {
       width: null,
       height: null,
       commentId: null,
+      preview: null,
       uploadedBy: human.id,
       createdAt: '',
     }

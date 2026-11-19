@@ -103,6 +103,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/direct",
     "/api/v1/events",
     "/api/v1/events/catalogue",
+    "/api/v1/files/{id}",
     "/api/v1/files/{id}/content",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
@@ -1839,6 +1840,12 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ]
     };
     cases.push(case(
+        "/api/v1/files/{id}",
+        files(a, ""),
+        files(b, ""),
+        vec![],
+    ));
+    cases.push(case(
         "/api/v1/files/{id}/content",
         [files(a, "/content"), files(a, "/content?download=1")].concat(),
         files(b, "/content"),
@@ -2030,7 +2037,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "automation_list",
     "briefing_get",
     "bug_report_link_list",
+    "change_list",
     "connection_list",
+    "proposal_list",
     "connection_delivery_list",
     "schedule_list",
     "conversation_list",
@@ -2056,6 +2065,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "record_query",
     "sheet_list",
     "sheet_read",
+    "sheet_search",
+    "sheet_view_list",
     "host_list",
     "account_joinable_list",
     "agent_offer_list",
@@ -2919,6 +2930,21 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "change_list",
+            vec![json!({"thingKind": "page", "thingId": a.page})],
+            vec![json!({"thingKind": "page", "thingId": b.page})],
+            vec![],
+        ),
+        case(
+            "proposal_list",
+            vec![
+                json!({"thingKind": "page", "thingId": a.page, "includeDecided": true}),
+                json!({}),
+            ],
+            vec![json!({"thingKind": "page", "thingId": b.page, "includeDecided": true})],
+            vec![],
+        ),
+        case(
             "skill_get",
             vec![
                 json!({"pageId": a.page}),
@@ -3098,6 +3124,18 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        case(
+            "sheet_search",
+            vec![json!({"sheetId": a.sheet, "query": "Rent"})],
+            vec![json!({"sheetId": b.sheet, "query": "Rent"})],
+            vec![],
+        ),
+        case(
+            "sheet_view_list",
+            vec![json!({"sheetId": a.sheet})],
+            vec![json!({"sheetId": b.sheet})],
             vec![],
         ),
     ]
