@@ -3205,6 +3205,7 @@ async fn a_private_channels_memory_stays_with_its_members() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
         .person("lena", "member")
+        .agent("rook", "member")
         .build("privacy_memory")
         .await
     else {
@@ -3300,6 +3301,22 @@ async fn a_private_channels_memory_stays_with_its_members() {
     )
     .await;
     assert!(!status.is_success(), "{status} {read}");
+    // Nor change its blocks through an agent tool, which would answer with
+    // them.
+    let (_, edited) = world.agents["rook"]
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "page_edit",
+                arguments: json!({
+                    "pageId": page,
+                    "edits": [{ "op": "append", "markdown": "Overwritten." }],
+                }),
+            },
+        )
+        .await;
+    assert_ne!(edited["outcome"], "ok", "{edited}");
+    assert!(!edited.to_string().contains(&word), "{edited}");
     // Nor its live document, its discussion or an export of it.
     for path in ["document", "discussion", "export?format=markdown"] {
         let (status, read) = send(
