@@ -3489,6 +3489,59 @@ async fn groups_give_spaces_and_guests_see_only_theirs() {
     assert_eq!(back["outcome"], "ok", "{back}");
     let (_, reopened) = send(&world.app, opens(&lena.browser, &team, "lena-4")).await;
     assert_eq!(reopened["outcome"], "ok", "{reopened}");
+    // Taken out of the group while TEAM is archived: bringing TEAM back
+    // doesn't bring her seat back with it.
+    let (_, archived) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_archive",
+            "owner-archive",
+            json!({"spaceId": team}),
+        ),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    let (_, out_while_archived) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_members_set",
+            "owner-out-archived",
+            json!({"group": "design", "remove": [lena.actor]}),
+        ),
+    )
+    .await;
+    assert_eq!(out_while_archived["outcome"], "ok", "{out_while_archived}");
+    let (_, restored) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_restore",
+            "owner-restore",
+            json!({"spaceId": team}),
+        ),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let (_, stale) = send(&world.app, opens(&lena.browser, &team, "lena-4b")).await;
+    assert_ne!(
+        stale["outcome"], "ok",
+        "removed from the group while TEAM was archived: {stale}"
+    );
+    let (_, again) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_members_set",
+            "owner-back-again",
+            json!({"group": "design", "add": ["@lena"]}),
+        ),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let (_, reopened_again) = send(&world.app, opens(&lena.browser, &team, "lena-4c")).await;
+    assert_eq!(reopened_again["outcome"], "ok", "{reopened_again}");
     let (_, ungranted) = send(
         &world.app,
         op(
