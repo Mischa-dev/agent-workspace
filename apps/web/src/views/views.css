@@ -1,84 +1,15 @@
 /* My work */
 
-.aw-mywork__list {
-  min-width: 0;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--content-border);
-  border-radius: var(--radius-md);
-}
-
-.aw-mywork__row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  min-height: 40px;
-  padding: var(--space-1) var(--space-3);
-  border-top: 1px solid var(--content-border);
-}
-
-.aw-mywork__row:hover {
-  background: var(--content-hover);
-}
-
-/* The task open in the side panel. */
-.aw-mywork__row.is-open {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
 /* Holds the priority's place when the project's layout hides it. */
 .aw-mywork__icon {
   flex: none;
   inline-size: 14px;
 }
 
-/* The whole row opens the task. */
-.aw-mywork__title::after {
-  position: absolute;
-  inset: 0;
-  content: '';
-}
-
-.aw-mywork__row:first-child {
-  border-top: 0;
-}
-
-.aw-mywork__title {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--content-fg);
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-mywork__title:focus-visible {
-  outline: none;
-}
-
-.aw-mywork__title:focus-visible::after {
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 2px var(--focus-ring);
-}
-
 .aw-mywork__key,
 .aw-timeline__key {
   color: var(--content-fg-muted);
   font: var(--t-code);
-}
-
-.aw-mywork__meta {
-  display: flex;
-  flex: none;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--content-fg-muted);
-  font: var(--t-small);
 }
 
 .aw-mywork__due.is-overdue {
@@ -89,21 +20,6 @@
   margin: var(--space-2) 0 0;
   color: var(--content-fg-muted);
   font: var(--t-small);
-}
-
-@media (max-width: 640px) {
-  .aw-mywork__row {
-    flex-wrap: wrap;
-  }
-
-  .aw-mywork__title {
-    flex-basis: calc(100% - 56px);
-  }
-
-  .aw-mywork__meta {
-    flex-basis: 100%;
-    flex-wrap: wrap;
-  }
 }
 
 /* Timeline */
