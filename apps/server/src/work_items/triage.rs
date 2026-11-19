@@ -898,7 +898,15 @@ async fn apply_rule(
             audit_version_metadata: AuditVersionMetadata::Include,
         },
     )
-    .await?;
+    .await;
+    // A status the task's collection doesn't use is refused before anything
+    // is written; the rule is skipped rather than turning the task away.
+    let outcome = match outcome {
+        Err(AppError::Refused {
+            field: "status", ..
+        }) => return Ok(false),
+        outcome => outcome?,
+    };
     let applied = matches!(
         outcome,
         UpdateWorkItemOutcome::Applied { .. } | UpdateWorkItemOutcome::Noop(_)
