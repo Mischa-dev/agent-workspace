@@ -275,10 +275,21 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     // would plan the idle polls by position as scans of the whole table,
     // and autovacuum catching up inside the window is a transaction per
     // table, which is the batch insert's cost, not idle work.
+    let mut connection = pool.acquire().await.expect("connection");
     sqlx::query("VACUUM (ANALYZE)")
-        .execute(pool)
+        .execute(&mut *connection)
         .await
         .expect("vacuum");
+    // VACUUM is a transaction or two for every table it goes through, a
+    // thousand or so here. A backend that can't take the statistics lock
+    // at once keeps its counts for up to ten seconds, which would land
+    // them inside the window as idle work; make this one hand them over
+    // now.
+    sqlx::query("SELECT pg_stat_force_next_flush()")
+        .execute(&mut *connection)
+        .await
+        .expect("flush statistics");
+    drop(connection);
     settle(pool).await;
     let (many_transactions, many_rows, many_tables) = idle(pool).await;
 
