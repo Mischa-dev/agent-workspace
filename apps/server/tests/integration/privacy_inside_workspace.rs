@@ -3317,6 +3317,23 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .await;
     assert_ne!(edited["outcome"], "ok", "{edited}");
     assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor a file on it, even by its id.
+    let file = upload(
+        &world.app,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=plan.txt"),
+        "text/plain",
+        format!("Plan: {word}").into_bytes(),
+    )
+    .await;
+    for path in [
+        format!("/api/v1/files/{file}"),
+        format!("/api/v1/files/{file}/content"),
+    ] {
+        let (status, read) = send(&world.app, lena.request("GET", &path, None, Value::Null)).await;
+        assert!(!status.is_success(), "{path}: {status} {read}");
+        assert!(!read.to_string().contains(&word), "{path}: {read}");
+    }
     // Nor its live document, its discussion or an export of it.
     for path in ["document", "discussion", "export?format=markdown"] {
         let (status, read) = send(
