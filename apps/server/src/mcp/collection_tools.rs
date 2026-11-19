@@ -787,8 +787,10 @@ pub(super) async fn collection_write(
                 // The Tasks collection's name and settings are fixed. Its
                 // fields are the project's task fields, changed by those who
                 // may change the workflow.
-                if locked.is_tasks() && !change.is_empty() {
-                    return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+                if let Some(message) = locked.read_only_message()
+                    && !change.is_empty()
+                {
+                    return Ok(ToolResult::conflict(message));
                 }
                 if locked.is_tasks()
                     && !field_writes.is_empty()

@@ -359,7 +359,7 @@ impl Operation for FormulaPreview {
         let collection_id = input.collection.id();
         let tx = call.tx().await?;
         let Some((title_name, acts_like_task)) = sqlx::query_as::<_, (String, bool)>(
-            "SELECT title_name, acts_like_task OR builtin IS NOT NULL FROM collections \
+            "SELECT title_name, acts_like_task FROM collections \
              WHERE project_id = $1 AND id = $2",
         )
         .bind(project_id)

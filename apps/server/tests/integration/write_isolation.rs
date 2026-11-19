@@ -7181,6 +7181,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+            // T1.36: a space's Pages records are its own pages only.
+            json!({"projectId": a.project, "collection": "Pages", "records": [{"record": b.page, "fields": {}}]}),
         ]),
         // C1.26: a page tab, only a page and channel of the caller's own.
         mcp_case(

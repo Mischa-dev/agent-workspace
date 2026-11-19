@@ -882,6 +882,22 @@ pub async fn write(
                 current_version: None,
             }))
         };
+        // The Pages collection's records are its pages (T1.36): only their
+        // fields change here.
+        if collection.is_pages()
+            && (input.record.is_none() || input.title.is_some() || input.archived.is_some())
+        {
+            let field = match (input.record, input.title.is_some()) {
+                (None, _) => "record",
+                (Some(_), true) => "title",
+                (Some(_), false) => "archived",
+            };
+            return stop(
+                ProblemKind::Invalid,
+                field,
+                super::pages::RECORDS_MESSAGE.to_owned(),
+            );
+        }
         let title = match input.title.as_deref() {
             Some(value) => match normalize_title(value) {
                 Some(title) => Some(title),

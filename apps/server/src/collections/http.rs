@@ -309,10 +309,14 @@ fn task_fields_forbidden() -> Response {
 }
 
 fn builtin_collection() -> Response {
+    builtin_refusal(super::tasks::READ_ONLY_MESSAGE)
+}
+
+fn builtin_refusal(message: &'static str) -> Response {
     refusal(
         StatusCode::CONFLICT,
         "builtin_collection",
-        super::tasks::READ_ONLY_MESSAGE,
+        message,
         Value::Null,
     )
 }
@@ -683,8 +687,8 @@ async fn update_collection(
         )
         .await
     );
-    if write.collection(collection_id).await?.is_tasks() {
-        return Ok(builtin_collection());
+    if let Some(message) = write.collection(collection_id).await?.read_only_message() {
+        return Ok(builtin_refusal(message));
     }
     // Switching on makes a task for each record.
     if request.acts_like_task == Some(true)

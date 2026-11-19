@@ -25,8 +25,8 @@ export type CollectionSummary = {
   archived: boolean
   version: number
   updatedAt: string
-  /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. */
-  builtin?: 'tasks' | null
+  /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. "pages" for its built-in Pages collection (T1.36): its records are its pages, whose fields change here. */
+  builtin?: 'tasks' | 'pages' | null
   /** Its records are tasks (AWD-110): a status, assignee and the rest, a key like AWD-12, and a task page. */
   actsLikeTask?: boolean
   /** The statuses its tasks use, by ID; left out when they use all of the space's. */
@@ -152,7 +152,7 @@ export function normalizeCollection(value: unknown): CollectionSummary {
     archived: raw.archived === true,
     version: asNumber(raw.version, 1),
     updatedAt: asString(raw.updatedAt),
-    builtin: raw.builtin === 'tasks' ? 'tasks' : null,
+    builtin: raw.builtin === 'tasks' || raw.builtin === 'pages' ? raw.builtin : null,
     actsLikeTask: raw.actsLikeTask === true || raw.builtin === 'tasks',
     ...(Array.isArray(raw.taskStatuses) ? { taskStatuses: raw.taskStatuses.filter((id): id is string => typeof id === 'string') } : {}),
     ...(typeof raw.startStatusId === 'string' ? { startStatusId: raw.startStatusId } : {}),

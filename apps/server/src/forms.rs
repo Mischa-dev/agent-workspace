@@ -377,6 +377,12 @@ async fn buildable(
     let collection = crate::collections::lock(connection, space, collection_id)
         .await?
         .ok_or(OpError::not_found("That collection"))?;
+    if collection.is_pages() {
+        return Err(OpError::invalid(
+            "collection",
+            crate::collections::pages::RECORDS_MESSAGE,
+        ));
+    }
     if collection.archived {
         return Err(OpError::Conflict {
             reason: ConflictReason::Archived,

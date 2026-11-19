@@ -3006,7 +3006,7 @@ async fn formula_config(
     let collection = match kind.collection_id() {
         Some(collection_id) => {
             sqlx::query_as::<_, (String, bool, bool)>(
-                "SELECT title_name, acts_like_task, builtin IS NOT NULL FROM collections \
+                "SELECT title_name, acts_like_task, builtin IS NOT DISTINCT FROM 'tasks' FROM collections \
                  WHERE project_id = $1 AND id = $2",
             )
             .bind(project_id)
@@ -3176,7 +3176,7 @@ async fn plain_collection_title(
     };
     Ok(sqlx::query_scalar::<_, String>(
         "SELECT title_name FROM collections WHERE project_id = $1 AND id = $2 \
-         AND NOT acts_like_task AND builtin IS NULL",
+         AND NOT acts_like_task AND builtin IS DISTINCT FROM 'tasks'",
     )
     .bind(project_id)
     .bind(collection_id)
@@ -3282,7 +3282,7 @@ pub async fn create(
     if let Some(collection) = new.config.collection {
         let found = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 \
-             AND archived_at IS NULL AND builtin IS NULL)",
+             AND archived_at IS NULL AND builtin IS DISTINCT FROM 'tasks')",
         )
         .bind(project_id)
         .bind(collection)

@@ -553,7 +553,7 @@ async fn recompute_batch(
 ) -> Result<Option<Vec<Uuid>>, AppError> {
     let found = sqlx::query_scalar::<_, bool>(
         "SELECT acts_like_task FROM collections \
-         WHERE project_id = $1 AND id = $2 AND builtin IS NULL FOR SHARE",
+         WHERE project_id = $1 AND id = $2 AND builtin IS DISTINCT FROM 'tasks' FOR SHARE",
     )
     .bind(project_id)
     .bind(collection_id)
@@ -639,7 +639,7 @@ pub async fn queue_volatile(pool: &sqlx::PgPool) -> Result<(), AppError> {
          JOIN collections collection ON collection.id = field.collection_id \
          WHERE field.field_type = 'formula' AND field.archived_at IS NULL \
            AND (field.config -> 'formula' ->> 'volatile')::boolean IS TRUE \
-           AND collection.archived_at IS NULL AND collection.builtin IS NULL \
+           AND collection.archived_at IS NULL AND collection.builtin IS DISTINCT FROM 'tasks' \
            AND NOT collection.acts_like_task",
     )
     .fetch_all(&mut *transaction)

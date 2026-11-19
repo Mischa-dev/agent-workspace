@@ -6,6 +6,7 @@ import { isApiError } from '../api/errors'
 import { useFieldMutations } from '../fields/api'
 import { clausesWithinLimits, type FieldClause, type FieldDefinition } from '../fields/fieldModel'
 import { FieldDialog } from '../fields/FieldManager'
+import { projectLocationHref } from '../projects/locations'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
@@ -171,8 +172,15 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   // and settings stay; its fields change here like any collection's (T1.11).
   const tasks = collection.data.collection.builtin === 'tasks'
   const taskLike = tasks || collection.data.collection.actsLikeTask === true
-  // A link to such a record (an embed, an old link) opens its task.
-  if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
+  // The built-in Pages collection (T1.36) lists the space's pages: a record
+  // opens its page, and only its fields change here.
+  const pages = collection.data.collection.builtin === 'pages'
+  const builtin = tasks || pages
+  const opensElsewhere = taskLike || pages
+  const elsewhere = (id: string) =>
+    pages ? projectLocationHref(projectId, { kind: 'page', pageId: id }) : `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+  // A link to such a record (an embed, an old link) opens its task or page.
+  if (opensElsewhere && recordId) return <Navigate replace to={elsewhere(recordId)} />
   const body = { ...collection.data, canBuild: collection.data.canChangeFields }
   // Shared views first, then the person's own.
   const views = [...body.views].sort((left, right) => Number(right.shared) - Number(left.shared) || left.position - right.position)
@@ -199,7 +207,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
   const recordHref = (id: string) => {
-    if (taskLike) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+    if (opensElsewhere) return elsewhere(id)
     const next = new URLSearchParams(params)
     next.set('record', id)
     return `?${next.toString()}`
@@ -298,10 +306,10 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
-    ...(body.canEditRecords && !taskLike ? [{ label: 'Templates…', icon: 'copy' as const, onSelect: () => setDialog({ kind: 'templates' }) }] : []),
-    ...(canBuild && tasks ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
-    ...(canBuild && !tasks
+    ...(body.canEditRecords && !pages ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(body.canEditRecords && !taskLike && !pages ? [{ label: 'Templates…', icon: 'copy' as const, onSelect: () => setDialog({ kind: 'templates' }) }] : []),
+    ...(canBuild && builtin ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
+    ...(canBuild && !builtin
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
           { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
@@ -323,12 +331,12 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
     edits,
     filtered,
     onClearFilters: clearFilters,
-    onOpenRecord: taskLike ? (id: string) => navigate(recordHref(id)) : openRecord,
+    onOpenRecord: opensElsewhere ? (id: string) => navigate(recordHref(id)) : openRecord,
     openRecordId: recordId,
     params: recordQuery,
     projectId,
   }
-  const panel = recordId && !taskLike ? (
+  const panel = recordId && !opensElsewhere ? (
     <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
   ) : undefined
 
@@ -342,7 +350,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
               {collectionMenu.length ? (
                 <Menu items={collectionMenu} label="Collection options" placement="bottom-end" trigger={<IconButton icon="more" label="Collection options" />} />
               ) : null}
-              {editable ? (
+              {editable && !pages ? (
                 <Button icon="plus" onClick={() => void newRecord()} variant="primary">
                   New record
                 </Button>
@@ -498,8 +506,8 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
       {dialog?.kind === 'field' ? (
         <FieldDialog
           field={dialog.field}
-          formulas={body.collection.actsLikeTask || body.collection.builtin ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
-          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && !entry.builtin)}
+          formulas={body.collection.actsLikeTask ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
+          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && entry.builtin !== 'tasks')}
           onClose={() => setDialog(null)}
           records="records"
           scope={fieldScope(projectId, collectionId)}

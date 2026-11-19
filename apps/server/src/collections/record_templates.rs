@@ -167,6 +167,12 @@ async fn template_collection(
             current: None,
         });
     }
+    if collection.is_pages() {
+        return Err(OpError::invalid(
+            "collection",
+            crate::collections::pages::RECORDS_MESSAGE,
+        ));
+    }
     if collection.acts_like_task {
         return Err(OpError::Invalid {
             field: "collection".into(),

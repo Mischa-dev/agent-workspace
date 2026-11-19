@@ -1473,8 +1473,8 @@ async fn project_snapshot(
             continue;
         };
         // The Tasks collection comes with every project; its tasks travel
-        // as tasks.
-        if collection.is_tasks() {
+        // as tasks. The Pages collection's records are its pages.
+        if collection.is_tasks() || collection.is_pages() {
             continue;
         }
         let fields =

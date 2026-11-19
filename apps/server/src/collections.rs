@@ -28,6 +28,7 @@ pub mod computed;
 pub mod definition;
 pub mod http;
 pub mod ops;
+pub mod pages;
 pub mod record_templates;
 pub mod records;
 pub mod relations;
@@ -101,7 +102,7 @@ pub async fn field_definitions(
     .fetch_optional(&mut *connection)
     .await?;
     match row {
-        Some((Some(_), _)) => {
+        Some((Some(builtin), _)) if builtin == tasks::BUILTIN => {
             return tasks::fields(connection, project_id, RecordKind::Task, include_archived).await;
         }
         Some((None, true)) => {
@@ -226,7 +227,8 @@ pub struct Collection {
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
-    /// "tasks" for the project's built-in Tasks collection.
+    /// "tasks" for the project's built-in Tasks collection, "pages" for its
+    /// built-in Pages collection (T1.36).
     pub builtin: Option<String>,
     /// Its records are tasks (always, for the built-in Tasks collection).
     pub acts_like_task: bool,
@@ -240,6 +242,23 @@ impl Collection {
     /// The built-in collection whose records are the project's tasks.
     pub fn is_tasks(&self) -> bool {
         self.builtin.as_deref() == Some(tasks::BUILTIN)
+    }
+
+    /// The built-in collection whose records are the space's pages.
+    pub fn is_pages(&self) -> bool {
+        self.builtin.as_deref() == Some(pages::BUILTIN)
+    }
+
+    /// What to say when a write would change a built-in collection's name
+    /// or settings; None for any other collection.
+    pub fn read_only_message(&self) -> Option<&'static str> {
+        if self.is_tasks() {
+            Some(tasks::READ_ONLY_MESSAGE)
+        } else if self.is_pages() {
+            Some(pages::READ_ONLY_MESSAGE)
+        } else {
+            None
+        }
     }
 
     /// What `work_items.collection_id` holds for its tasks: None for the

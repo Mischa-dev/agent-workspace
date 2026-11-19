@@ -147,6 +147,7 @@ mod t1_delegate;
 mod t1_forms;
 mod t1_formulas;
 mod t1_initiatives;
+mod t1_page_fields;
 mod t1_project_updates;
 mod t1_record_automations;
 mod t1_record_templates;

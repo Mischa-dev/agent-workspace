@@ -34,6 +34,10 @@ pub async fn refusal(
         return Ok((!acts_like_task)
             .then(|| "Tasks is the built-in collection of this project's tasks.".to_owned()));
     }
+    if current.is_pages() {
+        return Ok(acts_like_task
+            .then(|| "Pages is the built-in collection of this space's pages.".to_owned()));
+    }
     if acts_like_task && !current.acts_like_task {
         let taken = sqlx::query_scalar::<_, String>(
             "SELECT name FROM field_definitions \
