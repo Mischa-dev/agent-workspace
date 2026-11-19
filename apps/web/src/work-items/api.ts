@@ -1,7 +1,9 @@
 import { isSpaceAddress } from '../app/href'
+import { workItemHref } from './links'
 import { requestJson } from '../api/client'
 import { ApiError, isApiError } from '../api/errors'
 import { callOp, type OpInput } from '../api/ops'
+import { queueOp } from '../data/outbound'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
@@ -627,6 +629,28 @@ export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskU
   if (patch.addLabelIds?.length) input.addLabels = patch.addLabelIds
   if (patch.removeLabelIds?.length) input.removeLabels = patch.removeLabelIds
   return input
+}
+
+/**
+ * A task edit that may wait for the connection (W1.30): offline, it's kept on
+ * this device and sent when the connection is back, and this returns null.
+ * Edits the operation can't carry yet go the old way, and never wait.
+ */
+export async function queueWorkItemUpdate(input: {
+  projectId: string
+  workItemId: string
+  patch: WorkItemPatch
+  idempotencyKey: string
+  /** What it was, in words, for the note if it's refused later. */
+  label: string
+}): Promise<WorkItem | null> {
+  const operation = taskUpdateInput(input.workItemId, input.patch)
+  if (!operation) return updateWorkItem(input)
+  const meta = { thing: `task:${input.workItemId}`, href: workItemHref(input.projectId, input.workItemId), label: input.label }
+  const sent = await queueOp('task_update', operation, meta, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+    refuseAsMovedOn(error, { ...input, expectedVersion: input.patch.expectedVersion }),
+  )
+  return sent === null ? null : getWorkItem(input.projectId, input.workItemId)
 }
 
 export async function updateWorkItem(input: {

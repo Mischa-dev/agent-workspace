@@ -236,6 +236,20 @@ export async function queueOp<N extends OpName>(
   }
 }
 
+/**
+ * A write made on top of an earlier one to the same thing, both kept while
+ * offline, expected the version the person saw then. Once the earlier one
+ * goes through, that thing is at the version it answered with, and the
+ * later one follows on from it: the person's own changes don't clash with
+ * each other. Someone else's change still refuses the first of them.
+ */
+function followOn(entry: OutboundEntry, reached: ReadonlyMap<string, number>): unknown {
+  const version = entry.thing ? reached.get(entry.thing) : undefined
+  const input = entry.input as { expectedVersion?: unknown } | null
+  if (version === undefined || !input || typeof input.expectedVersion !== 'number') return entry.input
+  return { ...input, expectedVersion: version }
+}
+
 export type FlushResult = { sent: OutboundEntry[]; refused: OutboundEntry[] }
 
 let flushing: Promise<FlushResult> | null = null
@@ -251,14 +265,16 @@ export function flushOutbound(): Promise<FlushResult> {
     await load()
     const owner = localDraftOwner()
     const held = new Set<string>()
+    const reached = new Map<string, number>()
     for (const entry of [...entries]) {
       if (entry.owner !== owner) continue
       if (entry.refused || (entry.thing && held.has(entry.thing))) {
         if (entry.thing) held.add(entry.thing)
         continue
       }
+      let answer: unknown
       try {
-        await callOp(entry.op, entry.input as never, { requestId: entry.id, retries: 0 })
+        answer = await callOp(entry.op, followOn(entry, reached) as never, { requestId: entry.id, retries: 0 })
       } catch (error) {
         if (isConnectionError(error) || localDraftOwner() !== owner) return result
         const refused = { ...entry, refused: describeError(error).message }
@@ -267,6 +283,8 @@ export function flushOutbound(): Promise<FlushResult> {
         if (entry.thing) held.add(entry.thing)
         continue
       }
+      const version = (answer as { version?: unknown } | null)?.version
+      if (entry.thing && typeof version === 'number') reached.set(entry.thing, version)
       await forget(entry.id)
       result.sent.push(entry)
     }

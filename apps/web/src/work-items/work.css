@@ -633,6 +633,21 @@
   margin-right: var(--space-2);
 }
 
+.aw-task__saving {
+  white-space: nowrap;
+}
+
+/* On a phone the note keeps to "Saved offline"; the rest is still read out. */
+@media (max-width: 640px) {
+  .aw-task__saving-more {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+}
+
 .aw-task__body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

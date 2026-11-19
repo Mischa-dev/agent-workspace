@@ -20,6 +20,7 @@ import {
   setWorkItemPullRequestLink,
   setWorkItemRepositoryLink,
   setWorkItemThreadLink,
+  queueWorkItemUpdate,
   updateWorkItem,
   updateAcceptanceCriterion,
   workWithWorker,
@@ -117,6 +118,20 @@ export function useUpdateWorkItem() {
   return useMutation({
     mutationFn: updateWorkItem,
     onSuccess: (item) => {
+      queryClient.setQueryData(queryKeys.workItem(item.projectId, item.id), item)
+      void invalidate(item.projectId)
+    },
+  })
+}
+
+/** A task edit that may wait for the connection; a queued one resolves to null. */
+export function useQueueWorkItemUpdate() {
+  const queryClient = useQueryClient()
+  const invalidate = useInvalidateWorkItems()
+  return useMutation({
+    mutationFn: queueWorkItemUpdate,
+    onSuccess: (item) => {
+      if (!item) return
       queryClient.setQueryData(queryKeys.workItem(item.projectId, item.id), item)
       void invalidate(item.projectId)
     },
