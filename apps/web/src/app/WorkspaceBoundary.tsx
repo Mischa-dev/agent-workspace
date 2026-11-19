@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
@@ -9,6 +9,9 @@ import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState } from '../ui'
 import { CURRENT_WORKSPACE, isWorkspacePath, setCurrentWorkspaceSlug, spaceIdOf, withinWorkspace, workspaceHref, workspaceSlugOf } from './href'
 import { rememberWorkspace, resolveWorkspace, useWorkspace, WorkspaceContext } from './workspace'
+
+// Loads after the page: it keeps recent reading on this device when the person and workspace allow it (W1.31).
+const OfflineReading = lazy(() => import('../data/OfflineReading'))
 
 /** The workspace of the space with this id (`''`: none), from the rail's list or the space's own read. */
 function useSpaceWorkspace(spaceId: string | null): string | undefined {
@@ -50,6 +53,9 @@ export function WorkspaceProvider() {
         <Outlet />
         {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
         <CommandCenter />
+        <Suspense fallback={null}>
+          <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} />
+        </Suspense>
       </AvatarSourcesProvider>
     </WorkspaceContext.Provider>
   )

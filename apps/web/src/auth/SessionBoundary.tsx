@@ -64,7 +64,8 @@ export function SessionBoundary() {
     )
   }
 
-  if (session.isError) {
+  // A session kept for reading offline (W1.31) still opens the app when the check can't reach the server.
+  if (session.isError && !session.data) {
     return (
       <main className="aw-boot">
         <BrandMark />
