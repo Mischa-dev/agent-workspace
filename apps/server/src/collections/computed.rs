@@ -508,8 +508,10 @@ pub async fn recalculate_space(pool: &sqlx::PgPool, project_id: Uuid) -> Result<
             return Ok(());
         }
     }
-    let mut connection = pool.acquire().await?;
-    queue_recalculation(&mut connection, project_id).await
+    let mut transaction = db::scoped_tx(pool).await?;
+    queue_recalculation(&mut transaction, project_id).await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Queues the recalculation of a collection's formulas, as part of the
