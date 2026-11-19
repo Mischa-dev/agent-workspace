@@ -197,6 +197,12 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // M1.15: a connected module's frame, only ever its viewer's own.
+    (
+        "frame_launch",
+        "SELECT launch.workspace_id, launch.space_id FROM module_frame_launches launch \
+         WHERE launch.id = $1 AND launch.account_id = $2",
+    ),
     // K2.19: a queued launch, in its space; the command checks who may
     // cancel it.
     (

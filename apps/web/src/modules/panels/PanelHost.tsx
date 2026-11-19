@@ -4,15 +4,20 @@
 // errors for its form, `done` (the flow is finished; whoever opened the
 // panel gets its result) or `close`. The panel's `state` goes back with
 // each request as the module gave it, and `refresh.afterSeconds` asks again.
-// The server checks every answer before it gets here (blocks.rs).
+// The server checks every answer before it gets here (blocks.rs). A `frame`
+// answer opens the app's own page in FrameHost (M1.15), a lazy chunk of its
+// own, whose finish answers like a press.
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
 import { callOp, newRequestId, opKey, type OpOutput } from '../../api/ops'
 import { Banner, Button, ErrorState, ListSkeleton } from '../../ui'
 import { describeError } from '../../ui/errorText'
+import type { FrameAnswer } from './FrameHost'
 import { PanelBlocks, type PanelAction, type PanelBlock } from './StopgapBlocks'
+
+const FrameHost = lazy(() => import('./FrameHost'))
 
 type Answer = OpOutput<'module_panel_open'>['answer']
 
@@ -62,7 +67,7 @@ export function PanelHost({
     structuralSharing: false,
   })
   // What a press answered replaces what opening drew, until it opens again.
-  type After = { from: unknown; drawn?: Drawn; errors?: Record<string, string>; finished?: string }
+  type After = { from: unknown; drawn?: Drawn; errors?: Record<string, string>; finished?: string; frame?: FrameAnswer | null }
   const [after, setAfter] = useState<After | null>(null)
   const [failed, setFailed] = useState<unknown>(null)
   const pressing = useRef(false)
@@ -73,6 +78,7 @@ export function PanelHost({
   const errors = mine?.errors ?? {}
   const finished = mine?.finished ?? (answered?.kind === 'done' ? (answered.message ?? 'Done.') : null)
   const state = shown?.state
+  const frame = mine && 'frame' in mine ? mine.frame : answered?.kind === 'frame' ? answered : null
 
   // Opening can finish or close the flow at once.
   useEffect(() => {
@@ -80,27 +86,44 @@ export function PanelHost({
     if (answered?.kind === 'close') onClose?.()
   }, [answered, onClose, onDone])
 
-  const take = (answer: Answer) => {
-    const from = opened.data
-    setFailed(null)
-    switch (answer.kind) {
-      case 'panel':
-        setAfter({ from, drawn: drawn(answer.panel) })
-        break
-      case 'errors': {
-        const messages = Object.fromEntries(Object.entries(answer.errors).map(([field, message]) => [field, String(message)]))
-        setAfter((last) => ({ ...(last?.from === from ? last : {}), from, errors: messages }))
-        break
+  const take = useCallback(
+    (answer: Answer) => {
+      const from = opened.data
+      setFailed(null)
+      switch (answer.kind) {
+        case 'panel':
+          setAfter({ from, drawn: drawn(answer.panel), frame: null })
+          break
+        case 'frame':
+          setAfter((last) => ({ ...(last?.from === from ? last : {}), from, frame: answer }))
+          break
+        case 'errors': {
+          const messages = Object.fromEntries(Object.entries(answer.errors).map(([field, message]) => [field, String(message)]))
+          setAfter((last) => ({ ...(last?.from === from ? last : {}), from, errors: messages }))
+          break
+        }
+        case 'done':
+          setAfter((last) => ({ ...(last?.from === from ? last : {}), from, frame: null, finished: answer.message ?? 'Done.' }))
+          onDone?.({ message: answer.message, result: answer.result })
+          break
+        case 'close':
+          onClose?.()
+          break
       }
-      case 'done':
-        setAfter((last) => ({ ...(last?.from === from ? last : {}), from, finished: answer.message ?? 'Done.' }))
-        onDone?.({ message: answer.message, result: answer.result })
-        break
-      case 'close':
-        onClose?.()
-        break
+    },
+    [opened.data, onClose, onDone],
+  )
+  // Backing out of a frame goes back to the panel that opened it, or closes
+  // the flow when opening answered with the frame itself.
+  const openedWithFrame = answered?.kind === 'frame' && !mine?.drawn
+  const closeFrame = useCallback(() => {
+    if (openedWithFrame && onClose) {
+      onClose()
+      return
     }
-  }
+    const from = opened.data
+    setAfter((last) => ({ ...(last?.from === from ? last : {}), from, frame: null }))
+  }, [onClose, opened.data, openedWithFrame])
 
   // The module asked to be asked again after a while.
   const { refetch, dataUpdatedAt } = opened
@@ -152,6 +175,15 @@ export function PanelHost({
         >
           Back to {label}
         </Button>
+      </div>
+    )
+  }
+  if (frame) {
+    return (
+      <div className="aw-panel-host" data-part="panel-host">
+        <Suspense fallback={<ListSkeleton />}>
+          <FrameHost frame={frame} onAnswer={take} onCancel={closeFrame} workspaceId={workspaceId} />
+        </Suspense>
       </div>
     )
   }

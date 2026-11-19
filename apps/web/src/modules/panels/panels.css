@@ -174,3 +174,37 @@ button.aw-panel-list__row:hover {
     color: var(--content-fg-muted);
   }
 }
+
+/* A framed page (M1.15): Workspace's host page for the app, sized as the app
+   asks within 100-2000px, with whose page it is and a way out. */
+
+.aw-frame-host {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-frame-host__frame {
+  display: block;
+  width: 100%;
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-frame-host__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aw-frame-host__origin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  overflow-wrap: anywhere;
+}

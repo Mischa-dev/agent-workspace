@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +21,12 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/connected-modules/token", post(token))
         .route("/api/v1/modules/{module_id}/events", post(event_in))
+        .route(
+            "/api/v1/modules/{module_id}/frames/redeem",
+            post(redeem_frame),
+        )
+        .route("/panel-frame/{launch_id}", get(super::frames::open_host))
+        .route("/panel-frame.css", get(super::frames::host_css))
 }
 
 #[derive(Deserialize)]
@@ -326,6 +332,130 @@ async fn accept(
         Json(json!({ "accepted": true, "id": id })),
     )
         .into_response())
+}
+
+// ------------------------------------------------------------ frames
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RedeemRequest {
+    token: String,
+}
+
+/// `POST /api/v1/modules/{module_id}/frames/redeem`: a connected module
+/// trades the launch token its framed page received for who it is drawing
+/// for (M1.15). Signed as its events are; a token redeems once, only after
+/// the viewer's page opened it, and lapses five minutes after the panel
+/// asked for the frame.
+async fn redeem_frame(
+    State(state): State<AppState>,
+    Path(module_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Response, AppError> {
+    let unsigned = || {
+        answer(
+            StatusCode::UNAUTHORIZED,
+            "invalid_signature",
+            "The request isn't signed with this module's inbound secret, or the signature is too old.",
+        )
+    };
+    if body.len() > 4096 {
+        return Ok(answer(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "too_large",
+            "A redemption is a token.",
+        ));
+    }
+    let (Some(id), Some(timestamp), Some(signature)) = (
+        header_text(&headers, "webhook-id"),
+        header_text(&headers, "webhook-timestamp"),
+        header_text(&headers, "webhook-signature"),
+    ) else {
+        return Ok(unsigned());
+    };
+    let signed_at = timestamp.parse::<i64>().unwrap_or_default();
+    if (chrono::Utc::now().timestamp() - signed_at).abs() > TOLERANCE_SECONDS
+        || id.is_empty()
+        || id.len() > 200
+    {
+        return Ok(unsigned());
+    }
+    let workspace = crate::tenancy::system(
+        "modules.frame_redeem",
+        crate::db::scoped_one(&state.pool, async |connection| {
+            Ok::<_, AppError>(
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT workspace_id FROM module_apps WHERE module_id = $1 AND state = 'active'",
+                )
+                .bind(module_id)
+                .fetch_optional(&mut *connection)
+                .await?,
+            )
+        }),
+    )
+    .await?;
+    let Some(workspace) = workspace else {
+        return Ok(unsigned());
+    };
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        async {
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let Some(row) = super::get(&mut transaction, workspace, module_id, false).await? else {
+                return Ok(unsigned());
+            };
+            let Some(inbound) = row.inbound_secret_id.filter(|_| row.state == "active") else {
+                return Ok(unsigned());
+            };
+            let keys = crate::secrets::keyring(&state.config)?;
+            let secret = crate::secrets::reveal(
+                &mut *transaction,
+                keys.as_ref(),
+                inbound,
+                "connected module frame",
+            )
+            .await?;
+            if !agent_workspace_host_protocol::verify_push(
+                secret.expose(),
+                id,
+                signed_at,
+                &body,
+                signature,
+                chrono::Utc::now().timestamp(),
+            ) {
+                return Ok(unsigned());
+            }
+            let Ok(request) = serde_json::from_str::<RedeemRequest>(&body) else {
+                return Ok(answer(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "A redemption is {\"token\"}.",
+                ));
+            };
+            let redeemed =
+                super::frames::redeem(&mut transaction, workspace, module_id, &request.token)
+                    .await?;
+            transaction.commit().await?;
+            Ok(match redeemed {
+                Some(redeemed) => (
+                    StatusCode::OK,
+                    [(header::CACHE_CONTROL, "no-store")],
+                    Json(redeemed),
+                )
+                    .into_response(),
+                None => answer(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "That launch token isn't valid: it was used, it lapsed, or its page was never opened.",
+                ),
+            })
+        },
+    )
+    .await
 }
 
 /// An event heard across the workspace (its thing, if any, is in no space).

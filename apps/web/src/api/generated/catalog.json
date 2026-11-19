@@ -2446,6 +2446,22 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [
+      "module.panel_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "module_frame_finish",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Finish a connected module's frame"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [],
     "idempotent": false,
     "kind": "query",

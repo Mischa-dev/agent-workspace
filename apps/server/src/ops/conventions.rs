@@ -74,6 +74,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "retry",
             // A run's work goes out to its code host (K2.19).
             "publish",
+            // A connected module's framed page says it's done; the app is
+            // asked for the result (M1.15).
+            "finish",
             // A group's agents take more turns (K2.8).
             "continue",
             // An agent passes on, or a person stops, a reply request (K2.9).

@@ -1325,6 +1325,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ConnectedModuleSignature
     ),
     boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/modules/{module_id}/frames/redeem",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
         "hosts/routes",
         Post,
         "/api/v1/host/describe",

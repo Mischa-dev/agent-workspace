@@ -89,6 +89,9 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // An event a connected module sends in (M1.13), before its workspace
     // is known: one lookup of the install by its id.
     ("modules.events_in", &["modules/connected/http.rs"]),
+    // A connected module redeeming a frame's launch token (M1.15), before
+    // its workspace is known: one lookup of the install by its id.
+    ("modules.frame_redeem", &["modules/connected/http.rs"]),
     // An operator suspending or resuming a workspace from the command line
     // (H1.24), before any account is known.
     ("workspace.operator", &["workspace/lifecycle.rs"]),

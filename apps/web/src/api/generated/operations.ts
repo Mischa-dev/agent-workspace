@@ -362,7 +362,7 @@ export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; 
 
 export type PanelActionInput = { id: string; values?: Record<string, unknown> | null }
 
-export type PanelAnswer = { kind: "panel"; panel: Record<string, unknown> } | { errors: Record<string, unknown>; kind: "errors" } | ({ kind: "done"; message?: string | null; result?: Record<string, unknown> | null }) | { kind: "close" }
+export type PanelAnswer = { kind: "panel"; panel: Record<string, unknown> } | { errors: Record<string, unknown>; kind: "errors" } | ({ kind: "done"; message?: string | null; result?: Record<string, unknown> | null }) | { kind: "close" } | { address: string; height: number; kind: "frame"; launchId: string; origin: string; title: string }
 
 export type PanelEntry = { moduleId: string; moduleKey: string; panel: string; part: string; slot: string; title: string }
 
@@ -1285,6 +1285,10 @@ export type ModuleArchiveOutput = { archived: boolean; archivedParts?: string | 
 export type ModuleCreateInput = { automations?: InlineAutomation[]; collections?: InlineCollection[]; description?: string | null; forms?: InlineForm[]; icon?: string | null; key: string; name: string; nav?: NavEntry[]; parts?: PartRef[]; spaceId?: string | null }
 
 export type ModuleCreateOutput = { archived: boolean; archivedParts?: string | null; description: string; icon?: string | null; id: string; key: string; name: string; nav: NavView[]; on: boolean; parts: PartView[]; revision: number; spaceId?: string | null }
+
+export type ModuleFrameFinishInput = { launchId: string; ref: string }
+
+export type ModuleFrameFinishOutput = { answer: PanelAnswer; moduleId: string; panel: string }
 
 export type ModuleListInput = { module?: string | null; projectId?: string | null }
 
@@ -2242,6 +2246,7 @@ export type Operations = {
   model_catalog_set: { input: ModelCatalogSetInput; output: ModelCatalogSetOutput }
   module_archive: { input: ModuleArchiveInput; output: ModuleArchiveOutput }
   module_create: { input: ModuleCreateInput; output: ModuleCreateOutput }
+  module_frame_finish: { input: ModuleFrameFinishInput; output: ModuleFrameFinishOutput }
   module_list: { input: ModuleListInput; output: ModuleListOutput }
   module_open: { input: ModuleOpenInput; output: ModuleOpenOutput }
   module_panel_list: { input: ModulePanelListInput; output: ModulePanelListOutput }

@@ -178,6 +178,9 @@ export default defineConfig({
       '/health': apiTarget,
       // What the app reads at start (H1.41).
       '/client-config': apiTarget,
+      // A connected module's framed panel (M1.15): the server's host page
+      // and its stylesheet.
+      '/panel-frame': apiTarget,
       // Single sign-on comes back here from WorkOS, and the server finishes it.
       '/auth/workos': apiTarget,
       // An agent's one-time setup link (the server answers it, not the app).

@@ -453,6 +453,12 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          session, and the signature reaches only that install; covered in connected_modules",
     ),
     (
+        "POST /api/v1/modules/{module_id}/frames/redeem",
+        "a connected app redeems a framed panel's launch token, signed with its install's \
+         inbound secret; no session, and only that install's launches; covered in \
+         connected_modules",
+    ),
+    (
         "POST /oauth/register",
         "OAuth client registration: makes a public client that belongs to no workspace",
     ),
@@ -597,6 +603,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connected_module_run",
     "connected_module_test",
     "module_panel_press",
+    "module_frame_finish",
     "module_create",
     "module_part_link",
     "module_part_unlink",
@@ -7858,6 +7865,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                         "action": {"id": "rerun"}})],
         )
         .without_own("needs an installed app answering it; connected_modules runs it"),
+        // M1.15: a framed panel's launch is finished only by the account it
+        // was opened for, in its own workspace.
+        mcp_case(
+            "module_frame_finish",
+            json!({"launchId": a.organization, "ref": "saved-1"}),
+            vec![json!({"workspace": b.organization, "launchId": a.organization, "ref": "saved-1"})],
+        )
+        .without_own("needs a launch opened in a browser; connected_modules runs it"),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",

@@ -759,7 +759,18 @@ pub enum Answer {
         result: Option<Value>,
     },
     Close,
+    /// Open this address in a frame (M1.15). Its origin is checked against
+    /// the install's approved frame origins by the caller.
+    Frame {
+        url: url::Url,
+        title: String,
+        height: u16,
+    },
 }
+
+/// A frame's height when the app names none, and the most it may ask for.
+pub const FRAME_HEIGHT: u16 = 480;
+pub const MAX_FRAME_HEIGHT: u16 = 2000;
 
 /// Reads a module's answer, or says what's wrong with it.
 pub fn read_answer(answer: &Value) -> Result<Answer, Vec<Problem>> {
@@ -775,7 +786,7 @@ pub fn read_answer(answer: &Value) -> Result<Answer, Vec<Problem>> {
     if object.len() != 1 {
         return one(
             "answer",
-            "An answer is one of panel, errors, done or close.",
+            "An answer is one of panel, errors, done, close or frame.",
         );
     }
     let (key, value) = object.iter().next().expect("one entry");
@@ -824,10 +835,54 @@ pub fn read_answer(answer: &Value) -> Result<Answer, Vec<Problem>> {
             Ok(Answer::Done { message, result })
         }
         "close" if value.as_bool() == Some(true) => Ok(Answer::Close),
-        "frame" => one("frame", "This Workspace doesn't open framed panels yet."),
+        "frame" => {
+            let Some(frame) = value.as_object() else {
+                return one("frame", "A frame is {url, title, height}.");
+            };
+            if frame
+                .keys()
+                .any(|key| !matches!(key.as_str(), "url" | "title" | "height"))
+            {
+                return one("frame", "A frame is {url, title, height}.");
+            }
+            let url = frame
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|text| text.len() <= 2048)
+                .and_then(|text| url::Url::parse(text).ok())
+                .filter(|url| {
+                    matches!(url.scheme(), "https" | "http")
+                        && url.host_str().is_some()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.fragment().is_none()
+                });
+            let Some(url) = url else {
+                return one("frame.url", "An https address, with no fragment.");
+            };
+            let title = match frame.get("title") {
+                Some(Value::String(text))
+                    if (1..=120).contains(&text.trim().chars().count())
+                        && !text.chars().any(char::is_control) =>
+                {
+                    text.trim().to_owned()
+                }
+                _ => return one("frame.title", "A short title, 120 characters at most."),
+            };
+            let height = match frame.get("height") {
+                None | Some(Value::Null) => FRAME_HEIGHT,
+                Some(value) => match value.as_u64() {
+                    Some(height) if (100..=u64::from(MAX_FRAME_HEIGHT)).contains(&height) => {
+                        u16::try_from(height).unwrap_or(FRAME_HEIGHT)
+                    }
+                    _ => return one("frame.height", "A height from 100 to 2000 pixels."),
+                },
+            };
+            Ok(Answer::Frame { url, title, height })
+        }
         _ => one(
             "answer",
-            "An answer is one of panel, errors, done or close.",
+            "An answer is one of panel, errors, done, close or frame.",
         ),
     }
 }
@@ -1008,6 +1063,28 @@ mod tests {
         );
         assert_eq!(read_answer(&json!({"close": true})), Ok(Answer::Close));
         assert!(read_answer(&json!({"frame": {"url": "https://x"}})).is_err());
+        assert_eq!(
+            read_answer(&json!({"frame": {"url": "https://keys.example/aw?x=1", "title": "Keys"}})),
+            Ok(Answer::Frame {
+                url: url::Url::parse("https://keys.example/aw?x=1").expect("url"),
+                title: "Keys".to_owned(),
+                height: FRAME_HEIGHT,
+            })
+        );
+        assert!(
+            read_answer(&json!({"frame": {"url": "javascript:alert(1)", "title": "Keys"}}))
+                .is_err()
+        );
+        assert!(
+            read_answer(&json!({"frame": {"url": "https://a.example/#x", "title": "Keys"}}))
+                .is_err()
+        );
+        assert!(
+            read_answer(
+                &json!({"frame": {"url": "https://a.example/", "title": "K", "height": 5000}})
+            )
+            .is_err()
+        );
         assert!(read_answer(&json!({"panel": {}, "close": true})).is_err());
         assert!(read_answer(&json!({"errors": {"build": 3}})).is_err());
     }

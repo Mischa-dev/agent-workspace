@@ -229,12 +229,12 @@ pub fn content_security_policy(config: &AppConfig) -> HeaderValue {
     let policy = format!(
         "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; \
          form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; \
-         connect-src {connect}; font-src 'self'; worker-src 'self'"
+         connect-src {connect}; font-src 'self'; worker-src 'self'; frame-src 'self'"
     );
     // The live origin is a validated, serialized origin (config.rs), so the
     // policy is plain ASCII.
     HeaderValue::from_str(&policy).unwrap_or(HeaderValue::from_static(
-        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'",
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'; frame-src 'self'",
     ))
 }
 

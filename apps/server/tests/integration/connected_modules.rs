@@ -76,6 +76,20 @@ async fn panel(
         }
         Some("start") => json!({"done": {"message": "Build started.", "result": {"build": "215"}}}),
         Some("bad") => json!({"panel": form("api_token")}),
+        // M1.15: a frame on the app's own origin, or on one it never
+        // declared; and the result a finished frame asks for.
+        Some("keys") => {
+            let origin = app.lock().expect("app").origin.clone();
+            json!({"frame": {"url": format!("{origin}/keys?step=1"), "title": "Model keys",
+                             "height": 640}})
+        }
+        Some("elsewhere") => {
+            json!({"frame": {"url": "https://elsewhere.example/keys", "title": "Keys"}})
+        }
+        Some("aw.frame_done") if sent["action"]["values"]["ref"] == "saved-1" => {
+            json!({"done": {"message": "Keys saved.", "result": {"saved": true}}})
+        }
+        Some("aw.frame_done") => json!({"errors": {"keys": "Nothing was saved."}}),
         Some(_) => json!({"close": true}),
     };
     (StatusCode::OK, Json(answer))
@@ -1030,6 +1044,228 @@ async fn a_connected_module_draws_its_panels_and_hears_their_actions() {
     .await;
     assert_eq!(bad["outcome"], "invalid_request", "{bad}");
     assert!(bad.to_string().contains("api_token"), "{bad}");
+    world.finish().await;
+}
+
+/// A raw response: status, headers and text.
+async fn raw(world: &Workspace, request: Request<Body>) -> (StatusCode, HeaderMap, String) {
+    use tower::ServiceExt;
+    let response = world.app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
+/// A redemption the app signs with `secret`.
+async fn redeem(world: &Workspace, module: &str, secret: &str, token: &str) -> (StatusCode, Value) {
+    let body = json!({ "token": token }).to_string();
+    let id = uuid::Uuid::now_v7().to_string();
+    let timestamp = chrono::Utc::now().timestamp();
+    let signature =
+        agent_workspace_host_protocol::sign_push(secret, &id, timestamp, &body).expect("sign");
+    send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/modules/{module}/frames/redeem"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("webhook-id", id)
+            .header("webhook-timestamp", timestamp.to_string())
+            .header("webhook-signature", signature)
+            .body(Body::from(body))
+            .expect("request"),
+    )
+    .await
+}
+
+/// M1.15: a panel's frame. Only an origin the manifest declares is framed;
+/// the host page frames that one origin, runs no script, opens once and
+/// only for its viewer; the launch token redeems once, for that viewer; and
+/// a frame finishes only with the result the app gives Workspace itself.
+#[tokio::test]
+async fn a_framed_panel_opens_once_for_its_viewer_and_finishes_with_the_apps_result() {
+    let app = test_app().await;
+    let origin = app.lock().expect("app").origin.clone();
+    app.lock().expect("app").manifest["frameOrigins"] = json!([origin]);
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .person("lena", "member")
+        .config("AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS", origin.clone())
+        .build("m115_frames")
+        .await
+    else {
+        return;
+    };
+    let connected = connect(&world, &app, &format!("{origin}/manifest.json")).await;
+    let work = world.project("WORK").to_owned();
+    let lena = &world.people["lena"];
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let press = |action: &str, key: &str| {
+        lena.browser.request(
+            "POST",
+            &op("module_panel_press"),
+            Some(key),
+            json!({"moduleId": connected.module, "panel": "builds", "spaceId": work,
+                   "action": {"id": action}}),
+        )
+    };
+
+    // A frame on an origin the manifest doesn't declare is refused.
+    let (_, elsewhere) = send(&world.app, press("elsewhere", "frame-0")).await;
+    assert_eq!(elsewhere["outcome"], "invalid_request", "{elsewhere}");
+
+    let (_, framed) = send(&world.app, press("keys", "frame-1")).await;
+    assert_eq!(framed["outcome"], "ok", "{framed}");
+    let answer = &framed["value"]["answer"];
+    assert_eq!(answer["kind"], "frame", "{framed}");
+    assert_eq!(answer["origin"], origin);
+    assert_eq!(answer["height"], 640);
+    let launch = answer["launchId"].as_str().expect("launch").to_owned();
+    let address = answer["address"].as_str().expect("address").to_owned();
+    assert_eq!(address, format!("/panel-frame/{launch}"));
+
+    // Finishing before the app redeemed anything does nothing.
+    let finish = |reference: &str, key: &str| {
+        lena.browser.request(
+            "POST",
+            &op("module_frame_finish"),
+            Some(key),
+            json!({"launchId": launch, "ref": reference}),
+        )
+    };
+    let (_, early) = send(&world.app, finish("saved-1", "finish-0")).await;
+    assert_eq!(early["outcome"], "not_found", "{early}");
+
+    // Someone else's browser can't open it, and doesn't use it up.
+    let (status, _, _) = raw(
+        &world,
+        world
+            .owner
+            .browser
+            .request("GET", &address, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE);
+
+    // The viewer's opens it once: one origin framed, no script.
+    let (status, headers, page) = raw(
+        &world,
+        lena.browser.request("GET", &address, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let policy = headers
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|value| value.to_str().ok())
+        .expect("policy")
+        .to_owned();
+    assert!(policy.contains(&format!("frame-src {origin};")), "{policy}");
+    assert!(policy.contains("script-src 'none'"), "{policy}");
+    assert!(policy.contains("frame-ancestors 'self'"), "{policy}");
+    assert_eq!(
+        headers
+            .get(header::X_FRAME_OPTIONS)
+            .and_then(|value| value.to_str().ok()),
+        Some("SAMEORIGIN")
+    );
+    assert!(!page.contains("<script"), "{page}");
+    assert!(
+        page.contains(&format!("src=\"{origin}/keys?step=1&amp;aw_launch=")),
+        "{page}"
+    );
+    let token = page
+        .split("aw_launch=")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("token")
+        .to_owned();
+    let (status, _, _) = raw(
+        &world,
+        lena.browser.request("GET", &address, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "opens once");
+
+    // The app redeems the token once, signed, and learns who it draws for.
+    let (status, _) = redeem(&world, &connected.module, &connected.outbound, &token).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the wrong secret");
+    let (status, redeemed) = redeem(&world, &connected.module, &connected.inbound, &token).await;
+    assert_eq!(status, StatusCode::OK, "{redeemed}");
+    assert_eq!(redeemed["viewer"]["account"], lena.actor.to_string());
+    assert_eq!(redeemed["launch"], launch);
+    assert_eq!(redeemed["panel"], "builds");
+    assert_eq!(redeemed["space"]["id"], work);
+    let (status, again) = redeem(&world, &connected.module, &connected.inbound, &token).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{again}");
+
+    // Someone else can't finish it; the viewer's finish asks the app.
+    let (_, theirs) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &op("module_frame_finish"),
+            Some("finish-owner"),
+            json!({"launchId": launch, "ref": "saved-1"}),
+        ),
+    )
+    .await;
+    assert_eq!(theirs["outcome"], "not_found", "{theirs}");
+    let (_, finished) = send(&world.app, finish("saved-1", "finish-1")).await;
+    assert_eq!(finished["outcome"], "ok", "{finished}");
+    assert_eq!(
+        finished["value"]["answer"],
+        json!({"kind": "done", "message": "Keys saved.", "result": {"saved": true}})
+    );
+    let sent: Value = serde_json::from_str(
+        &app.lock()
+            .expect("app")
+            .calls
+            .last()
+            .cloned()
+            .expect("call")
+            .1,
+    )
+    .expect("finish body");
+    assert_eq!(
+        sent["action"],
+        json!({"id": "aw.frame_done", "values": {"launch": launch, "ref": "saved-1"}})
+    );
+    assert_eq!(sent["viewer"]["account"], lena.actor.to_string());
+    let (_, twice) = send(&world.app, finish("saved-1", "finish-2")).await;
+    assert_eq!(twice["outcome"], "not_found", "{twice}");
+
+    // A launch nobody opened in time lapses.
+    let (_, framed) = send(&world.app, press("keys", "frame-2")).await;
+    let lapsed = framed["value"]["answer"]["address"]
+        .as_str()
+        .expect("address")
+        .to_owned();
+    sqlx::query(
+        "UPDATE module_frame_launches SET expires_at = now() - interval '1 minute' \
+         WHERE id = $1::uuid",
+    )
+    .bind(
+        framed["value"]["answer"]["launchId"]
+            .as_str()
+            .expect("launch"),
+    )
+    .execute(world.pool())
+    .await
+    .expect("lapse");
+    let (status, _, _) = raw(
+        &world,
+        lena.browser.request("GET", &lapsed, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE);
     world.finish().await;
 }
 

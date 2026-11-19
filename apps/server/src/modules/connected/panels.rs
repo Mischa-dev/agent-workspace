@@ -35,7 +35,8 @@ pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<ModulePanelList>()
         .add::<ModulePanelOpen>()
-        .add::<ModulePanelPress>();
+        .add::<ModulePanelPress>()
+        .add::<super::frames::ModuleFrameFinish>();
 }
 
 /// The live installs in a workspace whose panels may be drawn: active, not
@@ -266,6 +267,17 @@ pub enum PanelAnswer {
     },
     /// Close the panel.
     Close,
+    /// Open the app's page in a frame (M1.15): load `address`, Workspace's
+    /// host page for this launch, once. Only `origin` is framed inside it.
+    #[serde(rename_all = "camelCase")]
+    Frame {
+        #[schemars(with = "String")]
+        launch_id: Uuid,
+        address: String,
+        origin: String,
+        title: String,
+        height: u16,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -277,17 +289,20 @@ pub struct PanelView {
     pub answer: PanelAnswer,
 }
 
-struct Request<'a> {
-    module_id: Uuid,
-    panel: &'a str,
-    space: Option<Uuid>,
-    thing: Option<&'a PanelThingInput>,
-    state: Option<&'a str>,
-    action: Option<&'a PanelActionInput>,
+pub(super) struct Request<'a> {
+    pub module_id: Uuid,
+    pub panel: &'a str,
+    pub space: Option<Uuid>,
+    pub thing: Option<&'a PanelThingInput>,
+    pub state: Option<&'a str>,
+    pub action: Option<&'a PanelActionInput>,
 }
 
 /// Asks a module for a panel, or sends it an action, for the call's caller.
-async fn round_trip(call: &mut OpCall<'_>, request: Request<'_>) -> Result<PanelView, OpError> {
+pub(super) async fn round_trip(
+    call: &mut OpCall<'_>,
+    request: Request<'_>,
+) -> Result<PanelView, OpError> {
     let state = call.state;
     let workspace = call.ctx.workspace_id;
     let account = call.ctx.caller.account_id;
@@ -450,6 +465,31 @@ async fn round_trip(call: &mut OpCall<'_>, request: Request<'_>) -> Result<Panel
         Answer::Errors(errors) => PanelAnswer::Errors { errors },
         Answer::Done { message, result } => PanelAnswer::Done { message, result },
         Answer::Close => PanelAnswer::Close,
+        Answer::Frame { url, title, height } => {
+            let launch = super::frames::launch(
+                state,
+                &install,
+                super::frames::NewLaunch {
+                    account,
+                    panel: request.panel,
+                    space: request.space,
+                    thing: request
+                        .thing
+                        .map(|thing| (thing.kind.as_str(), thing.id.id())),
+                    url,
+                    title,
+                    height,
+                },
+            )
+            .await?;
+            PanelAnswer::Frame {
+                launch_id: launch.id,
+                address: launch.address,
+                origin: launch.origin,
+                title: launch.title,
+                height: launch.height,
+            }
+        }
     };
     Ok(PanelView {
         module_id: install.module_id,
