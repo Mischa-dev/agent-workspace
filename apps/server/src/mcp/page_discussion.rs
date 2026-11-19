@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, insert_audit, parse_id, public_url},
+    common::{ToolResult, insert_audit, link_url, parse_id},
     memory_tools::{page_write_mode, writer},
 };
 use crate::{
@@ -17,8 +17,7 @@ use crate::{
     error::AppError,
     memory,
     page_docs::{
-        comments::{self, CommentChange, NewComment, ThreadView},
-        store,
+        comments::{self, CommentChange, Commenter, NewComment, ThreadView},
         suggestions::{self, Decision, Refusal},
     },
     policy::Action,
@@ -63,15 +62,9 @@ async fn readable(
     let Some(project_id) = project.filter(|project| *project == principal.project_id) else {
         return Ok(None);
     };
-    if memory::project_access(
-        &state.pool,
-        principal.actor_id,
-        principal.actor_kind,
-        project_id,
-        Action::McpRead,
-    )
-    .await
-    .is_err()
+    if memory::project_access(&state.pool, principal.actor_id, project_id, Action::McpRead)
+        .await
+        .is_err()
     {
         return Ok(None);
     }
@@ -79,7 +72,11 @@ async fn readable(
 }
 
 fn page_url(state: &AppState, project_id: Uuid, page_id: Uuid) -> String {
-    public_url(state, &format!("/projects/{project_id}/pages/{page_id}"))
+    link_url(
+        state,
+        None,
+        &crate::addresses::Target::page(project_id, page_id),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -250,23 +247,26 @@ pub(super) async fn page_comment(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
-            return Ok(ToolResult::not_found("That page"));
-        };
-        if page.project_id != project_id {
+        if readable(state, principal, page_id).await?.is_none() {
             return Ok(ToolResult::not_found("That page"));
         }
+        let actor = match super::talk::message_actor(principal) {
+            Ok(actor) => actor,
+            Err(message) => return Ok(ToolResult::denied(message)),
+        };
         let created = comments::create(
-            &mut transaction,
-            writer(principal),
+            state,
+            Commenter {
+                actor,
+                creator: crate::conversations::threads::ThreadCreator::mcp(principal),
+            },
             page_id,
-            &page,
-            &NewComment {
+            NewComment {
                 body: &arguments.text,
                 block_id: arguments.block_id.as_deref(),
                 quote: arguments.quote.as_deref(),
                 reply_to,
+                key: None,
             },
         )
         .await?;
@@ -284,6 +284,7 @@ pub(super) async fn page_comment(
             }
             Err(comments::Refusal::NotYours(message)) => return Ok(ToolResult::denied(message)),
         };
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         insert_audit(
             &mut transaction,
             principal,
@@ -366,34 +367,33 @@ pub(super) async fn page_comment_update(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
-            return Ok(ToolResult::not_found("That page"));
-        };
-        if page.project_id != project_id {
+        if readable(state, principal, page_id).await?.is_none() {
             return Ok(ToolResult::not_found("That page"));
         }
-        let thread_id = match comments::change(
-            &mut transaction,
-            writer(principal),
-            project_id,
-            page_id,
-            comment_id,
-            change,
-        )
-        .await?
-        {
-            Ok(thread_id) => thread_id,
-            Err(comments::Refusal::NotFound) => return Ok(ToolResult::not_found("That comment")),
-            Err(comments::Refusal::Invalid(field, message)) => {
-                let field = match field {
-                    "body" => "text",
-                    other => other,
-                };
-                return Ok(ToolResult::invalid(field, message));
-            }
-            Err(comments::Refusal::NotYours(message)) => return Ok(ToolResult::denied(message)),
+        let actor = match super::talk::message_actor(principal) {
+            Ok(actor) => actor,
+            Err(message) => return Ok(ToolResult::denied(message)),
         };
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let thread_id =
+            match comments::change(state, &mut transaction, &actor, page_id, comment_id, change)
+                .await?
+            {
+                Ok(thread_id) => thread_id,
+                Err(comments::Refusal::NotFound) => {
+                    return Ok(ToolResult::not_found("That comment"));
+                }
+                Err(comments::Refusal::Invalid(field, message)) => {
+                    let field = match field {
+                        "body" => "text",
+                        other => other,
+                    };
+                    return Ok(ToolResult::invalid(field, message));
+                }
+                Err(comments::Refusal::NotYours(message)) => {
+                    return Ok(ToolResult::denied(message));
+                }
+            };
         insert_audit(
             &mut transaction,
             principal,

@@ -334,7 +334,7 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "?category=mentions").await;
     assert_eq!(items(&page).len(), 1, "{page}");
-    assert_eq!(items(&page)[0]["kind"], "comment_mention");
+    assert_eq!(items(&page)[0]["kind"], "mention");
     assert_eq!(items(&page)[0]["title"], "Owner mentioned you on TSK-1");
     assert!(
         items(&page)[0]["preview"]
@@ -368,7 +368,7 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     assert_eq!(page["unreadCount"], 2);
     assert!(items(&inbox(&setup, &cara_browser, "").await).is_empty());
 
-    // A plain comment reaches watchers, and repeats collapse into one row.
+    // A plain comment reaches watchers as a comment on the task (C1.4).
     let (status, comment) = send(
         &setup.app,
         setup.browser.request(
@@ -381,18 +381,19 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{comment}");
     drain(&setup).await;
-    let page = inbox(&setup, &ben_browser, "?category=tasks").await;
+    let page = inbox(&setup, &ben_browser, "").await;
     let watched = items(&page)
         .iter()
-        .filter(|item| item["kind"] == "task_changed")
+        .filter(|item| item["kind"] == "thing_comment")
         .collect::<Vec<_>>();
     assert_eq!(watched.len(), 1, "{page}");
     assert_eq!(watched[0]["title"], "Owner commented on TSK-1");
     assert_eq!(watched[0]["preview"], "Went with teal");
-    assert_eq!(watched[0]["count"], 2);
 
     // Once Ben stops watching, changes stop reaching him.
-    sqlx::query("DELETE FROM work_item_watchers WHERE work_item_id = $1::uuid AND actor_id = $2")
+    sqlx::query(
+        "DELETE FROM follows WHERE target_kind = 'task' AND target_id = $1::uuid AND account_id = $2",
+    )
         .bind(&task)
         .bind(ben)
         .execute(&setup.pool)
@@ -853,9 +854,9 @@ async fn reading_through_a_connected_app_reads_the_mentions() {
 }
 
 /// P0.36: a page comment's notification holds ids, and the inbox reads the
-/// page's title and the comment's words live. A removal that skips
-/// `comments::change` (any later path: a move, retention, a moderator)
-/// still reaches the inbox, and so do a rename and an archive.
+/// comment's words live. Since C1.5 a page comment is a message in the
+/// page's discussion, so the page's maker hears of it as a follower, and
+/// its removal reaches the inbox.
 #[tokio::test]
 async fn page_comment_notifications_never_hold_the_words() {
     let Some(setup) = setup("notify_page_text").await else {
@@ -886,22 +887,21 @@ async fn page_comment_notifications_never_hold_the_words() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{comment}");
+    let comment_id = comment["id"].as_str().expect("comment id").to_owned();
     drain(&setup).await;
 
     let owner = owner_id(&setup.pool).await;
-    let detail = || async {
-        sqlx::query_scalar::<_, Value>(
-            "SELECT detail FROM notifications WHERE kind = 'page_comment' AND recipient_actor_id = $1",
-        )
-        .bind(owner)
-        .fetch_one(&setup.pool)
-        .await
-        .expect("the page's maker has a notification")
-    };
-    let stored = detail().await.to_string();
+    let stored = sqlx::query_scalar::<_, Value>(
+        "SELECT detail FROM notifications WHERE kind = 'thing_comment' AND recipient_actor_id = $1",
+    )
+    .bind(owner)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the page's maker has a notification")
+    .to_string();
     assert!(!stored.contains("40k"), "{stored}");
     assert!(!stored.contains("Quarterly"), "{stored}");
-    assert!(stored.contains("pageCommentId"), "{stored}");
+    assert!(stored.contains(&page), "{stored}");
 
     let only = |page: Value| {
         let found = items(&page).clone();
@@ -909,80 +909,26 @@ async fn page_comment_notifications_never_hold_the_words() {
         found[0].clone()
     };
     let item = only(inbox(&setup, &setup.browser, "").await);
-    assert_eq!(item["title"], "New comment on Quarterly plan", "{item}");
     assert_eq!(item["preview"], "the budget is 40k", "{item}");
 
-    // Removed behind comments::change's back: the inbox shows no words.
-    sqlx::query(
-        "UPDATE project_page_comments SET deleted_at = now(), body = '' WHERE page_id = $1::uuid",
-    )
-    .bind(&page)
-    .execute(&setup.pool)
-    .await
-    .expect("remove the comment");
-    let item = only(inbox(&setup, &setup.browser, "").await);
-    assert!(item["preview"].is_null(), "{item}");
-
-    // Renamed: the new title. Archived: said so, and no words.
-    sqlx::query("UPDATE project_page_comments SET deleted_at = NULL, body = 'the budget is 40k' WHERE page_id = $1::uuid")
-        .bind(&page)
-        .execute(&setup.pool)
-        .await
-        .expect("bring the comment back");
-    let (status, renamed) = send(
+    // Removed: the inbox shows no words.
+    let (status, removed) = send(
         &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/pages/{page}"),
+        bea.request(
+            "DELETE",
+            &format!("/api/v1/pages/{page}/comments/{comment_id}"),
             None,
-            json!({"title": "Annual plan"}),
+            Value::Null,
         ),
     )
     .await;
-    assert!(status.is_success(), "{renamed}");
-    let item = only(inbox(&setup, &setup.browser, "").await);
-    assert_eq!(item["title"], "New comment on Annual plan", "{item}");
-    assert_eq!(item["preview"], "the budget is 40k", "{item}");
-    let (status, archived) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/pages/{page}"),
-            None,
-            json!({"archived": true}),
-        ),
-    )
-    .await;
-    assert!(status.is_success(), "{archived}");
-    let item = only(inbox(&setup, &setup.browser, "").await);
-    assert_eq!(
-        item["title"], "New comment on Annual plan (archived)",
-        "{item}"
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    drain(&setup).await;
+    let left = items(&inbox(&setup, &setup.browser, "").await).clone();
+    assert!(
+        left.iter().all(|item| item["preview"].is_null()),
+        "{left:?}"
     );
-    assert!(item["preview"].is_null(), "{item}");
-
-    // A row written before P0.36 kept copies; the migration strips both,
-    // and running it again changes nothing.
-    sqlx::query(
-        r#"UPDATE notifications SET detail = detail || '{"title": "New comment on Quarterly plan", "preview": "the budget is 40k"}'::jsonb
-           WHERE kind = 'page_comment' AND recipient_actor_id = $1"#,
-    )
-    .bind(owner)
-    .execute(&setup.pool)
-    .await
-    .expect("an old row");
-    for _ in 0..2 {
-        sqlx::raw_sql(include_str!(
-            "../../migrations/20261114071000_notifications_page_text.sql"
-        ))
-        .execute(&setup.pool)
-        .await
-        .expect("the scrub");
-        let stored = detail().await;
-        assert!(stored.get("title").is_none(), "{stored}");
-        assert!(stored.get("preview").is_none(), "{stored}");
-        assert!(stored.get("pageCommentId").is_some(), "{stored}");
-    }
 }
 
 /// C2.5: a DM or group tells its members (one row that counts up, and a

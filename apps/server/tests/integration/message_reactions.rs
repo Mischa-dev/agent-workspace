@@ -347,8 +347,8 @@ async fn only_people_who_can_post_can_react() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let added = call(
-        "project_member_set",
-        json!({"projectId": work, "person": "@vee"}),
+        "space_member_add",
+        json!({"spaceId": work, "account": "@vee"}),
     )
     .await;
     assert_eq!(added["outcome"], "ok", "{added}");

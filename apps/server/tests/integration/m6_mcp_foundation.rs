@@ -167,7 +167,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let token = issued.token;
 
     let stored_digest = sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT token_digest FROM mcp_client_credentials WHERE id = $1",
+        "SELECT token_digest FROM account_credentials WHERE id = $1",
     )
     .bind(issued.credential_id)
     .fetch_one(&pool)
@@ -910,8 +910,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .fetch_one(&pool)
     .await
     .expect("MCP audit count");
+    // Ten writes, and the first comment opening the task's comments
+    // conversation (C1.4).
     assert_eq!(
-        mcp_audits, 10,
+        mcp_audits, 11,
         "exact replay and conflicts create no success audit"
     );
     let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(&format!(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { documentCss, type ThemeDocument } from './customTheme'
+import type { ThemeDocument } from '../api/generated/operations'
+import { documentCss } from './customTheme'
 
 const withCss = (css: string) =>
   ({ format: 1, light: { base: 'quiet', tokens: {} }, dark: { base: 'quiet-dark', tokens: {} }, css }) as unknown as ThemeDocument

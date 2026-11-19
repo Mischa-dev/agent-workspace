@@ -514,7 +514,7 @@ impl Operation for TaskCommentCreate {
     const NAME: &'static str = "task_comment_create";
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Comment on task";
     const DESCRIPTION: &'static str = "Comment on a task: progress, a handoff, or what's left. \

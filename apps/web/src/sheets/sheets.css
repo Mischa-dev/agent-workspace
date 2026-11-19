@@ -155,6 +155,12 @@
   color: var(--content-fg-muted);
 }
 
+/* A fill a person chose, with text that reads on it; the selection still shows over it. */
+.aw-grid__cell.has-fill {
+  color: var(--aw-cell-ink);
+  background: var(--aw-cell-fill);
+}
+
 .aw-grid__cell.is-selected {
   background: var(--accent-soft);
 }
@@ -164,6 +170,11 @@
 }
 
 /* A cell a comment thread is about: a mark in its top-right corner. */
+.aw-grid__cell.is-proposed {
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+
 .aw-grid__cell.has-comment::after {
   position: absolute;
   top: 0;
@@ -280,4 +291,125 @@
 .aw-sheet__empty {
   font: var(--t-small);
   color: var(--content-fg-muted);
+}
+
+/* Find and replace (C1.16): a row over the grid. */
+.aw-sheet__find {
+  align-items: center;
+  border-bottom: var(--border-width) solid var(--content-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+}
+
+.aw-sheet__find .aw-field {
+  max-width: 220px;
+}
+
+.aw-sheet__find-count {
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5em;
+}
+
+/* A filter view's editor. */
+.aw-sheet__view-filters {
+  border: 0;
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: 0;
+}
+
+.aw-sheet__view-filters legend {
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-2);
+}
+
+.aw-sheet__view-filter {
+  align-items: end;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-sheet__rules-empty {
+  color: var(--content-fg-muted);
+  margin: 0;
+}
+
+/* Proposed changes (C1.11) */
+.aw-sheet__suggesting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-sheet__proposal + .aw-sheet__proposal {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-sheet__proposal-by {
+  margin: 0 0 var(--space-2);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-sheet__proposal-cells {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.aw-sheet__proposal-cell {
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-sheet__proposal-change del {
+  color: var(--content-fg-muted);
+}
+
+.aw-sheet__proposal-change ins {
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+}
+
+.aw-sheet__proposal-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Named ranges (C1.20) */
+.aw-sheet__ranges {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.aw-sheet__ranges li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-sheet__range-name {
+  font-weight: var(--weight-semibold);
+}
+
+.aw-sheet__range-where {
+  flex: 1;
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-sheet__range-form {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
 }

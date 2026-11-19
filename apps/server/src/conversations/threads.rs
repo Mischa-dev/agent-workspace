@@ -22,7 +22,7 @@ use crate::{
     auth::AuthenticatedActor,
     error::AppError,
     outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
-    policy::{Action, ActorKind},
+    policy::Action,
 };
 
 /// How a new thread is named.
@@ -101,7 +101,6 @@ impl ThreadSpec {
 #[derive(Clone, Debug)]
 pub(crate) struct ThreadCreator {
     pub actor_id: Uuid,
-    pub actor_kind: ActorKind,
     /// Refuse (as not found) a parent outside this project: an MCP call
     /// acts in its principal's project.
     pub project_id: Option<Uuid>,
@@ -123,7 +122,6 @@ impl ThreadCreator {
     ) -> Result<Self, AppError> {
         Ok(Self {
             actor_id: principal.actor_id,
-            actor_kind: super::parse_actor_kind(&principal.actor_kind)?,
             project_id: None,
             session_id: Some(principal.session_id),
             authentication_class: "password_session",
@@ -144,7 +142,6 @@ impl ThreadCreator {
     pub(crate) fn mcp(principal: &crate::mcp::McpPrincipal) -> Self {
         Self {
             actor_id: principal.actor_id,
-            actor_kind: principal.actor_kind,
             project_id: Some(principal.project_id),
             session_id: None,
             authentication_class: principal.authentication_class,
@@ -160,14 +157,12 @@ impl ThreadCreator {
     /// Anyone, on a path that keeps its own audit columns (a launch).
     pub(crate) fn plain(
         actor_id: Uuid,
-        actor_kind: ActorKind,
         session_id: Option<Uuid>,
         authentication_class: &'static str,
         request_id: Option<String>,
     ) -> Self {
         Self {
             actor_id,
-            actor_kind,
             project_id: None,
             session_id,
             authentication_class,
@@ -219,15 +214,16 @@ pub(crate) async fn create(
     let parent = lock_conversation_for(
         transaction,
         creator.actor_id,
-        creator.actor_kind,
         parent_id,
         Action::ThreadCreate,
         false,
     )
     .await?;
+    // An agent's call scoped to a space reaches that space's conversations
+    // and DMs and groups (which have none).
     if creator
         .project_id
-        .is_some_and(|project_id| project_id != parent.project_id)
+        .is_some_and(|project_id| parent.project_id.is_some_and(|space| space != project_id))
     {
         return Err(AppError::NotFound("conversation"));
     }
@@ -256,7 +252,7 @@ pub(crate) async fn create(
                    CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END,
                    author_actor_id
             FROM messages
-            WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+            WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
             "#,
         )
         .bind(origin_id)
@@ -351,7 +347,7 @@ pub(crate) async fn create(
         .collect::<Vec<_>>();
     crate::notification_settings::follow_automatically(
         transaction,
-        parent.project_id,
+        parent.place(),
         thread_id,
         &followers,
     )
@@ -373,7 +369,7 @@ pub(crate) async fn create(
     }
     enqueue_event(
         transaction,
-        parent.project_id,
+        parent.place(),
         OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
             conversation_id: thread_id,
             kind: OutboxConversationKind::Thread,
@@ -392,7 +388,7 @@ pub(crate) async fn create(
         transaction,
         creator,
         "conversation.thread_created",
-        parent.project_id,
+        parent.place(),
         thread_id,
         metadata,
     )
@@ -469,7 +465,7 @@ async fn audit(
     )
     .bind(Uuid::now_v7())
     .bind(creator.actor_id)
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(creator.session_id)
     .bind(creator.authentication_class)
     .bind(thread_id)
@@ -491,7 +487,8 @@ async fn audit(
 /// both, so every made conversation passes the same constraints.
 struct NewConversation<'a> {
     id: Uuid,
-    project_id: Uuid,
+    /// None under a DM or group: the thread takes its parent's workspace.
+    project_id: Option<Uuid>,
     kind: &'static str,
     parent_id: Option<Uuid>,
     origin_message_id: Option<Uuid>,
@@ -515,7 +512,11 @@ async fn insert(
             auto_named, visibility, subject_kind, subject_id, anchor
         )
         VALUES (
-            $1, $2, (SELECT organization_id FROM projects WHERE id = $2), $3, $4, $5, $6, $7,
+            $1, $2,
+            -- visibility: the parent's workspace only, after the parent's access check
+            COALESCE((SELECT organization_id FROM projects WHERE id = $2),
+                     (SELECT workspace_id FROM conversations WHERE id = $4)),
+            $3, $4, $5, $6, $7,
             $8, $9, $10, $11
         )
         ON CONFLICT (subject_kind, subject_id) WHERE kind = 'comments' DO NOTHING
@@ -559,7 +560,7 @@ pub(crate) async fn open_comments(
         transaction,
         NewConversation {
             id,
-            project_id,
+            project_id: Some(project_id),
             kind: "comments",
             parent_id: None,
             origin_message_id: None,

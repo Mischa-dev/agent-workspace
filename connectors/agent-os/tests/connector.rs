@@ -9,8 +9,8 @@ use std::{
 };
 
 use agent_workspace_agent_os_connector::{
-    Connector, Decision, RunSink,
-    config::{AgentEntry, AgentOs, Config},
+    Connector, Decision, MEMORY_ACTION, PAUSE_ACTION, RunSink,
+    config::{AgentEntry, AgentOs, Config, OfferEntry, Operations},
     controller::{Controller, ControllerError, read_envelope},
     output_text, participation,
 };
@@ -70,6 +70,28 @@ impl Controller for FakeController {
                     "observation": {"status": status, "output": output}}}),
                 )
             }
+            "task-list" => Ok(json!({"tasks": [
+                // Started in Agent OS for the configured agent: adopted.
+                {"id": "own-1", "agent": "agent-helper", "title": "Nightly digest\nmore",
+                 "runtime_run_id": "rt-9", "observation": {"status": "running"}},
+                // The connector's own start: already a run.
+                {"id": "task-1", "agent": "agent-helper", "idempotency_key": "workspace-run",
+                 "observation": {"status": "running"}},
+                // Over already.
+                {"id": "own-2", "agent": "agent-helper", "observation": {"status": "completed"}},
+                // An agent this host doesn't serve.
+                {"id": "own-3", "agent": "someone-else", "observation": {"status": "running"}},
+            ]})),
+            "agent-pause" => Ok(json!({"paused": true})),
+            "memory-show" => Ok(json!({"text": "Prefers short answers."})),
+            "usage-report" => Ok(json!({"accounts": [{
+                "ref": "acct-1", "name": "Team plan", "plan": "team",
+                "windows": [
+                    {"key": "five-hour", "label": "5 hours", "usedPercent": 42.4, "resetsAt": "2026-11-18T15:00:00Z"},
+                    {"key": "Bad Key", "usedPercent": 10},
+                    {"key": "week", "usedPercent": 100},
+                ],
+            }]})),
             "task-cancel" => {
                 let mut cancels = self.cancels.lock().expect("cancels");
                 if cancels.is_empty() {
@@ -155,7 +177,37 @@ fn config(state_dir: PathBuf) -> Config {
         poll_seconds: 1,
         task_deadline_seconds: 3600,
         max_reply_characters: 40,
+        offers: Vec::new(),
+        operations: Operations::default(),
+        adopt_seconds: 30,
     }
+}
+
+/// The configuration with every optional part turned on.
+fn full_config(state_dir: PathBuf) -> Config {
+    Config {
+        offers: vec![OfferEntry {
+            id: "researcher".to_owned(),
+            title: "A research agent".to_owned(),
+            description: Some("Reads and summarises.".to_owned()),
+        }],
+        operations: Operations {
+            list_tasks: Some("task-list".to_owned()),
+            usage: Some("usage-report".to_owned()),
+            pause: Some("agent-pause".to_owned()),
+            memory: Some("memory-show".to_owned()),
+        },
+        ..config(state_dir)
+    }
+}
+
+fn action(agent: &str, action: &str) -> Command {
+    serde_json::from_value(json!({
+        "commandId": uuid::Uuid::now_v7(), "seq": 3, "kind": "action",
+        "issuedAt": "2026-11-17T10:00:00Z", "expiresAt": "2026-11-18T10:00:00Z",
+        "hostAgentRef": agent, "action": action, "input": {},
+    }))
+    .expect("action")
 }
 
 fn start(run: &str, agent: &str) -> Command {
@@ -498,6 +550,154 @@ fn the_controller_envelope_says_ok_refused_or_unknown() {
         read_envelope(true, b"not json"),
         Err(ControllerError::Uncertain(_))
     ));
+}
+
+#[tokio::test]
+async fn offers_and_actions_are_described_only_when_configured() {
+    let plain: Connector<FakeController, FakeSink> =
+        Connector::new(config(state_dir()), FakeController::default()).expect("connector");
+    let described = plain.description();
+    assert!(described.offers.is_empty());
+    assert!(described.agents[0].actions.is_empty());
+
+    let full: Connector<FakeController, FakeSink> =
+        Connector::new(full_config(state_dir()), FakeController::default()).expect("connector");
+    let described = full.description();
+    assert_eq!(described.offers[0].id, "researcher");
+    let actions: Vec<(&str, &str)> = described.agents[0]
+        .actions
+        .iter()
+        .map(|action| (action.id.as_str(), action.label.as_str()))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            (PAUSE_ACTION, "Pause"),
+            (MEMORY_ACTION, "What it remembers")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn pause_and_what_it_remembers_call_agent_os_for_that_agent() {
+    let fake = FakeController::default();
+    let mut connector: Connector<FakeController, FakeSink> =
+        Connector::new(full_config(state_dir()), fake.clone()).expect("connector");
+    let paused = connector
+        .command(&action("helper", PAUSE_ACTION), || None)
+        .await
+        .expect("answered");
+    assert_eq!(paused.outcome, Some(AckOutcome::Done));
+    assert_eq!(paused.result, Some(json!({"paused": true})));
+    assert_eq!(fake.calls("agent-pause")[0]["agent"], "agent-helper");
+
+    let memory = connector
+        .command(&action("helper", MEMORY_ACTION), || None)
+        .await
+        .expect("answered");
+    assert_eq!(
+        memory.result,
+        Some(json!({"text": "Prefers short answers."}))
+    );
+
+    for (agent, name) in [("helper", "rename"), ("stranger", PAUSE_ACTION)] {
+        let refused = connector
+            .command(&action(agent, name), || None)
+            .await
+            .expect("answered");
+        assert_eq!(refused.outcome, Some(AckOutcome::Refused));
+    }
+    // Without the operation configured, there is no such action.
+    let mut plain: Connector<FakeController, FakeSink> =
+        Connector::new(config(state_dir()), fake.clone()).expect("connector");
+    let refused = plain
+        .command(&action("helper", PAUSE_ACTION), || None)
+        .await
+        .expect("answered");
+    assert_eq!(refused.reason.as_deref(), Some("unknown_action"));
+    assert_eq!(fake.calls("agent-pause").len(), 1);
+}
+
+#[tokio::test]
+async fn a_task_started_in_agent_os_is_adopted_once_and_reported_like_a_start() {
+    let fake = FakeController::default();
+    let dir = state_dir();
+    let mut connector = Connector::new(full_config(dir.clone()), fake.clone()).expect("connector");
+    let found = connector.found_tasks().await;
+    assert_eq!(
+        found.len(),
+        1,
+        "only the running task of a served agent, not its own"
+    );
+    assert_eq!(found[0].task_id(), "own-1");
+    assert_eq!(found[0].host_agent_ref, "helper");
+    let request = found[0].adopt_request();
+    assert_eq!(
+        (request.host_run_ref.as_str(), request.title.as_str()),
+        ("own-1", "Nightly digest")
+    );
+
+    let sink = FakeSink::default();
+    connector
+        .adopted(
+            found[0].clone(),
+            RUN.to_owned(),
+            uuid::Uuid::now_v7().to_string(),
+            sink.clone(),
+        )
+        .await;
+    assert!(connector.found_tasks().await.is_empty(), "adopted once");
+    assert_eq!(
+        connector.heartbeat().runs[0].host_run_ref.as_deref(),
+        Some("own-1")
+    );
+
+    fake.finish("completed", json!("Digest sent."));
+    connector.tick().await;
+    let reports = sink.reports();
+    assert_eq!(
+        reports[0].1["statusLine"],
+        "Started in Agent OS; its steps aren't shown here."
+    );
+    assert_eq!(reports[1].1["payload"]["text"], "Digest sent.");
+    assert_eq!(reports[2].1["state"], "done");
+    assert_eq!(fake.calls("task-inspect")[0]["id"], "own-1");
+
+    // After a restart it is still known: not adopted a second time.
+    let restarted: Connector<FakeController, FakeSink> =
+        Connector::new(full_config(dir), fake).expect("connector");
+    assert!(restarted.found_tasks().await.is_empty());
+}
+
+#[tokio::test]
+async fn usage_reports_the_accounts_windows_and_says_when_the_accounts_change() {
+    let mut connector: Connector<FakeController, FakeSink> =
+        Connector::new(full_config(state_dir()), FakeController::default()).expect("connector");
+    let (changed, report) = connector.usage().await.expect("usage");
+    assert!(changed);
+    assert_eq!(connector.description().accounts[0].name, "Team plan");
+    let windows = &report.accounts[0].windows;
+    assert_eq!(
+        windows.len(),
+        2,
+        "a window with an unusable key is left out"
+    );
+    assert_eq!(
+        (
+            windows[0].key.as_str(),
+            windows[0].used_percent,
+            windows[0].limit_reached
+        ),
+        ("five-hour", 42, false)
+    );
+    assert!(windows[1].limit_reached);
+    let (changed, _) = connector.usage().await.expect("usage");
+    assert!(!changed);
+
+    let mut plain: Connector<FakeController, FakeSink> =
+        Connector::new(config(state_dir()), FakeController::default()).expect("connector");
+    assert!(plain.usage().await.is_none());
+    assert!(plain.found_tasks().await.is_empty());
 }
 
 #[test]

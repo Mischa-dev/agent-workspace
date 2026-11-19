@@ -298,19 +298,20 @@ pub struct SuggestionRow {
 }
 
 const SUGGESTION_SELECT: &str = r#"
-    SELECT suggestion.id, suggestion.page_id, suggestion.author_actor_id AS author_id,
+    SELECT suggestion.id, suggestion.thing_id AS page_id, suggestion.author_actor_id AS author_id,
            author.display_name AS author, actor.kind AS author_kind,
-           suggestion.note, suggestion.base_version, suggestion.edits, suggestion.status,
+           suggestion.note, suggestion.base_version, suggestion.change -> 'edits' AS edits,
+           suggestion.status,
            decider.display_name AS decided_by,
            to_char(suggestion.decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS decided_at,
            suggestion.applied_version,
            to_char(suggestion.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
-    FROM project_page_suggestions suggestion
+    FROM proposals suggestion
     JOIN actors actor ON actor.id = suggestion.author_actor_id
     LEFT JOIN project_memberships author
-      ON author.project_id = suggestion.project_id AND author.actor_id = suggestion.author_actor_id
+      ON author.project_id = suggestion.space_id AND author.actor_id = suggestion.author_actor_id
     LEFT JOIN project_memberships decider
-      ON decider.project_id = suggestion.project_id AND decider.actor_id = suggestion.decided_by_actor_id
+      ON decider.project_id = suggestion.space_id AND decider.actor_id = suggestion.decided_by_actor_id
 "#;
 
 /// A page's pending suggestions, oldest first, then (if asked) the latest
@@ -321,7 +322,8 @@ pub async fn list(
     include_decided: bool,
 ) -> Result<Vec<SuggestionRow>, AppError> {
     let mut rows = sqlx::query_as::<_, SuggestionRow>(&format!(
-        "{SUGGESTION_SELECT} WHERE suggestion.page_id = $1 AND suggestion.status = 'pending' \
+        "{SUGGESTION_SELECT} WHERE suggestion.thing_kind = 'page' AND suggestion.thing_id = $1 \
+         AND suggestion.status = 'pending' \
          ORDER BY suggestion.created_at, suggestion.id LIMIT 200"
     ))
     .bind(page_id)
@@ -330,7 +332,8 @@ pub async fn list(
     if include_decided {
         rows.extend(
             sqlx::query_as::<_, SuggestionRow>(&format!(
-                "{SUGGESTION_SELECT} WHERE suggestion.page_id = $1 AND suggestion.status <> 'pending' \
+                "{SUGGESTION_SELECT} WHERE suggestion.thing_kind = 'page' AND suggestion.thing_id = $1 \
+                 AND suggestion.status <> 'pending' \
                  ORDER BY suggestion.decided_at DESC, suggestion.id DESC LIMIT $2"
             ))
             .bind(page_id)
@@ -346,14 +349,12 @@ pub async fn get(
     executor: impl sqlx::PgExecutor<'_>,
     suggestion_id: Uuid,
 ) -> Result<Option<SuggestionRow>, AppError> {
-    Ok(
-        sqlx::query_as::<_, SuggestionRow>(&format!(
-            "{SUGGESTION_SELECT} WHERE suggestion.id = $1"
-        ))
-        .bind(suggestion_id)
-        .fetch_optional(executor)
-        .await?,
-    )
+    Ok(sqlx::query_as::<_, SuggestionRow>(&format!(
+        "{SUGGESTION_SELECT} WHERE suggestion.id = $1 AND suggestion.thing_kind = 'page'"
+    ))
+    .bind(suggestion_id)
+    .fetch_optional(executor)
+    .await?)
 }
 
 /// Tells open pages that a page's comments or suggestions changed.
@@ -383,7 +384,7 @@ pub async fn create(
     note: Option<&str>,
 ) -> Result<Uuid, AppError> {
     let pending = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM project_page_suggestions WHERE page_id = $1 AND author_actor_id = $2 AND status = 'pending'",
+        "SELECT count(*) FROM proposals WHERE thing_kind = 'page' AND thing_id = $1 AND author_actor_id = $2 AND status = 'pending'",
     )
     .bind(page_id)
     .bind(author.actor_id)
@@ -398,9 +399,13 @@ pub async fn create(
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO project_page_suggestions (
-            id, project_id, page_id, author_actor_id, note, base_version, edits
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO proposals (
+            id, workspace_id, space_id, thing_kind, thing_id, operation, author_actor_id,
+            via_oauth_grant_id, note, base_version, change
+        )
+        SELECT $1, project.organization_id, project.id, 'page', $3, 'page_edit', $4, $8, $5, $6,
+               jsonb_build_object('edits', $7::jsonb)
+        FROM projects project WHERE project.id = $2
         "#,
     )
     .bind(id)
@@ -410,6 +415,7 @@ pub async fn create(
     .bind(note)
     .bind(page.version)
     .bind(sqlx::types::Json(edits))
+    .bind(author.via_grant_id)
     .execute(&mut **transaction)
     .await?;
     if let Some(owner) = page_creator(transaction, page_id).await? {
@@ -433,6 +439,71 @@ pub async fn create(
     }
     discussion_updated(transaction, page.project_id, page_id).await?;
     Ok(id)
+}
+
+/// What became of new text offered as a suggestion.
+#[derive(Debug)]
+pub enum Suggested {
+    /// Kept as this suggestion, of `edits` block edits to `from_version`.
+    Made {
+        id: Uuid,
+        edits: usize,
+        from_version: i64,
+    },
+    /// The text is what the page already says.
+    Unchanged,
+    /// The page is archived.
+    Archived,
+    /// It changes more blocks than one suggestion holds.
+    TooBig,
+    /// The edits don't fit the page (the message says why).
+    Invalid(String),
+}
+
+/// Keeps `markdown`, offered by `author` as the whole of a page's text, as
+/// a suggestion of the block edits that turn the page into it: the one way
+/// both the web editor's save and `page_write` route a `Propose` grant
+/// (C1.8). Locks the page; `expected_version` refuses a page that moved on.
+pub async fn suggest_text(
+    transaction: &mut Transaction<'_, Postgres>,
+    author: Writer,
+    page_id: Uuid,
+    markdown: &str,
+    expected_version: Option<i64>,
+    note: Option<&str>,
+) -> Result<Suggested, AppError> {
+    let Some(page) = store::lock_page_for(transaction, page_id, author.actor_id).await? else {
+        return Err(AppError::NotFound("page"));
+    };
+    if let Some(expected) = expected_version
+        && expected != page.version
+    {
+        return Err(AppError::VersionConflict {
+            resource: "page",
+            current_version: page.version,
+        });
+    }
+    if page.archived {
+        return Ok(Suggested::Archived);
+    }
+    let stored = store::document(transaction, page_id, &page).await?;
+    let current = store::read_blocks(&stored.state)?;
+    let Some(edits) = diff(&current, markdown) else {
+        return Ok(Suggested::Unchanged);
+    };
+    if edits.len() > edits::MAX_EDITS {
+        return Ok(Suggested::TooBig);
+    }
+    let stored_edits = match resolve(&current, &edits) {
+        Ok(stored) => stored,
+        Err(error) => return Ok(Suggested::Invalid(error.to_string())),
+    };
+    let id = create(transaction, author, page_id, &page, &stored_edits, note).await?;
+    Ok(Suggested::Made {
+        id,
+        edits: stored_edits.len(),
+        from_version: page.version,
+    })
 }
 
 /// Delivers a notification to someone who can still see the page's project.
@@ -511,7 +582,7 @@ pub async fn decide(
     suggestion_id: Uuid,
     decision: Decision,
 ) -> Result<Result<Decided, Refusal>, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
+    let Some(page) = store::lock_page_for(transaction, page_id, decider.actor_id).await? else {
         return Ok(Err(Refusal::NotFound));
     };
     let Some(suggestion) = sqlx::query_as::<
@@ -524,8 +595,8 @@ pub async fn decide(
         ),
     >(
         r#"
-        SELECT author_actor_id, status, note, edits FROM project_page_suggestions
-        WHERE id = $1 AND page_id = $2 FOR UPDATE
+        SELECT author_actor_id, status, note, change -> 'edits' FROM proposals
+        WHERE id = $1 AND thing_kind = 'page' AND thing_id = $2 FOR UPDATE
         "#,
     )
     .bind(suggestion_id)
@@ -553,6 +624,7 @@ pub async fn decide(
         _ => {}
     }
     let mut version = page.version;
+    let mut applied_change_set = None;
     let status = match decision {
         Decision::Accept => {
             if page.archived {
@@ -624,6 +696,18 @@ pub async fn decide(
             )
             .await?;
             version = saved;
+            if let Some(change_set) =
+                crate::change_sets::at_version(transaction, "page", page_id, saved).await?
+            {
+                sqlx::query(
+                    "UPDATE document_change_sets SET proposal_id = $2, open_until = NULL WHERE id = $1",
+                )
+                .bind(change_set)
+                .bind(suggestion_id)
+                .execute(&mut **transaction)
+                .await?;
+                applied_change_set = Some(change_set);
+            }
             "accepted"
         }
         Decision::Reject => "rejected",
@@ -631,9 +715,10 @@ pub async fn decide(
     };
     sqlx::query(
         r#"
-        UPDATE project_page_suggestions
-        SET status = $2, decided_by_actor_id = $3, decided_at = now(),
-            applied_version = CASE WHEN $2 = 'accepted' THEN $4 END
+        UPDATE proposals
+        SET status = $2, decided_by_actor_id = $3, decided_at = now(), updated_at = now(),
+            applied_version = CASE WHEN $2 = 'accepted' THEN $4 END,
+            applied_change_set_id = $5
         WHERE id = $1
         "#,
     )
@@ -641,6 +726,7 @@ pub async fn decide(
     .bind(status)
     .bind(decider.actor_id)
     .bind(version)
+    .bind(applied_change_set)
     .execute(&mut **transaction)
     .await?;
     discussion_updated(transaction, page.project_id, page_id).await?;

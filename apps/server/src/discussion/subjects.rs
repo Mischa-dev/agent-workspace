@@ -40,9 +40,6 @@ pub enum AnchorShape {
 /// One row of the table.
 pub struct Subject {
     pub kind: SubjectKind,
-    /// Takes comments through `comment_create` now. Tasks and pages keep
-    /// their own comment paths until C1.4 and C1.5 move them here.
-    pub open: bool,
     pub anchor: AnchorShape,
     /// `$1` the thing, `$2` the viewer: its workspace, its project (none for
     /// a board outside any project) and whether it takes new comments,
@@ -57,60 +54,62 @@ pub struct Subject {
 pub const SUBJECTS: &[Subject] = &[
     Subject {
         kind: SubjectKind::Page,
-        open: false,
         anchor: AnchorShape::Text,
         home_sql: "SELECT project.organization_id, page.project_id, page.archived_at IS NULL \
              FROM project_pages page JOIN projects project ON project.id = page.project_id \
              WHERE page.id = $1 AND subject_visible_to('page', page.id, $2) \
              FOR SHARE OF page",
         followers_sql: "SELECT created_by_actor_id FROM project_pages \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'page' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Sheet,
-        open: true,
         anchor: AnchorShape::Cells,
         home_sql: "SELECT project.organization_id, sheet.project_id, sheet.archived_at IS NULL \
              FROM sheets sheet JOIN projects project ON project.id = sheet.project_id \
              WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2) \
              FOR SHARE OF sheet",
         followers_sql: "SELECT created_by_actor_id FROM sheets \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'sheet' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Whiteboard,
-        open: true,
         anchor: AnchorShape::Elements,
         home_sql: "SELECT board.organization_id, board.project_id, board.deleted_at IS NULL \
              FROM whiteboards board \
              WHERE board.id = $1 AND subject_visible_to('whiteboard', board.id, $2) \
              FOR SHARE OF board",
         followers_sql: "SELECT created_by_actor_id FROM whiteboards \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'whiteboard' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Record,
-        open: true,
         anchor: AnchorShape::Field,
         home_sql: "SELECT project.organization_id, record.project_id, record.archived_at IS NULL \
              FROM collection_records record JOIN projects project ON project.id = record.project_id \
              WHERE record.id = $1 AND subject_visible_to('record', record.id, $2) \
              FOR SHARE OF record",
         followers_sql: "SELECT created_by_actor_id FROM collection_records \
-             WHERE id = $1 AND created_by_actor_id IS NOT NULL",
+                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
+             UNION SELECT account_id FROM follows \
+                 WHERE target_kind = 'record' AND target_id = $1 AND level = 'everything'",
     },
     Subject {
         kind: SubjectKind::Task,
-        open: false,
         anchor: AnchorShape::Field,
         home_sql: "SELECT project.organization_id, item.project_id, item.archived_at IS NULL \
              FROM task_rows item JOIN projects project ON project.id = item.project_id \
              WHERE item.id = $1 AND subject_visible_to('task', item.id, $2)",
-        followers_sql: "SELECT assignee_actor_id FROM work_items \
-                 WHERE id = $1 AND assignee_actor_id IS NOT NULL \
-             UNION SELECT created_by_actor_id FROM work_items \
-                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
-             UNION SELECT actor_id FROM work_item_watchers WHERE work_item_id = $1",
+        // Those who follow everything about the task (its maker and
+        // assignee do until they stop), so unfollowing quiets its comments too.
+        followers_sql: "SELECT account_id FROM follows \
+             WHERE target_kind = 'task' AND target_id = $1 AND level = 'everything'",
     },
 ];
 
@@ -122,6 +121,19 @@ impl SubjectKind {
             Self::Whiteboard => "whiteboard",
             Self::Record => "record",
             Self::Task => "task",
+        }
+    }
+
+    /// What commenting on this kind takes: its module's "comment on"
+    /// permission, in place of posting in channels (K1.16).
+    pub fn comment_permission(self) -> crate::policy::Permission {
+        use crate::policy::Permission;
+        match self {
+            Self::Page => Permission::PagesComment,
+            Self::Sheet => Permission::SheetsComment,
+            Self::Whiteboard => Permission::WhiteboardsComment,
+            Self::Record => Permission::CollectionsComment,
+            Self::Task => Permission::TasksComment,
         }
     }
 

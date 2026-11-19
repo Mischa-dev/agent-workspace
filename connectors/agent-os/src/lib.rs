@@ -13,6 +13,12 @@
 //! when it says it has nothing to add (`{"decision": "pass"}`). Stop is
 //! `task-cancel`.
 //!
+//! A2.26 adds the rest of what works without Agent OS changing: tasks
+//! started in Agent OS itself are adopted onto the workspace's runs once
+//! each, usage is reported by plan window, the configured offers are
+//! described, and each agent gets "Pause" and "What it remembers" actions;
+//! each through a controller operation named in the configuration.
+//!
 //! Everything about one installation (the workspace, the Agent OS context,
 //! the controller command, the agents) is in the configuration file; see
 //! `examples/connector.example.json`.
@@ -28,8 +34,10 @@ use std::{
 };
 
 use agent_workspace_host_protocol::{
-    Ack, AckOutcome, ClientError, Command, CommandKind, DescribedAgent, Description, EnrolRequest,
-    Heartbeat, HeartbeatRun, HostClient, HostSoftware, PROTOCOL_VERSION, RunReporter,
+    AccountWindows, Ack, AckOutcome, ActionNeeds, AdoptRun, ClientError, Command, CommandKind,
+    DescribedAccount, DescribedAgent, Description, EnrolRequest, Heartbeat, HeartbeatRun,
+    HostAction, HostClient, HostSoftware, Offer, PROTOCOL_VERSION, PlanWindow, RunReporter,
+    WindowsReport,
 };
 use serde_json::{Value, json};
 
@@ -94,7 +102,36 @@ pub struct Connector<C, S> {
     receipts: Receipts,
     /// By run id.
     active: HashMap<String, Active<S>>,
+    /// The provider accounts last seen in usage, described with the host.
+    accounts: Vec<DescribedAccount>,
 }
+
+/// A task started in Agent OS itself, for one of the configured agents,
+/// that the workspace doesn't have yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FoundTask {
+    pub task: Value,
+    pub host_agent_ref: String,
+    pub title: String,
+}
+
+impl FoundTask {
+    pub fn task_id(&self) -> &str {
+        self.task["id"].as_str().unwrap_or_default()
+    }
+
+    pub fn adopt_request(&self) -> AdoptRun {
+        AdoptRun {
+            host_agent_ref: self.host_agent_ref.clone(),
+            host_run_ref: self.task_id().to_owned(),
+            title: self.title.clone(),
+        }
+    }
+}
+
+/// The action ids the connector publishes on each agent.
+pub const PAUSE_ACTION: &str = "pause";
+pub const MEMORY_ACTION: &str = "memory";
 
 impl<C: Controller, S: RunSink> Connector<C, S> {
     pub fn new(config: Config, controller: C) -> std::io::Result<Self> {
@@ -104,6 +141,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
             controller,
             receipts,
             active: HashMap::new(),
+            accounts: Vec::new(),
         })
     }
 
@@ -124,7 +162,16 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
             report_interval_seconds: Some(
                 i32::try_from(self.config.poll_seconds.clamp(5, 300) * 2).unwrap_or(600),
             ),
-            offers: Vec::new(),
+            offers: self
+                .config
+                .offers
+                .iter()
+                .map(|offer| Offer {
+                    id: offer.id.clone(),
+                    title: offer.title.clone(),
+                    description: offer.description.clone(),
+                })
+                .collect(),
             actions: Vec::new(),
             agents: self
                 .config
@@ -133,11 +180,32 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                 .map(|(host_agent_ref, agent)| DescribedAgent {
                     host_agent_ref: host_agent_ref.clone(),
                     name: Some(agent.name.clone()),
-                    actions: Vec::new(),
+                    actions: self.agent_actions(),
                 })
                 .collect(),
-            accounts: Vec::new(),
+            accounts: self.accounts.clone(),
         }
+    }
+
+    /// The actions every agent has, for the operations configured.
+    fn agent_actions(&self) -> Vec<HostAction> {
+        let operations = &self.config.operations;
+        let mut actions = Vec::new();
+        if operations.pause.is_some() {
+            actions.push(HostAction {
+                id: PAUSE_ACTION.to_owned(),
+                label: "Pause".to_owned(),
+                needs: ActionNeeds::Confirm,
+            });
+        }
+        if operations.memory.is_some() {
+            actions.push(HostAction {
+                id: MEMORY_ACTION.to_owned(),
+                label: "What it remembers".to_owned(),
+                needs: ActionNeeds::Confirm,
+            });
+        }
+        actions
     }
 
     /// The runs it is doing, for a heartbeat.
@@ -173,8 +241,194 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
                 "unsupported",
                 "This host can't pass messages to a running Agent OS task.",
             )),
-            CommandKind::Action => Some(refused("unknown_action", "This host has no actions yet.")),
+            CommandKind::Action => self.action(command).await,
         }
+    }
+
+    /// An agent's action: Pause, or What it remembers. `None` when Agent
+    /// OS's answer was lost (the action is offered again).
+    async fn action(&self, command: &Command) -> Option<Ack> {
+        let action = command.detail.get("action").and_then(Value::as_str);
+        let host_agent_ref = command
+            .detail
+            .get("hostAgentRef")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let operations = &self.config.operations;
+        let operation = match action {
+            Some(PAUSE_ACTION) => operations.pause.as_deref(),
+            Some(MEMORY_ACTION) => operations.memory.as_deref(),
+            _ => None,
+        };
+        let Some(operation) = operation else {
+            return Some(refused("unknown_action", "This host has no such action."));
+        };
+        let Some(agent) = self.config.agents.get(host_agent_ref) else {
+            return Some(refused(
+                "unknown_agent",
+                "This host doesn't serve that agent.",
+            ));
+        };
+        let answer = match self
+            .controller
+            .call(json!({"operation": operation, "agent": agent.agentos_id}))
+            .await
+        {
+            Ok(answer) => answer,
+            Err(ControllerError::Rejected(code)) => {
+                return Some(refused(
+                    "agentos_refused",
+                    &format!("Agent OS refused: {code}"),
+                ));
+            }
+            Err(ControllerError::Uncertain(_)) => return None,
+        };
+        let mut ack = Ack::new(AckOutcome::Done);
+        ack.result = Some(if action == Some(MEMORY_ACTION) {
+            let text = match &answer["text"] {
+                Value::String(text) => text.clone(),
+                Value::Null => {
+                    output_text(&json!({"output": answer}), self.config.max_reply_characters)
+                }
+                other => other.to_string(),
+            };
+            json!({"text": output_text(&json!({"output": text}), self.config.max_reply_characters)})
+        } else {
+            json!({"paused": true})
+        });
+        Some(ack)
+    }
+
+    /// Tasks started in Agent OS itself for a configured agent, still
+    /// running, that the workspace doesn't have yet. Nothing when listing
+    /// isn't configured or Agent OS doesn't answer: it is looked at again.
+    pub async fn found_tasks(&self) -> Vec<FoundTask> {
+        let Some(operation) = self.config.operations.list_tasks.as_deref() else {
+            return Vec::new();
+        };
+        let Ok(answer) = self.controller.call(json!({"operation": operation})).await else {
+            return Vec::new();
+        };
+        let tasks = answer
+            .get("tasks")
+            .and_then(Value::as_array)
+            .or_else(|| answer.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let by_agentos_id: HashMap<&str, &str> = self
+            .config
+            .agents
+            .iter()
+            .map(|(host_agent_ref, agent)| (agent.agentos_id.as_str(), host_agent_ref.as_str()))
+            .collect();
+        let ours: Vec<&str> = self
+            .active
+            .values()
+            .filter_map(|active| active.receipt.task_id())
+            .collect();
+        tasks
+            .into_iter()
+            .filter_map(|task| {
+                let id = task["id"].as_str().filter(|id| !id.is_empty())?;
+                // Its own starts carry this key; those are runs already.
+                let key = task["idempotency_key"].as_str().unwrap_or_default();
+                if key.starts_with("workspace-") || ours.contains(&id) {
+                    return None;
+                }
+                if self.receipts.load(&adopted_key(id)).is_some() {
+                    return None;
+                }
+                let status = task["observation"]["status"].as_str().unwrap_or("running");
+                if TERMINAL.contains(&status) {
+                    return None;
+                }
+                let agent = task["agent"]
+                    .as_str()
+                    .or_else(|| task["submission"]["agent"].as_str())?;
+                let host_agent_ref = (*by_agentos_id.get(agent)?).to_owned();
+                let title = task["title"]
+                    .as_str()
+                    .or_else(|| task["submission"]["prompt"].as_str())
+                    .map(one_line)
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or_else(|| "Started in Agent OS".to_owned());
+                Some(FoundTask {
+                    task,
+                    host_agent_ref,
+                    title,
+                })
+            })
+            .collect()
+    }
+
+    /// The workspace adopted a found task as `run_id`: it is watched and
+    /// reported like any start from then on. Agent OS doesn't report its
+    /// steps, so the run says only that it is working until it ends.
+    pub async fn adopted(&mut self, found: FoundTask, run_id: String, command_id: String, sink: S) {
+        let task_id = found.task_id().to_owned();
+        let receipt = Receipt {
+            start_key: adopted_key(&task_id),
+            run_id: run_id.clone(),
+            host_agent_ref: found.host_agent_ref,
+            command_id: Some(command_id),
+            submission: None,
+            task: Some(found.task),
+            finished: None,
+        };
+        if self.receipts.save(&receipt).is_err() {
+            return;
+        }
+        let _ = sink
+            .update(
+                json!({"statusLine": "Started in Agent OS; its steps aren't shown here."}),
+                &format!("{task_id}-adopted"),
+            )
+            .await;
+        self.active.insert(
+            run_id,
+            Active {
+                receipt,
+                sink,
+                since: Instant::now(),
+                sink_since: Instant::now(),
+            },
+        );
+    }
+
+    /// The accounts' plan windows, when usage is configured; `true` with it
+    /// when the accounts changed, so the host describes itself again first.
+    pub async fn usage(&mut self) -> Option<(bool, WindowsReport)> {
+        let operation = self.config.operations.usage.as_deref()?;
+        let answer = self
+            .controller
+            .call(json!({"operation": operation}))
+            .await
+            .ok()?;
+        let mut described = Vec::new();
+        let mut report = WindowsReport::default();
+        for account in answer["accounts"].as_array().into_iter().flatten() {
+            let Some(reference) = account["ref"].as_str().filter(|r| !r.is_empty()) else {
+                continue;
+            };
+            described.push(DescribedAccount {
+                reference: reference.to_owned(),
+                name: account["name"].as_str().unwrap_or(reference).to_owned(),
+            });
+            report.accounts.push(AccountWindows {
+                reference: reference.to_owned(),
+                plan: account["plan"].as_str().map(str::to_owned),
+                windows: account["windows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(plan_window)
+                    .collect(),
+                reset_credits: None,
+            });
+        }
+        let changed = described != self.accounts;
+        self.accounts = described;
+        Some((changed, report))
     }
 
     async fn start(&mut self, command: &Command, sink: impl FnOnce() -> Option<S>) -> Option<Ack> {
@@ -561,6 +815,41 @@ pub fn participation(output: &str) -> Result<Decision, String> {
     }
 }
 
+fn adopted_key(task_id: &str) -> String {
+    format!("adopted-{task_id}")
+}
+
+/// The first line, on one line, at most 200 characters.
+fn one_line(text: &str) -> String {
+    let first = text.trim().lines().next().unwrap_or_default();
+    first
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// One plan window as Agent OS gives it, if it is readable.
+fn plan_window(window: &Value) -> Option<PlanWindow> {
+    let key = window["key"].as_str().filter(|key| {
+        !key.is_empty()
+            && key
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c))
+    })?;
+    let used = window["usedPercent"].as_f64()?.clamp(0.0, 100.0);
+    Some(PlanWindow {
+        key: key.to_owned(),
+        label: window["label"].as_str().map(str::to_owned),
+        used_percent: used.round() as u16,
+        resets_at: window["resetsAt"].as_str().map(str::to_owned),
+        duration_minutes: window["durationMinutes"].as_i64(),
+        limit_reached: window["limitReached"].as_bool().unwrap_or(used >= 100.0),
+    })
+}
+
 fn accepted(host_run_ref: &str) -> Ack {
     let mut ack = Ack::new(AckOutcome::Accepted);
     ack.host_run_ref = Some(host_run_ref.to_owned());
@@ -657,6 +946,8 @@ pub async fn serve<C: Controller>(
     resume(&client, &mut connector).await?;
     let mut after = 0;
     let mut last_beat = Instant::now() - Duration::from_secs(3600);
+    let adopt_every = Duration::from_secs(connector.config.adopt_seconds.max(5));
+    let mut last_adopt = Instant::now() - adopt_every;
     let wait = connector
         .config
         .poll_seconds
@@ -704,7 +995,47 @@ pub async fn serve<C: Controller>(
             }
         }
         refresh_credentials(&client, &mut connector).await;
+        if last_adopt.elapsed() >= adopt_every {
+            last_adopt = Instant::now();
+            adopt_found(&client, &mut connector).await;
+            if let Some((changed, report)) = connector.usage().await {
+                if changed {
+                    let _ = client.describe(&connector.description()).await;
+                }
+                let _ = client.report_windows(&report).await;
+            }
+        }
         connector.tick().await;
+    }
+}
+
+/// Adds the tasks started in Agent OS itself to the workspace, once each:
+/// the workspace opens a run for the agent (the same task id finds the same
+/// run), and its start gives the credential to report with.
+async fn adopt_found<C: Controller>(
+    client: &HostClient,
+    connector: &mut Connector<C, RunReporter>,
+) {
+    for found in connector.found_tasks().await {
+        let Ok(adopted) = client.adopt_run(&found.adopt_request()).await else {
+            continue;
+        };
+        let Ok(command) = client.command(adopted.command_id).await else {
+            continue;
+        };
+        if let (Some(run_id), Some(credential)) =
+            (command.run_id, command.workspace_credential.as_ref())
+        {
+            let sink = client.reporter(run_id, credential);
+            connector
+                .adopted(
+                    found,
+                    run_id.to_string(),
+                    adopted.command_id.to_string(),
+                    sink,
+                )
+                .await;
+        }
     }
 }
 

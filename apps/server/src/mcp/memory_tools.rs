@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
+        ToolResult, insert_audit, link_url, parse_id, parse_time, project_is_chosen, public_url,
         scope_projects, string_or_number, truncate_text,
     },
     writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
@@ -334,7 +334,6 @@ pub(crate) async fn page_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -449,7 +448,6 @@ pub(crate) async fn page_get(
             || memory::project_access(
                 &state.pool,
                 principal.actor_id,
-                principal.actor_kind,
                 page.project_id,
                 Action::McpRead,
             )
@@ -473,13 +471,18 @@ pub(crate) async fn page_get(
         let (open_comments, pending_suggestions) = sqlx::query_as::<_, (i64, i64)>(
             r#"
             SELECT
-                (SELECT count(*) FROM project_page_comments
-                 WHERE page_id = $1 AND thread_id = id AND resolved_at IS NULL
-                   AND EXISTS (SELECT 1 FROM project_page_comments reply
-                               WHERE reply.thread_id = project_page_comments.id
-                                 AND reply.deleted_at IS NULL)),
-                (SELECT count(*) FROM project_page_suggestions
-                 WHERE page_id = $1 AND status = 'pending')
+                -- visibility: a count of the page's open threads, for a reader of the page
+                (SELECT count(*) FROM conversations comments
+                 JOIN conversations thread
+                   ON thread.parent_channel_id = comments.id AND thread.kind = 'thread'
+                 WHERE comments.kind = 'comments' AND comments.subject_kind = 'page'
+                   AND comments.subject_id = $1
+                   AND lower(COALESCE(thread.thread_status, '')) <> 'resolved'
+                   AND EXISTS (SELECT 1 FROM messages reply
+                               WHERE reply.conversation_id = thread.id
+                                 AND reply.removed_at IS NULL)),
+                (SELECT count(*) FROM proposals
+                 WHERE thing_kind = 'page' AND thing_id = $1 AND status = 'pending')
             "#,
         )
         .bind(page_id)
@@ -490,9 +493,10 @@ pub(crate) async fn page_get(
             pending_suggestions,
             suggestion: None,
             idempotent_replay: false,
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{}/pages/{}", page.project_id, page.id),
+                None,
+                &crate::addresses::Target::page(page.project_id, page.id),
             ),
             id: page.id.to_string(),
             project_id: page.project_id.to_string(),
@@ -563,6 +567,9 @@ pub(crate) struct PageWriteArguments {
     pub note: Option<String>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
+    /// The page's comment thread that asked for this change, if one did:
+    /// the change is linked there (with Undo). Reply in that thread too.
+    pub thread_id: Option<String>,
     /// Makes creating a page safe to retry: send the same one again and you
     /// get the page the first call made, not a second one. Used only when
     /// creating.
@@ -597,6 +604,17 @@ pub(crate) async fn page_write(
         },
         None => None,
     };
+    let thread_id = match (arguments.thread_id.as_deref().map(parse_id), page_id) {
+        (None, _) => None,
+        (Some(Some(id)), Some(_)) => Some(id),
+        (Some(Some(_)), None) => {
+            return ToolResult::invalid(
+                "threadId",
+                "A thread asks for changes to its own page: pass pageId with it.",
+            );
+        }
+        (Some(None), _) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
+    };
     let retry_key = match arguments.client_request_id.as_deref() {
         Some(value) if page_id.is_none() => match parse_request_id(value) {
             Some(key) => Some(key),
@@ -630,7 +648,6 @@ pub(crate) async fn page_write(
         let direct = memory::project_access(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::ProjectView,
         )
@@ -683,6 +700,17 @@ pub(crate) async fn page_write(
                 .await?;
                 if owner != Some(project_id) {
                     return Ok(ToolResult::not_found("That page"));
+                }
+                if let Some(thread_id) = thread_id
+                    && !crate::change_sets::is_page_thread(
+                        &mut transaction,
+                        page_id,
+                        thread_id,
+                        principal.actor_id,
+                    )
+                    .await?
+                {
+                    return Ok(ToolResult::not_found("That comment thread on this page"));
                 }
                 // Someone who only suggests here (K1.12) has new text kept
                 // as a suggestion; the rest of the page needs edit access.
@@ -762,6 +790,16 @@ pub(crate) async fn page_write(
             serde_json::json!({}),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let mut value = page_get(
             state,
@@ -790,23 +828,6 @@ async fn suggest_text(
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Result<Option<SuggestionMade>, ToolResult<PageValue>>, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
-        return Ok(Err(ToolResult::not_found("That page")));
-    };
-    if let Some(expected) = input.expected_version
-        && expected != page.version
-    {
-        return Err(AppError::VersionConflict {
-            resource: "page",
-            current_version: page.version,
-        });
-    }
-    if page.archived {
-        return Ok(Err(ToolResult::invalid(
-            "pageId",
-            "That page is archived. Bring it back with page_write (archived: false) to edit it.",
-        )));
-    }
     let markdown = match (input.restore_version, input.body.as_deref()) {
         (_, Some(body)) => memory::normalize_body(body, memory::MAX_PAGE_BODY)?,
         (Some(restore), None) => sqlx::query_scalar::<_, String>(
@@ -824,41 +845,56 @@ async fn suggest_text(
             .restore_version
             .map(|restore| format!("Restore version {restore}"))
     });
-    let stored = store::document(transaction, page_id, &page).await?;
-    let current = store::read_blocks(&stored.state)?;
-    let Some(edits) = suggestions::diff(&current, &markdown) else {
-        return Ok(Ok(None));
-    };
-    if edits.len() > edits::MAX_EDITS {
-        return Ok(Err(ToolResult::invalid(
-            "body",
-            format!(
-                "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
-                edits::MAX_EDITS
-            ),
-        )));
-    }
-    let stored_edits = match suggestions::resolve(&current, &edits) {
-        Ok(stored) => stored,
-        Err(error) => return Ok(Err(ToolResult::invalid("body", error.to_string()))),
-    };
-    let id = suggestions::create(
+    let (id, edits_count, from_version) = match suggestions::suggest_text(
         transaction,
         writer(principal),
         page_id,
-        &page,
-        &stored_edits,
+        &markdown,
+        input.expected_version,
         note.as_deref(),
     )
-    .await?;
+    .await
+    {
+        Ok(suggestions::Suggested::Made {
+            id,
+            edits,
+            from_version,
+        }) => (id, edits, from_version),
+        Ok(suggestions::Suggested::Unchanged) => return Ok(Ok(None)),
+        Ok(suggestions::Suggested::Archived) => {
+            return Ok(Err(ToolResult::invalid(
+                "pageId",
+                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+            )));
+        }
+        Ok(suggestions::Suggested::TooBig) => {
+            return Ok(Err(ToolResult::invalid(
+                "body",
+                format!(
+                    "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
+                    edits::MAX_EDITS
+                ),
+            )));
+        }
+        Ok(suggestions::Suggested::Invalid(message)) => {
+            return Ok(Err(ToolResult::invalid("body", message)));
+        }
+        Err(AppError::NotFound(_)) => return Ok(Err(ToolResult::not_found("That page"))),
+        Err(error) => return Err(error),
+    };
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
+            .bind(page_id)
+            .fetch_one(&mut **transaction)
+            .await?;
     insert_audit(
         transaction,
         principal,
-        page.project_id,
+        project_id,
         "page.suggestion_created",
         "page",
         page_id,
-        serde_json::json!({ "edits": stored_edits.len(), "fromVersion": page.version, "suggestionId": id }),
+        serde_json::json!({ "edits": edits_count, "fromVersion": from_version, "suggestionId": id }),
     )
     .await?;
     Ok(Ok(Some(SuggestionMade::pending(id))))
@@ -1000,7 +1036,6 @@ async fn readable_page(
         || memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             page.project_id,
             Action::McpRead,
         )
@@ -1182,9 +1217,10 @@ fn blocks_value(
         })
         .collect();
     PageBlocksValue {
-        url: public_url(
+        url: link_url(
             state,
-            &format!("/projects/{}/pages/{}", page.project_id, page.page_id),
+            None,
+            &crate::addresses::Target::page(page.project_id, page.page_id),
         ),
         page_id: page.page_id.to_string(),
         project_id: page.project_id.to_string(),
@@ -1313,6 +1349,10 @@ pub(crate) struct PageEditArguments {
     /// you may change directly. On a page someone else made, an agent's
     /// edits are always suggestions.
     pub suggest: Option<bool>,
+    /// The page's comment thread that asked for these edits, if one did:
+    /// the change (or suggestion) is linked there, with Undo. Reply in that
+    /// thread too.
+    pub thread_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -1343,6 +1383,11 @@ pub(crate) async fn page_edit(
     }
     let Some(page_id) = parse_id(&arguments.page_id) else {
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
+    };
+    let thread_id = match arguments.thread_id.as_deref().map(parse_id) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return ToolResult::invalid("threadId", "Pass the comment thread's ID."),
     };
     let note = match memory::normalize_note(arguments.note.as_deref()) {
         Ok(note) => note,
@@ -1402,11 +1447,22 @@ pub(crate) async fn page_edit(
         {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
+        let Some(page) = store::lock_page_for(&mut transaction, page_id, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
         if page.project_id != project_id {
             return Ok(ToolResult::not_found("That page"));
+        }
+        if let Some(thread_id) = thread_id
+            && !crate::change_sets::is_page_thread(
+                &mut transaction,
+                page_id,
+                thread_id,
+                principal.actor_id,
+            )
+            .await?
+        {
+            return Ok(ToolResult::not_found("That comment thread on this page"));
         }
         if page.archived {
             return Ok(ToolResult::invalid(
@@ -1470,6 +1526,16 @@ pub(crate) async fn page_edit(
                 serde_json::json!({ "edits": edits.len(), "fromVersion": page.version, "suggestionId": id }),
             )
             .await?;
+            if let Some(thread_id) = thread_id {
+                crate::change_sets::answer_thread(
+                    &mut transaction,
+                    "page",
+                    page_id,
+                    principal.actor_id,
+                    thread_id,
+                )
+                .await?;
+            }
             transaction.commit().await?;
             let derived = store::derive_markdown(&page.body, &current);
             let now = PageAsBlocks {
@@ -1513,6 +1579,16 @@ pub(crate) async fn page_edit(
             serde_json::json!({ "edits": edits.len(), "fromVersion": page.version }),
         )
         .await?;
+        if let Some(thread_id) = thread_id {
+            crate::change_sets::answer_thread(
+                &mut transaction,
+                "page",
+                page_id,
+                principal.actor_id,
+                thread_id,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let after = PageAsBlocks {
             page_id,
@@ -1596,7 +1672,6 @@ pub(crate) async fn skill_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -1682,7 +1757,6 @@ pub(crate) async fn skill_get(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -1715,9 +1789,10 @@ pub(crate) async fn skill_get(
         let (body, truncated) = truncate_text(&page.body, PAGE_BODY_CHARACTERS);
         Ok::<_, AppError>(ToolResult::ok(SkillValue {
             skill_md: skill_md(&name, &description, &body),
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{}/pages/{}", page.project_id, page.id),
+                None,
+                &crate::addresses::Target::page(page.project_id, page.id),
             ),
             name,
             description,

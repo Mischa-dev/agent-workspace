@@ -138,7 +138,7 @@ pub struct Sidebar {
 /// see in each, sorted as each section says.
 async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
     let caller = call.account_id();
-    let workspace = call.ctx.workspace_id;
+    let workspace = sidebar_workspace(call).await?;
     let tx = call.tx().await?;
     let sections = sqlx::query_as::<_, SectionRow>(
         r#"
@@ -162,14 +162,13 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
                         SELECT string_agg(membership.display_name, ', '
                                           ORDER BY lower(membership.display_name))
                         FROM conversation_members member
-                        JOIN project_memberships membership
-                          ON membership.project_id = member.project_id
-                         AND membership.actor_id = member.actor_id
+                        CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id)
+                            membership
                         WHERE member.conversation_id = conversation.id
                           AND member.actor_id <> $1
                     ), conversation.name)
                     ELSE conversation.name END AS name,
-               conversation.project_id AS space_id,
+               COALESCE(conversation.project_id, direct_scope_id()) AS space_id,
                conversation.visibility = 'members' AND conversation.kind = 'channel' AS private,
                conversation.last_message_sequence
                    > COALESCE(read_state.highest_seen_sequence, 0) AS unread,
@@ -188,9 +187,11 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
           AND item.workspace_id = $2
           AND conversation.archived_at IS NULL
           AND conversation_visible_to(conversation.id, $1)
-          AND EXISTS (SELECT 1 FROM project_memberships membership
-                      WHERE membership.project_id = conversation.project_id
-                        AND membership.actor_id = $1 AND membership.enabled)
+          -- A DM or group is in no space (K4.17): seeing it is enough.
+          AND (conversation.project_id IS NULL
+               OR EXISTS (SELECT 1 FROM project_memberships membership
+                          WHERE membership.project_id = conversation.project_id
+                            AND membership.actor_id = $1 AND membership.enabled))
         ORDER BY item.section_id, item.position, conversation.id
         "#,
     )
@@ -240,7 +241,7 @@ async fn sidebar(call: &mut OpCall<'_>) -> Result<Sidebar, OpError> {
 /// Tells the caller's other tabs and devices (their id only), in the same
 /// transaction. The envelope needs a space: the workspace's own.
 async fn announce(call: &mut OpCall<'_>) -> Result<(), OpError> {
-    let (workspace, account) = (call.ctx.workspace_id, call.account_id());
+    let (workspace, account) = (sidebar_workspace(call).await?, call.account_id());
     let tx = call.tx().await?;
     let space = crate::spaces::workspace::ensure(tx, workspace).await?;
     crate::outbox::enqueue_typed(
@@ -358,7 +359,7 @@ impl Operation for SidebarSectionSet {
 
     async fn run(call: &mut OpCall<'_>, input: SidebarSectionSetInput) -> Result<Sidebar, OpError> {
         let caller = call.account_id();
-        let workspace = call.ctx.workspace_id;
+        let workspace = sidebar_workspace(call).await?;
         let name = input.name.as_deref().map(section_name).transpose()?;
         if input.position.is_some_and(|position| position < 0) {
             return Err(OpError::invalid("position", "A position is 0 or more."));
@@ -485,6 +486,19 @@ impl Operation for SidebarSectionSet {
 
 pub struct SidebarItemMove;
 
+/// The workspace whose sidebar a call changes: where its target is, or for
+/// a DM or group (in no workspace, K4.17) the one the request named, else
+/// the caller's only one.
+async fn sidebar_workspace(call: &mut OpCall<'_>) -> Result<Uuid, OpError> {
+    if call.ctx.workspace_id != crate::spaces::DIRECT {
+        return Ok(call.ctx.workspace_id);
+    }
+    let caller = call.account_id();
+    let named = call.ctx.requested_workspace;
+    let tx = call.tx().await?;
+    Ok(crate::workspace::named_or_only(tx, caller, named).await?)
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SidebarItemMoveInput {
@@ -526,7 +540,7 @@ impl Operation for SidebarItemMove {
 
     async fn run(call: &mut OpCall<'_>, input: SidebarItemMoveInput) -> Result<Sidebar, OpError> {
         let caller = call.account_id();
-        let workspace = call.ctx.workspace_id;
+        let workspace = sidebar_workspace(call).await?;
         let conversation_id = input.conversation_id.id();
         if input.position.is_some_and(|position| position < 0) {
             return Err(OpError::invalid("position", "A position is 0 or more."));
@@ -541,7 +555,8 @@ impl Operation for SidebarItemMove {
         let kind = sqlx::query_scalar::<_, String>(
             r#"
             SELECT kind FROM conversations
-            WHERE id = $1 AND workspace_id = $3 AND archived_at IS NULL
+            WHERE id = $1 AND (workspace_id = $3 OR project_id IS NULL)
+              AND archived_at IS NULL
               AND conversation_visible_to(id, $2)
             "#,
         )

@@ -416,7 +416,13 @@ async fn concurrent_writers_leave_no_gaps() {
     assert_eq!(written.len(), 800);
     for tail in &mut tails {
         let seen = tail_until(tail, &written, Duration::from_secs(30)).await;
-        assert_eq!(seen.len(), written.len(), "each event once");
+        // The tail may also hand on the log project's own `space.created`,
+        // logged before the writers start; each written event comes once.
+        let ours = seen
+            .iter()
+            .filter(|(_, id)| written.contains(id))
+            .collect::<Vec<_>>();
+        assert_eq!(ours.len(), written.len(), "each event once");
         assert_dense(&seen);
     }
     cluster.finish().await;

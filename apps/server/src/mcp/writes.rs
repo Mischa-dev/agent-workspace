@@ -10,7 +10,7 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids_in,
-        archived_task_message, parse_id, public_url, version_conflict_message,
+        archived_task_message, link_url, parse_id, version_conflict_message,
     },
     planning,
     workflow::Workflow,
@@ -23,7 +23,7 @@ use crate::{
         resource_bound_scope,
     },
     message_content::MessageContent,
-    policy::{Action, ActorKind, Decision},
+    policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, CommandActor, ConflictKind, CreateWorkItemCommand,
@@ -349,7 +349,7 @@ impl WriteResult {
         self
     }
 
-    fn unavailable() -> Self {
+    pub(super) fn unavailable() -> Self {
         Self::TemporarilyUnavailable {
             retry_category: "retry_with_backoff".to_owned(),
         }
@@ -1334,26 +1334,12 @@ async fn post_update_inner(
         },
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    // Commenting needs "comment on tasks", as on the web (K1.16).
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemComment).await?
+    {
         return Ok(result);
     }
-    let scope = resource_bound_scope("mcp_work_items", work_item_id, "post_update")?;
-    let request_hash = RequestHash::for_value(&arguments)?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            transaction.commit().await?;
-            return Ok(replay.decode::<WriteResult>()?.replayed());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
     let Some(current) =
         lock_work_item(&mut transaction, principal.project_id, work_item_id).await?
     else {
@@ -1376,66 +1362,67 @@ async fn post_update_inner(
             message: Some(archived_task_message(&task)),
         });
     }
-    if let Some(reply_to) = reply_to {
-        let answerable = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM work_item_comments
-                WHERE project_id = $1 AND work_item_id = $2 AND id = $3
-                  AND removed_at IS NULL
-            )
-            "#,
-        )
-        .bind(principal.project_id)
-        .bind(work_item_id)
-        .bind(reply_to)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !answerable {
-            return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
+    // Checked, then let go: the comment goes through the send pipeline in
+    // its own transaction (C1.4), which keeps the request id.
+    transaction.commit().await?;
+    let actor = match super::talk::message_actor(principal) {
+        Ok(actor) => actor,
+        Err(message) => {
+            return Ok(WriteResult::PermissionDenied {
+                retry_category: "do_not_retry".to_owned(),
+                message: Some(message.to_owned()),
+            });
         }
-    }
-    // One path with the web (C1.1).
-    let inserted = match crate::work_item_commands::insert_task_comment(
-        &mut transaction,
-        &mcp_actor(principal, key.as_str().to_owned()),
-        crate::work_item_commands::NewTaskComment {
-            work_item_id,
-            version: current.version,
-            content: validated,
-            reply_to,
-            attachments: &attachments,
-            audit_action: "work_item.mcp_update_posted",
-        },
+    };
+    let content = serde_json::to_value(&validated)
+        .map_err(|_| AppError::Internal("serialize task comment"))?;
+    let posted = match crate::work_items::comments::post(
+        state,
+        actor,
+        crate::conversations::threads::ThreadCreator::mcp(principal),
+        work_item_id,
+        content,
+        &attachments,
+        reply_to,
+        key.clone(),
+        (
+            &mcp_actor(principal, key.as_str().to_owned()),
+            "work_item.mcp_update_posted",
+        ),
     )
     .await
     {
-        Ok(inserted) => inserted,
+        Ok(posted) => posted,
         Err(AppError::Validation("attachments")) => {
             return Ok(WriteResult::invalid(
                 "attachmentIds",
                 "Those files aren't your unsent uploads for a comment on this task.",
             ));
         }
+        Err(AppError::Validation("replyToCommentId")) => {
+            return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
+        }
         Err(AppError::Validation(_)) => {
             return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
         }
         Err(error) => return Err(error),
     };
-    let comment_id = inserted.comment_id;
-    let result_id = inserted.audit_id;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
+    transaction.commit().await?;
     let result = applied(
         work_item_id,
         current.version,
         vec!["update".to_owned()],
-        Some(comment_id),
-        result_id,
+        Some(posted.message_id),
+        posted.message_id,
         location,
     );
-    complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
-    transaction.commit().await?;
-    Ok(result)
+    Ok(if posted.replayed {
+        result.replayed()
+    } else {
+        result
+    })
 }
 
 pub async fn mark_blocked(
@@ -1915,12 +1902,9 @@ pub(super) async fn check_access_for(
     let Some(membership) = membership else {
         return Ok(WriteAccess::NotFound);
     };
-    if !membership.enabled
-        || !matches!(
-            principal.actor_kind,
-            ActorKind::Human | ActorKind::ExternalAgent
-        )
-    {
+    // Whatever kind of account: a worker's membership never passes
+    // `authorize_mutation`, which is where that is decided (K1.16).
+    if !membership.enabled {
         return Ok(WriteAccess::NotFound);
     }
     if membership.project_archived_at.is_some() {
@@ -2591,9 +2575,10 @@ pub(super) async fn locate(
     .await?;
     Ok((
         key,
-        public_url(
+        link_url(
             state,
-            &format!("/projects/{project_id}/work-items/{work_item_id}"),
+            None,
+            &crate::addresses::Target::task(project_id, work_item_id),
         ),
     ))
 }

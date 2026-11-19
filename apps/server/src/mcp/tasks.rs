@@ -15,8 +15,8 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, one_or_many, parse_id, parse_message_id, parse_since, project_is_chosen,
-        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
+        flag_or_text, link_url, one_or_many, parse_id, parse_message_id, parse_since,
+        project_is_chosen, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
@@ -2044,18 +2044,21 @@ pub(crate) async fn task_open(
         .await?;
         let mut comments = sqlx::query_as::<_, CommentItem>(
             r#"
+            -- visibility: the task's comment stream, which whoever may see the task may read
             SELECT comment.id::text AS id,
                    COALESCE(author.display_name, 'Former member') AS author,
                    comment.plain_text AS text, comment.created_at::text AS at,
                    via_client.client_name AS via,
-                   comment.reply_to_comment_id::text AS reply_to_comment_id
-            FROM work_item_comments comment
+                   comment.reply_to_message_id::text AS reply_to_comment_id
+            FROM conversations comments
+            JOIN messages comment ON comment.conversation_id = comments.id
             LEFT JOIN project_memberships author
               ON author.project_id = comment.project_id AND author.actor_id = comment.author_actor_id
             LEFT JOIN mcp_oauth_grants via_grant
               ON via_grant.id = comment.via_oauth_grant_id AND via_grant.show_via
             LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-            WHERE comment.work_item_id = $1 AND comment.removed_at IS NULL
+            WHERE comments.kind = 'comments' AND comments.subject_kind = 'task'
+              AND comments.subject_id = $1 AND comment.removed_at IS NULL
             ORDER BY comment.created_at DESC
             LIMIT 10
             "#,
@@ -2268,15 +2271,17 @@ pub(crate) async fn task_create(
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would
         // see them. A subtask goes where its parent is.
-        let in_messages_space =
-            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                .bind(principal.project_id)
-                .fetch_optional(crate::db::scoped(&state.pool))
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(true);
-        if !project_is_chosen(principal) || in_messages_space {
+        let in_messages_space = crate::spaces::kind::holds_messages(principal.project_id);
+        let workspace_wide = match crate::db::scoped_tx(&state.pool).await {
+            Ok(mut connection) => {
+                match super::common::anchored_in_workspace(&mut connection, principal).await {
+                    Ok(wide) => wide,
+                    Err(_) => return writes::WriteResult::unavailable(),
+                }
+            }
+            Err(_) => return writes::WriteResult::unavailable(),
+        };
+        if !project_is_chosen(principal) || in_messages_space || workspace_wide {
             const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
             return writes::WriteResult::InvalidRequest {
                 field: "projectId".to_owned(),
@@ -3294,9 +3299,10 @@ async fn task_whiteboard_link(
             version,
             role: None,
             notes: Vec::new(),
-            task_url: public_url(
+            task_url: link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{task_id}"),
+                None,
+                &crate::addresses::Target::task(project_id, task_id),
             ),
         }))
     }
@@ -3593,9 +3599,10 @@ async fn task_link_inner(
         version,
         role,
         notes,
-        task_url: public_url(
+        task_url: link_url(
             state,
-            &format!("/projects/{project_id}/work-items/{task_id}"),
+            None,
+            &crate::addresses::Target::task(project_id, task_id),
         ),
     }))
 }

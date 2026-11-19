@@ -46,6 +46,9 @@ pub enum MutationAction {
     /// A host's own call (A1.11): enrolling with a one-time code a person
     /// made, or describing itself, sending a heartbeat or a notice with the
     /// token it got then. It acts only for the agents people bound to it.
+    /// A run's own credential (A1.25) asks the workspace's model for its
+    /// next turn, only for the built-in assistant's runs, within the
+    /// workspace's budget.
     HostCredential,
     /// The generated operation route (K2): the operation it names checks
     /// its own permission, module and target through `ops::dispatch`, the
@@ -968,6 +971,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
         WorkItemEdit
     ),
+    // A thing's own file (C1.33): today a page's, by its editors.
+    policy_route!(
+        "files/http",
+        Post,
+        "/api/v1/things/{kind}/{id}/files",
+        PageEdit
+    ),
     policy_route!("files/http", Delete, "/api/v1/files/{id}", WorkItemEdit),
     // Hiding a link preview follows the rule for removing the message: its
     // author, or a person who may moderate.
@@ -1326,6 +1336,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/commands/{command_id}/ack",
         HostCredential
     ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/runs", HostCredential),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/runs/{run_id}/model",
+        HostCredential
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),
@@ -1479,7 +1496,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-        WorkItemEdit
+        WorkItemComment
     ),
     policy_route!(
         "work_items/comments",

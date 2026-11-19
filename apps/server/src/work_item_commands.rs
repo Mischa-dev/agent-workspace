@@ -17,10 +17,7 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     outbox::enqueue_work_item_updated,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, ActorKind, Decision, DenyReason, RoleGrant},
     work_item_fields::FieldValueChanges,
     work_item_history::FieldChanges,
     work_item_labels::{self, LabelDelta, LabelPlan, MAX_LABELS_PER_TASK},
@@ -458,31 +455,32 @@ pub async fn read_membership(
         .await?)
 }
 
+/// Whether a task write may go ahead (K1.16): the access rule read from the
+/// membership the write locked, the same answer `access::check` gives. The
+/// role holds the action's permission, the membership is enabled and not a
+/// worker's (a worker acts only through its run's delegated scope), and an
+/// app acting for the account keeps it under its delegation limit. The
+/// account's kind plays no part.
 pub fn authorize_mutation(
     actor: &CommandActor,
     membership: &ProjectMembership,
     action: Action,
-    work_item_id: Option<Uuid>,
+    _work_item_id: Option<Uuid>,
 ) -> Result<Decision, AppError> {
-    let scope = work_item_id.map_or_else(
-        || ProjectScope::project(membership.project_id),
-        |id| ProjectScope::work_item(membership.project_id, id),
-    );
-    Ok(authorize(
-        &Subject::new(
-            actor.actor_id,
-            actor.actor_kind,
-            true,
-            Some(Membership::project(
-                membership.project_id,
-                membership.grant()?,
-                membership.enabled,
-            )),
-            None,
-        ),
-        action,
-        Resource::Project(scope),
-    ))
+    if !membership.enabled {
+        return Ok(Decision::Deny(DenyReason::MembershipDisabled));
+    }
+    let grant = membership.grant()?;
+    let permission = action.permission();
+    if grant.role() == crate::policy::MembershipRole::Worker
+        || !grant.permissions().contains(permission)
+    {
+        return Ok(Decision::Deny(DenyReason::RoleDenied));
+    }
+    if crate::access::limit_hides(actor.actor_id, membership.project_id, permission) {
+        return Ok(Decision::Deny(DenyReason::AgentLimit));
+    }
+    Ok(Decision::Allow)
 }
 
 pub async fn lock_work_item(
@@ -2739,13 +2737,18 @@ pub async fn add_watcher(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO work_item_watchers (project_id, work_item_id, actor_id)
-        SELECT $1, $2, membership.actor_id
+        INSERT INTO follows (
+            workspace_id, space_id, account_id, target_kind, target_id, level,
+            created_by_account_id
+        )
+        SELECT space.organization_id, $1, membership.actor_id, 'task', $2, 'everything',
+               membership.actor_id
         FROM project_memberships membership
+        JOIN projects space ON space.id = membership.project_id
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1 AND membership.actor_id = $3
           AND membership.enabled AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -2809,7 +2812,7 @@ pub async fn validate_assignee(
               AND membership.actor_id = $2
               AND membership.enabled
               AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         )
         "#,
     )
@@ -2982,179 +2985,6 @@ async fn finalize_created(
     })
 }
 
-/// A new comment on a locked, open task (C1.1).
-pub(crate) struct NewTaskComment<'a> {
-    pub work_item_id: Uuid,
-    /// The locked task's version, which the comment's update event carries.
-    pub version: i64,
-    pub content: crate::message_content::MessageContent,
-    pub reply_to: Option<Uuid>,
-    pub attachments: &'a [Uuid],
-    pub audit_action: &'a str,
-}
-
-pub(crate) struct InsertedTaskComment {
-    pub comment_id: Uuid,
-    pub created_at: String,
-    pub sequence: i64,
-    pub audit_id: Uuid,
-    pub content_json: serde_json::Value,
-    pub plain_text: String,
-    pub mentioned_actor_ids: Vec<Uuid>,
-    pub referenced_work_item_ids: Vec<Uuid>,
-}
-
-/// The one way a task comment is written (C1.1), for the web and agent
-/// tools alike: its mentions and task references are checked against the
-/// project, the comment and the rows notifications and "Referenced in" read
-/// are inserted, the timeline, events and audit follow, its files are
-/// attached, and each mentioned agent with a connection gets a
-/// `comment.mentioned` event.
-///
-/// The caller has locked the task and checked it's open and that
-/// `reply_to` can be answered. Content that doesn't check out is
-/// `Validation("comment content")` (or `"Message content"`), files that
-/// aren't the author's unsent uploads `Validation("attachments")`.
-pub(crate) async fn insert_task_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    comment: NewTaskComment<'_>,
-) -> Result<InsertedTaskComment, AppError> {
-    let resolved = crate::work_items::comments::resolve_comment_content(
-        transaction,
-        actor.project_id,
-        comment.content,
-    )
-    .await?;
-    let comment_id = Uuid::now_v7();
-    let created_at = sqlx::query_scalar::<_, String>(
-        r#"
-        INSERT INTO work_item_comments (
-            id, project_id, work_item_id, author_actor_id, content_version,
-            content, plain_text, reply_to_comment_id
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-        RETURNING created_at::text
-        "#,
-    )
-    .bind(comment_id)
-    .bind(actor.project_id)
-    .bind(comment.work_item_id)
-    .bind(actor.actor_id)
-    .bind(&resolved.content_json)
-    .bind(&resolved.plain_text)
-    .bind(comment.reply_to)
-    .fetch_one(&mut **transaction)
-    .await?;
-    crate::work_items::comments::insert_comment_projections(
-        transaction,
-        actor.project_id,
-        comment.work_item_id,
-        comment_id,
-        &resolved,
-    )
-    .await?;
-    let (sequence, audit_id) = finalize_comment(
-        transaction,
-        actor,
-        comment.work_item_id,
-        comment_id,
-        comment.version,
-        comment.audit_action,
-    )
-    .await?;
-    crate::files::attach_to_comment(
-        transaction,
-        actor.project_id,
-        comment.work_item_id,
-        comment_id,
-        actor.actor_id,
-        comment.attachments,
-    )
-    .await?;
-    let mut mentioned_actor_ids = resolved
-        .mention_nodes
-        .iter()
-        .map(|(_, actor_id)| *actor_id)
-        .collect::<Vec<_>>();
-    mentioned_actor_ids.sort();
-    mentioned_actor_ids.dedup();
-    crate::delivery::mentions::comment_mentioned(
-        transaction,
-        crate::delivery::mentions::MentioningComment {
-            space_id: actor.project_id,
-            thing_kind: "task",
-            thing_id: comment.work_item_id,
-            comment_kind: "work_item_comment",
-            comment_id,
-            thread_id: comment_id,
-            author_account_id: actor.actor_id,
-        },
-        &mentioned_actor_ids,
-    )
-    .await?;
-    let mut referenced_work_item_ids = Vec::new();
-    for (_, referenced) in &resolved.references {
-        if !referenced_work_item_ids.contains(referenced) {
-            referenced_work_item_ids.push(*referenced);
-        }
-    }
-    Ok(InsertedTaskComment {
-        comment_id,
-        created_at,
-        sequence,
-        audit_id,
-        content_json: resolved.content_json,
-        plain_text: resolved.plain_text,
-        mentioned_actor_ids,
-        referenced_work_item_ids,
-    })
-}
-
-pub async fn finalize_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-    version: i64,
-    audit_action: &str,
-) -> Result<(i64, Uuid), AppError> {
-    let sequence =
-        insert_comment_timeline(transaction, actor.project_id, work_item_id, comment_id).await?;
-    enqueue_update(transaction, actor.project_id, work_item_id, version).await?;
-    let audit_id = record_audit(
-        transaction,
-        actor,
-        audit_action,
-        work_item_id,
-        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
-    )
-    .await?;
-    Ok((sequence, audit_id))
-}
-
-/// Records a comment copied in bulk (a task move carrying its history over)
-/// without telling anyone about each one. The caller's own change, committed
-/// in the same transaction, already sends the update and the agent events.
-pub async fn finalize_copied_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-    audit_action: &str,
-) -> Result<(), AppError> {
-    let sequence =
-        insert_comment_timeline(transaction, actor.project_id, work_item_id, comment_id).await?;
-    record_audit(
-        transaction,
-        actor,
-        audit_action,
-        work_item_id,
-        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
-    )
-    .await?;
-    Ok(())
-}
-
 pub async fn insert_activity(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -3204,23 +3034,28 @@ pub async fn enqueue_update(
     Ok(())
 }
 
-async fn insert_comment_timeline(
+/// Lists comments (messages, oldest first) in a task's timeline, after
+/// what's there: a task moved to another space brings its discussion along
+/// (C1.4). A new comment gets its entry from a trigger on messages.
+pub(crate) async fn insert_comment_entries(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<i64, AppError> {
-    let sequence = allocate_timeline_sequence(transaction, project_id, work_item_id).await?;
-    sqlx::query(
-        "INSERT INTO work_item_timeline_entries (project_id, work_item_id, sequence, kind, comment_id) VALUES ($1, $2, $3, 'comment', $4)",
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(sequence)
-    .bind(comment_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(sequence)
+    message_ids: &[Uuid],
+) -> Result<(), AppError> {
+    for message_id in message_ids {
+        let sequence = allocate_timeline_sequence(transaction, project_id, work_item_id).await?;
+        sqlx::query(
+            "INSERT INTO work_item_timeline_entries (project_id, work_item_id, sequence, kind, message_id) VALUES ($1, $2, $3, 'comment', $4)",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(sequence)
+        .bind(message_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn allocate_timeline_sequence(

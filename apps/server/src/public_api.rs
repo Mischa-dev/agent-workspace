@@ -227,10 +227,38 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The statuses an operation's own refusal answers with (its `outcome`
-/// says which), rather than the shared error body.
-fn refuses(status: &str) -> bool {
-    matches!(status, "403" | "404" | "409" | "422" | "503")
+/// An output schema's descriptions cut to their first sentence: the
+/// result's shape is the reference, and the operation's own description and
+/// its arguments say the rest. Kept whole, results take most of the
+/// document.
+fn brief(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                match child {
+                    Value::String(text) if key == "description" => {
+                        if let Some(end) = first_sentence_end(text) {
+                            text.truncate(end);
+                        }
+                    }
+                    _ => brief(child),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(brief),
+        _ => {}
+    }
+}
+
+/// Where a description's first sentence ends, when more follows it.
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(1)).find_map(|index| {
+        (matches!(bytes[index], b'.' | b'?' | b'!' | b';' | b':')
+            && bytes[index + 1].is_ascii_whitespace()
+            && !text[index + 1..].trim().is_empty())
+        .then_some(index + 1)
+    })
 }
 
 /// Moves a schema's `$defs` into `components.schemas` and points its
@@ -360,9 +388,10 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
-            // A paused account's answer (A2.10) is the same for every
-            // operation: shared too.
-            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
+            // A call set aside, by a paused account (A2.10) or a team's
+            // guard (A2.27), is answered the same for every operation:
+            // shared too.
+            Some("ok") if branch.get("anyOf").is_some() => "SetAside".to_owned(),
             Some("ok") => {
                 share_ok_envelope(branch, components);
                 continue;
@@ -449,6 +478,36 @@ fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
     }
 }
 
+/// An argument left out and one sent as `null` mean the same, so an
+/// optional argument's type is written without `null`: what a client should
+/// send, and a shorter document.
+fn drop_optional_nulls(input: &mut Value) {
+    let required = input
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, property) in properties.iter_mut() {
+        if required.iter().any(|known| known.as_str() == Some(name)) {
+            continue;
+        }
+        let Some(types) = property.get("type").and_then(Value::as_array) else {
+            continue;
+        };
+        let kept: Vec<Value> = types
+            .iter()
+            .filter(|kind| *kind != "null")
+            .cloned()
+            .collect();
+        if kept.len() == 1 && types.len() == 2 {
+            property["type"] = kept[0].clone();
+        }
+    }
+}
+
 fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
     match value {
         Value::Object(object) => {
@@ -518,6 +577,70 @@ Projects and tasks can be named by key (`AWD`, `AWD-12`) wherever an ID is asked
 Operations that change things take a `clientRequestId` so a retry never applies twice, and \
 changes to a task take the `expectedVersion` you last read.";
 
+/// Drops what a schema says twice, to keep the document small: a schema's
+/// `title` (the operation's id or the component's name says it), what JSON
+/// Schema assumes without being told (`default: null`,
+/// `additionalProperties: true`), and the
+/// unsigned integer formats the schema generator adds, which aren't
+/// OpenAPI's (`minimum: 0` already says it, and the type's own maximum
+/// adds nothing).
+fn slim(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get("title").is_some_and(Value::is_string) {
+                map.remove("title");
+            }
+            // What JSON Schema assumes anyway: a null default on an optional
+            // value, and properties beyond the listed ones allowed.
+            if map.get("default").is_some_and(Value::is_null) {
+                map.remove("default");
+            }
+            if map.get("additionalProperties") == Some(&Value::Bool(true)) {
+                map.remove("additionalProperties");
+            }
+            // A plain integer is read as 64 bits wherever the format is left
+            // out; only narrower ones say so.
+            if map.get("format").and_then(Value::as_str) == Some("int64") {
+                map.remove("format");
+            }
+            if map
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(|format| format.starts_with("uint"))
+            {
+                map.remove("format");
+                if map
+                    .get("maximum")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|maximum| {
+                        [
+                            u64::from(u8::MAX),
+                            u64::from(u16::MAX),
+                            u64::from(u32::MAX),
+                            u64::MAX,
+                        ]
+                        .contains(&maximum)
+                    })
+                {
+                    map.remove("maximum");
+                }
+            }
+            for (key, child) in map.iter_mut() {
+                // Property names are names, not keywords.
+                if key == "properties"
+                    && let Value::Object(properties) = child
+                {
+                    properties.values_mut().for_each(slim);
+                } else {
+                    slim(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(slim),
+        _ => {}
+    }
+}
+
 /// The OpenAPI 3.1 document for every operation.
 pub(crate) fn document() -> Value {
     let mut tools = mcp::tool_catalog();
@@ -571,6 +694,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or(description);
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
+        drop_optional_nulls(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()
@@ -583,7 +707,10 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let mut hoisted = hoist(&root, schema, &mut components);
+                        let mut briefed = Value::Object(Map::clone(schema.as_ref()));
+                        brief(&mut briefed);
+                        let briefed = briefed.as_object().cloned().unwrap_or_default();
+                        let mut hoisted = hoist(&root, &briefed, &mut components);
                         share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
@@ -595,36 +722,23 @@ pub(crate) fn document() -> Value {
                 (key, reference)
             })
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
-        // The result, and a refusal (the same result with its `outcome`),
-        // are one response that 200 and the refusing statuses point at,
-        // shared by every operation with that result, so the document stays
-        // small as tools are added. The introduction says what each status
-        // means.
+        // The result, a refusal (the same result with its `outcome`) and
+        // the shared `Error` body (401, 413 and 429, the same for every
+        // operation) are one response that 200 and every other status
+        // (`default`) point at, shared by every operation with that result,
+        // so an operation adds no responses of its own and the document
+        // stays small as operations are added. The introduction says what
+        // each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "The result, or a refusal: see its `outcome`.",
-                "content": { "application/json": { "schema": output } },
+                "description": "The result, a refusal (see `outcome`), or an `Error`.",
+                "content": { "application/json": { "schema": {
+                    "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
+                } } },
             })
         });
-        let mut responses = Map::new();
         let own = json!({ "$ref": format!("#/components/responses/{result}") });
-        responses.insert("200".to_owned(), own.clone());
-        // The refusing statuses (403, 404, 409, 422, 503) share it through
-        // the 4XX and 5XX ranges; the statuses every operation answers the
-        // same way are named, which takes precedence over a range.
-        for (status, _) in ERROR_STATUSES {
-            if !refuses(status) {
-                // The same for every operation, so referenced rather than
-                // repeated, which keeps the document small as tools are added.
-                responses.insert(
-                    (*status).to_owned(),
-                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
-                );
-            }
-        }
-        for range in ["4XX", "5XX"] {
-            responses.insert(range.to_owned(), own.clone());
-        }
+        let responses = json!({ "200": own.clone(), "default": own });
         let mut post = json!({
             "operationId": name,
             "summary": title,
@@ -642,6 +756,12 @@ pub(crate) fn document() -> Value {
             post["x-read-only"] = true.into();
         }
         paths.insert(format!("/{name}"), json!({ "post": post }));
+    }
+    for path in paths.values_mut() {
+        slim(path);
+    }
+    for schema in components.values_mut() {
+        slim(schema);
     }
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({
@@ -664,24 +784,7 @@ pub(crate) fn document() -> Value {
         "paths": paths,
         "components": {
             "schemas": components,
-            "responses": ERROR_STATUSES
-                .iter()
-                .filter(|(status, _)| !refuses(status))
-                .map(|(status, description)| {
-                    (
-                        format!("Error{status}"),
-                        json!({
-                            "description": description,
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Error" },
-                                },
-                            },
-                        }),
-                    )
-                })
-                .chain(refusals)
-                .collect::<Map<_, _>>(),
+            "responses": refusals,
             "securitySchemes": {
                 "bearerToken": {
                     "type": "http",

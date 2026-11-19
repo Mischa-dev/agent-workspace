@@ -57,9 +57,6 @@ pub enum Action {
     /// Remove anyone's message (owners and admins; people only, checked by
     /// the caller).
     MessageModerate,
-    /// Continue, stop or retry the replies accounts were asked for in a
-    /// conversation (A2.8), whatever kind of account asks.
-    ReplySteer,
     ThreadCreate,
     ConversationArchive,
     ReadStateUpdate,
@@ -67,6 +64,9 @@ pub enum Action {
     WorkItemView,
     WorkItemCreate,
     WorkItemEdit,
+    /// Comment on a task (K1.16: the web and agents both need
+    /// "comment on tasks").
+    WorkItemComment,
     /// Archive a task, or bring one back.
     WorkItemArchive,
     /// Change a project's task workflow: its statuses and their order.
@@ -97,10 +97,15 @@ pub enum Action {
     RoleManage,
     /// Link hosts for the workspace and manage them (A1.11; people only).
     HostManage,
+    /// Add or remove others in a group (leaving needs nothing).
+    ConversationMembersChange,
+    /// Continue, stop or retry the replies accounts were asked for in a
+    /// conversation (A2.8), whatever kind of account asks.
+    ReplySteer,
 }
 
 impl Action {
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 49] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -123,7 +128,6 @@ impl Action {
         Self::ChannelCreate,
         Self::MessageSend,
         Self::MessageModerate,
-        Self::ReplySteer,
         Self::ThreadCreate,
         Self::ConversationArchive,
         Self::ReadStateUpdate,
@@ -131,6 +135,7 @@ impl Action {
         Self::WorkItemView,
         Self::WorkItemCreate,
         Self::WorkItemEdit,
+        Self::WorkItemComment,
         Self::WorkItemArchive,
         Self::WorkflowManage,
         Self::PageEdit,
@@ -148,6 +153,8 @@ impl Action {
         Self::SettingsManage,
         Self::RoleManage,
         Self::HostManage,
+        Self::ConversationMembersChange,
+        Self::ReplySteer,
     ];
 
     /// The permission a role needs for this action.
@@ -177,10 +184,12 @@ impl Action {
                 Permission::ChannelsPost
             }
             Self::MessageModerate => Permission::ChannelsModerate,
+            Self::ConversationMembersChange => Permission::ConversationsMembers,
             Self::ReplySteer => Permission::RepliesSteer,
             Self::WorkItemView => Permission::TasksView,
             Self::WorkItemCreate => Permission::TasksCreate,
             Self::WorkItemArchive => Permission::TasksDelete,
+            Self::WorkItemComment => Permission::TasksComment,
             Self::WorkflowManage => Permission::TasksWorkflow,
             Self::PageEdit => Permission::PagesEdit,
             Self::WhiteboardEdit => Permission::WhiteboardsEdit,
@@ -252,6 +261,19 @@ impl RoleGrant {
 
     pub const fn permissions(self) -> PermissionSet {
         self.permissions
+    }
+
+    /// The grant with what the account's groups are given in the same
+    /// space added (K1.27). A worker's membership takes nothing from them:
+    /// it acts only through its run.
+    pub fn with_groups(self, groups: PermissionSet) -> Self {
+        if self.role == MembershipRole::Worker {
+            return self;
+        }
+        Self {
+            role: self.role,
+            permissions: self.permissions.union(groups),
+        }
     }
 }
 
@@ -338,10 +360,62 @@ pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permissio
         .is_some_and(|limit| !limit.contains(permission))
 }
 
+/// Whether an app acting for `actor_id` is kept from `permission` in a DM
+/// or group of `workspace_id` by its agent limit: a kept DM follows its
+/// workspace's limit; a personal one (the direct scope) is open to what
+/// the limit allows in any workspace. False outside such a call.
+pub fn agent_limit_hides_direct(
+    actor_id: Uuid,
+    workspace_id: Uuid,
+    permission: Permission,
+) -> bool {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| match limits.organizations.get(&workspace_id) {
+                Some(limit) => !limit.contains(permission),
+                // A personal DM, in no workspace, follows what the limit
+                // allows in any; a kept one in a workspace the limit doesn't
+                // name holds nothing.
+                None if workspace_id == crate::spaces::DIRECT => !limits
+                    .organizations
+                    .values()
+                    .any(|limit| limit.contains(permission)),
+                None => true,
+            })
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
 /// While an app acts for `actor_id`: the projects its agent limit allows
 /// `permission` in (every other project allows nothing). None outside such
 /// a call, meaning no limit applies. For queries that can't filter rows in
 /// Rust, such as counts.
+/// While an app or token acts for `actor_id`, the workspaces whose DMs and
+/// groups its limit leaves `permission` in, with the direct scope (personal
+/// ones) when it allows it in any, as `agent_limit_hides_direct` decides one
+/// at a time; `None` outside such a call. For list SQL over DMs.
+pub fn agent_limit_direct_workspaces(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                let mut allowed = limits
+                    .organizations
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(workspace, _)| *workspace)
+                    .collect::<Vec<_>>();
+                if !allowed.is_empty() {
+                    allowed.push(crate::spaces::DIRECT);
+                }
+                allowed
+            })
+        })
+        .ok()
+        .flatten()
+}
+
 pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
     AGENT_LIMITS
         .try_with(|limits| {
@@ -618,6 +692,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::ChannelCreate
             | Action::MessageSend
             | Action::MessageModerate
+            | Action::ConversationMembersChange
             | Action::ReplySteer
             | Action::ThreadCreate
             | Action::ConversationArchive
@@ -626,6 +701,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WorkItemView
             | Action::WorkItemCreate
             | Action::WorkItemEdit
+            | Action::WorkItemComment
             | Action::WorkItemArchive
             | Action::WorkflowManage
             | Action::PageEdit
@@ -810,6 +886,7 @@ mod tests {
                             | Action::WorkItemView
                             | Action::WorkItemCreate
                             | Action::WorkItemEdit
+                            | Action::WorkItemComment
                             | Action::RepositoryView
                             // Split from WorkItemEdit.
                             | Action::WorkItemArchive
@@ -823,7 +900,8 @@ mod tests {
                             // A1: every role reports its own runs.
                             | Action::RunReport
                             | Action::RequestRaise
-                            // A2.8: members steer the replies they asked for.
+                            // K1.14b: steering agents in chat is a role's.
+                            | Action::ConversationMembersChange
                             | Action::ReplySteer
                     ),
                     MembershipRole::Viewer => {
@@ -1184,7 +1262,10 @@ mod tests {
             .collect::<Vec<_>>();
         indexes.sort_unstable();
         assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
-        assert_eq!(Permission::WorkspaceDelete as usize, PERMISSIONS.len() - 1);
+        assert_eq!(
+            Permission::ChannelsMentionEveryone as usize,
+            PERMISSIONS.len() - 1
+        );
         for info in PERMISSIONS {
             assert_eq!(Permission::from_key(info.key), Some(info.permission));
             assert_eq!(info.permission.info().key, info.key);

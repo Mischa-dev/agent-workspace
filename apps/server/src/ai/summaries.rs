@@ -136,9 +136,7 @@ pub async fn thread(
                left(message.plain_text, $4) AS text
         FROM messages message
         JOIN conversations conversation ON conversation.id = message.conversation_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
-         AND membership.actor_id = message.author_actor_id
+        LEFT JOIN LATERAL place_profile(conversation.project_id, message.author_actor_id) membership ON true
         WHERE message.conversation_id = $1 AND message.removed_at IS NULL
           AND ($2::timestamptz IS NULL OR message.created_at > $2)
           AND btrim(message.plain_text) <> ''
@@ -210,13 +208,18 @@ pub async fn task(
              AND membership.actor_id = activity.actor_id
             WHERE activity.project_id = $1 AND activity.work_item_id = $2
             UNION ALL
+            -- visibility: the task's comments, which whoever may see the task may read
             SELECT COALESCE(membership.display_name, 'Someone'),
                    comment.created_at, left(comment.plain_text, $4)
-            FROM work_item_comments comment
+            FROM conversations comments
+            JOIN conversations place
+              ON place.id = comments.id OR place.parent_channel_id = comments.id
+            JOIN messages comment ON comment.conversation_id = place.id
             LEFT JOIN project_memberships membership
               ON membership.project_id = comment.project_id
              AND membership.actor_id = comment.author_actor_id
-            WHERE comment.project_id = $1 AND comment.work_item_id = $2
+            WHERE comments.kind = 'comments' AND comments.subject_kind = 'task'
+              AND comments.subject_id = $2 AND comments.project_id = $1
               AND comment.removed_at IS NULL
         ) history
         ORDER BY at DESC

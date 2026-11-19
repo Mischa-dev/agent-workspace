@@ -254,7 +254,6 @@ pub struct NewNotification {
     pub conversation_id: Option<Uuid>,
     pub message_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
-    pub comment_id: Option<Uuid>,
     pub agent_run_id: Option<Uuid>,
     pub pull_request_id: Option<Uuid>,
     pub detail: serde_json::Value,
@@ -282,7 +281,6 @@ impl NewNotification {
             conversation_id: None,
             message_id: None,
             work_item_id: None,
-            comment_id: None,
             agent_run_id: None,
             pull_request_id: None,
             detail: serde_json::json!({}),
@@ -396,22 +394,21 @@ pub async fn deliver(
         r#"
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
-            actor_id, conversation_id, message_id, work_item_id, comment_id,
+            actor_id, conversation_id, message_id, work_item_id,
             agent_run_id, pull_request_id, detail, group_key, archived_at,
             read_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                  CASE WHEN $16 THEN NULL ELSE now() END,
-                  CASE WHEN $17 THEN now() END)
+        ) VALUES ($1, NULLIF($2, direct_scope_id()), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                  CASE WHEN $15 THEN NULL ELSE now() END,
+                  CASE WHEN $16 THEN now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
             actor_id = EXCLUDED.actor_id,
             message_id = EXCLUDED.message_id,
-            comment_id = EXCLUDED.comment_id,
             pull_request_id = COALESCE(EXCLUDED.pull_request_id, notifications.pull_request_id),
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
-            read_at = CASE WHEN $17 THEN COALESCE(notifications.read_at, now()) END,
+            read_at = CASE WHEN $16 THEN COALESCE(notifications.read_at, now()) END,
             -- Snoozed until something new: this is it (C2.10).
             surfaced_at = CASE WHEN notifications.wake_on_activity THEN now()
                 ELSE GREATEST(now(), COALESCE(notifications.snoozed_until, now())) END,
@@ -432,7 +429,6 @@ pub async fn deliver(
     .bind(notification.conversation_id)
     .bind(notification.message_id)
     .bind(notification.work_item_id)
-    .bind(notification.comment_id)
     .bind(notification.agent_run_id)
     .bind(notification.pull_request_id)
     .bind(&notification.detail)
@@ -442,11 +438,12 @@ pub async fn deliver(
     .fetch_one(&mut **transaction)
     .await?;
     if decision.push || decision.email {
-        let organization_id =
-            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-                .bind(notification.project_id)
-                .fetch_one(&mut **transaction)
-                .await?;
+        let organization_id = notice_workspace(
+            transaction,
+            notification.project_id,
+            notification.recipient_actor_id,
+        )
+        .await?;
         if decision.push {
             crate::push::enqueue_delivery(
                 transaction,
@@ -485,6 +482,27 @@ pub async fn deliver(
     Ok(true)
 }
 
+/// The workspace a notification is sent from: its space's, or for a DM
+/// (no space) the recipient's default workspace.
+async fn notice_workspace(
+    transaction: &mut Transaction<'_, Postgres>,
+    place: Uuid,
+    recipient: Uuid,
+) -> Result<Uuid, AppError> {
+    if crate::spaces::kind::holds_messages(place) {
+        return crate::workspace::default_workspace(&mut **transaction, recipient)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+            .ok_or(AppError::NotFound("organization"));
+    }
+    Ok(
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(place)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )
+}
+
 /// The `notifications` consumer: every change notice in the log, turned
 /// into notifications in the transaction that moves its cursor.
 pub struct Notifier;
@@ -510,7 +528,8 @@ impl crate::events::Consumer for Notifier {
         batch: &[crate::events::LoggedEvent],
     ) -> Result<(), crate::events::ConsumerError> {
         for event in batch {
-            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+            // A DM's event is in the direct scope.
+            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.place()) else {
                 continue;
             };
             let Ok(payload) = OutboxEventPayload::from_json(notice, event.payload.clone()) else {
@@ -663,7 +682,8 @@ async fn message_mentions(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT id, project_id, conversation_id, author_actor_id, content,
+            SELECT id, COALESCE(project_id, direct_scope_id()) AS project_id, conversation_id,
+                   author_actor_id, content,
                    may_notify_everyone
             FROM messages
             WHERE id = $1 AND removed_at IS NULL
@@ -678,7 +698,7 @@ async fn message_mentions(
             FROM message
             JOIN project_memberships membership
               ON membership.project_id = message.project_id AND membership.enabled
-            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
+            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
             -- Written in the text itself, so a person whose handle happens
             -- to be "everyone" is still only a mention of them.
             WHERE EXISTS (
@@ -693,9 +713,15 @@ async fn message_mentions(
         grouped AS (
             SELECT DISTINCT member.account_id AS actor_id
             FROM message
-            JOIN projects space ON space.id = message.project_id
+            LEFT JOIN projects space ON space.id = message.project_id
+            -- A DM or group is in no workspace (K4.17): the groups of the
+            -- workspaces its author is in.
             JOIN account_groups grp
-              ON grp.workspace_id = space.organization_id AND grp.archived_at IS NULL
+              ON grp.archived_at IS NULL
+             AND (grp.workspace_id = space.organization_id
+                  OR (message.project_id = direct_scope_id() AND grp.workspace_id IN (
+                      SELECT author_in.organization_id FROM organization_memberships author_in
+                      WHERE author_in.actor_id = message.author_actor_id AND author_in.enabled)))
             JOIN account_group_members member
               ON member.group_id = grp.id AND member.workspace_id = grp.workspace_id
             WHERE EXISTS (
@@ -718,8 +744,7 @@ async fn message_mentions(
                      ON author.project_id = message.project_id
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
-                   WHERE author.role IN ('owner', 'admin')
-                     AND custom_role_allows(author.role_id, 'channels.moderate')
+                   WHERE role_allows(author.role, author.role_id, 'channels.mention_everyone')
                )) AS allowed
         ),
         everyone_allowed AS (
@@ -740,7 +765,8 @@ async fn message_mentions(
               UNION SELECT actor_id FROM everyone_allowed
               UNION SELECT actor_id FROM grouped_allowed) recipient
           ON recipient.actor_id <> message.author_actor_id
-        WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
+        WHERE (message.project_id = direct_scope_id()
+               OR actor_can_access_project(recipient.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, recipient.actor_id)
           -- W21: set to nothing, a conversation doesn't notify even of mentions.
           AND conversation_notification_level(recipient.actor_id, message.conversation_id)
@@ -783,7 +809,8 @@ async fn followed_messages(
     let rows = sqlx::query_as::<_, FollowedRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id, conversation.parent_channel_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
@@ -803,9 +830,10 @@ async fn followed_messages(
                message.parent_channel_id IS NOT NULL AS in_thread
         FROM message
         JOIN following ON following.actor_id <> message.author_actor_id
-        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human'
+        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
         WHERE conversation_notification_level(following.actor_id, message.conversation_id) = 'all'
-          AND actor_can_access_project(following.actor_id, NULL, message.project_id)
+          AND (message.project_id = direct_scope_id()
+               OR actor_can_access_project(following.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, following.actor_id)
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
@@ -870,7 +898,8 @@ async fn direct_messages(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
@@ -886,7 +915,8 @@ async fn direct_messages(
         JOIN actors actor ON actor.id = member.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (an agent in a DM is asked to reply, not told)
         WHERE conversation_notification_level(member.actor_id, message.conversation_id)
               <> 'nothing'
-          AND actor_can_access_project(member.actor_id, NULL, message.project_id)
+          AND (message.project_id = direct_scope_id()
+               OR actor_can_access_project(member.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, member.actor_id)
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
@@ -932,12 +962,12 @@ async fn keyword_messages(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id, message.plain_text,
-                   project.organization_id AS workspace_id
+                   message.workspace_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
-            JOIN projects project ON project.id = message.project_id
             WHERE message.id = $1 AND message.removed_at IS NULL
               AND conversation.kind NOT IN ('dm', 'group')
               AND message.plain_text IS NOT NULL
@@ -945,7 +975,11 @@ async fn keyword_messages(
         matched AS (
             SELECT DISTINCT keyword.account_id
             FROM message
-            JOIN notification_keywords keyword ON keyword.workspace_id = message.workspace_id
+            -- A thread in a personal DM or group (the direct scope) hears
+            -- its members' keywords from any workspace.
+            JOIN notification_keywords keyword
+              ON keyword.workspace_id = message.workspace_id
+              OR message.workspace_id = direct_scope_id()
             WHERE keyword.account_id <> message.author_actor_id
               AND message.plain_text ~* ('(^|[^[:alnum:]_])'
                   || regexp_replace(keyword.keyword, '([^[:alnum:][:space:]])', '\\\1', 'g')
@@ -955,7 +989,8 @@ async fn keyword_messages(
                matched.account_id AS recipient_actor_id
         FROM message
         JOIN matched ON true
-        WHERE actor_can_access_project(matched.account_id, NULL, message.project_id)
+        WHERE (message.project_id = direct_scope_id()
+               OR actor_can_access_project(matched.account_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, matched.account_id)
           AND conversation_notification_level(matched.account_id, message.conversation_id)
               <> 'nothing'
@@ -1028,7 +1063,7 @@ async fn thing_comments(
         .subject()
         .followers(transaction, subject_id)
         .await?;
-    let recipients = sqlx::query_scalar::<_, Uuid>(
+    let recipients = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
         WITH candidate AS (
             SELECT unnest($1::uuid[]) AS actor_id
@@ -1039,8 +1074,17 @@ async fn thing_comments(
             JOIN conversations place ON place.id = earlier.conversation_id
             WHERE (place.id = $2 OR place.parent_channel_id = $2)
               AND earlier.removed_at IS NULL AND earlier.id <> $4
+        ),
+        -- The author of the comment this one answers hears it as a reply.
+        answered AS (
+            -- visibility: the author of a comment in the same discussion
+            SELECT answered.author_actor_id AS actor_id
+            FROM messages comment
+            JOIN messages answered ON answered.id = comment.reply_to_message_id
+            WHERE comment.id = $4 AND answered.removed_at IS NULL
         )
-        SELECT candidate.actor_id
+        SELECT candidate.actor_id,
+               candidate.actor_id IN (SELECT actor_id FROM answered) AS answered
         FROM candidate
         -- An inbox row is how people are told; agents are asked by mention.
         JOIN actors actor ON actor.id = candidate.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (how a follower is told)
@@ -1066,17 +1110,29 @@ async fn thing_comments(
     .await?;
     Ok(recipients
         .into_iter()
-        .map(|recipient| {
-            let mut notification = NewNotification::new(
-                project_id,
-                recipient,
-                kind::THING_COMMENT,
-                "conversation",
-                conversation_id,
-                // One per place: the stream, or each thread on its own.
-                format!("comments:{conversation_id}"),
-                format!("message:{message_id}"),
-            );
+        .map(|(recipient, answered)| {
+            let mut notification = if answered {
+                NewNotification::new(
+                    project_id,
+                    recipient,
+                    kind::MENTION,
+                    "conversation",
+                    conversation_id,
+                    format!("mention:{conversation_id}"),
+                    format!("mention:{message_id}"),
+                )
+            } else {
+                NewNotification::new(
+                    project_id,
+                    recipient,
+                    kind::THING_COMMENT,
+                    "conversation",
+                    conversation_id,
+                    // One per place: the stream, or each thread on its own.
+                    format!("comments:{conversation_id}"),
+                    format!("message:{message_id}"),
+                )
+            };
             notification.actor_id = Some(author);
             notification.conversation_id = Some(conversation_id);
             notification.message_id = Some(message_id);
@@ -1084,6 +1140,7 @@ async fn thing_comments(
                 "subjectKind": thing_kind.as_str(),
                 "subjectId": subject_id,
                 "href": href,
+                "reply": answered,
             });
             notification
         })
@@ -1092,125 +1149,6 @@ async fn thing_comments(
 
 /// A removed message stops counting: its occurrences go, and a notification
 /// left with none goes too. The text itself was never copied here.
-/// A deleted task comment's notifications go with it, as a removed
-/// message's do. A notification that also stood for other occurrences stays,
-/// counted again.
-pub(crate) async fn forget_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-) -> Result<(), AppError> {
-    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        DELETE FROM notification_occurrences
-        WHERE dedupe_key = ANY($1)
-        RETURNING notification_id, recipient_actor_id
-        "#,
-    )
-    .bind(vec![
-        format!("comment-mention:{comment_id}"),
-        format!("watch:{comment_id}"),
-    ])
-    .fetch_all(&mut **transaction)
-    .await?;
-    retract(transaction, project_id, comment_id, affected).await
-}
-
-/// A page comment that was edited or deleted (AWD-53): a deletion takes its
-/// occurrence away (and the notification, when that was all it stood for),
-/// and either way the recipients hear the inbox changed. The words are read
-/// live when listing (P0.36), so there is no copy to strip.
-pub(crate) async fn forget_page_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-    deleted: bool,
-) -> Result<(), AppError> {
-    let key = format!("page-comment:{comment_id}");
-    let reached = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        UPDATE notifications n
-        SET updated_at = now()
-        FROM notification_occurrences o
-        WHERE o.notification_id = n.id AND o.dedupe_key = $1
-        RETURNING n.id, n.recipient_actor_id
-        "#,
-    )
-    .bind(&key)
-    .fetch_all(&mut **transaction)
-    .await?;
-    if !deleted {
-        let recipients = reached
-            .into_iter()
-            .map(|(_, recipient)| recipient)
-            .collect::<BTreeSet<_>>();
-        for recipient in recipients {
-            announce(transaction, project_id, recipient).await?;
-        }
-        return Ok(());
-    }
-    let affected = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        DELETE FROM notification_occurrences
-        WHERE dedupe_key = $1
-        RETURNING notification_id, recipient_actor_id
-        "#,
-    )
-    .bind(&key)
-    .fetch_all(&mut **transaction)
-    .await?;
-    retract(transaction, project_id, comment_id, affected).await
-}
-
-/// Notifications that lost occurrences: one left with none goes, the rest
-/// are counted again, and their recipients hear about it.
-async fn retract(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    comment_id: Uuid,
-    affected: Vec<(Uuid, Uuid)>,
-) -> Result<(), AppError> {
-    if affected.is_empty() {
-        return Ok(());
-    }
-    let ids = affected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    sqlx::query(
-        r#"
-        DELETE FROM notifications n
-        WHERE n.id = ANY($1)
-          AND NOT EXISTS (
-              SELECT 1 FROM notification_occurrences o WHERE o.notification_id = n.id
-          )
-        "#,
-    )
-    .bind(&ids)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE notifications n
-        SET comment_id = NULLIF(n.comment_id, $2),
-            repeat_count = GREATEST(1, (
-                SELECT count(*) FROM notification_occurrences o WHERE o.notification_id = n.id
-            )::integer),
-            updated_at = now()
-        WHERE n.id = ANY($1)
-        "#,
-    )
-    .bind(&ids)
-    .bind(comment_id)
-    .execute(&mut **transaction)
-    .await?;
-    let recipients = affected
-        .into_iter()
-        .map(|(_, recipient)| recipient)
-        .collect::<BTreeSet<_>>();
-    for recipient in recipients {
-        announce(transaction, project_id, recipient).await?;
-    }
-    Ok(())
-}
-
 async fn forget_message(
     transaction: &mut Transaction<'_, Postgres>,
     message_id: Uuid,
@@ -1263,15 +1201,6 @@ async fn forget_message(
 }
 
 #[derive(FromRow)]
-struct CommentMentionRow {
-    comment_id: Uuid,
-    author_actor_id: Uuid,
-    recipient_actor_id: Uuid,
-    /// The recipient wrote the comment this one replies to (AWD-95).
-    reply: bool,
-}
-
-#[derive(FromRow)]
 struct AssignmentRow {
     activity_id: Uuid,
     actor_id: Uuid,
@@ -1280,19 +1209,19 @@ struct AssignmentRow {
 
 #[derive(FromRow)]
 struct WatchedChangeRow {
-    /// The activity or comment this change is.
+    /// The activity this change is.
     change_id: Uuid,
     actor_id: Uuid,
-    comment_id: Option<Uuid>,
-    /// created, updated, archived, restored or commented.
+    /// created, updated, archived or restored.
     change: String,
     recipient_actor_id: Uuid,
 }
 
 /// What a task change means for people. `work_item.updated` carries only the
-/// task and its version, so this finds the comment and activity rows written
-/// in the same transaction as the event: they share its `created_at`
-/// (PostgreSQL's `now()` is the transaction's start).
+/// task and its version, so this finds the activity rows written in the same
+/// transaction as the event: they share its `created_at` (PostgreSQL's
+/// `now()` is the transaction's start). Comments are messages (C1.4): their
+/// mentions and followers are told as any comment's are (`thing_comments`).
 async fn work_item_changes(
     transaction: &mut Transaction<'_, Postgres>,
     event_id: Uuid,
@@ -1300,68 +1229,6 @@ async fn work_item_changes(
     work_item_id: Uuid,
 ) -> Result<Vec<NewNotification>, AppError> {
     let mut notifications = Vec::new();
-    let comments = sqlx::query_as::<_, CommentMentionRow>(
-        r#"
-        SELECT comment_id, author_actor_id, recipient_actor_id, bool_or(reply) AS reply
-        FROM (
-            SELECT comment.id AS comment_id, comment.author_actor_id,
-                   mention.actor_id AS recipient_actor_id, false AS reply,
-                   comment.project_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             -- A new comment, or an edit (it can add mentions; people already
-             -- told about this comment aren't told again).
-             AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
-             AND comment.removed_at IS NULL
-            JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
-            WHERE event.id = $1 AND event.space_id = $2
-            UNION ALL
-            -- A new reply tells whoever wrote the comment it answers.
-            SELECT comment.id, comment.author_actor_id, quoted.author_actor_id, true,
-                   comment.project_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             AND comment.created_at = event.created_at
-             AND comment.removed_at IS NULL
-            JOIN work_item_comments quoted
-              ON quoted.project_id = comment.project_id
-             AND quoted.work_item_id = comment.work_item_id
-             AND quoted.id = comment.reply_to_comment_id
-            WHERE event.id = $1 AND event.space_id = $2
-        ) told
-        WHERE recipient_actor_id <> author_actor_id
-          AND actor_can_access_project(recipient_actor_id, NULL, project_id)
-        GROUP BY comment_id, author_actor_id, recipient_actor_id, project_id
-        ORDER BY comment_id, recipient_actor_id
-        "#,
-    )
-    .bind(event_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for row in comments {
-        let mut notification = NewNotification::new(
-            project_id,
-            row.recipient_actor_id,
-            kind::COMMENT_MENTION,
-            "work_item",
-            work_item_id,
-            format!("mention:task:{work_item_id}"),
-            format!("comment-mention:{}", row.comment_id),
-        );
-        notification.actor_id = Some(row.author_actor_id);
-        notification.work_item_id = Some(work_item_id);
-        notification.comment_id = Some(row.comment_id);
-        if row.reply {
-            notification.detail = serde_json::json!({"reply": true});
-        }
-        notifications.push(notification);
-    }
     let assignments = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT activity.id AS activity_id, activity.actor_id,
@@ -1410,7 +1277,7 @@ async fn work_item_changes(
     let changes = sqlx::query_as::<_, WatchedChangeRow>(
         r#"
         WITH changes AS (
-            SELECT activity.id AS change_id, activity.actor_id, NULL::uuid AS comment_id,
+            SELECT activity.id AS change_id, activity.actor_id,
                    replace(activity.kind, 'work_item_', '') AS change,
                    activity.project_id, activity.work_item_id
             FROM events event
@@ -1419,26 +1286,20 @@ async fn work_item_changes(
              AND activity.work_item_id = $3
              AND activity.created_at = event.created_at
             WHERE event.id = $1 AND event.space_id = $2
-            UNION ALL
-            SELECT comment.id, comment.author_actor_id, comment.id, 'commented',
-                   comment.project_id, comment.work_item_id
-            FROM events event
-            JOIN work_item_comments comment
-              ON comment.project_id = event.space_id
-             AND comment.work_item_id = $3
-             AND comment.created_at = event.created_at
-             AND comment.removed_at IS NULL
-            WHERE event.id = $1 AND event.space_id = $2
         )
-        SELECT change.change_id, change.actor_id, change.comment_id, change.change,
-               watcher.actor_id AS recipient_actor_id
+        SELECT change.change_id, change.actor_id, change.change,
+               watcher.account_id AS recipient_actor_id
         FROM changes change
-        JOIN work_item_watchers watcher
-          ON watcher.project_id = change.project_id
-         AND watcher.work_item_id = change.work_item_id
-        WHERE watcher.actor_id <> change.actor_id
-          AND actor_can_access_project(watcher.actor_id, NULL, change.project_id)
-        ORDER BY change.change_id, watcher.actor_id
+        JOIN follows watcher
+          ON watcher.target_kind = 'task'
+         AND watcher.target_id = change.work_item_id
+         AND watcher.space_id = change.project_id
+         -- A comment is the task's discussion: only for those who follow
+         -- everything about it.
+         AND (change.change <> 'commented' OR watcher.level = 'everything')
+        WHERE watcher.account_id <> change.actor_id
+          AND actor_can_access_project(watcher.account_id, NULL, change.project_id)
+        ORDER BY change.change_id, watcher.account_id
         "#,
     )
     .bind(event_id)
@@ -1465,7 +1326,6 @@ async fn work_item_changes(
         );
         notification.actor_id = Some(row.actor_id);
         notification.work_item_id = Some(work_item_id);
-        notification.comment_id = row.comment_id;
         notification.detail = serde_json::json!({ "change": row.change });
         notifications.push(notification);
     }
@@ -1690,7 +1550,9 @@ async fn pull_request_notifications(
 
 /// The checks every read applies, for viewer `$1`.
 const VISIBLE: &str = r#"
-    actor_can_access_project($1, NULL, n.project_id)
+    -- A DM's notification (no space) by the visibility rule alone.
+    (CASE WHEN n.project_id IS NULL THEN n.conversation_id IS NOT NULL
+          ELSE actor_can_access_project($1, NULL, n.project_id) END)
     AND (n.conversation_id IS NULL OR conversation_visible_to(n.conversation_id, $1))
     AND (n.pull_request_id IS NULL OR pull_request_visible_to(n.pull_request_id, $1))
     -- A task's or pull request's notification only while the recipient's
@@ -1699,12 +1561,12 @@ const VISIBLE: &str = r#"
     AND (n.work_item_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_task
         WHERE sees_task.project_id = n.project_id AND sees_task.actor_id = $1
-          AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+          AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
     ))
     AND (n.pull_request_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_code
         WHERE sees_code.project_id = n.project_id AND sees_code.actor_id = $1
-          AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+          AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
     ))
     AND (n.subject_kind <> 'provider_account' OR EXISTS (
         SELECT 1 FROM provider_accounts account
@@ -1844,12 +1706,13 @@ struct NotificationRow {
     parent_conversation_id: Option<Uuid>,
     /// Where a comment's thing opens, for a comments conversation (C1.3).
     subject_href: Option<String>,
+    /// What a comment is on, for a comments conversation: a task's key or a
+    /// thing's title.
+    subject_label: Option<String>,
     message_id: Option<Uuid>,
     message_preview: Option<String>,
-    comment_preview: Option<String>,
     page_title: Option<String>,
     page_archived: Option<bool>,
-    page_comment_preview: Option<String>,
     work_item_id: Option<Uuid>,
     work_item_key: Option<String>,
     work_item_title: Option<String>,
@@ -1875,11 +1738,12 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
     let run_join = crate::runs::sql::builtin_run_and_worker_join("n.agent_run_id");
     format!(
         r#"
-        SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
-               project.organization_id AS workspace_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
-                   AS project_name,
-               project.kind = 'direct' AS direct_space,
+        SELECT n.id, n.kind, n.subject_kind, n.subject_id,
+               COALESCE(n.project_id, direct_scope_id()) AS project_id,
+               COALESCE(project.organization_id, conversation.workspace_id, direct_scope_id())
+                   AS workspace_id,
+               COALESCE(project.name, 'Messages') AS project_name,
+               n.project_id IS NULL AS direct_space,
                n.actor_id, actor_member.display_name AS actor_name,
                actor.kind AS actor_kind,
                n.repeat_count, n.read_at IS NOT NULL AS read,
@@ -1901,12 +1765,33 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                         COALESCE(comments_parent.subject_kind, conversation.subject_kind),
                         COALESCE(comments_parent.subject_id, conversation.subject_id))
                END AS subject_href,
+               -- What a comment is on, named live (C1.4): a task by its key,
+               -- anything else by its title.
+               CASE WHEN COALESCE(comments_parent.kind, conversation.kind) = 'comments' THEN
+                   CASE COALESCE(comments_parent.subject_kind, conversation.subject_kind)
+                       WHEN 'task' THEN (
+                           SELECT subject_space.project_key || '-' || subject_task.number::text
+                           FROM task_rows subject_task
+                           JOIN projects subject_space ON subject_space.id = subject_task.project_id
+                           WHERE subject_task.id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'page' THEN (
+                           SELECT title FROM project_pages
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'whiteboard' THEN (
+                           SELECT title FROM whiteboards
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'sheet' THEN (
+                           SELECT name FROM sheets
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                       WHEN 'record' THEN (
+                           SELECT title FROM collection_records
+                           WHERE id = COALESCE(comments_parent.subject_id, conversation.subject_id))
+                   END
+               END AS subject_label,
                n.message_id,
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
-               left(comment.plain_text, {PREVIEW_CHARACTERS}) AS comment_preview,
                page.title AS page_title, page.archived_at IS NOT NULL AS page_archived,
-               left(page_comment.body, {PREVIEW_CHARACTERS}) AS page_comment_preview,
                n.work_item_id,
                project.project_key || '-' || item.number::text AS work_item_key,
                item.title AS work_item_title,
@@ -1925,20 +1810,15 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                to_char(request.answered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                    AS request_answered_at
         FROM notifications n
-        JOIN projects project ON project.id = n.project_id
-        LEFT JOIN project_memberships actor_member
-          ON actor_member.project_id = n.project_id AND actor_member.actor_id = n.actor_id
+        LEFT JOIN projects project ON project.id = n.project_id
+        LEFT JOIN LATERAL place_profile(n.project_id, n.actor_id) actor_member
+          ON n.actor_id IS NOT NULL
         LEFT JOIN actors actor ON actor.id = n.actor_id
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
         LEFT JOIN conversations comments_parent
           ON comments_parent.id = conversation.parent_channel_id
         LEFT JOIN messages message ON message.id = n.message_id
-        LEFT JOIN work_item_comments comment ON comment.id = n.comment_id
         LEFT JOIN project_pages page ON n.subject_kind = 'page' AND page.id = n.subject_id
-        LEFT JOIN project_page_comments page_comment
-          ON n.kind = 'page_comment'
-         AND page_comment.id = (n.detail->>'pageCommentId')::uuid
-         AND page_comment.deleted_at IS NULL
         LEFT JOIN task_rows item ON item.id = n.work_item_id
         {run_join}
         LEFT JOIN project_memberships run_agent
@@ -1950,8 +1830,8 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         WHERE n.recipient_actor_id = $1
           AND {view_condition}
           AND ($2::text[] IS NULL OR n.kind = ANY($2))
-          AND ($3::uuid IS NULL OR n.project_id = $3)
-          AND ($4::uuid[] IS NULL OR n.project_id = ANY($4))
+          AND ($3::uuid IS NULL OR COALESCE(n.project_id, direct_scope_id()) = $3)
+          AND ($4::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($4))
           AND {VISIBLE}
           AND {switches}
           {extra}
@@ -1979,6 +1859,10 @@ pub async fn list(
         r#"
           AND ($5::bigint IS NULL
                OR ((extract(epoch FROM n.surfaced_at) * 1000000)::bigint, n.id) < ($5, $6))
+          -- A DM's or group's follows a credential's limit by the
+          -- workspace it is kept in.
+          AND ($8::uuid[] IS NULL OR n.project_id IS NOT NULL
+               OR COALESCE(conversation.workspace_id, n.workspace_id) = ANY($8))
         ORDER BY n.surfaced_at DESC, n.id DESC
         LIMIT $7
         "#,
@@ -1991,6 +1875,10 @@ pub async fn list(
         .bind(cursor.map(|(micros, _)| micros))
         .bind(cursor.map(|(_, id)| id))
         .bind(limit + 1)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            viewer,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(pool))
         .await?;
     let next_cursor = if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
@@ -2015,10 +1903,11 @@ pub async fn list(
 /// A task's or pull request's notification an app acting for `viewer` may
 /// not see: its agent limit leaves out "see tasks", or "see code", there.
 fn hidden_by_limit(viewer: Uuid, row: &NotificationRow) -> bool {
-    use crate::policy::{Permission, agent_limit_hides};
-    (row.work_item_id.is_some() && agent_limit_hides(viewer, row.project_id, Permission::TasksView))
+    use crate::policy::Permission;
+    (row.work_item_id.is_some()
+        && crate::access::limit_hides(viewer, row.project_id, Permission::TasksView))
         || (row.pull_request_number.is_some()
-            && agent_limit_hides(viewer, row.project_id, Permission::CodeView))
+            && crate::access::limit_hides(viewer, row.project_id, Permission::CodeView))
 }
 
 /// The given notifications, if they are the viewer's and still visible.
@@ -2074,7 +1963,11 @@ pub async fn unread_count(
         SELECT count(*) FROM notifications n
         WHERE n.recipient_actor_id = $1
           AND {view}
-          AND ($2::uuid[] IS NULL OR n.project_id = ANY($2))
+          AND ($2::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($2))
+          AND ($3::uuid[] IS NULL OR n.project_id IS NOT NULL
+               -- visibility: only the DM's workspace is read, to apply a credential's limit
+               OR COALESCE((SELECT kept.workspace_id FROM conversations kept
+                            WHERE kept.id = n.conversation_id), n.workspace_id) = ANY($3))
           AND {VISIBLE}
           AND {switches}
         "#,
@@ -2082,6 +1975,10 @@ pub async fn unread_count(
     ))
     .bind(viewer)
     .bind(within)
+    .bind(crate::policy::agent_limit_direct_workspaces(
+        viewer,
+        crate::policy::Permission::ProjectsView,
+    ))
     .fetch_one(crate::db::scoped(pool))
     .await?)
 }
@@ -2138,12 +2035,12 @@ pub async fn attention_counts(
     let switches = crate::modules::state::notification_switches_sql();
     let rows = sqlx::query_as::<_, (Uuid, i64)>(&format!(
         r#"
-        SELECT n.project_id, count(*) FROM notifications n
+        SELECT COALESCE(n.project_id, direct_scope_id()), count(*) FROM notifications n
         WHERE n.recipient_actor_id = $1
           AND {view}
           AND {VISIBLE}
           AND {switches}
-        GROUP BY n.project_id
+        GROUP BY 1
         "#,
         view = View::Unread.condition(),
     ))
@@ -2157,6 +2054,13 @@ pub async fn attention_counts(
 }
 
 fn conversation_label(row: &NotificationRow) -> String {
+    if let Some(label) = row
+        .subject_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+    {
+        return label.to_owned();
+    }
     match (
         row.conversation_kind.as_deref(),
         row.conversation_name.as_deref(),
@@ -2216,6 +2120,19 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         |number| format!("PR #{number}"),
     );
     let (title, preview) = match row.kind.as_str() {
+        kind::MENTION
+            if row.subject_label.is_some()
+                && row.detail.get("reply").and_then(serde_json::Value::as_bool) == Some(true) =>
+        {
+            (
+                format!("{who} replied to you on {place}"),
+                row.message_preview.clone(),
+            )
+        }
+        kind::MENTION if row.subject_label.is_some() => (
+            format!("{who} mentioned you on {place}"),
+            row.message_preview.clone(),
+        ),
         kind::MENTION => (
             format!("{who} mentioned you in {place}"),
             row.message_preview.clone(),
@@ -2228,6 +2145,10 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         kind::DIRECT_MESSAGE => (format!("{who} messaged you"), row.message_preview.clone()),
         kind::KEYWORD => (
             format!("{who} used one of your words in {place}"),
+            row.message_preview.clone(),
+        ),
+        kind::THING_COMMENT if row.subject_label.is_some() => (
+            format!("{who} commented on {place}"),
             row.message_preview.clone(),
         ),
         kind::THING_COMMENT => (format!("{who} commented"), row.message_preview.clone()),
@@ -2258,7 +2179,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
             } else {
                 format!("{who} mentioned you on {task_key}")
             },
-            row.comment_preview.clone(),
+            row.message_preview.clone(),
         ),
         kind::ASSIGNED => (
             format!("{who} assigned you {task_key}"),
@@ -2272,7 +2193,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 Some("created") => format!("{who} created {task_key}"),
                 _ => format!("{who} updated {task_key}"),
             },
-            row.comment_preview
+            row.message_preview
                 .clone()
                 .or_else(|| row.work_item_title.clone()),
         ),
@@ -2340,7 +2261,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
             if row.kind == kind::PAGE_COMMENT {
                 (
                     format!("New comment on {page}"),
-                    row.page_comment_preview.clone().filter(|_| !archived),
+                    row.message_preview.clone().filter(|_| !archived),
                 )
             } else {
                 (format!("Suggested edits to {page}"), None)
@@ -2613,15 +2534,15 @@ pub async fn update(
         SET {change}, updated_at = now()
         WHERE n.recipient_actor_id = $1
           AND ($2::uuid[] IS NULL OR n.id = ANY($2))
-          AND ($3::uuid IS NULL OR n.project_id = $3)
-          AND ($4::uuid[] IS NULL OR n.project_id = ANY($4))
+          AND ($3::uuid IS NULL OR COALESCE(n.project_id, direct_scope_id()) = $3)
+          AND ($4::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($4))
           AND ($5 OR $2::uuid[] IS NOT NULL)
           AND {all_condition}
           AND {applies}
           AND ($6::timestamptz IS NULL OR true)
           AND {VISIBLE}
           AND {switches}
-        RETURNING n.id, n.project_id
+        RETURNING n.id, COALESCE(n.project_id, direct_scope_id())
         "#
     );
     let mut transaction = crate::db::scoped_tx(pool).await?;

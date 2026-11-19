@@ -16,16 +16,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    comments::{self, CommentChange, NewComment, ThreadView},
+    comments::{self, CommentChange, Commenter, NewComment, ThreadView},
     suggestions::{self, Decision, StoredEdit, SuggestionRow},
 };
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, AppError},
+    idempotency::IdempotencyKey,
     memory,
-    page_docs::store,
     policy::Action,
 };
 
@@ -63,16 +62,10 @@ async fn page_access(
     page_id: Uuid,
     action: Action,
 ) -> Result<Uuid, AppError> {
-    let project_id = memory::page_project(&state.pool, page_id).await?;
-    memory::project_access(
-        &state.pool,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
+    memory::project_access(&state.pool, principal.actor_id, project_id, action)
+        .await
+        .map_err(|_| AppError::NotFound("page"))?;
     Ok(project_id)
 }
 
@@ -85,7 +78,6 @@ pub async fn get_discussion(
     let can_comment = memory::project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::PageEdit,
     )
@@ -123,30 +115,6 @@ pub struct CommentCreated {
     pub thread_id: Uuid,
 }
 
-/// The page locked for a write by someone who may edit it.
-async fn locked_for_comment(
-    state: &AppState,
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    principal: &AuthenticatedActor,
-    page_id: Uuid,
-) -> Result<(memory::Writer, store::LockedPage), AppError> {
-    let writer = memory::browser_writer(principal)?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
-    memory::project_access(
-        &mut **transaction,
-        writer.actor_id,
-        writer.actor_kind,
-        project_id,
-        Action::PageEdit,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("page"))?;
-    let page = store::lock_page(transaction, page_id)
-        .await?
-        .ok_or(AppError::NotFound("page"))?;
-    Ok((writer, page))
-}
-
 pub async fn create_comment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -155,26 +123,27 @@ pub async fn create_comment(
     ApiJson(request): ApiJson<CommentRequest>,
 ) -> Result<Json<CommentCreated>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
+    let project_id = page_access(&state, &principal, page_id, Action::PageEdit).await?;
+    let (actor, creator) = crate::work_items::comments::browser_poster(&principal, &headers)?;
     let (id, thread_id) = comments::create(
-        &mut transaction,
-        writer,
+        &state,
+        Commenter { actor, creator },
         page_id,
-        &page,
-        &NewComment {
+        NewComment {
             body: &request.body,
             block_id: request.block_id.as_deref(),
             quote: request.quote.as_deref(),
             reply_to: request.reply_to,
+            key: IdempotencyKey::from_headers(&headers).ok(),
         },
     )
     .await?
     .map_err(comments::Refusal::into_error)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     memory::audit(
         &mut transaction,
         &principal,
-        page.project_id,
+        project_id,
         "page.comment_created",
         "page",
         page_id,
@@ -197,6 +166,33 @@ pub struct CommentChanged {
     pub thread_id: Uuid,
 }
 
+async fn change_comment(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    page_id: Uuid,
+    comment_id: Uuid,
+    change: CommentChange<'_>,
+    action: &str,
+) -> Result<Json<CommentChanged>, AppError> {
+    let project_id = page_access(state, principal, page_id, Action::PageEdit).await?;
+    let actor = crate::work_items::comments::browser_message_actor(principal);
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let thread_id = comments::change(state, &mut transaction, &actor, page_id, comment_id, change)
+        .await?
+        .map_err(comments::Refusal::into_error)?;
+    memory::audit(
+        &mut transaction,
+        principal,
+        project_id,
+        action,
+        "page",
+        page_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(CommentChanged { thread_id }))
+}
+
 pub async fn update_comment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -210,29 +206,15 @@ pub async fn update_comment(
         (None, Some(resolved)) => CommentChange::Resolve(resolved),
         _ => return Err(AppError::Validation("body")),
     };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
-    let thread_id = comments::change(
-        &mut transaction,
-        writer,
-        page.project_id,
+    change_comment(
+        &state,
+        &principal,
         page_id,
         comment_id,
         change,
-    )
-    .await?
-    .map_err(comments::Refusal::into_error)?;
-    memory::audit(
-        &mut transaction,
-        &principal,
-        page.project_id,
         "page.comment_updated",
-        "page",
-        page_id,
     )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(CommentChanged { thread_id }))
+    .await
 }
 
 pub async fn delete_comment(
@@ -242,29 +224,15 @@ pub async fn delete_comment(
     ApiPath((page_id, comment_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<CommentChanged>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
-    let thread_id = comments::change(
-        &mut transaction,
-        writer,
-        page.project_id,
+    change_comment(
+        &state,
+        &principal,
         page_id,
         comment_id,
         CommentChange::Delete,
-    )
-    .await?
-    .map_err(comments::Refusal::into_error)?;
-    memory::audit(
-        &mut transaction,
-        &principal,
-        page.project_id,
         "page.comment_deleted",
-        "page",
-        page_id,
     )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(CommentChanged { thread_id }))
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,7 +258,7 @@ pub async fn decide_suggestion(
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let writer = memory::browser_writer(&principal)?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     // Anyone who may at least suggest here may withdraw their own;
     // accepting and rejecting need edit access to the page (K1.12).
     let caller = crate::access::Caller::person(writer.actor_id, writer.actor_kind);

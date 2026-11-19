@@ -743,7 +743,6 @@ impl Operation for ConversationMemberList {
         input: ConversationMemberListInput,
     ) -> Result<ConversationMembers, OpError> {
         let caller = call.ctx.caller.account_id;
-        let kind = call.ctx.caller.kind;
         let tx = call.tx().await?;
         let row = crate::conversations::read_conversation_access(
             &mut **tx,
@@ -754,7 +753,6 @@ impl Operation for ConversationMemberList {
         .ok_or_else(|| OpError::not_found("That conversation"))?;
         crate::conversations::authorize_conversation_row_for(
             caller,
-            kind,
             &row,
             crate::policy::Action::ProjectView,
             true,
@@ -776,9 +774,7 @@ impl Operation for ConversationMemberList {
                    member.manager
             FROM conversation_members member
             JOIN actors actor ON actor.id = member.actor_id
-            JOIN project_memberships membership
-              ON membership.project_id = member.project_id
-             AND membership.actor_id = member.actor_id
+            CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id) membership
             WHERE member.conversation_id = $1
               AND conversation_visible_to($1, $2)
             ORDER BY member.manager DESC, lower(membership.display_name), actor.id
@@ -793,9 +789,10 @@ impl Operation for ConversationMemberList {
             .iter()
             .any(|(id, _, _, _, manager)| *id == caller && *manager);
         let can_manage = if row.private {
-            is_manager || row.allows(caller, kind, crate::policy::Action::MessageModerate)?
+            is_manager || row.allows(caller, crate::policy::Action::MessageModerate)?
         } else {
-            row.allows(caller, kind, crate::policy::Action::ChannelCreate)?
+            row.effective_kind() == "group"
+                && row.allows(caller, crate::policy::Action::ConversationMembersChange)?
         };
         Ok(ConversationMembers {
             conversation_id: holder,

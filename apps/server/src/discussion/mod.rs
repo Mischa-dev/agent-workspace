@@ -122,6 +122,29 @@ pub(crate) async fn ensure_subject_takes_messages(
     Ok(())
 }
 
+/// The kind of thing a conversation discusses: its comments conversation,
+/// or a thread under one. `None` for any other conversation.
+pub(crate) async fn subject_kind_of(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+) -> Result<Option<SubjectKind>, AppError> {
+    let kind = sqlx::query_scalar::<_, String>(
+        r#"
+        -- visibility: the caller holds the conversation, checked by its lock
+        SELECT COALESCE(parent.subject_kind, conversation.subject_kind)
+        FROM conversations conversation
+        LEFT JOIN conversations parent
+          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
+        WHERE conversation.id = $1
+          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(kind.as_deref().and_then(SubjectKind::parse))
+}
+
 /// The thing's comments conversation and its project, made if it doesn't
 /// exist yet, when `creator` may see the thing and it takes comments. A
 /// board outside any project keeps its comments in the workspace space,
@@ -133,13 +156,6 @@ pub(crate) async fn open_for(
     thing_id: Uuid,
 ) -> Result<(Uuid, Uuid), AppError> {
     let subject = kind.subject();
-    if !subject.open {
-        return Err(AppError::Refused {
-            field: "thing",
-            message: "Comment on a task with task_comment and on a page with page_comment; \
-                      they move to comment_create later.",
-        });
-    }
     let home = subject
         .home(transaction, thing_id, creator.actor_id)
         .await?
@@ -158,6 +174,81 @@ pub(crate) async fn open_for(
     Ok((conversation_id, project_id))
 }
 
+/// Moves a thing's discussion to the space the thing moved to: its comments
+/// conversation, the threads under it and everything on their messages
+/// (one update; the composite keys carry it down, migration
+/// `20261117194000_discussions_follow_their_thing`). Called in the
+/// transaction that moves the thing, after the thing's own row. Nothing to
+/// do for a thing nobody has commented on.
+pub(crate) async fn follow(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kind: SubjectKind,
+    thing_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), AppError> {
+    hand_over(transaction, kind, thing_id, thing_id, project_id)
+        .await
+        .map(|_| ())
+}
+
+/// Gives a thing's discussion to another thing of the same kind in
+/// `project_id` (a task moved to another space is a new task there, C1.4),
+/// moving it as [`follow`] does. Returns the comments conversation, if
+/// there was one. The new thing has no discussion yet.
+pub(crate) async fn hand_over(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kind: SubjectKind,
+    from: Uuid,
+    to: Uuid,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(comments_id) = threads::comments_of(transaction, kind.as_str(), from).await? else {
+        return Ok(None);
+    };
+    sqlx::query("SELECT set_config('aw.discussion_move', 'on', true)")
+        .execute(&mut **transaction)
+        .await?;
+    // Where someone last was in the old space isn't a place in the new one.
+    sqlx::query(
+        r#"
+        DELETE FROM project_navigation_states
+        WHERE conversation_id = $1
+           OR conversation_id IN (
+               -- visibility: the tree of a thing's comments, moved with the thing
+               SELECT id FROM conversations WHERE parent_channel_id = $1)
+        "#,
+    )
+    .bind(comments_id)
+    .execute(&mut **transaction)
+    .await?;
+    let moved = sqlx::query(
+        r#"
+        UPDATE conversations SET project_id = $3, subject_id = $2
+        WHERE id = $1 AND (project_id <> $3 OR subject_id <> $2)
+        "#,
+    )
+    .bind(comments_id)
+    .bind(to)
+    .bind(project_id)
+    .execute(&mut **transaction)
+    .await;
+    sqlx::query("SELECT set_config('aw.discussion_move', 'off', true)")
+        .execute(&mut **transaction)
+        .await?;
+    match moved {
+        Ok(_) => Ok(Some(comments_id)),
+        // Something tied to the old space hangs off the discussion (an
+        // agent's run that can't move with it).
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503") => {
+            Err(AppError::Conflict(
+                kind.as_str(),
+                "its discussion has work tied to its current space",
+            ))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Posts a comment on a thing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post(
@@ -174,6 +265,13 @@ pub(crate) async fn post(
 ) -> Result<PostedComment, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (comments_id, project_id) = open_for(&mut transaction, &creator, kind, thing_id).await?;
+    // A task's discussion only while the author, and an app acting for
+    // them, still sees tasks there.
+    if crate::conversations::task_discussion_hidden(&mut transaction, creator.actor_id, comments_id)
+        .await?
+    {
+        return Err(AppError::NotFound("task"));
+    }
     let (conversation_id, expected_kind, thread_id) = match place {
         CommentPlace::Stream => (comments_id, "comments", None),
         CommentPlace::Thread(thread_id) => {
@@ -236,12 +334,26 @@ pub(crate) async fn post(
             (thread_id, "thread", Some(thread_id))
         }
     };
+    // A task's comment files were uploaded to the task (`?for=comment`);
+    // they go with the comment's conversation now.
+    if kind == SubjectKind::Task {
+        crate::files::rehome_comment_uploads(
+            &mut transaction,
+            thing_id,
+            conversation_id,
+            actor.actor_id,
+            attachments,
+        )
+        .await?;
+    }
     let href = href_of_conversation(&mut transaction, comments_id).await?;
     transaction.commit().await?;
 
     let content = match body {
         CommentBody::Content(content) => content,
-        CommentBody::Text(text) => crate::mcp::content_from_text(state, project_id, &text).await?,
+        CommentBody::Text(text) => {
+            crate::mcp::content_from_text(state, project_id, None, &text).await?
+        }
     };
     let outcome = append_message_command_with(
         state,

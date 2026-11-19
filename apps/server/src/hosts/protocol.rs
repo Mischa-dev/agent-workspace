@@ -939,6 +939,21 @@ pub async fn notice(
                 "ref": outside_ref,
             });
             bounded(&body, 8 * 1024, "ref")?;
+            // K1.7: a new outside reference only waits for a manager; it
+            // never becomes the account's on the host's word.
+            let proposed = match (outside_ref["issuer"].as_str(), outside_ref["id"].as_str()) {
+                (Some(issuer), Some(id)) => {
+                    crate::accounts::refs::propose_from_host(
+                        &mut transaction,
+                        host.id,
+                        account_id,
+                        issuer,
+                        id,
+                    )
+                    .await?
+                }
+                _ => false,
+            };
             if lineage.is_some() && lineage == new_lineage {
                 // Same lineage: the same agent, moved or re-keyed. The
                 // binding follows now; K1.7 replays this notice for the
@@ -965,6 +980,20 @@ pub async fn notice(
                 .bind(&new_reference)
                 .execute(&mut *transaction)
                 .await?;
+                // The binding follows; a new outside reference still asks
+                // the managers.
+                if proposed {
+                    request_ids = crate::requests::open_for_host_agent(
+                        &mut transaction,
+                        host.id,
+                        host.account_id,
+                        account_id,
+                        &host.name,
+                        &reference,
+                        &new_reference,
+                    )
+                    .await?;
+                }
                 ("waiting", body)
             } else {
                 // A different lineage may be a different agent: the

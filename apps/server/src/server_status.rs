@@ -2,7 +2,8 @@
 //! is running, the checks `preflight` makes (run live), when the nightly
 //! backup last ran and whether it worked, the job queue, and whether the
 //! workspace can send email. Operators are whoever set the server up from
-//! its terminal (`bootstrap-admin`) and anyone named in
+//! its terminal (`bootstrap-admin`, which grants the operator server role)
+//! and anyone named in
 //! `AGENT_WORKSPACE_OPERATOR_LOGINS`; a workspace's owner on a shared server
 //! isn't one, and sees nothing of the server here.
 //!
@@ -25,7 +26,7 @@ use crate::{
     health::BUILD_COMMIT,
     jobs,
     preflight::{self, Level},
-    workspace::{WorkspaceRole, caller_role},
+    workspace::standing_of,
 };
 
 pub const BACKUP_STATUS_FILE: &str = "backup-status.json";
@@ -40,8 +41,12 @@ pub fn router() -> Router<AppState> {
     )
 }
 
-/// Whether `principal` runs this server: set it up from its terminal, or is
-/// named in `AGENT_WORKSPACE_OPERATOR_LOGINS`.
+/// The server role of whoever runs the server (K1.30).
+pub const OPERATOR: &str = "operator";
+
+/// Whether `principal` runs this server: holds the operator server role
+/// (bootstrap-admin grants it), or is named in
+/// `AGENT_WORKSPACE_OPERATOR_LOGINS`.
 pub async fn is_operator(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -55,14 +60,10 @@ pub async fn is_operator(
         return Ok(true);
     }
     Ok(sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM audit_events
-            WHERE actor_id = $1 AND action = 'identity.bootstrap_admin' AND outcome = 'succeeded'
-        )
-        "#,
+        "SELECT EXISTS (SELECT 1 FROM server_roles WHERE account_id = $1 AND role = $2)",
     )
     .bind(principal.actor_id)
+    .bind(OPERATOR)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?)
 }
@@ -248,9 +249,11 @@ async fn read_http(
 ) -> Result<Json<ServerView>, AppError> {
     {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        if caller_role(&mut connection, &principal, organization_id, false).await?
-            != WorkspaceRole::Owner
-        {
+        // An owner of the workspace who also runs the server (K1.30 makes
+        // this the server role).
+        let standing =
+            standing_of(&mut connection, principal.actor_id, organization_id, false).await?;
+        if !crate::access::tier::owner(standing.role) {
             return Err(AppError::Forbidden);
         }
     }

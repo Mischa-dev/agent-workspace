@@ -54,9 +54,9 @@ export function discussionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload
   return pageId ? { pageId } : null
 }
 
-/** A sheet's cells or tabs changed (AWD-54): its open tab and the list refetch. */
+/** A sheet's cells, tabs or named ranges changed (AWD-54, C1.20): its open tab and the list refetch. */
 export function sheetChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): { sheetId: string } | null {
-  if (event.type !== 'sheet.updated') return null
+  if (event.type !== 'sheet.updated' && event.type !== 'sheet.ranges_changed') return null
   const sheetId = uuid(field(event.payload, 'sheetId', 'sheet_id'))
   return sheetId ? { sheetId } : null
 }
@@ -124,6 +124,12 @@ const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => is
 /** An operation's answer read through `opQuery`, by the operation's name. */
 const isOpKey = (key: readonly unknown[], name: string) => key[0] === 'op' && key[2] === name
 
+/** Whether a dashboard read through `dashboard_get` has a tile over this sheet. */
+function chartsSheet(data: unknown, sheetId: string) {
+  const tiles = (data as { tiles?: { sheet?: unknown }[] } | undefined)?.tiles
+  return Array.isArray(tiles) && tiles.some((tile) => tile.sheet === sheetId)
+}
+
 /**
  * Open dashboards read their tiles again: a tile over a collection or over
  * tasks shows figures any change to them can move.
@@ -168,6 +174,8 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
       void queryClient.invalidateQueries({ queryKey: sheetKeys.list(event.projectId) })
       // Its cell discussions' anchors may have moved with rows and columns.
       void queryClient.invalidateQueries({ predicate: (query) => isCommentSummary(query.queryKey, sheet.sheetId) })
+      // A dashboard tile charting it reads it again (C1.20).
+      void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') && chartsSheet(query.state.data, sheet.sheetId) })
     })
     return
   }

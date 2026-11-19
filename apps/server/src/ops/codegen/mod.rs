@@ -44,6 +44,10 @@ pub fn generate(registry: &Registry) -> Result<Vec<Generated>, String> {
             content: catalog::json(registry),
         },
         Generated {
+            path: "apps/web/src/api/generated/writes.json",
+            content: catalog::writes(registry),
+        },
+        Generated {
             path: "docs/api/v2.openapi.json",
             content: pretty(&openapi::document(registry)?),
         },

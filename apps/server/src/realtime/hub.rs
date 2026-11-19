@@ -27,10 +27,7 @@ use crate::{
     auth::{AuthenticatedActor, load_authenticated_actor, origin_is_allowed},
     error::AppError,
     outbox::{OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxPublisher},
-    policy::{
-        Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, MembershipRole, RoleGrant},
 };
 
 const SESSION_REVALIDATION_INTERVAL: Duration = Duration::from_secs(15);
@@ -282,6 +279,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "theme.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "follows.changed"
                 | "inbox_views.changed"
                 | "dm_rules.changed"
         );
@@ -301,6 +299,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "conversation.message.reactions.updated"
                 | "conversation.read_state.updated"
                 | "conversation.member.removed"
+                | "conversation.member.added"
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
                 | "project.membership.updated"
@@ -316,12 +315,14 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "dashboard.updated"
                 | "project.modules.updated"
                 | "custom_emoji.changed"
+                | "guards.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
                 | "theme.changed"
                 | "workspace_themes.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "follows.changed"
                 | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
@@ -342,12 +343,14 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "dashboard.updated"
                 | "project.modules.updated"
                 | "custom_emoji.changed"
+                | "guards.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
                 | "theme.changed"
                 | "workspace_themes.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "follows.changed"
                 | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
@@ -644,6 +647,22 @@ async fn event_is_authorized(
         return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
             .await;
     }
+    // A DM or group (and threads under one) has no space: its participants
+    // hear it, by `conversation_visible_to` alone; an event for one account
+    // reached `is_visible_to_actor` above.
+    if event.project_id() == crate::spaces::DIRECT {
+        return match event.conversation_id() {
+            Some(conversation_id) => {
+                sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+                    .bind(conversation_id)
+                    .bind(principal.actor_id)
+                    .fetch_one(crate::db::scoped(&state.pool))
+                    .await
+                    .map_err(AppError::from)
+            }
+            None => Ok(event.recipient_actor_id().is_some()),
+        };
+    }
     if event.is_workspace_wide() {
         // The envelope's space names the workspace; its members hear of it.
         return sqlx::query_scalar::<_, bool>(
@@ -699,46 +718,26 @@ async fn event_is_authorized(
     };
     realtime_policy_allows(
         principal.actor_id,
-        &principal.actor_kind,
         &membership.role,
         membership.enabled,
         event.project_id(),
-        event.conversation_id(),
     )
 }
 
 fn realtime_policy_allows(
     actor_id: Uuid,
-    actor_kind: &str,
     role: &str,
     membership_enabled: bool,
     project_id: Uuid,
-    conversation_id: Option<Uuid>,
 ) -> Result<bool, AppError> {
-    let subject = Subject::new(
+    // Subscribing needs only "Open projects", which every role holds,
+    // custom ones included, so the built-in role decides it.
+    Ok(crate::access::membership_allows(
         actor_id,
-        crate::accounts::actor_kind(actor_kind)?,
-        true,
-        // Subscribing needs only "Open projects", which every role holds,
-        // custom ones included, so the built-in role decides it.
-        Some(Membership::project(
-            project_id,
-            RoleGrant::built_in(parse_membership_role(role)?),
-            membership_enabled,
-        )),
-        None,
-    );
-    let scope = conversation_id.map_or_else(
-        || ProjectScope::project(project_id),
-        |conversation_id| ProjectScope::thread(project_id, conversation_id),
-    );
-    Ok(matches!(
-        authorize(
-            &subject,
-            Action::RealtimeSubscribe,
-            Resource::Project(scope),
-        ),
-        Decision::Allow
+        project_id,
+        RoleGrant::built_in(parse_membership_role(role)?),
+        membership_enabled,
+        Action::RealtimeSubscribe.permission(),
     ))
 }
 
@@ -812,48 +811,20 @@ mod tests {
         let actor_id = Uuid::now_v7();
 
         assert!(
-            realtime_policy_allows(
-                actor_id,
-                "human",
-                "viewer",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("viewer policy")
+            realtime_policy_allows(actor_id, "viewer", true, event.project_id,)
+                .expect("viewer policy")
         );
         assert!(
-            realtime_policy_allows(
-                actor_id,
-                "external_agent",
-                "member",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("external member policy")
+            realtime_policy_allows(actor_id, "member", true, event.project_id,)
+                .expect("external member policy")
         );
         assert!(
-            !realtime_policy_allows(
-                actor_id,
-                "human",
-                "owner",
-                false,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("disabled membership policy")
+            !realtime_policy_allows(actor_id, "owner", false, event.project_id,)
+                .expect("disabled membership policy")
         );
         assert!(
-            !realtime_policy_allows(
-                actor_id,
-                "execution_worker",
-                "worker",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("undelegated Worker policy")
+            !realtime_policy_allows(actor_id, "worker", true, event.project_id,)
+                .expect("undelegated Worker policy")
         );
     }
 

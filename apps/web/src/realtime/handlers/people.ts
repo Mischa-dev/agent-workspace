@@ -97,6 +97,9 @@ export const peopleHandlers: Record<string, Handler> = {
   'sidebar.changed': ownList('sidebar_list'),
   'saved_searches.changed': ownList('saved_search_list'),
   'inbox_views.changed': ownList('inbox_view_list'),
+  'follows.changed': ownList('follow_list'),
+  // A team's guards changed (A2.27): the lists of them read again.
+  'guards.changed': ownList('guard_list'),
   'dm_rules.changed': dmRulesChanged,
   'account.profile_changed': profileChanged,
   'account.status.changed': statusChanged,

@@ -437,6 +437,8 @@ fn read_back(block: &Block) -> Option<Block> {
 /// A document change worked out in memory, ready to save.
 pub struct Change {
     pub state: Vec<u8>,
+    /// The document's blocks before the change (C1.9's change sets).
+    pub before: Vec<Block>,
     /// The document is different from before.
     pub changed: bool,
     pub blocks: Vec<Block>,
@@ -461,6 +463,7 @@ pub fn change(
     let derived = derive_markdown_with(source, sent, &blocks);
     Ok(Change {
         state: state_after,
+        before,
         changed,
         blocks,
         derived,
@@ -487,6 +490,7 @@ pub fn apply_browser_update(
     since: &[u8],
 ) -> Result<Result<Applied, ydoc::Refused>, AppError> {
     let doc = ydoc::load(state).map_err(|_| AppError::Internal("load page document"))?;
+    let before = ydoc::read_doc(&doc).map_err(|_| AppError::Internal("read page document"))?;
     if let Err(refused) = ydoc::apply_client_update(&doc, update) {
         return Ok(Err(refused));
     }
@@ -498,6 +502,7 @@ pub fn apply_browser_update(
     Ok(Ok(Applied {
         change: Change {
             state: state_after,
+            before,
             changed,
             blocks,
             derived,
@@ -556,6 +561,28 @@ pub async fn lock_page(
     .bind(page_id)
     .fetch_optional(&mut **transaction)
     .await?)
+}
+
+/// The page locked for `viewer`'s change: as [`lock_page`], and `None` for
+/// a conversation's memory page they can't read (A2.16), whatever path the
+/// change comes by.
+pub async fn lock_page_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Option<LockedPage>, AppError> {
+    let visible = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_pages WHERE id = $1 \
+         AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2)))",
+    )
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !visible {
+        return Ok(None);
+    }
+    lock_page(transaction, page_id).await
 }
 
 /// A stored document.
@@ -763,6 +790,17 @@ pub async fn save(
     .bind(writer.actor_id)
     .execute(&mut **transaction)
     .await?;
+    crate::change_sets::record_page(
+        transaction,
+        writer,
+        page.project_id,
+        page_id,
+        (page.version, version),
+        &change.before,
+        &change.blocks,
+        history == History::Live,
+    )
+    .await?;
     let mut new_version = false;
     if *body != page.body {
         new_version = memory::record_revision(
@@ -806,7 +844,7 @@ pub async fn set_markdown(
     transaction: &mut Transaction<'_, Postgres>,
     page_id: Uuid,
     markdown: &str,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<Change>, AppError> {
     let Some(stored) = stored(transaction, page_id).await? else {
         return Ok(None);
     };
@@ -826,7 +864,7 @@ pub async fn set_markdown(
         .execute(&mut **transaction)
         .await?;
     }
-    Ok(Some(change.derived.markdown))
+    Ok(Some(change))
 }
 
 /// Block ids by position, for answers that list a page's blocks.

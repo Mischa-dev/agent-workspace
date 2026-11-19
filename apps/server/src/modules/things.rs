@@ -76,7 +76,7 @@ struct ThingRow {
     project_id: Option<Uuid>,
     /// For a thing across a workspace (no project): that workspace.
     organization_id: Option<Uuid>,
-    /// For conversations: whether they're in the hidden direct project.
+    /// For conversations: whether they're a DM or group (in no space).
     direct: bool,
     /// For a thread: the conversation it was started in. For a record: its
     /// collection.
@@ -178,6 +178,7 @@ const PAGES_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = ANY($1) AND page.project_id = ANY($2) AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
 "#;
 
 const DECISIONS_SQL: &str = r#"
@@ -217,10 +218,10 @@ const CONVERSATIONS_SQL: &str = r#"
            CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name,
            conversation.project_id, NULL::uuid AS organization_id,
-           project.kind = 'direct' AS direct, conversation.parent_channel_id AS parent_id
+           conversation.project_id IS NULL AS direct, conversation.parent_channel_id AS parent_id
     FROM conversations conversation
-    JOIN projects project ON project.id = conversation.project_id
-    WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)
+    WHERE conversation.id = ANY($1)
+      AND (conversation.project_id IS NULL OR conversation.project_id = ANY($2))
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $3)
 "#;
@@ -527,16 +528,22 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
             FROM whiteboard_links WHERE target_kind = 'work_item' AND target_id = $1
             UNION ALL
-            SELECT 'about', 'incoming', 'task', comment.work_item_id
-            FROM work_item_comment_references reference
-            JOIN work_item_comments comment ON comment.id = reference.comment_id
-            WHERE reference.referenced_work_item_id = $1 AND comment.removed_at IS NULL
-              AND comment.work_item_id <> $1
-            UNION ALL
-            SELECT 'about', 'incoming', 'conversation', message.conversation_id
+            -- A message naming the task links its conversation, or, for a
+            -- comment, the thing it's on (each link is resolved for the viewer).
+            -- visibility: ids only, each resolved with the viewer's access
+            SELECT DISTINCT 'about', 'incoming',
+                   CASE WHEN COALESCE(parent.kind, place.kind) = 'comments'
+                        THEN COALESCE(parent.subject_kind, place.subject_kind)
+                        ELSE 'conversation' END,
+                   CASE WHEN COALESCE(parent.kind, place.kind) = 'comments'
+                        THEN COALESCE(parent.subject_id, place.subject_id)
+                        ELSE message.conversation_id END
             FROM message_work_item_references reference
             JOIN messages message ON message.id = reference.message_id
+            JOIN conversations place ON place.id = message.conversation_id
+            LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
             WHERE reference.work_item_id = $1 AND message.removed_at IS NULL
+              AND COALESCE(parent.subject_id, place.subject_id) IS DISTINCT FROM $1
             UNION ALL
             SELECT 'about', 'incoming', thing_kind, thing_id
             FROM thing_references WHERE target_id = $1 AND target_kind = 'task'
@@ -544,11 +551,16 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             SELECT 'about', 'outgoing', target_kind, target_id
             FROM thing_references WHERE thing_id = $1 AND thing_kind = 'task'
             UNION ALL
-            SELECT 'about', 'outgoing', 'task', reference.referenced_work_item_id
-            FROM work_item_comment_references reference
-            JOIN work_item_comments comment ON comment.id = reference.comment_id
-            WHERE reference.source_work_item_id = $1 AND comment.removed_at IS NULL
-              AND reference.referenced_work_item_id <> $1
+            -- The tasks the task's comments name.
+            SELECT DISTINCT 'about', 'outgoing', 'task', reference.work_item_id
+            FROM conversations comments
+            JOIN conversations place
+              ON place.id = comments.id OR place.parent_channel_id = comments.id
+            JOIN messages message ON message.conversation_id = place.id
+            JOIN message_work_item_references reference ON reference.message_id = message.id
+            WHERE comments.kind = 'comments' AND comments.subject_kind = 'task'
+              AND comments.subject_id = $1 AND message.removed_at IS NULL
+              AND reference.work_item_id <> $1
             "#
         }
         "page" | "decision" => {
@@ -771,7 +783,7 @@ mod tests {
         // onto the wrong placeholders.
         let expected = [
             ("task", 2),
-            ("page", 2),
+            ("page", 3),
             ("decision", 3),
             ("whiteboard", 3),
             ("thread", 3),

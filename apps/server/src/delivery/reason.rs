@@ -54,8 +54,11 @@ pub enum Reason {
     /// The account caused it; only for subscriptions that ask for echoes.
     #[serde(rename = "self")]
     Own,
+    /// A message in a conversation where it is in ambient mode (A2.9):
+    /// heard whatever the subscription's level.
+    Ambient,
     /// It follows the thing: a task it watches or is assigned, a run it
-    /// does or asked for.
+    /// does or asked for, or anything in `follows`.
     Following,
     Visible,
 }
@@ -72,6 +75,7 @@ impl Reason {
             Self::HostCommand => "host_command",
             Self::Lifecycle => "lifecycle",
             Self::Own => "self",
+            Self::Ambient => "ambient",
             Self::Following => "following",
             Self::Visible => "visible",
         }
@@ -89,6 +93,7 @@ impl Reason {
             Self::HostCommand,
             Self::Lifecycle,
             Self::Own,
+            Self::Ambient,
             Self::Following,
             Self::Visible,
         ]
@@ -113,6 +118,8 @@ pub struct Facts {
     /// The recipient acted.
     pub own: bool,
     pub following: bool,
+    /// A message where the recipient is in ambient mode.
+    pub ambient: bool,
     /// The event is about a request the recipient raised.
     pub raiser: bool,
     /// A request the recipient may answer was raised.
@@ -147,6 +154,9 @@ pub fn decide(kind: &str, facts: Facts) -> Reason {
     }
     if facts.own {
         return Reason::Own;
+    }
+    if facts.ambient && kind == "message.created" {
+        return Reason::Ambient;
     }
     if facts.following {
         return Reason::Following;
