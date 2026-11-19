@@ -31,7 +31,7 @@ use crate::{
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     idempotency::IdempotencyKey,
     launch::{self, LaunchCaller, LaunchOverrides, LaunchRequest, LaunchView, StartWhen},
-    policy::{Action, ActorKind},
+    policy::Action,
     work_item_planning::Reader,
 };
 
@@ -165,15 +165,9 @@ async fn places(
             reason,
             href: settings_href(project_id),
         };
-        if environments::authorize_project(
-            &state.pool,
-            viewer,
-            ActorKind::Human,
-            project_id,
-            Action::WorkerInvoke,
-        )
-        .await
-        .is_err()
+        if environments::authorize_project(&state.pool, viewer, project_id, Action::WorkerInvoke)
+            .await
+            .is_err()
         {
             result
                 .skipped

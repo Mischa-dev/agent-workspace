@@ -36,6 +36,14 @@ async fn the_server_page_is_for_the_servers_operators() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (_, session) = get(&setup.app, &setup.browser, "/api/v1/auth/session").await;
     assert_eq!(session["user"]["capabilities"]["serverStatus"], true);
+    // K1.30: running the server is a server role, not the bootstrap's audit
+    // row: without the row, the owner still runs it.
+    sqlx::query("DELETE FROM audit_events WHERE action = 'identity.bootstrap_admin'")
+        .execute(&setup.pool)
+        .await
+        .expect("forget the bootstrap row");
+    let (status, body) = get(&setup.app, &setup.browser, &server(setup.organization_id)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     // Mara owns a workspace of her own on the same server.
     let shared = create_project(setup, "OPS", "Shared").await;

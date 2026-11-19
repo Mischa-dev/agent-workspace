@@ -410,8 +410,9 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Some("direct-agent-create") => {
-            // Creates an agent in the owner's Messages space and writes its
-            // token to a new owner-only file, so the token is never printed.
+            // Creates an agent in the own space of the owner's current
+            // workspace and writes its token to a new owner-only file, so the
+            // token is never printed.
             let options = parse_options(arguments)?;
             reject_unknown_options(
                 &options,
@@ -425,12 +426,13 @@ async fn main() -> anyhow::Result<()> {
                 ],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
-            let (project_id, owner_actor_id) = agent_workspace_server::direct::space_for_login(
-                &pool,
-                required_option(&options, "owner-login")?,
-            )
-            .await
-            .context("find the owner's Messages space")?;
+            let (project_id, owner_actor_id) =
+                agent_workspace_server::spaces::workspace::home_for_login(
+                    &pool,
+                    required_option(&options, "owner-login")?,
+                )
+                .await
+                .context("find the owner's workspace space")?;
             let agent = agent_workspace_server::external_agents::provision(
                 &pool,
                 project_id,

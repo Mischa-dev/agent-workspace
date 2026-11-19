@@ -46,7 +46,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    policy::{Action, Membership, Permission, ProjectScope, Resource, Subject, authorize},
+    policy::{Action, Permission},
     settings::{self, Target},
 };
 
@@ -850,10 +850,11 @@ async fn rules(connection: &mut PgConnection, project_id: Uuid) -> Result<Vec<Ru
 
 /// The role a rule names for someone with this role in the project.
 fn rule_role(project_role: &str) -> Option<&'static str> {
-    match project_role {
-        "owner" | "admin" => Some("admin"),
-        "member" => Some("member"),
-        "viewer" => Some("viewer"),
+    use crate::policy::MembershipRole;
+    match crate::access::tier::of(project_role)? {
+        tier if crate::access::tier::high(tier) => Some(MembershipRole::Admin.key()),
+        MembershipRole::Member => Some(MembershipRole::Member.key()),
+        MembershipRole::Viewer => Some(MembershipRole::Viewer.key()),
         _ => None,
     }
 }
@@ -908,30 +909,23 @@ async fn project_access(
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let subject = Subject::new(
+    if !crate::access::membership_allows(
         principal.actor_id,
-        settings::actor_kind(&principal.actor_kind)?,
+        project_id,
+        settings::membership_grant(&access.role, access.role_permissions.as_deref())?,
         true,
-        Some(Membership::project(
-            project_id,
-            settings::membership_grant(&access.role, access.role_permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    let resource = Resource::Project(ProjectScope::project(project_id));
-    if !authorize(&subject, Action::ProjectView, resource).is_allowed() {
+        Action::ProjectView.permission(),
+    ) {
         return Err(AppError::NotFound("project"));
     }
     Ok(access)
 }
 
-/// Owners and admins (or a role that kept "Manage settings"), as people:
-/// who may change a layout, and who may show what one hides.
-fn manages(principal: &AuthenticatedActor, role: &str, permissions: Option<&[String]>) -> bool {
-    principal.actor_kind == "human"
-        && settings::membership_grant(role, permissions)
-            .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
+/// Whoever's role holds "Manage settings": who may change a layout, and
+/// who may show what one hides.
+fn manages(role: &str, permissions: Option<&[String]>) -> bool {
+    settings::membership_grant(role, permissions)
+        .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
 }
 
 async fn project_view(
@@ -940,7 +934,7 @@ async fn project_view(
     project_id: Uuid,
 ) -> Result<ProjectLayoutView, AppError> {
     let access = project_access(connection, principal, project_id).await?;
-    let manager = manages(principal, &access.role, access.role_permissions.as_deref());
+    let manager = manages(&access.role, access.role_permissions.as_deref());
     let stored = Stored::load(
         connection,
         access.organization_id,
@@ -1001,7 +995,6 @@ async fn project_view(
         capabilities: LayoutCapabilities {
             manage: manager && !access.archived,
             manage_workspace: manages(
-                principal,
                 &access.organization_role,
                 access.organization_role_permissions.as_deref(),
             ),
@@ -1054,7 +1047,7 @@ async fn workspace_view(
     organization_id: Uuid,
 ) -> Result<WorkspaceLayoutView, AppError> {
     let access = workspace_role(connection, principal.actor_id, organization_id).await?;
-    let manager = manages(principal, &access.role, access.role_permissions.as_deref());
+    let manager = manages(&access.role, access.role_permissions.as_deref());
     let stored = Stored::load(connection, organization_id, None, principal.actor_id).await?;
     let mut also = stored.saved_ids();
     also.extend(
@@ -1545,7 +1538,7 @@ pub(crate) async fn set_rules_in(
         r#"
         SELECT membership.actor_id
         FROM project_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
+        JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (a layout shapes the web app, where people sign in)
         WHERE membership.project_id = $1 AND membership.enabled AND membership.actor_id = ANY($2)
         "#,
     )

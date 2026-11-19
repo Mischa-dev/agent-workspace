@@ -237,6 +237,11 @@ async fn module_on(
     ) else {
         return Ok(true);
     };
+    // A DM's or group's event is in no workspace, so no workspace's
+    // switches turn it off (K4.25).
+    if row.event.workspace_id == crate::spaces::DIRECT {
+        return Ok(true);
+    }
     let place = (row.event.workspace_id, row.event.space_id);
     let set = match known.get(&place) {
         Some(set) => *set,

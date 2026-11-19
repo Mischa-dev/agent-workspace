@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, confined_project, parse_id, public_url},
+    common::{ToolResult, confined_project, link_url, parse_id},
     writes::{
         CreateRetry, REQUEST_ID_MESSAGE, complete_create, complete_create_with, parse_request_id,
         reserve_create,
@@ -49,7 +49,7 @@ pub(super) fn caller(principal: &McpPrincipal) -> Caller {
 }
 
 fn board_url(state: &AppState, id: Uuid) -> String {
-    public_url(state, &format!("/whiteboards/{id}"))
+    link_url(state, None, &crate::addresses::Target::Whiteboard(id))
 }
 
 fn whiteboard_id(value: &str) -> Option<Uuid> {

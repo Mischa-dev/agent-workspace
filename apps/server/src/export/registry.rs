@@ -23,9 +23,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("actor_id", "actors"),
                     ("project_id", "projects"),
                     ("session_id", "sessions"),
-                    ("mcp_credential_id", "mcp_client_credentials"),
+                    ("mcp_credential_id", "account_credentials"),
                     ("mcp_oauth_grant_id", "mcp_oauth_grants"),
                     ("external_agent_connection_id", "external_agent_connections"),
+                    ("requested_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -73,6 +74,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("group_id", "account_groups"),
                     ("account_id", "actors"),
                     ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "role_grants",
+                table: "role_grants",
+                references: &[
+                    ("space_id", "projects"),
+                    ("group_id", "account_groups"),
+                    ("role_id", "workspace_roles"),
+                    ("granted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -366,10 +379,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "operation_tasks",
                 "long calls in flight and their answers for a week (K2.21); a call on this server, not the workspace's content",
-            ),
-            (
-                "mcp_client_credentials",
-                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
                 "mcp_oauth_access_tokens",
@@ -1147,7 +1156,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "thing_grants",
+            "who else may see one page, and its share links (a link is a credential); shared again after import",
+        )],
     },
     ExportDecl {
         module: "collections",
@@ -1915,8 +1927,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
-                "run_credentials",
-                "short-lived credentials, kept as digests, that end with their run",
+                "access_tokens",
+                "short-lived tokens, kept as digests, that lapse within a day",
             ),
             (
                 "repository_workspaces",

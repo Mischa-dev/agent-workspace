@@ -114,7 +114,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
     ("links", WORKSPACE_ID),
-    ("mcp_client_credentials", WORKSPACE_ID),
     ("mcp_oauth_access_tokens", WORKSPACE_ID),
     ("mcp_oauth_authorization_codes", WORKSPACE_ID),
     ("mcp_oauth_grants", WORKSPACE_ID),
@@ -185,8 +184,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("repositories", WORKSPACE_ID),
     ("repository_workspaces", WORKSPACE_ID),
     ("requests", WORKSPACE_ID),
+    ("role_grants", WORKSPACE_ID),
     ("run_activities", WORKSPACE_ID),
-    ("run_credentials", WORKSPACE_ID),
+    ("access_tokens", WORKSPACE_ID),
     ("run_usage", WORKSPACE_ID),
     ("runs", WORKSPACE_ID),
     ("saved_items", ORGANIZATION_ID),
@@ -208,6 +208,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("task_import_links", WORKSPACE_ID),
     ("task_imports", WORKSPACE_ID),
     ("task_templates", WORKSPACE_ID),
+    ("thing_grants", WORKSPACE_ID),
     ("things", WORKSPACE_ID),
     ("usage_accounts", ORGANIZATION_ID),
     ("usage_reports", WORKSPACE_ID),
@@ -269,6 +270,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "agent_outside_refs",
+        "which agent elsewhere an agent account is: accounts are server-wide (R19), so the reference is too",
     ),
     (
         "agent_connections",
@@ -392,6 +397,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "an issuer's identity linked to an account, and accounts are server-wide (H1.18)",
     ),
     (
+        "server_roles",
+        "who runs the server itself (its operators): above every workspace (K1.30)",
+    ),
+    (
         "sessions",
         "browser sign-in sessions, before any workspace is chosen",
     ),
@@ -424,6 +433,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "workos_login_attempts",
         "sign-in ceremonies, before any account is known",
     ),
+    (
+        "account_credentials",
+        "an account's credentials belong to the account (R19); workspace_id only narrows one",
+    ),
 ];
 
 /// Tables that must stay global whenever they exist: accounts, their
@@ -446,6 +459,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
     "account_credentials",
     "account_managers",
     "agent_outside_refs",
+    "server_roles",
     "agent_connections",
     "connection_signing_secrets",
     "hosts",

@@ -28,9 +28,7 @@ use super::{
 };
 use crate::{
     AppState,
-    conversations::{
-        MessageCommandActor, ThreadPatch, parse_actor_kind, threads::ThreadCreator, update_thread,
-    },
+    conversations::{MessageCommandActor, ThreadPatch, threads::ThreadCreator, update_thread},
     discussion::{self, CommentBody, CommentPlace, SubjectKind},
     error::AppError,
     idempotency::IdempotencyKey,
@@ -482,7 +480,6 @@ pub(crate) async fn create(
         None => IdempotencyKey::parse(&format!("page-comment-{}", Uuid::now_v7()))?,
     };
     let actor_id = commenter.actor.actor_id;
-    let actor_kind = parse_actor_kind(&commenter.actor.actor_kind)?;
     let posted = match discussion::post(
         state,
         commenter.actor,
@@ -505,7 +502,7 @@ pub(crate) async fn create(
     // A reply reopens its thread; open pages hear of the change.
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(thread_id) = reopen {
-        set_resolved(&mut transaction, actor_id, actor_kind, thread_id, false).await?;
+        set_resolved(&mut transaction, actor_id, thread_id, false).await?;
     }
     let project_id = sqlx::query_scalar::<_, Uuid>(
         "-- visibility: the thread just posted to\nSELECT project_id FROM conversations WHERE id = $1",
@@ -522,7 +519,6 @@ pub(crate) async fn create(
 async fn set_resolved(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: crate::policy::ActorKind,
     thread_id: Uuid,
     resolved: bool,
 ) -> Result<(), AppError> {
@@ -542,7 +538,7 @@ async fn set_resolved(
         outcome: None,
         clear_outcome: false,
     };
-    update_thread(transaction, actor_id, actor_kind, thread_id, &patch).await?;
+    update_thread(transaction, actor_id, thread_id, &patch).await?;
     Ok(())
 }
 
@@ -560,12 +556,10 @@ fn refused(error: ChangeError, change: Change) -> Result<Refusal, AppError> {
         ChangeError::App(AppError::NotFound(_)) => Ok(Refusal::NotFound),
         ChangeError::App(error) => Err(error),
         ChangeError::Refused(refused) => Ok(match refused {
-            Refused::NotYourMessage | Refused::OnlyPeopleModerate if change == Change::Remove => {
+            Refused::NotYourMessage if change == Change::Remove => {
                 Refusal::NotYours("You can only delete your own comments.")
             }
-            Refused::NotYourMessage | Refused::OnlyPeopleModerate => {
-                Refusal::NotYours("You can only edit your own comments.")
-            }
+            Refused::NotYourMessage => Refusal::NotYours("You can only edit your own comments."),
             Refused::RoleCannotWrite => return Err(AppError::Forbidden),
             Refused::Removed => Refusal::NotFound,
             Refused::Archived => Refusal::Invalid(
@@ -615,15 +609,14 @@ pub(crate) async fn change(
     };
     match change {
         CommentChange::Resolve(resolved) => {
-            let actor_kind = parse_actor_kind(&actor.actor_kind)?;
-            set_resolved(transaction, actor.actor_id, actor_kind, thread_id, resolved).await?;
+            set_resolved(transaction, actor.actor_id, thread_id, resolved).await?;
         }
         CommentChange::Edit(body) => {
             let body = match check_body(body) {
                 Ok(body) => body,
                 Err(message) => return Ok(Err(Refusal::Invalid("body", message))),
             };
-            let content = crate::mcp::content_from_text(state, project_id, &body).await?;
+            let content = crate::mcp::content_from_text(state, project_id, None, &body).await?;
             let Ok(content) = MessageContent::from_json(content) else {
                 return Ok(Err(Refusal::Invalid(
                     "body",

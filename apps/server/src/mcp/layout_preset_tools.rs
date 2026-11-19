@@ -196,7 +196,6 @@ pub(super) async fn layout_preset_write(
         settings::authorize_workspace_manage_as(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             organization_id,
         )
         .await?;

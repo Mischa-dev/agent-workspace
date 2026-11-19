@@ -156,9 +156,23 @@ pub async fn put_explicit(
     let Some(ends) = ends(connection, from, to).await? else {
         return Ok(Err(Refused::NotThings));
     };
-    if ends.workspace_id != ends.other_workspace_id {
+    // A DM or group lives in the direct scope: a link between it and a
+    // workspace's thing belongs to that workspace.
+    let direct = crate::spaces::DIRECT;
+    if ends.workspace_id != ends.other_workspace_id
+        && ends.workspace_id != direct
+        && ends.other_workspace_id != direct
+    {
         return Ok(Err(Refused::OtherWorkspace));
     }
+    let ends = if ends.workspace_id == direct {
+        Ends {
+            workspace_id: ends.other_workspace_id,
+            ..ends
+        }
+    } else {
+        ends
+    };
     let made = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin, \
                             created_by_account_id) \

@@ -38,7 +38,7 @@ pub(super) async fn direct_space(setup: &Setup) -> String {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned()
@@ -151,15 +151,32 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
     .execute(&setup.pool)
     .await
     .expect("organization membership");
+    // Their workspace name, which also puts them in the workspace's space.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $3) ON CONFLICT (organization_id, actor_id) DO NOTHING",
+    )
+    .bind(setup.organization_id)
+    .bind(actor_id)
+    .bind(login)
+    .execute(&setup.pool)
+    .await
+    .expect("workspace profile");
     for project in projects {
+        // DMs live in no space (K4.17): the workspace membership is enough.
+        let project = project.parse::<Uuid>().expect("project");
+        if project == agent_workspace_server::spaces::DIRECT {
+            continue;
+        }
         sqlx::query(
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
             VALUES ($1, $2, $3, 'member', $4, $4)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
             "#,
         )
         .bind(Uuid::now_v7())
-        .bind(project.parse::<Uuid>().expect("project"))
+        .bind(project)
         .bind(actor_id)
         .bind(login)
         .execute(&setup.pool)
@@ -220,6 +237,47 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
 }
 
 pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &str) {
+    // DMs and groups are in no space: there the workspace role counts, and
+    // a workspace has no built-in viewer, so a custom role reads only. The
+    // workspace's own space follows the workspace role too (the place an
+    // agent added without a project lives, K4.6), and its membership row is
+    // set as well.
+    let place = project.parse::<Uuid>().expect("project");
+    let own_space = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND kind = 'workspace')",
+    )
+    .bind(place)
+    .fetch_one(pool)
+    .await
+    .expect("space kind");
+    if place == agent_workspace_server::spaces::DIRECT || own_space {
+        sqlx::query(
+            "INSERT INTO workspace_roles (id, organization_id, key, base_role, name) \
+             SELECT gen_random_uuid(), organization_id, 'reader', 'viewer', 'Reader' \
+             FROM organization_memberships WHERE actor_id = $1 \
+             ON CONFLICT (organization_id, key) DO NOTHING",
+        )
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("reader role");
+        sqlx::query(
+            "UPDATE organization_memberships membership \
+             SET role = CASE WHEN $2 = 'viewer' THEN 'member' ELSE $2 END, \
+                 role_id = (SELECT held.id FROM workspace_roles held \
+                            WHERE held.organization_id = membership.organization_id \
+                              AND held.key = 'reader' AND $2 = 'viewer') \
+             WHERE actor_id = $1",
+        )
+        .bind(actor)
+        .bind(role)
+        .execute(pool)
+        .await
+        .expect("set workspace role");
+        if !own_space {
+            return;
+        }
+    }
     sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2")
         .bind(project.parse::<Uuid>().expect("project"))
         .bind(actor)
@@ -260,8 +318,8 @@ async fn removed_message_text_vanishes_everywhere() {
     };
     for handle in ["@mara", "@nova"] {
         let added = call(
-            "project_member_set",
-            json!({"projectId": work, "person": handle}),
+            "space_member_add",
+            json!({"spaceId": work, "account": handle}),
         )
         .await;
         assert_eq!(added["outcome"], "ok", "{added}");
@@ -481,12 +539,13 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(edited["message"]["revision"], 2, "{edited}");
     assert_eq!(edited["changed"], true);
 
-    // Agents never remove or edit someone else's message.
+    // An agent without a moderating role never removes or edits someone
+    // else's message.
     let refused = mara("message_delete", json!({"messageId": message})).await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(
         refused["message"],
-        "Agents can only remove their own messages. Ask a project owner or admin to remove this one."
+        "You can only remove your own messages. Project owners and admins can remove anyone's."
     );
     let refused = mara(
         "message_edit",
@@ -1371,8 +1430,8 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         app,
         &codex,
         &codex_session,
-        "project_member_set",
-        json!({"projectId": work, "person": "@mara"}),
+        "space_member_add",
+        json!({"spaceId": work, "account": "@mara"}),
     )
     .await;
     assert_eq!(added["outcome"], "ok", "{added}");
@@ -1457,13 +1516,19 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         text("Owner's second"),
     )
     .await;
+    // An agent whose role moderates removes anyone's message, as a person
+    // with that role does: no permission depends on the kind of account.
+    let owners_third = say(
+        &setup,
+        owner_browser,
+        &general,
+        "owner-for-agent-moderator",
+        text("Owner's third"),
+    )
+    .await;
     set_role(&setup.pool, &work, mara, "admin").await;
-    let refused = mara_call("message_delete", json!({"messageId": owners_second})).await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
-    assert_eq!(
-        refused["message"],
-        "Agents can only remove their own messages. Ask a project owner or admin to remove this one."
-    );
+    let moderated = mara_call("message_delete", json!({"messageId": owners_third})).await;
+    assert_eq!(moderated["outcome"], "ok", "{moderated}");
     set_role(&setup.pool, &work, mara, "member").await;
     let pat_app = connect_app(app, &pat_browser, "Codex", "full").await;
     let pat_session = initialize(app, &pat_app).await.expect("Pat's MCP");
@@ -1529,7 +1594,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         &setup,
         owner_browser,
         &general,
-        "owner-3",
+        "owner-moderated",
         text("Owner's third"),
     )
     .await;
@@ -1645,8 +1710,8 @@ async fn edits_keep_every_revision_and_projections_follow() {
             app,
             &codex,
             &session,
-            "project_member_set",
-            json!({"projectId": work, "person": handle}),
+            "space_member_add",
+            json!({"spaceId": work, "account": handle}),
         )
         .await;
         assert_eq!(added["outcome"], "ok", "{added}");

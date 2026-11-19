@@ -12,13 +12,9 @@
   "tools": {
     "project_list": "query",
     "project_get": "describe",
-    "project_create": "create",
     "project_template_list": "query",
     "project_template_write": "change",
-    "project_update": "change",
-    "project_archive": "change",
     "project_members": "query",
-    "project_member_set": "change",
     "invitation_list": "query",
     "invitation_write": "change",
     "project_layout_set": "change",
@@ -44,7 +40,7 @@
     "/api/v1/organizations/{organization_id}/project-templates*",
     "/api/v1/project-invitations/*"
   ],
-  "events": { "emits": ["space.member.changed", "space.modules_changed"], "listens": [] },
+  "events": { "emits": ["space.modules_changed"], "listens": [] },
   "notifications": [],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

@@ -25,10 +25,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
-    policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
-        Subject, authorize,
-    },
+    policy::{Action, MembershipRole, RoleGrant},
     profile_runtime::prepare_private_profile_directory,
     provider::{
         AccountHandle, AccountSummary, HarnessError, LoginCeremonyError, LoginCeremonySnapshot,
@@ -1457,21 +1454,13 @@ fn may_manage_execution(
     if role.role() == MembershipRole::Worker {
         return false;
     }
-    principal.actor_kind == "human"
-        && matches!(
-            authorize(
-                &Subject::new(
-                    principal.actor_id,
-                    ActorKind::Human,
-                    true,
-                    Some(Membership::project(project_id, role, true)),
-                    None,
-                ),
-                Action::ExecutionProfileManage,
-                Resource::Project(ProjectScope::project(project_id)),
-            ),
-            Decision::Allow
-        )
+    crate::access::membership_allows(
+        principal.actor_id,
+        project_id,
+        role,
+        true,
+        Action::ExecutionProfileManage.permission(),
+    )
 }
 
 /// The caller's own account in the workspace of a project they can manage

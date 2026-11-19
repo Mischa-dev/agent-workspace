@@ -117,19 +117,13 @@ pub async fn post(state: &AppState, run_id: Uuid, activity_id: &str) -> Result<(
         .bind(run.account_id)
         .fetch_one(&mut *transaction)
         .await?;
-    let actor_kind = crate::launch::actor_kind(&kind).ok_or(AppError::Forbidden)?;
     // A launched run answers its request: claimed now (its first message
     // there opens a channel tag's answer thread), answered by this message.
     let mut reply = None;
     let mut target = conversation_id;
     if let Some((request_id, status)) = launch_paths::reply_of(&mut transaction, run.id).await? {
-        let creator = crate::conversations::threads::ThreadCreator::plain(
-            run.account_id,
-            actor_kind,
-            None,
-            "run",
-            None,
-        );
+        let creator =
+            crate::conversations::threads::ThreadCreator::plain(run.account_id, None, "run", None);
         if matches!(status.as_str(), "pending" | "claimed") {
             if let Some((conversation, thread)) = crate::mcp::replies::claim_in(
                 &mut transaction,
@@ -164,7 +158,8 @@ pub async fn post(state: &AppState, run_id: Uuid, activity_id: &str) -> Result<(
         }
     }
     transaction.commit().await?;
-    let content = crate::mcp::common::content_from_text(state, space_id, &text).await?;
+    let content =
+        crate::mcp::common::content_from_text(state, space_id, Some(target), &text).await?;
     let key = IdempotencyKey::parse(&format!("run-say-{}-{}", run.id, short(activity_id)))
         .map_err(|_| AppError::Internal("run say key"))?;
     let posted = crate::conversations::append_message_command_with(

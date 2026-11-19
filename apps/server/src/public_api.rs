@@ -227,6 +227,40 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// An output schema's descriptions cut to their first sentence: the
+/// result's shape is the reference, and the operation's own description and
+/// its arguments say the rest. Kept whole, results take most of the
+/// document.
+fn brief(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                match child {
+                    Value::String(text) if key == "description" => {
+                        if let Some(end) = first_sentence_end(text) {
+                            text.truncate(end);
+                        }
+                    }
+                    _ => brief(child),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(brief),
+        _ => {}
+    }
+}
+
+/// Where a description's first sentence ends, when more follows it.
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(1)).find_map(|index| {
+        (matches!(bytes[index], b'.' | b'?' | b'!' | b';' | b':')
+            && bytes[index + 1].is_ascii_whitespace()
+            && !text[index + 1..].trim().is_empty())
+        .then_some(index + 1)
+    })
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -568,6 +602,11 @@ fn slim(value: &mut Value) {
             if map.get("additionalProperties") == Some(&Value::Bool(true)) {
                 map.remove("additionalProperties");
             }
+            // A plain integer is read as 64 bits wherever the format is left
+            // out; only narrower ones say so.
+            if map.get("format").and_then(Value::as_str) == Some("int64") {
+                map.remove("format");
+            }
             if map
                 .get("format")
                 .and_then(Value::as_str)
@@ -665,7 +704,10 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let mut hoisted = hoist(&root, schema, &mut components);
+                        let mut briefed = Value::Object(Map::clone(schema.as_ref()));
+                        brief(&mut briefed);
+                        let briefed = briefed.as_object().cloned().unwrap_or_default();
+                        let mut hoisted = hoist(&root, &briefed, &mut components);
                         share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
@@ -677,24 +719,23 @@ pub(crate) fn document() -> Value {
                 (key, reference)
             })
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
-        // The result, and a refusal (the same result with its `outcome`),
-        // are one response, shared by every operation with that result, so
-        // the document stays small as tools are added. The introduction says
-        // what each status means.
+        // The result, a refusal (the same result with its `outcome`) and
+        // the shared `Error` body (401, 413 and 429, the same for every
+        // operation) are one response, shared by every operation with that
+        // result, so an operation adds no responses of its own and the
+        // document stays small as operations are added. It is the `default`
+        // (every status, 200 included), written once rather than again
+        // under 200. The introduction says what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "See `outcome`.",
-                "content": { "application/json": { "schema": output } },
+                "description": "The result, a refusal (see `outcome`), or an `Error`.",
+                "content": { "application/json": { "schema": {
+                    "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
+                } } },
             })
         });
-        // Every status shares one answer, the `default` response: the
-        // operation's result, a refusal (its `outcome` says which) or the
-        // edge's own error (401, 413, 429), each a branch of it.
-        let mut responses = Map::new();
-        responses.insert(
-            "default".to_owned(),
-            json!({ "$ref": format!("#/components/responses/{result}") }),
-        );
+        let responses =
+            json!({ "default": { "$ref": format!("#/components/responses/{result}") } });
         let mut post = json!({
             "operationId": name,
             "summary": title,

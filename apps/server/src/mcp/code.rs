@@ -23,8 +23,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        StoredRole, ToolResult, accessible_project_ids, conversation_path, parse_id, public_url,
-        role_allows, scope_projects,
+        StoredRole, ToolResult, accessible_project_ids, conversation_path, link_url, parse_id,
+        public_url, role_allows, scope_projects,
     },
 };
 use crate::{AppState, error::AppError, policy::Action, runs::ACTIVE_RUN_STATES};
@@ -413,7 +413,7 @@ pub(crate) async fn repository_list(
         let rows = sqlx::query_as::<_, RepositoryRow>(
             r#"
             SELECT repository.id, repository.project_id, project.project_key,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    repository.owner, repository.name, repository.default_branch,
                    repository.clone_url, repository.preparation_state,
                    repository.preparation_failure_category, repository.prepared_at,
@@ -470,9 +470,16 @@ pub(crate) async fn repository_list(
                 RepositoryItem {
                     id: row.id.to_string(),
                     project_id: row.project_id.to_string(),
-                    settings_url: public_url(
-                        state,
-                        &format!("/projects/{}/settings?tab=repositories", row.project_id),
+                    settings_url: crate::addresses::with_query(
+                        link_url(
+                            state,
+                            None,
+                            &crate::addresses::Target::space(
+                                row.project_id,
+                                crate::addresses::Place::Settings,
+                            ),
+                        ),
+                        "tab=repositories",
                     ),
                     project_key: row.project_key,
                     project: row.project,
@@ -617,7 +624,7 @@ fn pull_requests_sql() -> String {
               AND ($8::uuid[] IS NULL OR pr.id = ANY($8))
         )
         SELECT pr.id, pr.project_id, project.project_key,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+               project.name AS project,
                pr.repository_id, repository.owner || '/' || repository.name AS repository,
                pr.pull_request_number, pr.title, pr.html_url, pr.state, pr.draft,
                pr.checks_state, pr.review_state, pr.requested_reviewers,
@@ -892,17 +899,13 @@ pub(crate) async fn pull_request_list(
                 (reach, Some(ids))
             }
         };
-        let github_login = if principal.actor_kind == crate::policy::ActorKind::Human {
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT github_login FROM users WHERE actor_id = $1",
-            )
-            .bind(principal.actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-            .flatten()
-        } else {
-            None
-        };
+        let github_login = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT github_login FROM users WHERE actor_id = $1",
+        )
+        .bind(principal.actor_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?
+        .flatten();
         let rows = sqlx::query_as::<_, PullRequestRow>(&pull_requests_sql())
             .bind(&pr_projects)
             .bind(principal.actor_id)
@@ -920,9 +923,8 @@ pub(crate) async fn pull_request_list(
         let total = rows.first().map_or(0, |row| row.total);
         let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
         let mut details = page_details(state, principal, &ids).await?;
-        let note = (needs_me
-            && principal.actor_kind == crate::policy::ActorKind::Human
-            && github_login.is_none())
+        let has_login_setting = principal.actor_kind == crate::policy::ActorKind::Human; // kind-check: mechanical (only a person's account settings hold a GitHub username)
+        let note = (needs_me && has_login_setting && github_login.is_none())
         .then(|| {
             format!(
                 "Add your GitHub username in Account settings ({}) to also see pull requests that ask for your review.",
@@ -1086,12 +1088,12 @@ async fn page_details(
     let thread_rows = sqlx::query_as::<_, ThreadLinkRow>(
         r#"
         SELECT DISTINCT ON (link.github_pull_request_id)
-               link.github_pull_request_id AS pull_request_id, thread.id, thread.project_id,
+               link.github_pull_request_id AS pull_request_id, thread.id,
+               COALESCE(thread.project_id, direct_scope_id()) AS project_id,
                COALESCE(thread.name, '') AS name, thread.kind,
-               project.kind = 'direct' AS direct
+               thread.project_id IS NULL AS direct
         FROM github_pull_request_conversation_links link
         JOIN conversations thread ON thread.id = link.conversation_id
-        JOIN projects project ON project.id = thread.project_id
         WHERE link.github_pull_request_id = ANY($1) AND link.source = 'run_artifact'
           AND conversation_visible_to(thread.id, $2)
         ORDER BY link.github_pull_request_id, link.created_at, thread.id
@@ -1111,7 +1113,7 @@ async fn page_details(
                     name: row.name,
                     url: public_url(
                         state,
-                        &conversation_path(row.project_id, &row.kind, row.id, row.direct),
+                        &conversation_path(state, row.project_id, &row.kind, row.id, row.direct),
                     ),
                 },
             )

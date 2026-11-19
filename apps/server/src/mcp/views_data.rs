@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, parse_id, public_url, scope_projects},
+    common::{ToolResult, link_url, parse_id, public_url, scope_projects},
     planning::{DATE_MESSAGE, milestone_change},
     tasks::{command_actor, resolve_assignee},
     writes::{
@@ -45,7 +45,6 @@ async fn can_view(state: &AppState, principal: &McpPrincipal) -> Result<(), AppE
     crate::memory::project_access(
         &state.pool,
         principal.actor_id,
-        principal.actor_kind,
         principal.project_id,
         Action::WorkItemView,
     )
@@ -956,9 +955,10 @@ pub(crate) async fn task_from_template(
         };
         let value = TaskFromTemplateValue {
             id: applied.work_item_id.to_string(),
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{}", applied.work_item_id),
+                None,
+                &crate::addresses::Target::task(project_id, applied.work_item_id),
             ),
             key: applied.key,
             subtasks: applied.subtask_count,

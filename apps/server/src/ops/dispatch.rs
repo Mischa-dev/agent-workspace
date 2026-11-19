@@ -91,7 +91,10 @@ pub async fn dispatch(
     let Some(call) = registry().get(name).map(|entry| entry.call) else {
         return Answer::error(&OpError::not_found("That operation"));
     };
-    call(state, request, input).await
+    // K1.25: every write the operation makes says which credential it came
+    // through, and for a run's token, the run and who asked for it.
+    let acting = crate::access::acting::Acting::of(&request.caller);
+    crate::access::acting::within(acting, call(state, request, input)).await
 }
 
 /// A space's key (such as "AWD") in the input's `spaceId` or `projectId`
@@ -105,6 +108,29 @@ async fn space_keys_to_ids(
     mut input: Value,
 ) -> Result<Value, OpError> {
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
+        // K4.9: "me" is the caller's personal space in the named workspace,
+        // made on first use; a credential held to one space never reaches it.
+        if input.pointer(field).and_then(Value::as_str) == Some("me") {
+            if let (Some(workspace), None) = (request.workspace, request.caller.confined_space) {
+                let mut tx = crate::db::scoped_tx(&state.pool)
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                let space = crate::spaces::personal::personal(
+                    &mut tx,
+                    workspace,
+                    request.caller.account_id,
+                )
+                .await
+                .map_err(|error| OpError::logged("personal space", &error))?;
+                tx.commit()
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                if let (Some(space), Some(slot)) = (space, input.pointer_mut(field)) {
+                    *slot = Value::String(space.to_string());
+                }
+            }
+            continue;
+        }
         let Some(key) = input
             .pointer(field)
             .and_then(Value::as_str)
@@ -350,6 +376,7 @@ async fn admit<O: Operation>(
         let located = target::Located {
             workspace_id: Uuid::nil(),
             space_id: None,
+            direct: None,
         };
         // Across workspaces only the credential is checked here; the read
         // keeps to what the caller may see (and has on) in each one.
@@ -530,6 +557,8 @@ async fn pipeline<O: Operation>(
         trace_id: request.trace_id,
         workspace_id: located.workspace_id,
         space_id: located.space_id,
+        direct: located.direct,
+        requested_workspace: request.workspace,
         target: target.clone(),
         request_id: key
             .as_ref()
@@ -763,7 +792,7 @@ async fn module_here<O: Operation>(
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
-    if registry.also_serving(O::NAME).next().is_some() {
+    if located.direct.is_none() && registry.also_serving(O::NAME).next().is_some() {
         let modules = match located.space_id {
             Some(space) => {
                 crate::modules::state::for_project(connection, space, caller.account_id).await
@@ -786,24 +815,24 @@ async fn module_here<O: Operation>(
             return Ok(also);
         }
     }
-    let Some(space) = located.space_id else {
+    if located.space_id.is_none() && located.direct.is_none() {
         return Ok(O::MODULE);
-    };
+    }
     if !registry.governs_conversations(O::MODULE) {
         return Ok(O::MODULE);
     }
-    let direct = crate::spaces::kind::holds_messages(connection, space)
-        .await
-        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
+    Ok(registry
+        .conversation_module(located.direct.is_some())
+        .unwrap_or(O::MODULE))
 }
 
 /// What `access` is asked about for a located target.
 fn access_target(target: &Target, located: &target::Located) -> crate::access::Target {
-    match (target, located.space_id) {
-        (Target::Account, _) => crate::access::Target::Account,
-        (_, Some(space)) => crate::access::Target::Space(space),
-        (_, None) => crate::access::Target::Workspace(located.workspace_id),
+    match (target, located.space_id, located.direct) {
+        (Target::Account, _, _) => crate::access::Target::Account,
+        (_, Some(space), _) => crate::access::Target::Space(space),
+        (_, None, Some(conversation)) => crate::access::Target::Conversation(conversation),
+        (_, None, None) => crate::access::Target::Workspace(located.workspace_id),
     }
 }
 
@@ -815,9 +844,10 @@ fn denied_error<O: Operation>(
 ) -> OpError {
     use crate::access::{Denied, DenyReason as Because};
     match denied {
-        Denied::NotFound => match located.space_id {
-            Some(_) => OpError::not_found("That space"),
-            None => OpError::not_found("That workspace"),
+        Denied::NotFound => match (located.space_id, located.direct) {
+            (Some(_), _) => OpError::not_found("That space"),
+            (None, Some(_)) => OpError::not_found("That conversation"),
+            (None, None) => OpError::not_found("That workspace"),
         },
         Denied::ModuleOff { module } => OpError::Denied {
             reason: DenyReason::ModuleOff {
@@ -890,6 +920,7 @@ pub(super) async fn begin(
         &crate::events::EventContext {
             actor: Some(ctx.caller.account_id),
             via_credential: ctx.caller.via_grant_id,
+            credential: ctx.caller.credential_id,
             requested_by: ctx.caller.requested_by,
             run: ctx.caller.run_id,
             request_id: ctx.request_id.clone(),
@@ -1013,10 +1044,11 @@ async fn audit_row(
             id, actor_id, project_id, organization_id, session_id,
             authentication_class, action, target_kind, target_id, outcome,
             request_id, correlation_id, metadata, channel, client_name,
-            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id
+            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id,
+            via_credential_id, requested_by_account_id, run_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'succeeded',
-            $10, $11, $12, $13, $14, $15, $16, $17
+            $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
         )
         "#,
     )
@@ -1041,6 +1073,9 @@ async fn audit_row(
     .bind(columns.credential_id)
     .bind(columns.oauth_grant_id)
     .bind(columns.connection_id)
+    .bind(ctx.caller.credential_id)
+    .bind(ctx.caller.requested_by)
+    .bind(ctx.caller.run_id)
     .execute(&mut **tx)
     .await
     .map_err(|error| OpError::logged(ctx.op, &error.into()))?;

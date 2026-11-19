@@ -33,7 +33,13 @@ pub struct AliasWorkspace(pub Uuid);
 /// to their agent limits, as the older tools are.
 pub async fn caller_of(state: &AppState, principal: &McpPrincipal) -> Result<Caller, OpError> {
     let limits = limits_of(state, principal).await?;
-    Ok(Caller::of_principal(principal, limits))
+    let acting = crate::mcp::acting_of(state, principal)
+        .await
+        .map_err(|error| OpError::logged("authenticate", &error))?;
+    let mut caller = Caller::of_principal(principal, limits);
+    caller.requested_by = acting.requested_by;
+    caller.run_id = acting.run;
+    Ok(caller)
 }
 
 async fn limits_of(

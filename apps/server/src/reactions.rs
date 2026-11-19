@@ -34,7 +34,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, ConversationAccessRow, MessageCommandActor, TimelineEntryView, enqueue_event,
-        lock_message_conversation, parse_actor_kind,
+        lock_message_conversation,
     },
     error::{ApiPath, AppError},
     outbox::{MessageReactionsUpdatedPayload, OutboxEventPayload},
@@ -233,7 +233,7 @@ pub(crate) struct Picked {
 
 async fn pick(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
+    workspace_id: Uuid,
     message_id: Uuid,
     actor_id: Uuid,
     input: &str,
@@ -256,14 +256,13 @@ async fn pick(
             r#"
             SELECT emoji.id, emoji.name
             FROM custom_emojis emoji
-            JOIN projects project ON project.organization_id = emoji.workspace_id
-            WHERE project.id = $1 AND emoji.id = $2
+            WHERE emoji.workspace_id = $1 AND emoji.id = $2
               AND (NOT $3 OR emoji.retired_at IS NULL OR EXISTS (
                   SELECT 1 FROM message_reactions reaction
                   WHERE reaction.message_id = $4 AND reaction.custom_emoji_id = emoji.id))
             "#,
         )
-        .bind(project_id)
+        .bind(workspace_id)
         .bind(id)
         .bind(adding)
         .bind(message_id)
@@ -278,17 +277,16 @@ async fn pick(
         r#"
         SELECT emoji.id
         FROM custom_emojis emoji
-        JOIN projects project ON project.organization_id = emoji.workspace_id
         LEFT JOIN message_reactions mine
           ON mine.message_id = $4 AND mine.actor_id = $5 AND mine.custom_emoji_id = emoji.id
-        WHERE project.id = $1 AND emoji.name = $2
+        WHERE emoji.workspace_id = $1 AND emoji.name = $2
           AND ($3 OR emoji.retired_at IS NULL)
         ORDER BY mine.custom_emoji_id IS NOT NULL DESC,
                  emoji.retired_at IS NULL DESC, emoji.created_at DESC
         LIMIT 1
         "#,
     )
-    .bind(project_id)
+    .bind(workspace_id)
     .bind(&name)
     .bind(!adding)
     .bind(message_id)
@@ -405,14 +403,14 @@ pub(crate) async fn set_reaction(
             Err(AppError::NotFound(_)) => return Err(AppError::NotFound("message").into()),
             Err(error) => return Err(error.into()),
         };
-    if project_hint.is_some_and(|project_id| project_id != conversation.project_id) {
+    if project_hint.is_some_and(|project_id| project_id != conversation.place()) {
         return Err(AppError::NotFound("message").into());
     }
     let removed = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT removed_at IS NOT NULL
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         "#,
     )
     .bind(message_id)
@@ -424,8 +422,7 @@ pub(crate) async fn set_reaction(
     if conversation.project_archived {
         return Err(AppError::ProjectArchived.into());
     }
-    let actor_kind = parse_actor_kind(&actor.actor_kind)?;
-    if !conversation.allows(actor.actor_id, actor_kind, Action::MessageSend)? {
+    if !conversation.allows(actor.actor_id, Action::MessageSend)? {
         return Err(ReactionError::Refused(ReactionRefused::RoleCannotReact));
     }
     if conversation.is_archived() {
@@ -436,7 +433,7 @@ pub(crate) async fn set_reaction(
     }
     let picked = pick(
         transaction,
-        conversation.project_id,
+        conversation.workspace_id,
         message_id,
         actor.actor_id,
         reaction,
@@ -483,7 +480,7 @@ pub(crate) async fn set_reaction(
     if changed {
         enqueue_event(
             transaction,
-            conversation.project_id,
+            conversation.place(),
             OutboxEventPayload::MessageReactionsUpdated(MessageReactionsUpdatedPayload {
                 conversation_id: conversation.id,
                 message_id,
@@ -541,9 +538,7 @@ where
           ON message.id = reaction.message_id
          AND message.conversation_id = reaction.conversation_id
         JOIN actors actor ON actor.id = reaction.actor_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = reaction.project_id
-         AND membership.actor_id = reaction.actor_id
+        LEFT JOIN LATERAL place_profile(reaction.project_id, reaction.actor_id) membership ON true
         WHERE reaction.conversation_id = $1
           AND reaction.message_id = ANY($2)
           AND message.removed_at IS NULL
