@@ -28,6 +28,7 @@ async fn m3_hardening_rejects_duplicate_host_runtime_paths() {
         apply_through_m2(&pool).await;
         let temporary_root = tempfile::tempdir().expect("create duplicate-path data root");
         let config = development_config(&database_url, &temporary_root);
+        crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
         let seed = dev_seed(&pool, &config)
             .await
             .expect("seed duplicate-path fixture");
@@ -148,6 +149,7 @@ async fn pre_m3_upgrade_repair_handles_only_the_known_relative_seed_paths() {
         ),
     ]))
     .expect("relative legacy configuration");
+    crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed preflight fixture");
@@ -239,6 +241,7 @@ async fn deferred_repository_run_guard_closes_the_concurrent_archive_race() {
         .expect("apply every migration");
     let temporary_root = tempfile::tempdir().expect("create archive-race data root");
     let config = development_config(&database_url, &temporary_root);
+    crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed archive-race fixture");

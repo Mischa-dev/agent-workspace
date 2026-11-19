@@ -3082,6 +3082,266 @@ async fn themes_are_their_makers_until_offered() {
     world.finish().await;
 }
 
+/// K5.20: a direct upload goes only into a conversation the caller may post
+/// in (never a private group they aren't in), and only someone who may
+/// manage settings sees or changes the workspace's own bucket.
+#[tokio::test]
+async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .private_group("secret", &["ana"])
+        .build("privacy_direct_uploads")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let secret = world.conversations["secret"].clone();
+    let lena = &world.people["lena"];
+    let (status, refused) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("file_upload_start"),
+            Some("lena-upload"),
+            json!({ "conversationId": secret, "name": "a.txt", "size": 1,
+                    "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb" }),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
+    for (op, body) in [
+        ("workspace_store_get", json!({})),
+        ("workspace_store_revoke", json!({})),
+        (
+            "workspace_store_set",
+            json!({ "endpoint": "https://s3.example.com", "bucket": "mine",
+                    "region": "us-east-1", "accessKeyId": "a", "secretAccessKey": "b" }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    world.finish().await;
+}
+
+/// K3.26: only someone who may manage automations makes or deletes an
+/// incoming hook; a member sees the space's hooks but never a secret.
+#[tokio::test]
+async fn incoming_hooks_need_automations_manage_and_never_show_a_secret() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_incoming_hooks")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let space = world.projects["WORK"].clone();
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("incoming_hook_create"),
+            Some("hook-1"),
+            json!({ "spaceId": space, "name": "Alerts" }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let hook = made["value"]["hook"]["id"]
+        .as_str()
+        .expect("hook")
+        .to_owned();
+    let secret = made["value"]["secret"].as_str().expect("secret").to_owned();
+    let lena = &world.people["lena"];
+    let (_, listed) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("incoming_hook_list"),
+            None,
+            json!({ "spaceId": space }),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["hooks"][0]["id"], hook.as_str(), "{listed}");
+    assert!(!listed.to_string().contains(&secret), "{listed}");
+    for (op, body) in [
+        (
+            "incoming_hook_create",
+            json!({ "spaceId": space, "name": "Mine" }),
+        ),
+        (
+            "incoming_hook_delete",
+            json!({ "spaceId": space, "hookId": hook }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let still = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM incoming_hooks")
+        .fetch_one(world.pool())
+        .await
+        .expect("hooks");
+    assert_eq!(still, 1);
+    world.finish().await;
+}
+
+/// K3.15: linking needs edit on the thing the link starts at and sight of
+/// the other end. A viewer can't link, and nobody can link to a private
+/// group they aren't in (the answer is the same as for no such thing).
+#[tokio::test]
+async fn links_by_hand_need_edit_on_the_start_and_sight_of_the_end() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("vera", "viewer")
+        .person("ana", "member")
+        .private_group("secret", &["ana"])
+        .build("privacy_hand_links")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let work = world.project("WORK").to_owned();
+    let mut pages = Vec::new();
+    for title in ["Plan", "Notes"] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{work}/pages"),
+                None,
+                json!({ "title": title, "body": "" }),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{page}");
+        pages.push(page["id"].as_str().expect("page").to_owned());
+    }
+    let (plan, notes) = (&pages[0], &pages[1]);
+    let link = |person: &str, op: &str, to: &str, key: &str| {
+        let browser = &world.people[person].browser;
+        send(
+            &world.app,
+            browser.request(
+                "POST",
+                &route(op),
+                Some(key),
+                json!({ "from": plan, "to": to, "kind": "about" }),
+            ),
+        )
+    };
+
+    let (status, refused) = link("vera", "thing_link", notes, "vera-link").await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
+    let secret = world.conversations["secret"].clone();
+    let (status, hidden) = link("lena", "thing_link", &secret, "lena-secret").await;
+    assert_ne!(hidden["outcome"], "ok", "{status} {hidden}");
+    assert!(
+        !hidden.to_string().contains("conversation"),
+        "a hidden end reads as no such thing: {hidden}"
+    );
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM links WHERE from_thing_id = $1::uuid AND origin = 'explicit'",
+    )
+    .bind(plan)
+    .fetch_one(world.pool())
+    .await
+    .expect("links");
+    assert_eq!(held, 0, "no refused link was kept");
+
+    let (status, made) = link("lena", "thing_link", notes, "lena-link").await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["changed"], true, "{made}");
+    let (status, vera_unlink) = link("vera", "thing_unlink", notes, "vera-unlink").await;
+    assert_ne!(vera_unlink["outcome"], "ok", "{status} {vera_unlink}");
+    let (status, gone) = link("lena", "thing_unlink", notes, "lena-unlink").await;
+    assert_eq!(gone["outcome"], "ok", "{status} {gone}");
+    assert_eq!(gone["value"]["changed"], true, "{gone}");
+    world.finish().await;
+}
+
+/// H1.9: only someone who may export the workspace starts an export, and
+/// only the one who asked sees or downloads it.
+#[tokio::test]
+async fn an_export_is_for_its_requester_alone() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_workspace_export")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let lena = &world.people["lena"];
+    let (status, refused) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("workspace_export_start"),
+            Some("lena-export"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
+    let (status, started) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("workspace_export_start"),
+            Some("owner-export"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{status} {started}");
+    let id = started["value"]["id"].as_str().expect("id").to_owned();
+    agent_workspace_server::export::transfer::run_export(&world.state, id.parse().expect("uuid"))
+        .await
+        .expect("export runs");
+    for (op, body) in [
+        ("workspace_transfer_get", json!({ "transferId": id })),
+        ("workspace_transfer_list", json!({})),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser.request("POST", &route(op), None, body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let archive = agent_workspace_server::export::transfer::download_path(
+        world.organization,
+        id.parse().expect("uuid"),
+    );
+    let (status, _) = send(
+        &world.app,
+        lena.browser.request("GET", &archive, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a member never downloads it");
+    world.finish().await;
+}
+
 /// C2.6 and C2.7: someone outside a private channel can't read its details
 /// or members, join it, leave it or set its topic, and browsing doesn't
 /// list it; a role that can't post sets no topic anywhere.

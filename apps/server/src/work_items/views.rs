@@ -363,7 +363,7 @@ pub(super) async fn get_timeline(
     let dependencies = sqlx::query_as::<_, TimelineLink>(
         r#"
         SELECT blocking_work_item_id AS blocking_id, blocked_work_item_id AS blocked_id
-        FROM work_item_dependencies
+        FROM task_dependencies
         WHERE project_id = $1 AND blocking_project_id = $1
           AND blocked_work_item_id = ANY($2) AND blocking_work_item_id = ANY($2)
         ORDER BY blocking_work_item_id, blocked_work_item_id

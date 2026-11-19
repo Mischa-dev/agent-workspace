@@ -91,6 +91,17 @@ pub trait KeyEncryption: Send + Sync {
     fn reloaded(&self) -> Option<Arc<dyn KeyEncryption>> {
         None
     }
+    /// A key for one purpose (signing file links, say), derived from the
+    /// master key `master_key_id` names, or from the active one: the same
+    /// on every server sharing the keyring, never stored. Returns the master
+    /// key's id with it, so a signature names the key that checks it.
+    fn derived(
+        &self,
+        _master_key_id: Option<&str>,
+        _purpose: &str,
+    ) -> Result<(String, Zeroizing<[u8; 32]>), SecretError> {
+        Err(SecretError::NotConfigured)
+    }
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, Eq, PartialEq)]
@@ -256,6 +267,23 @@ impl KeyEncryption for FileKeyring {
 
     fn reloaded(&self) -> Option<Arc<dyn KeyEncryption>> {
         load_cached(self.source.as_deref()?).ok()
+    }
+
+    fn derived(
+        &self,
+        master_key_id: Option<&str>,
+        purpose: &str,
+    ) -> Result<(String, Zeroizing<[u8; 32]>), SecretError> {
+        use hmac::{Hmac, Mac};
+        let id = master_key_id.unwrap_or_else(|| self.active_key_id());
+        let master = self.key(id).ok_or(SecretError::UnknownMasterKey)?;
+        let mut mac =
+            Hmac::<sha2::Sha256>::new_from_slice(master).map_err(|_| SecretError::Corrupt)?;
+        mac.update(b"agent-workspace derived key\0");
+        mac.update(purpose.as_bytes());
+        let mut key = Zeroizing::new([0_u8; 32]);
+        key.copy_from_slice(&mac.finalize().into_bytes());
+        Ok((id.to_owned(), key))
     }
 }
 

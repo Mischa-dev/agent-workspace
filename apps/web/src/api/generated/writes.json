@@ -295,6 +295,16 @@
     "title": "Update field"
   },
   {
+    "kind": "create",
+    "name": "file_upload_finish",
+    "title": "Finish a direct upload"
+  },
+  {
+    "kind": "create",
+    "name": "file_upload_start",
+    "title": "Start a direct upload"
+  },
+  {
     "kind": "change",
     "name": "follow_set",
     "title": "Follow"
@@ -373,6 +383,16 @@
     "kind": "change",
     "name": "inbox_view_set",
     "title": "Save an inbox view"
+  },
+  {
+    "kind": "create",
+    "name": "incoming_hook_create",
+    "title": "Make an incoming hook"
+  },
+  {
+    "kind": "change",
+    "name": "incoming_hook_delete",
+    "title": "Delete an incoming hook"
   },
   {
     "kind": "create",
@@ -890,6 +910,11 @@
     "title": "Change theme"
   },
   {
+    "kind": "change",
+    "name": "thing_link",
+    "title": "Link two things"
+  },
+  {
     "kind": "create",
     "name": "thing_link_create",
     "title": "Make a link to one thing"
@@ -903,6 +928,11 @@
     "kind": "change",
     "name": "thing_share_remove",
     "title": "Stop sharing one thing"
+  },
+  {
+    "kind": "change",
+    "name": "thing_unlink",
+    "title": "Take a link away"
   },
   {
     "kind": "create",
@@ -980,6 +1010,11 @@
     "title": "Keep workspace"
   },
   {
+    "kind": "create",
+    "name": "workspace_export_start",
+    "title": "Export the workspace"
+  },
+  {
     "kind": "change",
     "name": "workspace_member_update",
     "title": "Change someone's workspace membership"
@@ -988,6 +1023,16 @@
     "kind": "change",
     "name": "workspace_shape_set",
     "title": "Change what the workspace is for"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_store_revoke",
+    "title": "Stop using the workspace's own file bucket"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_store_set",
+    "title": "Use the workspace's own file bucket"
   },
   {
     "kind": "change",

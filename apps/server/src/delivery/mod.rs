@@ -202,10 +202,5 @@ pub async fn poll(
 
 /// The oldest position the log still keeps (1 when nothing was dropped).
 async fn oldest(connection: &mut sqlx::PgConnection) -> Result<i64, AppError> {
-    Ok(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT min(position) FROM events")
-            .fetch_one(&mut *connection)
-            .await?
-            .unwrap_or(1),
-    )
+    crate::events::oldest_position(connection).await
 }

@@ -119,6 +119,9 @@ pub struct NewWorkspace {
     /// Its address. Left out, a readable one from the name (K4.5). A slug
     /// a person chose is checked with `slug::check_new` by the caller.
     pub slug: Option<String>,
+    /// Its id, when it keeps the one it had elsewhere (an import, H1.10);
+    /// left out, a new one.
+    pub id: Option<Uuid>,
 }
 
 /// Make a workspace with `owner` as its owner. The one way a workspace row
@@ -136,7 +139,7 @@ pub async fn create(
         Some(slug) => slug,
         None => super::slug::readable_for_new(connection, name).await?,
     };
-    let id = Uuid::now_v7();
+    let id = input.id.unwrap_or_else(Uuid::now_v7);
     let inserted = sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(name)
@@ -153,6 +156,17 @@ pub async fn create(
         }
         Err(error) => return Err(error.into()),
     }
+    crate::metering::start_plan(connection, id).await?;
+    // How many workspaces one account may own is the new workspace's plan's
+    // to say (the default plan, for every new workspace).
+    crate::metering::admit(
+        connection,
+        crate::metering::Ask {
+            account_id: Some(owner),
+            ..crate::metering::Ask::new(id, "workspaces_owned", 1)
+        },
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO organization_memberships (organization_id, actor_id, role, enabled)
@@ -164,6 +178,31 @@ pub async fn create(
     .execute(&mut *connection)
     .await?;
     Ok(id)
+}
+
+/// Marks a workspace just made as being imported (H1.10): it refuses
+/// writes until [`finish_import`].
+pub async fn begin_import(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE organizations SET lifecycle = 'importing', lifecycle_changed_at = now() \
+         WHERE id = $1 AND lifecycle = 'active'",
+    )
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+/// Opens a workspace whose import finished.
+pub async fn finish_import(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE organizations SET lifecycle = 'active', lifecycle_changed_at = now() \
+         WHERE id = $1 AND lifecycle = 'importing'",
+    )
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 /// A workspace's state, as the edges and the web read it.
@@ -226,7 +265,8 @@ async fn check_open(
     .fetch_optional(&mut *connection)
     .await?;
     match lifecycle.as_deref() {
-        Some("suspended") => Err(AppError::WorkspaceSuspended),
+        // Nobody writes into a workspace while it is being imported.
+        Some("suspended" | "importing") => Err(AppError::WorkspaceSuspended),
         Some("deleting") if !ALLOWED_WHILE_DELETING.contains(&call) => {
             Err(AppError::WorkspaceSuspended)
         }
@@ -904,9 +944,14 @@ async fn remove_bytes(
     for repository in repositories {
         crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
     }
-    crate::files::store::FileStore::from_config(&state.config)
-        .delete_workspace(workspace)
-        .await
+    let own = crate::files::workspace_store::all_of(state, workspace).await?;
+    for store in crate::files::store::FileStore::all(&state.config)
+        .into_iter()
+        .chain(own)
+    {
+        store.delete_workspace(workspace).await?;
+    }
+    Ok(())
 }
 
 /// Retire the agent and app accounts the workspace owns: disabled, with no

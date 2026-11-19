@@ -5,9 +5,7 @@ use std::{ops::Deref, sync::Arc};
 
 #[cfg(test)]
 pub use agent_workspace_builtin_host::harness::registry::ShutdownSignal;
-pub use agent_workspace_builtin_host::harness::registry::{
-    CustomAdapter, HostLease, LoginCeremonyError, LoginCeremonySnapshot, LoginReservation,
-};
+pub use agent_workspace_builtin_host::harness::registry::{CustomAdapter, HostLease};
 
 use crate::{config::AppConfig, provider::adapter::HarnessError};
 

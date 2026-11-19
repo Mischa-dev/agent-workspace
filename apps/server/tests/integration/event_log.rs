@@ -462,6 +462,67 @@ async fn a_failing_event_is_parked_and_swept_not_lost() {
     db.finish().await;
 }
 
+/// A consumer of one type only.
+struct Narrow {
+    handled: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Consumer for Narrow {
+    fn name(&self) -> &'static str {
+        "test.narrow"
+    }
+
+    fn types(&self) -> Option<&'static [&'static str]> {
+        Some(&["test.nothing_writes_this"])
+    }
+
+    fn starts_at_head(&self) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        _transaction: &mut Transaction<'_, Postgres>,
+        batch: &[LoggedEvent],
+    ) -> Result<(), ConsumerError> {
+        self.handled.fetch_add(batch.len(), Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// H1.42: a consumer of some types moves past the others, so a quiet log
+/// costs it nothing however many unrelated events came before.
+#[tokio::test]
+async fn a_narrow_consumer_moves_past_what_it_never_reads() {
+    let Some((db, project)) = log_db("narrow_consumer").await else {
+        return;
+    };
+    let pool = &db.pool;
+    for _ in 0..3 {
+        stage_one(pool, project).await;
+    }
+    sequencer::step(pool).await.expect("step");
+    let head = sqlx::query_scalar::<_, i64>("SELECT max(position) FROM events")
+        .fetch_one(pool)
+        .await
+        .expect("head");
+    let handled = Arc::new(AtomicUsize::new(0));
+    let mut runner = Runner::new(Narrow {
+        handled: Arc::clone(&handled),
+    });
+    runner.round(pool).await.expect("round");
+    let cursor = sqlx::query_scalar::<_, i64>(
+        "SELECT position FROM event_consumers WHERE name = 'test.narrow'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("cursor");
+    assert_eq!(cursor, head, "the cursor is at the head");
+    assert_eq!(handled.load(Ordering::SeqCst), 0);
+    db.finish().await;
+}
+
 /// K3.8: writes that had no event now emit one, through whichever path
 /// made them, with who acted and the app they came through, and no text.
 #[tokio::test]
