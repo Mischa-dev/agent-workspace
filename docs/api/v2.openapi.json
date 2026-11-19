@@ -4923,6 +4923,21 @@
         ],
         "type": "object"
       },
+      "ModuleEntry": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name"
+        ],
+        "type": "object"
+      },
       "MoveIssue": {
         "properties": {
           "candidates": {
@@ -6193,6 +6208,60 @@
         "required": [
           "kind",
           "id"
+        ],
+        "type": "object"
+      },
+      "PermissionEntry": {
+        "properties": {
+          "builtIn": {
+            "description": "The built-in roles that hold it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "level": {
+            "description": "For a level: `see`, `comment`, `suggest`, `edit_own`, `edit` or\n`manage`. A higher level holds every lower one on the same kind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meaning": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "project, workspace or both.",
+            "type": "string"
+          },
+          "thingKind": {
+            "description": "For a level: the kind of thing it is on (`task`, `page`, ...).\n`None` for a capability.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "module",
+          "label",
+          "meaning",
+          "scope",
+          "builtIn",
+          "required"
         ],
         "type": "object"
       },
@@ -7603,6 +7672,168 @@
         ],
         "type": "object"
       },
+      "RoleCapabilities": {
+        "properties": {
+          "assign": {
+            "description": "Give it to someone.",
+            "type": "boolean"
+          },
+          "edit": {
+            "description": "Change its name, description, defaults and agent limit.",
+            "type": "boolean"
+          },
+          "editPermissions": {
+            "type": "boolean"
+          },
+          "invite": {
+            "description": "Invite someone to it, to the workspace or a project: what the\ninvitation endpoints allow (an owner or admin holding \"invite\nmembers\", a role within what they hold, admin-based ones by owners).\nA project's own \"invite members\" decides whether its form shows.",
+            "type": "boolean"
+          },
+          "remove": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edit",
+          "editPermissions",
+          "remove",
+          "assign",
+          "invite"
+        ],
+        "type": "object"
+      },
+      "RoleDefaults": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "description": "Private channels holders join when they arrive in a project, by name.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "homeHidden": {
+            "description": "Home and workspace sections holders don't see.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "layoutPreset": {
+            "description": "A built-in preset's id or a saved preset's ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pinnedViews": {
+            "description": "The built-in views holders start with pinned. Left out: My tasks and\nReady for agents.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RoleView": {
+        "properties": {
+          "actWithinRequester": {
+            "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+            "type": "boolean"
+          },
+          "agentLimit": {
+            "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "baseRole": {
+            "type": "string"
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/RoleCapabilities"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/RoleDefaults"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string"
+          },
+          "modulesOff": {
+            "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projectHolders": {
+            "description": "Memberships holding it in the workspace's projects.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "workspaceHolders": {
+            "description": "People and agents holding it in the workspace.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "builtIn",
+          "baseRole",
+          "name",
+          "description",
+          "permissions",
+          "defaults",
+          "modulesOff",
+          "actWithinRequester",
+          "isDefault",
+          "version",
+          "updatedAt",
+          "workspaceHolders",
+          "projectHolders",
+          "capabilities"
+        ],
+        "type": "object"
+      },
       "RunActivityInput": {
         "additionalProperties": false,
         "properties": {
@@ -7959,6 +8190,43 @@
           "sendAt",
           "status",
           "url"
+        ],
+        "type": "object"
+      },
+      "ScopePermissions": {
+        "properties": {
+          "forApps": {
+            "description": "What apps and agents acting for them may do.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "permissions": {
+            "description": "What they may do themselves.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "role": {
+            "type": "string"
+          },
+          "roleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roleName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "roleName",
+          "permissions",
+          "forApps"
         ],
         "type": "object"
       },
@@ -8449,6 +8717,22 @@
         ],
         "type": "object"
       },
+      "SkippedProject": {
+        "description": "A project \"apply to their projects\" left as it was.",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "reason"
+        ],
+        "type": "object"
+      },
       "SortWrite": {
         "additionalProperties": false,
         "properties": {
@@ -8632,6 +8916,50 @@
             "type": "string"
           }
         ]
+      },
+      "StartingPoint": {
+        "description": "A ready-made custom role to start from.",
+        "properties": {
+          "agentLimit": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "baseRole": {
+            "type": "string"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/RoleDefaults"
+          },
+          "description": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "description",
+          "baseRole",
+          "permissions",
+          "defaults"
+        ],
+        "type": "object"
       },
       "StatusCount": {
         "properties": {
@@ -13401,6 +13729,362 @@
           "agents"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/agent_limit_set": {
+      "post": {
+        "description": "Cap what apps connected by a person may do, or lift the cap. Your own, or anyone's if you manage members (an owner for an admin's). Through an app you can only narrow the cap it runs under; lifting it takes the web.",
+        "operationId": "agent_limit_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "default": null,
+                    "description": "Whose apps: an @handle or account id. Left out, your own.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lift": {
+                    "default": false,
+                    "description": "True removes the cap (instead of permissions).",
+                    "type": "boolean"
+                  },
+                  "permissions": {
+                    "default": null,
+                    "description": "The permission keys their apps are capped to, whatever their role\nallows.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "AgentLimitSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "description": "The keys their apps are capped to now; absent for no cap.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "accountId"
+                          ],
+                          "title": "AgentLimitView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "description": "The keys their apps are capped to now; absent for no cap.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "accountId"
+                          ],
+                          "title": "AgentLimitView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set agent limit",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/agent_managers_set": {
@@ -72192,6 +72876,373 @@
         "x-operation-kind": "query"
       }
     },
+    "/api/v2/w/{workspace}/ops/permissions_get": {
+      "post": {
+        "description": "What someone may do in the workspace and, with spaceId, in a space: their role's permissions, and what apps and agents acting for them may (forApps, cut down by agent limits). Left out, yours.",
+        "operationId": "permissions_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "default": null,
+                    "description": "Whose: an @handle or account id. Left out, yours. Someone else's\ntakes seeing the member list.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "default": null,
+                    "description": "A space to check too: its id or link.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "PermissionsGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actorId": {
+                              "type": "string"
+                            },
+                            "personalAgentLimit": {
+                              "description": "Their own limit on their apps, if they set one.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "project": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ScopePermissions"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "workspace": {
+                              "$ref": "#/components/schemas/ScopePermissions"
+                            }
+                          },
+                          "required": [
+                            "actorId",
+                            "workspace"
+                          ],
+                          "title": "PermissionsView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actorId": {
+                              "type": "string"
+                            },
+                            "personalAgentLimit": {
+                              "description": "Their own limit on their apps, if they set one.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "project": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ScopePermissions"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "workspace": {
+                              "$ref": "#/components/schemas/ScopePermissions"
+                            }
+                          },
+                          "required": [
+                            "actorId",
+                            "workspace"
+                          ],
+                          "title": "PermissionsView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Get permissions",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
     "/api/v2/w/{workspace}/ops/person_create": {
       "post": {
         "description": "Add someone before they sign in, with a role within yours; they can be mentioned and assigned at once. Returns a claim token, shown once, that lets them choose a sign-in name and password within 14 days. Needs \"Invite people\" where it acts.",
@@ -86394,6 +87445,2709 @@
         "summary": "Answer a request",
         "tags": [
           "runs"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_assign": {
+      "post": {
+        "description": "Give someone a workspace role, and with applyToProjects in their spaces too. Nobody changes their own role or an owner's, and only owners give roles based on admin. Needs \"Change roles and remove people\" where it acts.",
+        "operationId": "role_assign",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "Who: an @handle or account id of someone in the workspace.",
+                    "type": "string"
+                  },
+                  "applyToProjects": {
+                    "default": false,
+                    "description": "True gives them the role in each of their spaces too (where they\naren't the owner).",
+                    "type": "boolean"
+                  },
+                  "expectedVersion": {
+                    "default": null,
+                    "description": "Their membership's version, so a change made meanwhile isn't undone.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "role": {
+                    "description": "The workspace role to give them: its name, key or id. For a role in\none space only, use member_update.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "account",
+                  "role"
+                ],
+                "title": "RoleAssignInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actorId": {
+                              "type": "string"
+                            },
+                            "projectsChanged": {
+                              "description": "Projects whose role changed with it.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "projectsSkipped": {
+                              "description": "Projects left as they were: they own it, managing their role there\ntakes an owner, or the caller may not manage members there.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "role": {
+                              "type": "string"
+                            },
+                            "roleId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "roleName": {
+                              "type": "string"
+                            },
+                            "skippedProjects": {
+                              "description": "Each project left as it was, and why.",
+                              "items": {
+                                "$ref": "#/components/schemas/SkippedProject"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "actorId",
+                            "role",
+                            "roleName",
+                            "projectsChanged",
+                            "projectsSkipped",
+                            "skippedProjects"
+                          ],
+                          "title": "Assignment",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actorId": {
+                              "type": "string"
+                            },
+                            "projectsChanged": {
+                              "description": "Projects whose role changed with it.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "projectsSkipped": {
+                              "description": "Projects left as they were: they own it, managing their role there\ntakes an owner, or the caller may not manage members there.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "role": {
+                              "type": "string"
+                            },
+                            "roleId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "roleName": {
+                              "type": "string"
+                            },
+                            "skippedProjects": {
+                              "description": "Each project left as it was, and why.",
+                              "items": {
+                                "$ref": "#/components/schemas/SkippedProject"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "actorId",
+                            "role",
+                            "roleName",
+                            "projectsChanged",
+                            "projectsSkipped",
+                            "skippedProjects"
+                          ],
+                          "title": "Assignment",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Assign role",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_create": {
+      "post": {
+        "description": "Make a custom role from admin, member or viewer, holding some of its base's permissions. Needs \"Define roles\" where it acts.",
+        "operationId": "role_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "actWithinRequester": {
+                    "default": false,
+                    "description": "Holders acting on someone's request (such as a run someone asked\nfor) do only what that account could also do.",
+                    "type": "boolean"
+                  },
+                  "agentLimit": {
+                    "default": null,
+                    "description": "What apps and agents acting for holders may do, as permission keys.\nLeft out, they may do what holders may.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "baseRole": {
+                    "description": "What it starts from: admin, member or viewer. It keeps only\npermissions its base has; only owners make roles based on admin.",
+                    "type": "string"
+                  },
+                  "defaults": {
+                    "$ref": "#/components/schemas/RoleDefaults",
+                    "default": {},
+                    "description": "Where holders start."
+                  },
+                  "description": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "isDefault": {
+                    "default": false,
+                    "description": "The role new members and invitations start with.",
+                    "type": "boolean"
+                  },
+                  "modulesOff": {
+                    "default": [],
+                    "description": "Modules holders don't get, on top of what the workspace has off.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "permissions": {
+                    "description": "Permission keys (role_list lists them), such as \"tasks.edit\".",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "name",
+                  "baseRole",
+                  "permissions"
+                ],
+                "title": "RoleCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Create role",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_delete": {
+      "post": {
+        "description": "Remove a custom role. Built-in roles stay, and a role someone holds can't go. Needs \"Define roles\" where it acts.",
+        "operationId": "role_delete",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "role": {
+                    "description": "The role's name, key or id.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role"
+                ],
+                "title": "RoleDeleteInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "roleId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "roleId"
+                          ],
+                          "title": "RoleDeleteOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "roleId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "roleId"
+                          ],
+                          "title": "RoleDeleteOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Delete role",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_get": {
+      "post": {
+        "description": "One role: its permissions, agent limit, defaults, holders, version and what you may do with it.",
+        "operationId": "role_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "role": {
+                    "description": "The role's name, key (such as \"member\") or id.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role"
+                ],
+                "title": "RoleGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Get role",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_list": {
+      "post": {
+        "description": "The workspace's roles (built-in and custom) with their permissions, agent limits, defaults and holders, and every permission a role can hold.",
+        "operationId": "role_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "RoleListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canManage": {
+                              "description": "Whether you may make and change roles.",
+                              "type": "boolean"
+                            },
+                            "canManageAdminRoles": {
+                              "description": "Whether you may also make or change roles based on admin.",
+                              "type": "boolean"
+                            },
+                            "modules": {
+                              "description": "The modules permissions are grouped by.",
+                              "items": {
+                                "$ref": "#/components/schemas/ModuleEntry"
+                              },
+                              "type": "array"
+                            },
+                            "permissions": {
+                              "description": "Every permission a role can hold.",
+                              "items": {
+                                "$ref": "#/components/schemas/PermissionEntry"
+                              },
+                              "type": "array"
+                            },
+                            "roles": {
+                              "items": {
+                                "$ref": "#/components/schemas/RoleView"
+                              },
+                              "type": "array"
+                            },
+                            "startingPoints": {
+                              "description": "Ready-made custom roles to start from.",
+                              "items": {
+                                "$ref": "#/components/schemas/StartingPoint"
+                              },
+                              "type": "array"
+                            },
+                            "yourPermissions": {
+                              "description": "What you may do in the workspace.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "roles",
+                            "modules",
+                            "permissions",
+                            "startingPoints",
+                            "canManage",
+                            "canManageAdminRoles",
+                            "yourPermissions"
+                          ],
+                          "title": "RoleListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canManage": {
+                              "description": "Whether you may make and change roles.",
+                              "type": "boolean"
+                            },
+                            "canManageAdminRoles": {
+                              "description": "Whether you may also make or change roles based on admin.",
+                              "type": "boolean"
+                            },
+                            "modules": {
+                              "description": "The modules permissions are grouped by.",
+                              "items": {
+                                "$ref": "#/components/schemas/ModuleEntry"
+                              },
+                              "type": "array"
+                            },
+                            "permissions": {
+                              "description": "Every permission a role can hold.",
+                              "items": {
+                                "$ref": "#/components/schemas/PermissionEntry"
+                              },
+                              "type": "array"
+                            },
+                            "roles": {
+                              "items": {
+                                "$ref": "#/components/schemas/RoleView"
+                              },
+                              "type": "array"
+                            },
+                            "startingPoints": {
+                              "description": "Ready-made custom roles to start from.",
+                              "items": {
+                                "$ref": "#/components/schemas/StartingPoint"
+                              },
+                              "type": "array"
+                            },
+                            "yourPermissions": {
+                              "description": "What you may do in the workspace.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "roles",
+                            "modules",
+                            "permissions",
+                            "startingPoints",
+                            "canManage",
+                            "canManageAdminRoles",
+                            "yourPermissions"
+                          ],
+                          "title": "RoleListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List roles",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/role_update": {
+      "post": {
+        "description": "Change a role's name, description, permissions, agent limit, defaults or modules. What's left out stays. Needs \"Define roles\" where it acts.",
+        "operationId": "role_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "actWithinRequester": {
+                    "default": null,
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "agentLimit": {
+                    "default": null,
+                    "description": "What apps and agents acting for holders may do; an empty list leaves\nthem reading only.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "clearAgentLimit": {
+                    "default": false,
+                    "description": "True takes the agent limit away (apps may do what holders may).",
+                    "type": "boolean"
+                  },
+                  "defaults": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/RoleDefaults"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null
+                  },
+                  "description": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "description": "Its version (role_get), so a change made meanwhile isn't undone.",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "isDefault": {
+                    "default": null,
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "modulesOff": {
+                    "default": null,
+                    "description": "Modules holders don't get; an empty list gives them every module the\nworkspace has on. Never for the owner role.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "permissions": {
+                    "default": null,
+                    "description": "Permission keys. Built-in owner keeps everything.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "role": {
+                    "description": "The role's name, key or id.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role",
+                  "expectedVersion"
+                ],
+                "title": "RoleUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "actWithinRequester": {
+                              "description": "Holders acting on someone's request (a run's requester) do only what\nthat account could also do (K1.25).",
+                              "type": "boolean"
+                            },
+                            "agentLimit": {
+                              "description": "What apps and agents acting for holders may do; absent when it's the\nsame as the holder.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
+                            "baseRole": {
+                              "type": "string"
+                            },
+                            "builtIn": {
+                              "type": "boolean"
+                            },
+                            "capabilities": {
+                              "$ref": "#/components/schemas/RoleCapabilities"
+                            },
+                            "defaults": {
+                              "$ref": "#/components/schemas/RoleDefaults"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "modulesOff": {
+                              "description": "Modules holders don't get, on top of what the workspace has off\n(AWD-75). Never any for the owner role.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "permissions": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "projectHolders": {
+                              "description": "Memberships holding it in the workspace's projects.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "updatedAt": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "workspaceHolders": {
+                              "description": "People and agents holding it in the workspace.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "key",
+                            "builtIn",
+                            "baseRole",
+                            "name",
+                            "description",
+                            "permissions",
+                            "defaults",
+                            "modulesOff",
+                            "actWithinRequester",
+                            "isDefault",
+                            "version",
+                            "updatedAt",
+                            "workspaceHolders",
+                            "projectHolders",
+                            "capabilities"
+                          ],
+                          "title": "RoleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Update role",
+        "tags": [
+          "workspace"
         ],
         "x-operation-kind": "change"
       }

@@ -632,7 +632,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_create",
     "repository_prepare",
     "role_assign",
-    "role_write",
+    "role_create",
+    "role_update",
+    "role_delete",
+    "agent_limit_set",
     "run_activity_report",
     "run_cancel",
     "run_dismiss_failure",
@@ -6713,11 +6716,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
         ]),
         mcp_case(
-            "role_write",
-            json!({"projectId": a.project, "name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"]}),
-            vec![json!({"projectId": b.project, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"]})],
+            "role_create",
+            json!({"name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role"}),
+            vec![json!({"workspace": b.organization, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role-b"})],
+        ),
+        mcp_case(
+            "role_update",
+            json!({"role": ax.custom_role, "expectedVersion": version("workspace_roles", ax.custom_role), "description": "Net"}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})],
         )
-        .rejecting(vec![json!({"projectId": a.project, "role": bx.custom_role, "description": "Net"})]),
+        .rejecting(vec![json!({"role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})]),
+        mcp_case(
+            "role_delete",
+            json!({"role": ax.custom_role}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role})],
+        )
+        .rejecting(vec![json!({"role": bx.custom_role})])
+        .without_own("A's role is held and the cases after it use it; roles_and_access removes one"),
         mcp_case(
             "workspace_template_apply",
             json!({"projectId": a.project, "template": "everything"}),
@@ -6740,17 +6755,19 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ]),
         mcp_case(
             "role_assign",
-            json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
-            vec![
-                json!({"projectId": b.project, "person": "@wren", "role": "member"}),
-                json!({"projectId": b.project, "person": "@wren", "agentLimit": ["tasks.view"]}),
-            ],
+            json!({"account": "@wren", "role": ax.custom_role}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "role": "member"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
-            json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
-            json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
+            json!({"account": bx.wren, "role": "member"}),
+            json!({"account": "@wren", "role": bx.custom_role}),
         ]),
+        mcp_case(
+            "agent_limit_set",
+            json!({"account": "@wren", "permissions": ["tasks.view"]}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "permissions": ["tasks.view"]})],
+        )
+        .rejecting(vec![json!({"account": bx.wren, "lift": true})]),
         // K4.7: spaces. B's spaces, B's workspace and B's project
         // templates aren't A's.
         mcp_case(

@@ -270,6 +270,8 @@ export type MilestoneValue = { archived: boolean; canceled?: number; description
 
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
+export type ModuleEntry = { key: string; name: string }
+
 export type MoveIssue = { candidates?: CandidateField[]; field: string; fieldId: string; fieldType: FieldType; id: string; linkTarget?: LinkTarget | null; message: string; reason: IssueReason; taskId: string; taskKey: string; value: unknown }
 
 export type MovePlan = { archivedFieldValues?: number; carried?: CarriedValue[]; issues?: MoveIssue[]; notes?: string[]; snapshot: string; targetProjectId: string; targetProjectKey: string; tasks: PlannedTask[] }
@@ -327,6 +329,8 @@ export type PanelThingInput = { id: string; kind: string }
 export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
+
+export type PermissionEntry = { builtIn: string[]; key: string; label: string; level?: string | null; meaning: string; module: string; required: boolean; scope: string; thingKind?: string | null }
 
 export type PinItem = { id: string; kind: string; text: string; title: string }
 
@@ -400,6 +404,12 @@ export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 
 export type RevisionItem = { redacted?: boolean; revision: number; text: string; truncated?: boolean; via?: string | null; writtenAt: string; writtenBy: string }
 
+export type RoleCapabilities = { assign: boolean; edit: boolean; editPermissions: boolean; invite: boolean; remove: boolean }
+
+export type RoleDefaults = { channels?: string[]; homeHidden?: string[]; layoutPreset?: string | null; pinnedViews?: string[] | null }
+
+export type RoleView = { actWithinRequester: boolean; agentLimit?: string[] | null; baseRole: string; builtIn: boolean; capabilities: RoleCapabilities; defaults: RoleDefaults; description: string; id: string; isDefault: boolean; key: string; modulesOff: string[]; name: string; permissions: string[]; projectHolders: number; updatedAt: string; version: number; workspaceHolders: number }
+
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
 
 export type RunCauseInput = { conversationId?: string | null; kind: string; messageId?: string | null; ref?: string | null; taskId?: string | null }
@@ -413,6 +423,8 @@ export type SavedSearch = { id: string; name: string; position: number; query: s
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
+
+export type ScopePermissions = { forApps: string[]; permissions: string[]; role: string; roleId?: string | null; roleName: string }
 
 export type ScopeView = { approved: boolean; known: boolean; label: string; required: boolean; scope: string; why: string }
 
@@ -444,6 +456,8 @@ export type SidebarSection = { collapsed: boolean; id: string; items: SidebarIte
 
 export type SkillLine = { description: string; name: string; pageId: string; stale: boolean; title: string; updatedAt: string; version: number }
 
+export type SkippedProject = { projectId: string; reason: string }
+
 export type SortWrite = { direction?: Direction; field: string }
 
 export type SourceView = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
@@ -455,6 +469,8 @@ export type SpaceShape = { channels?: ShapeChannel[]; kind?: string | null; page
 export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpaceVisibility = "members" | "workspace"
+
+export type StartingPoint = { agentLimit?: string[] | null; baseRole: string; defaults: RoleDefaults; description: string; key: string; name: string; permissions: string[] }
 
 export type StatusCount = { category: string; count: number; status: string }
 
@@ -565,6 +581,10 @@ export type AgentActionRunOutput = { commandId: string; reply?: Record<string, u
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
 export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
+
+export type AgentLimitSetInput = { account?: string | null; lift?: boolean; permissions?: string[] | null }
+
+export type AgentLimitSetOutput = { accountId: string; permissions?: string[] | null }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
@@ -1186,6 +1206,10 @@ export type PageTemplateListInput = { spaceId: string }
 
 export type PageTemplateListOutput = { templates: PageTemplateView[] }
 
+export type PermissionsGetInput = { account?: string | null; spaceId?: string | null }
+
+export type PermissionsGetOutput = { actorId: string; personalAgentLimit?: string[] | null; project?: ScopePermissions | null; workspace: ScopePermissions }
+
 export type PersonCreateInput = { displayName: string; handle: string; roleId?: string | null }
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
@@ -1329,6 +1353,30 @@ export type RequestListOutput = { requests: RequestView[] }
 export type RequestRespondInput = { optionId?: string | null; requestId: string; text?: string | null }
 
 export type RequestRespondOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RoleAssignInput = { account: string; applyToProjects?: boolean; expectedVersion?: number | null; role: string }
+
+export type RoleAssignOutput = { actorId: string; projectsChanged: number; projectsSkipped: number; role: string; roleId?: string | null; roleName: string; skippedProjects: SkippedProject[] }
+
+export type RoleCreateInput = { actWithinRequester?: boolean; agentLimit?: string[] | null; baseRole: string; defaults?: RoleDefaults; description?: string; isDefault?: boolean; modulesOff?: string[]; name: string; permissions: string[] }
+
+export type RoleCreateOutput = { actWithinRequester: boolean; agentLimit?: string[] | null; baseRole: string; builtIn: boolean; capabilities: RoleCapabilities; defaults: RoleDefaults; description: string; id: string; isDefault: boolean; key: string; modulesOff: string[]; name: string; permissions: string[]; projectHolders: number; updatedAt: string; version: number; workspaceHolders: number }
+
+export type RoleDeleteInput = { role: string }
+
+export type RoleDeleteOutput = { roleId: string }
+
+export type RoleGetInput = { role: string }
+
+export type RoleGetOutput = { actWithinRequester: boolean; agentLimit?: string[] | null; baseRole: string; builtIn: boolean; capabilities: RoleCapabilities; defaults: RoleDefaults; description: string; id: string; isDefault: boolean; key: string; modulesOff: string[]; name: string; permissions: string[]; projectHolders: number; updatedAt: string; version: number; workspaceHolders: number }
+
+export type RoleListInput = Record<string, never>
+
+export type RoleListOutput = { canManage: boolean; canManageAdminRoles: boolean; modules: ModuleEntry[]; permissions: PermissionEntry[]; roles: RoleView[]; startingPoints: StartingPoint[]; yourPermissions: string[] }
+
+export type RoleUpdateInput = { actWithinRequester?: boolean | null; agentLimit?: string[] | null; clearAgentLimit?: boolean; defaults?: RoleDefaults | null; description?: string | null; expectedVersion: number; isDefault?: boolean | null; modulesOff?: string[] | null; name?: string | null; permissions?: string[] | null; role: string }
+
+export type RoleUpdateOutput = { actWithinRequester: boolean; agentLimit?: string[] | null; baseRole: string; builtIn: boolean; capabilities: RoleCapabilities; defaults: RoleDefaults; description: string; id: string; isDefault: boolean; key: string; modulesOff: string[]; name: string; permissions: string[]; projectHolders: number; updatedAt: string; version: number; workspaceHolders: number }
 
 export type RunActivityListInput = { afterSeq?: number | null; limit?: number | null; runId: string }
 
@@ -1723,6 +1771,7 @@ export type Operations = {
   agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
   agent_action_run: { input: AgentActionRunInput; output: AgentActionRunOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
+  agent_limit_set: { input: AgentLimitSetInput; output: AgentLimitSetOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
   agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
@@ -1878,6 +1927,7 @@ export type Operations = {
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   page_make: { input: PageMakeInput; output: PageMakeOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
+  permissions_get: { input: PermissionsGetInput; output: PermissionsGetOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   pin_set: { input: PinSetInput; output: PinSetOutput }
   place_search: { input: PlaceSearchInput; output: PlaceSearchOutput }
@@ -1914,6 +1964,12 @@ export type Operations = {
   request_get: { input: RequestGetInput; output: RequestGetOutput }
   request_list: { input: RequestListInput; output: RequestListOutput }
   request_respond: { input: RequestRespondInput; output: RequestRespondOutput }
+  role_assign: { input: RoleAssignInput; output: RoleAssignOutput }
+  role_create: { input: RoleCreateInput; output: RoleCreateOutput }
+  role_delete: { input: RoleDeleteInput; output: RoleDeleteOutput }
+  role_get: { input: RoleGetInput; output: RoleGetOutput }
+  role_list: { input: RoleListInput; output: RoleListOutput }
+  role_update: { input: RoleUpdateInput; output: RoleUpdateOutput }
   run_activity_list: { input: RunActivityListInput; output: RunActivityListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }

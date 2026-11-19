@@ -22,6 +22,7 @@ impl CoreModule for Module {
         module.operations(crate::custom_emoji::ops::register_ops);
         module.routes(crate::custom_emoji::router);
         module.operations(crate::themes::ops::register_ops);
+        module.operations(crate::roles::ops::register_ops);
         module.routes(crate::profiles::router);
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::modules::connected::ops::register_ops);

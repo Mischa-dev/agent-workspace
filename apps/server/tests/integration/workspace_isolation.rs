@@ -2109,7 +2109,10 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "module_list",
     "module_open",
     "connected_module_list",
-    "my_permissions",
+    "file_source_get",
+    "file_source_list",
+    "module_panel_list",
+    "module_panel_open",
     "my_work_get",
     "notification_list",
     "directory_list",
@@ -2133,6 +2136,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "page_list",
     "page_template_list",
     "people_search",
+    "permissions_get",
     "project_export",
     "project_members",
     "project_get",
@@ -2256,17 +2260,27 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("invitation_list"),
-        by_project("role_list"),
-        by_project("my_permissions"),
+        case(
+            "role_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "permissions_get",
+            vec![json!({}), json!({"spaceId": a.project})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"spaceId": b.project}),
+            ],
+            vec![],
+        ),
         by_project("workspace_template_list"),
         by_project("project_template_list"),
         case(
             "role_get",
-            vec![
-                json!({"projectId": "WORK", "role": "member"}),
-                json!({"projectId": a.project, "role": "Viewer"}),
-            ],
-            vec![json!({"projectId": b.project, "role": "member"})],
+            vec![json!({"role": "member"}), json!({"role": "Viewer"})],
+            vec![json!({"workspace": b.organization, "role": "member"})],
             vec![],
         ),
         by_project("label_list"),
@@ -2455,6 +2469,46 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"workspace": b.organization}),
                 json!({"moduleId": b.module.to_string()}),
+            ],
+            vec![],
+        ),
+        // M1.14 and M1.18: a connected module's panels and files are asked of
+        // the module live; A's own calls are in connected_modules.rs, since
+        // they need a module answering. B's never reach it.
+        case(
+            "module_panel_list",
+            vec![json!({}), json!({"spaceId": a.project})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"spaceId": b.project}),
+            ],
+            vec![],
+        ),
+        case(
+            "module_panel_open",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string(), "panel": "main"}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string(), "panel": "main"}),
+                json!({"moduleId": b.module.to_string(), "panel": "main", "spaceId": b.project}),
+            ],
+            vec![],
+        ),
+        case(
+            "file_source_list",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string()}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string()}),
+            ],
+            vec![],
+        ),
+        case(
+            "file_source_get",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string(), "ref": "f1"}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string(), "ref": "f1"}),
             ],
             vec![],
         ),

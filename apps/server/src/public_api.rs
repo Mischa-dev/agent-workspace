@@ -172,7 +172,7 @@ fn outcome_status(outcome: &str) -> Option<StatusCode> {
 
 /// Groups operations by the noun their tool starts with.
 pub(crate) fn tag_for(tool: &str) -> &'static str {
-    if tool == "my_permissions" {
+    if matches!(tool, "permissions_get" | "agent_limit_set") {
         return "Roles and access";
     }
     let noun = tool.split('_').next().unwrap_or(tool);
@@ -661,7 +661,14 @@ pub(crate) fn document() -> Value {
         let description = description
             .strip_suffix(crate::ops::mcp::RETRY_NOTE)
             .unwrap_or(description);
-        let mut input = hoist(&name, &tool.input_schema, &mut components);
+        // The types an input shares (a field, a rule, a role's defaults)
+        // keep their first sentence, as results do; the tool's own
+        // arguments keep their whole description.
+        let mut schema = Map::clone(tool.input_schema.as_ref());
+        if let Some(definitions) = schema.get_mut("$defs") {
+            brief(definitions);
+        }
+        let mut input = hoist(&name, &schema, &mut components);
         share_arguments(&mut input, &mut components);
         let (result, output) = tool
             .output_schema

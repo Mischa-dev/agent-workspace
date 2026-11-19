@@ -592,6 +592,19 @@ pub static SPACE_MODULES_CHANGED: EventType = fact(
 )
 .legacy(&["project.modules.updated"]);
 
+pub static ROLE_CHANGED: EventType = fact(
+    "role.changed",
+    "workspace",
+    Some("role"),
+    "A workspace role was made, changed or removed",
+);
+pub static WORKSPACE_MEMBER_CHANGED: EventType = fact(
+    "workspace.member_changed",
+    "workspace",
+    Some("account"),
+    "Someone's workspace role or the cap on their apps changed",
+);
+
 pub static WORKSPACE_LIFECYCLE_CHANGED: EventType = fact(
     "workspace.lifecycle_changed",
     "workspace",
@@ -821,6 +834,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SPACE_RESTORED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
+        &ROLE_CHANGED,
+        &WORKSPACE_MEMBER_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,
         &CONNECTED_THING_CHANGED,
         &MODULE_OPERATION_RAN,

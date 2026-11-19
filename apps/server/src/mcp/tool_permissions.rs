@@ -16,7 +16,7 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodePublish, CollectionsBuild, CollectionsEdit,
-    MembersInvite, MembersView, PagesComment, PagesSuggest, RolesManage, RunsInterrupt, RunsLaunch,
+    MembersInvite, MembersView, PagesComment, PagesSuggest, RunsInterrupt, RunsLaunch,
     SettingsManage, SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
@@ -32,13 +32,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("project_members", Some(MembersView)),
     ("invitation_list", Some(MembersInvite)),
     ("invitation_write", Some(MembersInvite)),
-    ("role_list", None),
-    ("role_get", None),
-    ("my_permissions", None),
-    ("role_write", Some(RolesManage)),
-    // Anyone may cap their own apps (agentLimit); assigning roles and
-    // changing others' limits is checked inside, against MembersManage.
-    ("role_assign", None),
     ("workspace_template_list", None),
     ("workspace_template_apply", Some(SettingsManage)),
     ("workspace_template_save", Some(SettingsManage)),

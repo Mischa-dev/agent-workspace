@@ -634,7 +634,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     let tools = listed_tools(app, &bea_app, &session).await;
     assert!(!tools.contains(&"task_create".to_owned()), "{tools:?}");
     assert!(tools.contains(&"task_list".to_owned()), "{tools:?}");
-    assert!(tools.contains(&"my_permissions".to_owned()), "{tools:?}");
+    assert!(tools.contains(&"permissions_get".to_owned()), "{tools:?}");
     let refused = tool(
         app,
         &bea_app,
@@ -648,13 +648,12 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "my_permissions",
-        json!({"projectId": work}),
+        "permissions_get",
+        json!({"spaceId": work}),
     )
     .await;
     assert_eq!(mine["outcome"], "ok", "{mine}");
-    assert_eq!(mine["value"]["actingAs"], "person");
-    let may = keys(&mine["value"]["project"]["thisConnectionMay"]);
+    let may = keys(&mine["value"]["project"]["forApps"]);
     // K1.9: posting implies seeing conversations, and reading pages is
     // required, so a limit always includes them.
     assert_eq!(
@@ -815,11 +814,11 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &mara_token,
         &mara_session,
-        "my_permissions",
-        json!({"projectId": work}),
+        "permissions_get",
+        json!({"spaceId": work}),
     )
     .await;
-    assert_eq!(mine["value"]["actingAs"], "agent");
+    assert_eq!(mine["outcome"], "ok", "{mine}");
     assert_eq!(
         keys(&mine["value"]["project"]["permissions"]),
         [
@@ -866,8 +865,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &mara_token,
         &mara_session,
-        "role_write",
-        json!({"projectId": work, "name": "Mine", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        "role_create",
+        json!({"name": "Mine", "baseRole": "member", "permissions": ["tasks.edit"]}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -876,7 +875,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         &bea_app,
         &session,
         "role_assign",
-        json!({"projectId": work, "person": "@bea", "role": "admin"}),
+        json!({"account": "@bea", "role": "admin"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -885,8 +884,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "role_assign",
-        json!({"projectId": work, "person": "@bea", "agentLimit": ["tasks.view", "tasks.edit"]}),
+        "agent_limit_set",
+        json!({"permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(own_cap["outcome"], "ok", "{own_cap}");
@@ -894,8 +893,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "role_assign",
-        json!({"projectId": work, "person": "@bea", "agentLimit": null}),
+        "agent_limit_set",
+        json!({"lift": true}),
     )
     .await;
     assert_eq!(lifted["outcome"], "permission_denied", "{lifted}");
@@ -905,8 +904,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &owner_app,
         &owner_session,
-        "role_write",
-        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        "role_create",
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
@@ -915,7 +914,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         &owner_app,
         &owner_session,
         "role_assign",
-        json!({"projectId": work, "person": "@bea", "role": "Helpers", "applyToProjects": true}),
+        json!({"account": "@bea", "role": "Helpers", "applyToProjects": true}),
     )
     .await;
     assert_eq!(given["outcome"], "ok", "{given}");
@@ -924,7 +923,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         "SELECT channel FROM audit_events WHERE action = 'role.created' AND target_id = $1",
     )
     .bind(
-        written["value"]["role"]["id"]
+        written["value"]["id"]
             .as_str()
             .expect("id")
             .parse::<Uuid>()
@@ -6423,8 +6422,8 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
         app,
         &rook_token,
         &session,
-        "role_write",
-        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        "role_create",
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
@@ -6433,7 +6432,7 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
         &rook_token,
         &session,
         "role_assign",
-        json!({"projectId": work, "person": "@rook", "role": "owner"}),
+        json!({"account": "@rook", "role": "owner"}),
     )
     .await;
     assert_ne!(ownership["outcome"], "ok", "{ownership}");

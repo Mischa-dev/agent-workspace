@@ -3070,6 +3070,133 @@ async fn themes_are_their_makers_until_offered() {
     world.finish().await;
 }
 
+/// K2.17: roles and caps change only for whoever the role rules allow. A
+/// member (no "Manage roles", no "Manage members", no member list) makes,
+/// changes, removes and gives no role, caps nobody else's apps and reads
+/// nobody else's permissions; they cap their own and read their own.
+#[tokio::test]
+async fn roles_and_caps_change_only_for_those_the_rules_allow() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("milo", "member")
+        .build("privacy_roles")
+        .await
+    else {
+        return;
+    };
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let milo = world.people["milo"].actor.to_string();
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_create"),
+            Some("r-1"),
+            json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let role = made["value"]["id"].as_str().expect("role id").to_owned();
+    let version = made["value"]["version"].clone();
+
+    let refused = |name: &'static str, key: &'static str, body: Value| {
+        let request = lena.request("POST", &op(name), Some(key), body);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+        }
+    };
+    refused(
+        "role_create",
+        "l-1",
+        json!({"name": "Mine", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    refused(
+        "role_update",
+        "l-2",
+        json!({"role": role, "expectedVersion": version, "permissions": ["tasks.view", "tasks.edit", "tasks.delete"]}),
+    )
+    .await;
+    refused("role_delete", "l-3", json!({"role": role})).await;
+    refused("role_assign", "l-4", json!({"account": milo, "role": role})).await;
+    refused(
+        "role_assign",
+        "l-5",
+        json!({"account": "@lena", "role": "admin"}),
+    )
+    .await;
+    refused(
+        "agent_limit_set",
+        "l-6",
+        json!({"account": milo, "permissions": ["tasks.view"]}),
+    )
+    .await;
+    refused("permissions_get", "l-7", json!({"account": milo})).await;
+
+    // Their own: a cap on their apps, and what they may do.
+    let (_, capped) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("agent_limit_set"),
+            Some("l-8"),
+            json!({"permissions": ["tasks.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(capped["outcome"], "ok", "{capped}");
+    let (_, mine) = send(
+        &world.app,
+        lena.request("POST", &op("permissions_get"), None, json!({})),
+    )
+    .await;
+    assert_eq!(mine["outcome"], "ok", "{mine}");
+    // Required keys (reading pages, seeing conversations) come with any cap.
+    let cap = mine["value"]["personalAgentLimit"].to_string();
+    assert!(
+        cap.contains("\"tasks.view\"") && !cap.contains("tasks.create"),
+        "{mine}"
+    );
+
+    // Nothing of the owner's changed.
+    let (name, permissions) = sqlx::query_as::<_, (String, Vec<String>)>(
+        "SELECT name, permissions FROM workspace_roles WHERE id = $1::uuid",
+    )
+    .bind(&role)
+    .fetch_one(world.pool())
+    .await
+    .expect("role");
+    assert_eq!(name, "Helpers");
+    assert!(
+        !permissions.contains(&"tasks.delete".to_owned()),
+        "{permissions:?}"
+    );
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM organization_memberships WHERE role_id = $1::uuid",
+    )
+    .bind(&role)
+    .fetch_one(world.pool())
+    .await
+    .expect("holders");
+    assert_eq!(held, 0);
+    let milo_cap = sqlx::query_scalar::<_, Option<Vec<String>>>(
+        "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2::uuid",
+    )
+    .bind(world.organization)
+    .bind(&milo)
+    .fetch_one(world.pool())
+    .await
+    .expect("cap");
+    assert_eq!(milo_cap, None);
+    world.finish().await;
+}
+
 /// C2.6 and C2.7: someone outside a private channel can't read its details
 /// or members, join it, leave it or set its topic, and browsing doesn't
 /// list it; a role that can't post sets no topic anywhere.

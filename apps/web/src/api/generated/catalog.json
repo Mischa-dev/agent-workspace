@@ -126,6 +126,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "workspace.member_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_limit_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set agent limit"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "account.managers.changed"
     ],
     "idempotent": true,
@@ -2498,6 +2514,20 @@
     "title": "List page templates"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "permissions_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get permissions"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -3051,6 +3081,98 @@
     "preview": false,
     "proposable": false,
     "title": "Answer a request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.member_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "role_assign",
+    "permission": "members.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Assign role"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "role.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "role_create",
+    "permission": "roles.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Create role"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "role.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "role_delete",
+    "permission": "roles.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Delete role"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "role_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get role"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "role_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List roles"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "role.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "role_update",
+    "permission": "roles.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Update role"
   },
   {
     "automation": false,

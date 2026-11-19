@@ -873,8 +873,24 @@ async fn audit_row(
     ctx: &OpContext,
     target_kind: &str,
     target_id: Uuid,
-    mut metadata: Value,
+    metadata: Value,
 ) -> Result<(), OpError> {
+    audit_row_as(tx, ctx, ctx.op, target_kind, target_id, metadata)
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))
+}
+
+/// The audit row of a command that names its own action (such as
+/// `role.created`), with the columns of the edge the call came by. The
+/// operation then says `audited_by_command`.
+pub(crate) async fn audit_row_as(
+    connection: &mut sqlx::PgConnection,
+    ctx: &OpContext,
+    action: &str,
+    target_kind: &str,
+    target_id: Uuid,
+    mut metadata: Value,
+) -> Result<(), sqlx::Error> {
     struct Columns<'a> {
         session_id: Option<Uuid>,
         authentication_class: &'a str,
@@ -993,7 +1009,7 @@ async fn audit_row(
     .bind(ctx.workspace_id)
     .bind(columns.session_id)
     .bind(columns.authentication_class)
-    .bind(ctx.op)
+    .bind(action)
     .bind(target_kind)
     .bind(target_id)
     .bind(ctx.request_id.as_deref())
@@ -1011,9 +1027,8 @@ async fn audit_row(
     .bind(ctx.caller.credential_id)
     .bind(ctx.caller.requested_by)
     .bind(ctx.caller.run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+    .execute(connection)
+    .await?;
     Ok(())
 }
 

@@ -2643,7 +2643,6 @@ async fn people_cap_their_apps_and_agents_never_do() {
     let Some(f) = fixture().await else {
         return;
     };
-    let project = f.seed.project_id.to_string();
     let me = f.seed.human_actor_id.to_string();
     let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
     let session = initialize(&f.app, &app).await.expect("owner MCP");
@@ -2654,22 +2653,18 @@ async fn people_cap_their_apps_and_agents_never_do() {
         async move { tool(&router, &app, &session, name, arguments).await }
     };
 
-    let neither = person("role_assign", json!({"projectId": project, "person": me})).await;
+    let neither = person("agent_limit_set", json!({})).await;
     assert_eq!(neither["outcome"], "invalid_request", "{neither}");
 
-    let capped = person(
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": ["tasks.view"]}),
-    )
-    .await;
+    let capped = person("agent_limit_set", json!({"permissions": ["tasks.view"]})).await;
     assert_eq!(capped["outcome"], "ok", "{capped}");
     assert!(
-        capped["value"]["agentLimit"]
+        capped["value"]["permissions"]
             .as_array()
             .is_some_and(|keys| keys.iter().any(|key| key == "tasks.view")),
         "{capped}"
     );
-    assert!(capped["value"]["workspaceRole"].is_string(), "{capped}");
+    assert_eq!(capped["value"]["accountId"], me.as_str(), "{capped}");
     let stored = sqlx::query_scalar::<_, Option<Vec<String>>>(
         "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -2685,18 +2680,14 @@ async fn people_cap_their_apps_and_agents_never_do() {
         &f.app,
         &f.token,
         &f.session,
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": null}),
+        "agent_limit_set",
+        json!({"account": me, "lift": true}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
     // The cap holds for the capped app too: lifting it takes the web.
-    let capped_out = person(
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": null}),
-    )
-    .await;
+    let capped_out = person("agent_limit_set", json!({"lift": true})).await;
     assert_eq!(capped_out["outcome"], "permission_denied", "{capped_out}");
     f.web(
         "PUT",

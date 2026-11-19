@@ -225,17 +225,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/roles",
-            Tool("role_write"),
+            Tool("role_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
+            Tool("role_update"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
+            Tool("role_delete"),
         ),
         (
             Put,
@@ -245,7 +245,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Tool("role_assign"),
+            Tool("agent_limit_set"),
         ),
         (
             Post,

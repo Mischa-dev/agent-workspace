@@ -30,6 +30,8 @@
 //!
 //! Every change is audited with what it was before and after.
 
+pub mod ops;
+
 use std::collections::BTreeSet;
 
 use axum::{
@@ -39,6 +41,7 @@ use axum::{
     routing::{get, patch, put},
 };
 use chrono::{DateTime, Utc};
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
@@ -246,7 +249,7 @@ impl Standing {
         self.permissions.contains(permission)
     }
 
-    fn is_owner(self) -> bool {
+    pub(crate) fn is_owner(self) -> bool {
         crate::access::tier::owner(self.role)
     }
 }
@@ -385,9 +388,9 @@ pub(crate) fn role_allows_sql(actor: &str, project: &str, permission: &str) -> S
 // ---------------------------------------------------------------------------
 // Roles: reading
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct RoleDefaults {
+pub struct RoleDefaults {
     /// A built-in preset's id or a saved preset's ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_preset: Option<String>,
@@ -455,9 +458,10 @@ impl RoleRow {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RoleView {
+pub struct RoleView {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub key: String,
     pub built_in: bool,
@@ -485,9 +489,9 @@ pub(crate) struct RoleView {
     pub capabilities: RoleCapabilities,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RoleCapabilities {
+pub struct RoleCapabilities {
     /// Change its name, description, defaults and agent limit.
     pub edit: bool,
     pub edit_permissions: bool,
@@ -662,9 +666,9 @@ pub(crate) async fn read(
 // ---------------------------------------------------------------------------
 // The permission catalogue and starting points
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionEntry {
+pub struct PermissionEntry {
     pub key: &'static str,
     pub module: &'static str,
     pub label: &'static str,
@@ -682,9 +686,9 @@ pub(crate) struct PermissionEntry {
     pub required: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ModuleEntry {
+pub struct ModuleEntry {
     pub key: &'static str,
     pub name: &'static str,
 }
@@ -716,9 +720,9 @@ pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
 }
 
 /// A ready-made custom role to start from.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct StartingPoint {
+pub struct StartingPoint {
     pub key: &'static str,
     pub name: &'static str,
     pub description: &'static str,
@@ -913,6 +917,10 @@ pub(crate) enum Auditor<'a> {
         principal: &'a AuthenticatedActor,
     },
     App(&'a McpPrincipal),
+    /// An operation (K2.17): the row names the role action, with the
+    /// columns of the edge the call came by; the operation then says it
+    /// wrote its own audit row.
+    Op(&'a crate::ops::OpContext),
 }
 
 impl Auditor<'_> {
@@ -938,6 +946,18 @@ impl Auditor<'_> {
                     metadata,
                 )
                 .await
+            }
+            Self::Op(ctx) => {
+                crate::ops::dispatch::audit_row_as(
+                    &mut **transaction,
+                    ctx,
+                    action,
+                    target_kind,
+                    target_id,
+                    metadata,
+                )
+                .await?;
+                Ok(())
             }
             Self::App(principal) => {
                 sqlx::query(
@@ -1638,11 +1658,13 @@ async fn lock_target(
     .ok_or(AppError::NotFound("workspace member"))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Assignment {
+pub struct Assignment {
+    #[schemars(with = "String")]
     pub actor_id: Uuid,
     pub role: String,
+    #[schemars(with = "Option<String>")]
     pub role_id: Option<Uuid>,
     pub role_name: String,
     /// Projects whose role changed with it.
@@ -1655,9 +1677,10 @@ pub(crate) struct Assignment {
 }
 
 /// A project "apply to their projects" left as it was.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SkippedProject {
+pub struct SkippedProject {
+    #[schemars(with = "String")]
     pub project_id: Uuid,
     pub reason: &'static str,
 }
@@ -2058,10 +2081,11 @@ pub(crate) async fn apply_arrival_defaults(
 // ---------------------------------------------------------------------------
 // Effective permissions
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ScopePermissions {
+pub struct ScopePermissions {
     pub role: String,
+    #[schemars(with = "Option<String>")]
     pub role_id: Option<Uuid>,
     pub role_name: String,
     /// What they may do themselves.
@@ -2070,9 +2094,10 @@ pub(crate) struct ScopePermissions {
     pub for_apps: Vec<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionsView {
+pub struct PermissionsView {
+    #[schemars(with = "String")]
     pub actor_id: Uuid,
     pub workspace: ScopePermissions,
     pub project: Option<ScopePermissions>,
@@ -2581,7 +2606,7 @@ mod tests {
 
     #[test]
     fn the_web_app_knows_every_permission() {
-        let web = include_str!("../../web/src/settings/workspace/roles.ts");
+        let web = include_str!("../../../web/src/settings/workspace/roles.ts");
         for info in PERMISSIONS {
             assert!(
                 web.contains(&format!("'{}'", info.key)),
