@@ -106,12 +106,10 @@ pub const SUBJECTS: &[Subject] = &[
         home_sql: "SELECT project.organization_id, item.project_id, item.archived_at IS NULL \
              FROM task_rows item JOIN projects project ON project.id = item.project_id \
              WHERE item.id = $1 AND subject_visible_to('task', item.id, $2)",
-        followers_sql: "SELECT assignee_actor_id FROM work_items \
-                 WHERE id = $1 AND assignee_actor_id IS NOT NULL \
-             UNION SELECT created_by_actor_id FROM work_items \
-                 WHERE id = $1 AND created_by_actor_id IS NOT NULL \
-             UNION SELECT account_id FROM follows \
-                 WHERE target_kind = 'task' AND target_id = $1 AND level = 'everything'",
+        // Those who follow everything about the task (its maker and
+        // assignee do until they stop), so unfollowing quiets its comments too.
+        followers_sql: "SELECT account_id FROM follows \
+             WHERE target_kind = 'task' AND target_id = $1 AND level = 'everything'",
     },
 ];
 
