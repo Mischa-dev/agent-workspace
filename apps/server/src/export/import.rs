@@ -814,6 +814,8 @@ pub async fn run_import(
 struct Claimed {
     workspace: Uuid,
     requester: Uuid,
+    /// Every id fresh (copy mode), rather than kept.
+    copy: bool,
     store_id: String,
     key: String,
     cursor: Cursor,
@@ -821,12 +823,13 @@ struct Claimed {
 
 async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppError> {
     let row = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Value)>(
+        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Value, bool)>(
             "UPDATE workspace_transfers SET state = 'running', \
                  lease_until = now() + make_interval(secs => $2) \
              WHERE id = $1 AND direction = 'import' AND state IN ('queued', 'running') \
                AND (lease_until IS NULL OR lease_until < now()) \
-             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, cursor",
+             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, cursor, \
+                       id_mode = 'copy'",
         )
         .bind(transfer)
         .bind(f64::from(LEASE_SECONDS))
@@ -834,7 +837,7 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
         .await
     })
     .await?;
-    let Some((workspace, requester, store_id, key, cursor)) = row else {
+    let Some((workspace, requester, store_id, key, cursor, copy)) = row else {
         return Ok(None);
     };
     let (Some(store_id), Some(key)) = (store_id, key) else {
@@ -843,6 +846,7 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
     Ok(Some(Claimed {
         workspace,
         requester,
+        copy,
         store_id,
         key,
         cursor: serde_json::from_value(cursor).unwrap_or_default(),
@@ -1614,6 +1618,7 @@ async fn fill(
             store_id: store.id(),
             info: &info,
             carried: &carried,
+            copy: claimed.copy,
         };
         if cursor.phase == "rows" {
             // A row that must go in with its companion's (a task and its
@@ -1700,6 +1705,7 @@ struct Batch<'a> {
     store_id: &'a str,
     info: &'a HashMap<&'static str, TableInfo>,
     carried: &'a BTreeSet<&'static str>,
+    copy: bool,
 }
 
 fn count(cursor: &mut Cursor, table: &str, written: u64, skipped: u64) {
@@ -1764,6 +1770,12 @@ async fn write_batch(
     blobs_missing: &HashSet<Uuid>,
 ) -> Result<(u64, u64), ImportError> {
     let info = &context.info[step.table];
+    // A page's live document is a binary Yjs state whose ids can't be
+    // rewritten like text: in copy mode it stays behind, and the page's
+    // (rewritten) Markdown becomes its document when it is first opened.
+    if context.copy && step.table == "project_page_documents" {
+        return Ok((0, 0));
+    }
     let rows = prepare(connection, context, step, &lines, blobs_missing).await?;
     keep_authors(connection, info, &rows).await?;
     let (rows, kept, dangling) =

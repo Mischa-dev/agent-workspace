@@ -326,6 +326,17 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
             .any(|body| body.contains(&format!("/tasks/{copied_task}"))),
         "the address names the copy's task"
     );
+    // A page's live document holds ids in binary: the copy leaves it
+    // behind, and each copied page makes a fresh one from its rewritten
+    // Markdown when opened.
+    let documents = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_page_documents WHERE workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("documents");
+    assert_eq!(documents, 0, "no live document is copied with stale ids");
     // Field values are keyed by their field's id: the copy's keys name the
     // copy's fields, so its records keep their values.
     let (keys, strangers) = sqlx::query_as::<_, (i64, i64)>(
