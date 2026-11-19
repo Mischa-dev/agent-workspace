@@ -348,6 +348,13 @@
       "default": true
     },
     {
+      "id": "sheet.charts",
+      "group": "pages",
+      "label": "Sheet charts",
+      "description": "Charts drawn from a sheet's cells, made and changed from the sheet.",
+      "default": true
+    },
+    {
       "id": "page.references",
       "group": "pages",
       "label": "Referenced in",
@@ -493,6 +500,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -536,6 +544,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -627,6 +636,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -674,6 +684,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "home.working_now",
         "workspace.my_work",
@@ -717,6 +728,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -765,6 +777,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -806,6 +819,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work",
         "workspace.threads",
@@ -854,6 +868,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "tech.task_keys",
         "workspace.my_work",
@@ -909,6 +924,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "tech.task_keys",
         "workspace.my_work"
@@ -941,6 +957,7 @@
         "page.import_export",
         "page.nesting",
         "page.recent_edits",
+        "sheet.charts",
         "page.references",
         "workspace.my_work"
       ]

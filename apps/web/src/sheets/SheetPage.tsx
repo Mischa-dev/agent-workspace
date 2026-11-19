@@ -589,7 +589,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
     { label: 'Download as Excel (.xlsx)', icon: Download, onSelect: () => download('xlsx') },
     { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
     { label: body.ranges.length ? `Named ranges and links (${body.ranges.length})` : 'Named ranges and links', onSelect: () => setNaming(true) },
-    { label: body.charts.length ? `Charts (${body.charts.length})` : 'Charts', onSelect: () => setCharting(true) },
+    ...(experience.shows('sheet.charts') ? [{ label: body.charts.length ? `Charts (${body.charts.length})` : 'Charts', onSelect: () => setCharting(true) }] : []),
     { label: 'History', icon: 'clock', onSelect: () => setHistoryOpen(true) },
     ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
@@ -879,7 +879,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
           tab={tab}
         />
       ) : null}
-      {charting && tab ? (
+      {charting && tab && experience.shows('sheet.charts') ? (
         <SheetChartsDialog
           canEdit={editable && !body.sheet.archived}
           charts={body.charts}

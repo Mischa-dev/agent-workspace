@@ -42,7 +42,7 @@
   "web": { "folder": "sheets" },
   "slots": {
     "pages": ["/projects/:projectId/sheets/*"],
-    "parts": ["area.sheets"],
+    "parts": ["area.sheets", "sheet.charts"],
     "sidebar": [],
     "home": [],
     "settings": [],
