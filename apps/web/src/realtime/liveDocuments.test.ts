@@ -122,6 +122,7 @@ describe('live documents from the realtime socket', () => {
       ['project', PROJECT, 'sheets', COLLECTION],
       ['project', PROJECT, 'sheets', 'list'],
       undefined,
+      undefined,
     ])
     // The third refetches this sheet's discussion summaries, and no other's.
     const summaries = invalidate.mock.calls[2]?.[0]?.predicate
@@ -129,6 +130,14 @@ describe('live documents from the realtime socket', () => {
     expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: COLLECTION } }]))).toBe(true)
     expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: 'other' } }]))).toBe(false)
     expect(summaries?.(query(['op', null, 'page_list', {}]))).toBe(false)
+    // The fourth refetches open dashboards with a tile over this sheet (C1.20).
+    const charts = invalidate.mock.calls[3]?.[0]?.predicate
+    const dashboard = (sheet: string) =>
+      ({ queryKey: ['op', null, 'dashboard_get', { dashboard: PAGE }], state: { data: { tiles: [{ kind: 'sheet', sheet }] } } }) as unknown as Parameters<NonNullable<typeof charts>>[0]
+    expect(charts?.(dashboard(COLLECTION))).toBe(true)
+    expect(charts?.(dashboard('other'))).toBe(false)
+    // Its named ranges changing is a change to it too.
+    expect(sheetChange(envelope('sheet.ranges_changed', { sheetId: COLLECTION }))).toEqual({ sheetId: COLLECTION })
   })
 
   // The pages cache under their features' key factories; the live connection

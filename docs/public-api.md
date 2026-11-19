@@ -15,7 +15,7 @@ see only what that person can see right now.
   script can.
 - `GET <base>/openapi.json` is the OpenAPI 3.1 document, generated from the
   Rust argument types (`apps/server/src/public_api.rs`). It needs no token.
-  Operations carry `x-read-only`. In the app, Settings › Account › API
+  Read-only operations carry `x-read-only: true`. In the app, Settings › Account › API
   reference renders it with a curl example per operation.
 - Auth: `Authorization: Bearer <token>` with a personal token from Settings ›
   Account › API tokens (the same tokens as MCP). A token reaches one project

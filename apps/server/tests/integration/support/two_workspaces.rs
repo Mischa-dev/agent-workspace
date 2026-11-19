@@ -71,7 +71,9 @@ pub(crate) struct World {
     /// A comment thread on `page` (AWD-53), and two edits the agent
     /// suggested to it (it asks to suggest: its role edits), pending.
     pub(crate) page_thread: Uuid,
-    pub(crate) page_suggestions: [Uuid; 2],
+    pub(crate) page_suggestions: [Uuid; 3],
+    /// A change to a page of the owner's that nothing else touches.
+    pub(crate) page_change: Uuid,
     pub(crate) repository: Uuid,
     pub(crate) pull_request: Uuid,
     pub(crate) pull_request_url: String,
@@ -122,6 +124,10 @@ pub(crate) struct World {
     pub(crate) package_install: Uuid,
     /// A finished export of the workspace (H1.9), by its owner.
     pub(crate) export: Uuid,
+    /// The workspace's own package list (M1.11), never read.
+    pub(crate) directory_source: Uuid,
+    /// A long call of the owner's (K2.21), answered.
+    pub(crate) job: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -933,7 +939,7 @@ async fn build_workspace(
         succeeded(&structured(&claimed)["outcome"]),
         "{label} claim: {claimed}"
     );
-    let mut page_suggestions = [Uuid::nil(); 2];
+    let mut page_suggestions = [Uuid::nil(); 3];
     for (index, slot) in page_suggestions.iter_mut().enumerate() {
         let (_, suggested) = call_tool(
             app,
@@ -951,6 +957,27 @@ async fn build_workspace(
         *slot = Uuid::parse_str(&string_at(&suggested, "/value/suggestion/suggestionId"))
             .expect("suggestion id");
     }
+    // A page only the owner's app edits, so its one change can be undone
+    // whatever the other cases do to the launch page (C1.9).
+    let undo_page = call(
+        "page_write",
+        json!({"projectId": project, "title": format!("Undo notes{m}"), "body": "One"}),
+    )
+    .await;
+    let undo_page = string_at(&undo_page, "/value/id");
+    call(
+        "page_edit",
+        json!({"pageId": undo_page, "edits": [{"op": "append", "markdown": format!("Two{m}")}]}),
+    )
+    .await;
+    let page_change = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM document_change_sets WHERE thing_id = $1::uuid \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&undo_page)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the edit made a change set");
 
     let (status, invitation) = send(
         app,
@@ -1826,6 +1853,42 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("package install");
+    let directory_source = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO directory_sources (id, workspace_id, kind, location, name) \
+         VALUES ($1, $2, 'url_list', $3, $4)",
+    )
+    .bind(directory_source)
+    .bind(organization)
+    .bind(format!("https://lists.example/{tag}.json"))
+    .bind(format!("Lists{m}"))
+    .execute(pool)
+    .await
+    .expect("directory source");
+
+    let job = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO operation_tasks (
+            id, workspace_id, space_id, account_id, op, status, input_hash, caller, result,
+            finished_at
+        )
+        SELECT $1, $2, $3::uuid, membership.actor_id, 'task_create_many', 'completed', 'sha256',
+               jsonb_build_object('accountId', membership.actor_id),
+               jsonb_build_object('outcome', 'ok', 'value', jsonb_build_object('note', $4::text)),
+               now()
+        FROM organization_memberships membership
+        WHERE membership.organization_id = $2 AND membership.role = 'owner'
+        LIMIT 1
+        "#,
+    )
+    .bind(job)
+    .bind(organization)
+    .bind(&project)
+    .bind(format!("Job{m}"))
+    .execute(pool)
+    .await
+    .expect("operation task");
 
     World {
         marker,
@@ -1851,6 +1914,7 @@ async fn build_workspace(
         page,
         page_thread,
         page_suggestions,
+        page_change,
         repository,
         pull_request,
         pull_request_url,
@@ -1884,6 +1948,8 @@ async fn build_workspace(
         module,
         package_install,
         export: Uuid::nil(),
+        job,
+        directory_source,
     }
 }
 

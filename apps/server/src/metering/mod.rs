@@ -232,7 +232,6 @@ async fn deliver_notice(pool: &sqlx::PgPool, job: &NoticeJob) -> Result<(), AppE
             conversation_id: None,
             message_id: None,
             work_item_id: None,
-            comment_id: None,
             agent_run_id: None,
             pull_request_id: None,
             detail: serde_json::json!({

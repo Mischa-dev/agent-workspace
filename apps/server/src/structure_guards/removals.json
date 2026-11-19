@@ -112,7 +112,6 @@
     "mcp.rs": "K1.21: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/agent_profile_tools.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/agents.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "mcp/automation_tools.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/batch_tools.rs": "K1.21: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/briefing.rs": "K1.20: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/bug_report_tools.rs": "K1.21: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",

@@ -27,6 +27,15 @@ export type PageThread = {
   resolvedBy?: string
   resolvedAt?: string
   comments: PageComment[]
+  /** Changes to the page made because this thread asked (C1.22). */
+  changes?: ThreadChange[]
+}
+
+export type ThreadChange = {
+  changeSetId: string
+  actor: string | null
+  createdAt: string
+  undone: boolean
 }
 
 export type SuggestedEdit = {

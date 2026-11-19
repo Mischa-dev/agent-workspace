@@ -32,13 +32,6 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<WorkspaceStoreRevoke>();
 }
 
-fn destination_space(destination: super::Destination) -> Uuid {
-    match destination {
-        super::Destination::Conversation { project_id, .. }
-        | super::Destination::Task { project_id, .. } => project_id,
-    }
-}
-
 /// Stages one of these operations' events in the call's transaction.
 async fn emit(
     connection: &mut sqlx::PgConnection,
@@ -252,7 +245,7 @@ impl Operation for FileUploadStart {
             tx,
             &catalog::FILE_UPLOAD_STARTED,
             workspace,
-            Some(destination_space(destination)),
+            Some(destination.project_id()),
             Audience::Account(account),
             json!({ "uploadId": started.upload_id }),
             None,

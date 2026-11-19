@@ -62,7 +62,6 @@
     "mcp.rs": 8,
     "mcp/agent_profile_tools.rs": 2,
     "mcp/agents.rs": 3,
-    "mcp/automation_tools.rs": 1,
     "mcp/batch_tools.rs": 4,
     "mcp/briefing.rs": 4,
     "mcp/bug_report_tools.rs": 1,
@@ -225,7 +224,6 @@
     "work_items/imports.rs": 1
   },
   "direct_tool_calls": {
-    "automations.rs": 1,
     "bug_reports.rs": 2,
     "public_api.rs": 1
   },

@@ -38,6 +38,7 @@ export function DecisionDialog({
   const [title, setTitle] = useState(firstLine(message.plainText))
   const [detail, setDetail] = useState('')
   const [pinIt, setPinIt] = useState(true)
+  const [saySo, setSaySo] = useState(false)
   const [target, setTarget] = useState(() => projects?.[0]?.id ?? projectId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -51,6 +52,7 @@ export function DecisionDialog({
       title: title.trim(),
       detail: detail.trim() || undefined,
       sourceMessageId: direct ? undefined : message.id,
+      saySo: !direct && saySo,
     })
       .then(async (decision) => {
         if (pinned) await pin(conversationId, 'decision', decision.id).catch(() => undefined)
@@ -110,6 +112,7 @@ export function DecisionDialog({
       <TextField label="What was decided" maxLength={300} onChange={(event) => setTitle(event.target.value)} value={title} />
       <TextArea label="Why (optional)" maxLength={20000} onChange={(event) => setDetail(event.target.value)} rows={4} value={detail} />
       {direct ? null : <Checkbox checked={pinIt} label="Pin it to this conversation" onChange={setPinIt} />}
+      {direct ? null : <Checkbox checked={saySo} label="Say so in the conversation" onChange={setSaySo} />}
     </Dialog>
   )
 }

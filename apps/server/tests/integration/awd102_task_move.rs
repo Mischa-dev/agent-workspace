@@ -29,7 +29,7 @@ async fn target_rows(setup: &Setup, project: &str) -> String {
     let mut text = String::new();
     for query in [
         "SELECT row_to_json(activity)::text FROM work_item_activity activity WHERE project_id = $1::uuid",
-        "SELECT row_to_json(comment)::text FROM work_item_comments comment WHERE project_id = $1::uuid",
+        "SELECT row_to_json(comment)::text FROM messages comment WHERE project_id = $1::uuid",
         "SELECT row_to_json(audit)::text FROM audit_events audit WHERE project_id = $1::uuid",
         &format!(
             "SELECT row_to_json(event)::text FROM {n} event WHERE event.payload::text LIKE '%' || $1 || '%'",
@@ -58,7 +58,7 @@ async fn footprint(setup: &Setup) -> Vec<i64> {
     let mut counts = Vec::new();
     for table in [
         "work_items",
-        "work_item_comments",
+        "messages",
         "work_item_activity",
         "work_item_key_aliases",
         "work_item_move_receipts",
@@ -1436,12 +1436,12 @@ async fn a_receipt_is_returned_only_with_access_now() {
     // - the target: the request gate (which scopes task_move by the task's
     //   own project, the source) lets it through, and the move's access
     //   check finds no enabled membership there: not_found.
-    // - the source: the request gate itself refuses the call, an HTTP 403,
-    //   before any tool code runs (mcp.rs scoped_project).
+    // - the source: the operation's own access check finds the task out
+    //   of reach: not_found, the same as a task that isn't there.
     // Neither answer, read raw, carries anything from the receipt.
     for (lost, status, outcome) in [
         (w.dst.clone(), StatusCode::OK, Some("not_found")),
-        (w.src.clone(), StatusCode::FORBIDDEN, None),
+        (w.src.clone(), StatusCode::OK, Some("not_found")),
     ] {
         set_enabled(lost.clone(), false).await;
         let (answered, body) =

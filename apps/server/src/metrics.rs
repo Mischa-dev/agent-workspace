@@ -44,6 +44,7 @@ struct Registry {
     browser_errors: Mutex<u64>,
     browser_errors_dropped: Mutex<u64>,
     browser_window: Mutex<Option<(Instant, u32)>>,
+    browser_timings: Mutex<BTreeMap<&'static str, Timing>>,
     server_errors: Mutex<BTreeMap<&'static str, u64>>,
     live: Mutex<Live>,
     tenancy_transactions: Mutex<BTreeMap<&'static str, u64>>,
@@ -144,11 +145,18 @@ pub fn unscoped_call_site(file: &'static str, line: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// Middleware: count and time every request by route class and status.
+/// Middleware: count and time every request by route class and status, and
+/// say how long the server took in a `Server-Timing` header (C2.29), so the
+/// browser's own timings split network from server time.
 pub async fn track_requests(request: Request, next: Next) -> Response {
     let started = Instant::now();
     let class = route_class(request.uri().path());
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    if let Ok(value) = header::HeaderValue::from_str(&server_timing(started.elapsed())) {
+        response
+            .headers_mut()
+            .append(header::HeaderName::from_static("server-timing"), value);
+    }
     let status = match response.status().as_u16() {
         100..=199 => "1xx",
         200..=299 => "2xx",
@@ -162,6 +170,12 @@ pub async fn track_requests(request: Request, next: Next) -> Response {
         started.elapsed(),
     );
     response
+}
+
+/// The `Server-Timing` value for a request that took `elapsed`: its whole
+/// time in the app, in milliseconds. Nothing else: no route, no ids.
+fn server_timing(elapsed: Duration) -> String {
+    format!("app;dur={:.1}", elapsed.as_secs_f64() * 1000.0)
 }
 
 /// A low-cardinality name for a path: the first two segments after
@@ -252,10 +266,16 @@ pub fn alert(alert: Alert) {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/metrics", get(serve_metrics)).route(
-        "/api/v1/client-errors",
-        post(report_client_error).layer(DefaultBodyLimit::max(BROWSER_REPORT_MAX_BYTES)),
-    )
+    Router::new()
+        .route("/metrics", get(serve_metrics))
+        .route(
+            "/api/v1/client-errors",
+            post(report_client_error).layer(DefaultBodyLimit::max(BROWSER_REPORT_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/client-timings",
+            post(report_client_timings).layer(DefaultBodyLimit::max(BROWSER_REPORT_MAX_BYTES)),
+        )
 }
 
 async fn serve_metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -312,6 +332,29 @@ struct DatabaseGauges {
 async fn render(state: &AppState) -> Result<String, AppError> {
     let mut out = String::new();
     let registry = registry();
+
+    let timings = registry
+        .browser_timings
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default();
+    out.push_str("# HELP aw_client_timing_seconds Browser timings against the speed targets.\n");
+    out.push_str("# TYPE aw_client_timing_seconds_count counter\n");
+    for (name, timing) in &timings {
+        let _ = writeln!(
+            out,
+            "aw_client_timing_seconds_count{{name=\"{name}\"}} {}",
+            timing.count
+        );
+    }
+    out.push_str("# TYPE aw_client_timing_seconds_sum counter\n");
+    for (name, timing) in &timings {
+        let _ = writeln!(
+            out,
+            "aw_client_timing_seconds_sum{{name=\"{name}\"}} {:.6}",
+            timing.seconds
+        );
+    }
 
     out.push_str("# HELP aw_http_requests_total HTTP requests by route class and status.\n");
     out.push_str("# TYPE aw_http_requests_total counter\n");
@@ -652,6 +695,68 @@ async fn report_client_error(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What the browser times against the speed targets (C2.29). A name not
+/// listed here is dropped, so labels stay few and never carry ids.
+pub const CLIENT_TIMINGS: &[&str] = &[
+    // A channel or DM opened until its messages show.
+    "conversation_open",
+    // A message sent until the server has it.
+    "message_send",
+    // The inbox opened until its rows show.
+    "inbox_open",
+    // A search typed until its results show.
+    "search_results",
+];
+
+/// The longest timing counted; anything longer is a stalled tab, not speed.
+const CLIENT_TIMING_MAX_MS: f64 = 120_000.0;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClientTimings {
+    timings: Vec<ClientTiming>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClientTiming {
+    name: String,
+    ms: f64,
+}
+
+/// The timings that count: known names, sensible durations, at most 20.
+fn counted_timings(report: &ClientTimings) -> Vec<(&'static str, Duration)> {
+    report
+        .timings
+        .iter()
+        .take(20)
+        .filter(|timing| timing.ms.is_finite() && (0.0..=CLIENT_TIMING_MAX_MS).contains(&timing.ms))
+        .filter_map(|timing| {
+            CLIENT_TIMINGS
+                .iter()
+                .find(|name| **name == timing.name)
+                .map(|name| (*name, Duration::from_secs_f64(timing.ms / 1000.0)))
+        })
+        .collect()
+}
+
+/// Browser timings against the speed targets: counted per name in this
+/// process, never stored or logged. Signed-in people only.
+async fn report_client_timings(
+    State(state): State<AppState>,
+    _signed_in: crate::auth::AuthenticatedActor,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, AppError> {
+    crate::auth::require_allowed_origin(&state.config, &headers)?;
+    let report = serde_json::from_slice::<ClientTimings>(&body)
+        .map_err(|_| AppError::Invalid("JSON request body"))?;
+    for (name, elapsed) in counted_timings(&report) {
+        time(&registry().browser_timings, name, elapsed);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Recurring check: alert when realtime delivery or agent wakeups have
 /// fallen behind.
 pub async fn health_check(state: &AppState) -> Result<(), AppError> {
@@ -705,6 +810,33 @@ mod tests {
             take_browser_report_slot(start + Duration::from_secs(61)),
             Ok(())
         );
+    }
+
+    #[test]
+    fn client_timings_keep_to_known_names_and_sane_durations() {
+        let report: ClientTimings = serde_json::from_value(serde_json::json!({"timings": [
+            {"name": "conversation_open", "ms": 180.0},
+            {"name": "conversation_open/0199a4c2", "ms": 10.0},
+            {"name": "message_send", "ms": -1.0},
+            {"name": "inbox_open", "ms": 500_000.0},
+            {"name": "search_results", "ms": 90.0}
+        ]}))
+        .expect("a report");
+        let counted = counted_timings(&report);
+        assert_eq!(counted.len(), 2);
+        assert_eq!(counted[0].0, "conversation_open");
+        assert_eq!(counted[1].0, "search_results");
+        assert!(
+            serde_json::from_value::<ClientTimings>(
+                serde_json::json!({"timings": [], "route": "/x"})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn server_timing_is_the_app_time_only() {
+        assert_eq!(server_timing(Duration::from_micros(12_340)), "app;dur=12.3");
     }
 
     #[test]

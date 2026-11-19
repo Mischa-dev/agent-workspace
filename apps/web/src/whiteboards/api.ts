@@ -47,6 +47,8 @@ export type WhiteboardDetail = {
   whiteboard: Whiteboard
   links: WhiteboardLink[]
   canEdit: boolean
+  /** The role only suggests here: drawing is sent as a proposal (C1.11). */
+  canSuggest?: boolean
   revisions: WhiteboardRevision[]
 }
 
@@ -144,9 +146,6 @@ export function getFile(id: string, fileId: string) {
   return requestJson<StoredFile>(`${board(id)}/files/${encodeURIComponent(fileId)}`)
 }
 
-export function restoreRevision(id: string, revision: number) {
-  return requestJson<WriteOutcome>(`${board(id)}/revisions/${revision}/restore`, { method: 'POST', json: {} })
-}
 
 export function linkWhiteboard(id: string, targetKind: LinkTargetKind, targetId: string) {
   return requestJson<WhiteboardDetail>(`${board(id)}/links`, { method: 'POST', json: { targetKind, targetId } })

@@ -379,6 +379,7 @@ pub(crate) async fn finish(
             dimensions: None,
             thumbnail_key: None,
             thumbnail_bytes: None,
+            preview: None,
         },
     )
     .await?;
@@ -555,6 +556,9 @@ fn places(destination: Destination) -> (Option<Uuid>, Option<Uuid>, bool) {
             for_comment,
             ..
         } => (None, Some(work_item_id), for_comment),
+        // Resumable uploads go only to messages and tasks (`Place`); a row
+        // with neither finds no place at its finish and is refused.
+        Destination::Thing { .. } => (None, None, false),
     }
 }
 

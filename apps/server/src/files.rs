@@ -1,14 +1,18 @@
-//! W20: files and images on messages, tasks and task comments.
+//! W20: files and images on messages, tasks and task comments; C1.33:
+//! files of any other thing, such as a picture pasted into a page.
 //!
 //! A file is uploaded into one place, a conversation or a task, by someone
 //! who may post there. A message's files wait, seen only by their uploader,
-//! until the message is sent with their IDs (`attach_to_message`); a
-//! comment's the same way (`attach_to_comment`). Files uploaded to a task
-//! itself are attached at once. Unsent uploads are cleaned up after a day.
+//! until the message is sent with their IDs (`attach_to_message`). A task
+//! comment is a message (C1.4): its files are uploaded to the task and move
+//! to the comment's conversation when it is posted
+//! (`rehome_comment_uploads`). Files uploaded to a task itself are attached
+//! at once. Unsent uploads are cleaned up after a day.
 //!
 //! Reading a file checks its place every time (`readable_file`): a message's
 //! file needs the project, `conversation_visible_to` and the message not
-//! removed; a task's file needs the project. File URLs carry no secret: the
+//! removed; a task's file needs the project; another thing's file needs
+//! `subject_visible_to` (C1.33). File URLs carry no secret: the
 //! browser's session (or the agent's credential, over MCP) is checked on
 //! every request, so a link copied out of the app opens for nobody else.
 //!
@@ -71,10 +75,13 @@ pub struct FileView {
     pub width: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<i32>,
-    /// The task comment it belongs to, for a task's files.
+    /// The task comment it belongs to, in a task's files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub comment_id: Option<Uuid>,
+    /// The start of a text or code file, to show before it is opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     #[schemars(with = "String")]
     pub uploaded_by: Uuid,
     pub created_at: String,
@@ -94,6 +101,7 @@ pub(crate) struct FileRow {
     pub(crate) image_width: Option<i32>,
     pub(crate) image_height: Option<i32>,
     pub(crate) thumbnail_key: Option<String>,
+    pub(crate) preview_text: Option<String>,
     pub(crate) attached_at: Option<String>,
     pub(crate) created_at: String,
     /// Which store holds the bytes (`store::LOCAL`, `store::OBJECT`).
@@ -110,6 +118,7 @@ impl FileRow {
             width: self.image_width,
             height: self.image_height,
             comment_id: self.comment_id,
+            preview: self.preview_text.clone(),
             uploaded_by: self.uploaded_by_actor_id,
             created_at: self.created_at.clone(),
         }
@@ -121,9 +130,10 @@ impl FileRow {
 }
 
 const FILE_COLUMNS: &str = r#"
-    file.id, file.project_id, file.work_item_id, file.comment_id,
+    file.id, file.project_id, file.work_item_id, NULL::uuid AS comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
+    file.preview_text,
     file.attached_at::text AS attached_at, file.created_at::text AS created_at,
     file.store_id
 "#;
@@ -171,6 +181,9 @@ const READABLE: &str = r#"
                 WHERE message.id = file.message_id AND message.removed_at IS NULL
             )
             AND conversation_visible_to(file.conversation_id, $2)
+        -- Another thing's file: whoever can see the thing (C1.33).
+        WHEN file.thing_id IS NOT NULL THEN
+            subject_visible_to(file.thing_kind, file.thing_id, $2)
         -- A task's file (its own or a comment's): only while the reader's
         -- role there still lets them see tasks. An app's agent limit is
         -- checked in Rust (`hidden_by_agent_limit`).
@@ -232,11 +245,31 @@ pub(crate) async fn readable_file(
     file_id: Uuid,
 ) -> Result<FileRow, AppError> {
     let sql = format!("SELECT {FILE_COLUMNS} FROM files file WHERE file.id = $1 AND {READABLE}");
-    bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
+    let row = bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
         .fetch_optional(crate::db::scoped(pool))
         .await?
         .filter(|row| !hidden_by_agent_limit(reader, row))
-        .ok_or(AppError::NotFound("file"))
+        .ok_or(AppError::NotFound("file"))?;
+    // A file in a task's discussion (a comment's, C1.4) keeps the task
+    // limit its message has: hidden while the reader, or an app acting for
+    // them, can't see tasks there.
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    let conversation =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT conversation_id FROM files WHERE id = $1")
+            .bind(row.id)
+            .fetch_one(&mut *connection)
+            .await?;
+    if let Some(conversation) = conversation
+        && crate::conversations::task_discussion_hidden(
+            &mut connection,
+            reader.actor_id(),
+            conversation,
+        )
+        .await?
+    {
+        return Err(AppError::NotFound("file"));
+    }
+    Ok(row)
 }
 
 /// The files of one message the reader may see, in order.
@@ -264,9 +297,16 @@ pub(crate) async fn task_files(
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<Vec<FileRow>, AppError> {
+    // A comment's files are its message's, in the task's comments.
+    let columns = FILE_COLUMNS.replace("NULL::uuid AS comment_id", "file.message_id AS comment_id");
     let sql = format!(
-        "SELECT {FILE_COLUMNS} FROM files file
-         WHERE file.project_id = $6 AND file.work_item_id = $1
+        "SELECT {columns} FROM files file
+         WHERE file.project_id = $6
+           AND (file.work_item_id = $1 OR file.conversation_id = (
+               -- visibility: READABLE checks each comment file's conversation
+               SELECT place.id FROM conversations place
+               WHERE place.kind = 'comments' AND place.subject_kind = 'task'
+                 AND place.subject_id = $1))
            AND file.attached_at IS NOT NULL AND {READABLE}
          ORDER BY file.created_at, file.position, file.id"
     );
@@ -302,12 +342,22 @@ pub(crate) enum Destination {
         work_item_id: Uuid,
         for_comment: bool,
     },
+    /// Another thing's own file, such as a picture in a page (C1.33),
+    /// attached at once. The caller has checked the uploader may edit it.
+    Thing {
+        project_id: Uuid,
+        thing: ThingKind,
+        thing_id: Uuid,
+        purpose: Purpose,
+    },
 }
 
 impl Destination {
     pub(crate) fn project_id(self) -> Uuid {
         match self {
-            Self::Conversation { project_id, .. } | Self::Task { project_id, .. } => project_id,
+            Self::Conversation { project_id, .. }
+            | Self::Task { project_id, .. }
+            | Self::Thing { project_id, .. } => project_id,
         }
     }
 
@@ -317,7 +367,9 @@ impl Destination {
             Self::Conversation {
                 members_only: true, ..
             } => Readers::Members,
-            Self::Conversation { .. } | Self::Task { .. } => Readers::Workspace,
+            Self::Conversation { .. } | Self::Task { .. } | Self::Thing { .. } => {
+                Readers::Workspace
+            }
         }
     }
 
@@ -327,6 +379,88 @@ impl Destination {
             project_id: conversation.project_id,
             conversation_id: conversation.id,
             members_only: matches!(conversation.effective_kind(), "dm" | "group"),
+        }
+    }
+}
+
+/// The things other than conversations and tasks that keep files of their
+/// own. Board images move here with C1.29.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThingKind {
+    Page,
+}
+
+impl ThingKind {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "page" => Some(Self::Page),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+        }
+    }
+}
+
+/// What a thing's file is for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    /// Kept with the thing, such as a file added to a page.
+    Attachment,
+    /// Shown in place, such as a picture in a page.
+    Inline,
+}
+
+impl Purpose {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Attachment => "attachment",
+            Self::Inline => "inline",
+        }
+    }
+}
+
+/// Where an upload to a thing goes, once `editor` may edit it: its space,
+/// and the thing still open. A thing the editor can't edit or see is
+/// NotFound, so its existence isn't told.
+pub(crate) async fn thing_destination(
+    pool: &PgPool,
+    editor: Uuid,
+    editor_kind: crate::policy::ActorKind,
+    thing: ThingKind,
+    thing_id: Uuid,
+) -> Result<Destination, AppError> {
+    match thing {
+        ThingKind::Page => {
+            let project_id = crate::memory::page_project(pool, thing_id).await?;
+            crate::memory::project_access(
+                pool,
+                editor,
+                editor_kind,
+                project_id,
+                crate::policy::Action::PageEdit,
+            )
+            .await
+            .map_err(|_| AppError::NotFound("page"))?;
+            let open = sqlx::query_scalar::<_, bool>(
+                "SELECT archived_at IS NULL FROM project_pages WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(crate::db::scoped(pool))
+            .await?
+            .ok_or(AppError::NotFound("page"))?;
+            if !open {
+                return Err(AppError::Conflict("page", "archived"));
+            }
+            Ok(Destination::Thing {
+                project_id,
+                thing,
+                thing_id,
+                purpose: Purpose::Inline,
+            })
         }
     }
 }
@@ -417,6 +551,7 @@ pub(crate) struct PreparedUpload {
     content_type: String,
     dimensions: Option<(u32, u32)>,
     thumbnail: Option<Vec<u8>>,
+    preview: Option<String>,
 }
 
 pub(crate) async fn prepare_upload(upload: Upload) -> Result<PreparedUpload, AppError> {
@@ -443,15 +578,18 @@ pub(crate) async fn prepare_upload(upload: Upload) -> Result<PreparedUpload, App
             content_type: image.format.content_type().to_owned(),
             dimensions: Some((image.width, image.height)),
             thumbnail: image.thumbnail.map(|thumbnail| thumbnail.bytes),
+            preview: None,
         },
         Err(bytes) => {
             let content_type = file_content_type(&name, declared.as_deref(), &bytes);
+            let preview = text_preview(&content_type, &bytes);
             PreparedUpload {
                 name,
                 bytes,
                 content_type,
                 dimensions: None,
                 thumbnail: None,
+                preview,
             }
         }
     })
@@ -473,6 +611,7 @@ pub(crate) struct StagedUpload {
     storage_key: String,
     thumbnail_key: Option<String>,
     store: FileStore,
+    preview: Option<String>,
 }
 
 impl StagedUpload {
@@ -504,6 +643,7 @@ pub(crate) async fn stage_prepared(
         content_type,
         dimensions,
         thumbnail,
+        preview,
     } = prepared;
     let byte_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let thumbnail_bytes = thumbnail
@@ -542,6 +682,7 @@ pub(crate) async fn stage_prepared(
         storage_key,
         thumbnail_key,
         store,
+        preview,
     };
     begin_objects(state, &staged.store, organization_id, &staged.keys()).await?;
     let mut put = staged.store.put(&staged.storage_key, &bytes).await;
@@ -601,6 +742,7 @@ pub(crate) async fn store_prepared(
                 dimensions: staged.dimensions,
                 thumbnail_key: staged.thumbnail_key.as_deref(),
                 thumbnail_bytes: staged.thumbnail_bytes,
+                preview: staged.preview.as_deref(),
             },
         )
         .await
@@ -667,6 +809,8 @@ pub(crate) async fn store_body(
 
     let name = clean_name(&name);
     let content_type = file_content_type(&name, declared_type.as_deref(), &head);
+    // A text file's preview comes from the bytes read so far.
+    let preview = text_preview(&content_type, &head);
     let project_id = destination.project_id();
     let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
     // A full workspace or disk refuses before a byte is written.
@@ -733,6 +877,7 @@ pub(crate) async fn store_body(
                 dimensions: None,
                 thumbnail_key: None,
                 thumbnail_bytes: None,
+                preview: preview.as_deref(),
             },
         )
         .await?;
@@ -837,6 +982,7 @@ struct NewFile<'a> {
     dimensions: Option<(u32, u32)>,
     thumbnail_key: Option<&'a str>,
     thumbnail_bytes: Option<u64>,
+    preview: Option<&'a str>,
 }
 
 /// Writes a file's row and claims its bytes, in the caller's transaction.
@@ -853,6 +999,16 @@ async fn insert_file(
             for_comment,
             ..
         } => (None, Some(work_item_id), !for_comment),
+        Destination::Thing { .. } => (None, None, true),
+    };
+    let (thing_kind, thing_id, purpose) = match file.destination {
+        Destination::Thing {
+            thing,
+            thing_id,
+            purpose,
+            ..
+        } => (Some(thing.name()), Some(thing_id), purpose.name()),
+        _ => (None, None, Purpose::Attachment.name()),
     };
     let row = sqlx::query_as::<_, FileRow>(&format!(
         r#"
@@ -860,10 +1016,11 @@ async fn insert_file(
             id, organization_id, project_id, conversation_id, work_item_id,
             uploaded_by_actor_id, name, content_type, byte_size, sha256,
             storage_key, image_width, image_height, thumbnail_key,
-            thumbnail_bytes, attached_at, store_id
+            thumbnail_bytes, attached_at, thing_kind, thing_id, purpose, preview_text,
+            store_id
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                CASE WHEN $16 THEN now() END, $17)
+                CASE WHEN $16 THEN now() END, $17, $18, $19, $20, $21)
         RETURNING {FILE_COLUMNS}
         "#
     ))
@@ -892,6 +1049,10 @@ async fn insert_file(
             .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
     )
     .bind(attached)
+    .bind(thing_kind)
+    .bind(thing_id)
+    .bind(purpose)
+    .bind(file.preview)
     .bind(file.store_id)
     .fetch_one(&mut **transaction)
     .await?;
@@ -1017,6 +1178,48 @@ fn file_content_type(name: &str, declared: Option<&str>, bytes: &[u8]) -> String
     }
 }
 
+/// The most of a text file's start kept to show before it is opened.
+const PREVIEW_CHARACTERS: usize = 1_200;
+const PREVIEW_LINES: usize = 24;
+
+/// The start of a text or code file, for its preview: up to 24 lines or
+/// 1,200 characters of what is valid UTF-8 at its start. None for
+/// anything else.
+fn text_preview(content_type: &str, bytes: &[u8]) -> Option<String> {
+    let texty = content_type.starts_with("text/")
+        || content_type.ends_with("+json")
+        || content_type.ends_with("+xml")
+        || matches!(
+            content_type,
+            "application/json"
+                | "application/xml"
+                | "application/yaml"
+                | "application/toml"
+                | "application/sql"
+                | "application/javascript"
+                | "application/x-sh"
+        );
+    if !texty {
+        return None;
+    }
+    let head = &bytes[..bytes.len().min(PREVIEW_CHARACTERS * 4)];
+    let valid = match std::str::from_utf8(head) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&head[..error.valid_up_to()]).unwrap_or_default(),
+    };
+    let preview = valid
+        .lines()
+        .take(PREVIEW_LINES)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .take(PREVIEW_CHARACTERS)
+        .collect::<String>();
+    let preview = preview.trim_end().to_owned();
+    (!preview.trim().is_empty()).then_some(preview)
+}
+
 fn valid_content_type(value: &str) -> bool {
     let Some((kind, subtype)) = value.split_once('/') else {
         return false;
@@ -1095,41 +1298,35 @@ pub(crate) async fn attach_to_message(
     in_order(rows, file_ids)
 }
 
-/// Attaches the author's unsent uploads on this task to a new comment.
-pub(crate) async fn attach_to_comment(
+/// Moves the author's unsent uploads for a comment on this task (`?for=
+/// comment`) into the conversation the comment is posted in, so the send
+/// pipeline attaches them as the message's (C1.4). Anything else in the
+/// list is left for `attach_to_message` to refuse.
+pub(crate) async fn rehome_comment_uploads(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
     work_item_id: Uuid,
-    comment_id: Uuid,
+    conversation_id: Uuid,
     author: Uuid,
     file_ids: &[Uuid],
-) -> Result<Vec<FileView>, AppError> {
+) -> Result<(), AppError> {
     if file_ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
-    check_attachment_ids(file_ids)?;
-    let rows = sqlx::query_as::<_, FileRow>(&format!(
+    sqlx::query(
         r#"
-        UPDATE files AS file
-        SET comment_id = $1, attached_at = now(), position = chosen.position - 1
-        FROM unnest($2::uuid[]) WITH ORDINALITY AS chosen(id, position)
-        WHERE file.id = chosen.id
-          AND file.project_id = $3
-          AND file.work_item_id = $4
-          AND file.uploaded_by_actor_id = $5
-          AND file.attached_at IS NULL
-          AND file.removed_at IS NULL
-        RETURNING {FILE_COLUMNS}
-        "#
-    ))
-    .bind(comment_id)
-    .bind(file_ids)
-    .bind(project_id)
+        UPDATE files
+        SET conversation_id = $2, work_item_id = NULL
+        WHERE id = ANY($3) AND work_item_id = $1 AND uploaded_by_actor_id = $4
+          AND attached_at IS NULL AND removed_at IS NULL
+        "#,
+    )
     .bind(work_item_id)
+    .bind(conversation_id)
+    .bind(file_ids)
     .bind(author)
-    .fetch_all(&mut **transaction)
+    .execute(&mut **transaction)
     .await?;
-    in_order(rows, file_ids)
+    Ok(())
 }
 
 fn check_attachment_ids(file_ids: &[Uuid]) -> Result<(), AppError> {
@@ -1175,30 +1372,11 @@ pub(crate) async fn forget_message_files(
     Ok(())
 }
 
-/// A deleted task comment's files stop showing at once; their bytes are
-/// deleted by the next cleanup.
-pub(crate) async fn forget_comment_files(
-    transaction: &mut Transaction<'_, Postgres>,
-    comment_id: Uuid,
-    removed_by: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE files SET removed_at = now(), removed_by_actor_id = $2
-        WHERE comment_id = $1 AND removed_at IS NULL
-        "#,
-    )
-    .bind(comment_id)
-    .bind(removed_by)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
-/// Removes a file: an unsent upload by its uploader, or a task's own file by
+/// Removes a file: an unsent upload by its uploader, a task's own file by
 /// anyone who may edit the task (checked by the caller, `may_edit_task`, so
-/// an archived task or a viewer can't). Message and comment files go with
-/// their message or comment instead.
+/// an archived task or a viewer can't), or another thing's file by the one
+/// who added it (the page keeps showing where it was, as gone). Message
+/// files (a task comment's too) go with their message instead.
 pub(crate) async fn remove_file(
     transaction: &mut Transaction<'_, Postgres>,
     row: &FileRow,
@@ -1207,10 +1385,11 @@ pub(crate) async fn remove_file(
 ) -> Result<(), AppError> {
     // Decided on the row as it is now, locked: an upload sent with a message
     // a moment ago is the message's, not an unsent upload any more.
-    let Some((attached, work_item_id, comment_id, uploader)) =
-        sqlx::query_as::<_, (bool, Option<Uuid>, Option<Uuid>, Uuid)>(
+    let Some((attached, work_item_id, thing, uploader)) =
+        sqlx::query_as::<_, (bool, Option<Uuid>, bool, Uuid)>(
             r#"
-            SELECT attached_at IS NOT NULL, work_item_id, comment_id, uploaded_by_actor_id
+            SELECT attached_at IS NOT NULL, work_item_id, thing_id IS NOT NULL,
+                   uploaded_by_actor_id
             FROM files WHERE id = $1 AND removed_at IS NULL
             FOR UPDATE
             "#,
@@ -1221,8 +1400,10 @@ pub(crate) async fn remove_file(
     else {
         return Ok(());
     };
-    let allowed = if attached {
-        work_item_id.is_some() && comment_id.is_none() && may_edit_task
+    let allowed = if thing {
+        uploader == actor
+    } else if attached {
+        work_item_id.is_some() && may_edit_task
     } else {
         uploader == actor
     };
@@ -1407,6 +1588,7 @@ mod tests {
             image_width: None,
             image_height: None,
             thumbnail_key: None,
+            preview_text: None,
             attached_at: None,
             created_at: String::new(),
             store_id: store::LOCAL.to_owned(),
@@ -1423,5 +1605,27 @@ mod tests {
             );
         }
         assert_eq!(served_content_type(&row("text/plain")), "text/plain");
+    }
+
+    #[test]
+    fn text_files_keep_their_first_lines_as_a_preview() {
+        let many = (1..=40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let preview = text_preview("text/plain", many.as_bytes()).expect("a preview");
+        assert_eq!(preview.lines().count(), PREVIEW_LINES);
+        assert!(preview.starts_with("line 1\nline 2"));
+        assert_eq!(
+            text_preview("application/json", b"{\"a\": 1}").as_deref(),
+            Some("{\"a\": 1}")
+        );
+        // Cut inside a character: what is whole is kept.
+        assert_eq!(
+            text_preview("text/plain", "ab\u{e9}".as_bytes()[..3].as_ref()).as_deref(),
+            Some("ab")
+        );
+        assert_eq!(text_preview("application/pdf", b"%PDF-1.7"), None);
+        assert_eq!(text_preview("text/plain", b"   \n  "), None);
     }
 }

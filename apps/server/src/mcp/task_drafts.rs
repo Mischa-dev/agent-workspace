@@ -46,9 +46,9 @@ const MAX_ASSIGNEE_CHARACTERS: usize = 200;
 const NO_ONE_MESSAGE: &str = "Leave assignee out for an unassigned task.";
 
 /// One task to create, as an agent describes it.
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct NewTask {
+pub(crate) struct NewTask {
     /// Your name for this task within the list, so subtasks can point at it
     /// with parentRef: 1 to 64 letters, digits, dashes, dots or underscores.
     #[serde(rename = "ref")]
@@ -81,6 +81,39 @@ pub(super) struct NewTask {
     /// Custom fields by name or ID (see field_list), such as {"Risk":
     /// "High"}, typed and checked as task_create's fields are. At most 50.
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// An active milestone of the space, by name or ID (see
+    /// milestone_list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// When work starts: YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// When it's due: YYYY-MM-DD, on or after startDate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    /// How big it is, in the space's unit (points or hours), from 0 to
+    /// 100000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<f64>,
+    /// Tasks that must finish before this one: refs of other tasks in this
+    /// list, or keys (or IDs) of existing tasks you can reach. At most 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by_refs: Option<Vec<String>>,
+}
+
+/// The most blockers one new task names.
+const MAX_BLOCKERS_PER_TASK: usize = 50;
+
+/// What blocks a new task.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Blocker {
+    /// Another task in the same list, by its index.
+    InBatch(usize),
+    /// An existing task, as the call wrote it, until it's resolved.
+    Written(String),
+    /// An existing task, resolved.
+    Existing(Uuid),
 }
 
 /// Where a new task goes in the task tree.
@@ -118,6 +151,18 @@ pub(super) struct Draft {
     /// so earlier batches still match on a retry.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<(String, serde_json::Value)>,
+    /// The milestone as written (AWD-168). Left out of the hash when unset,
+    /// as are the planning fields below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<Blocker>,
 }
 
 impl Draft {
@@ -284,6 +329,58 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
                 ),
             ));
         }
+        let date = |value: &Option<String>, field: &'static str, found: &mut Vec<_>| {
+            let value = value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+                Ok(date) => Some(date),
+                Err(_) => {
+                    found.push((
+                        field,
+                        "Use a date as YYYY-MM-DD, such as 2026-12-01.".to_owned(),
+                    ));
+                    None
+                }
+            }
+        };
+        let start_date = date(&task.start_date, "startDate", &mut found);
+        let due_date = date(&task.due_date, "dueDate", &mut found);
+        if let (Some(start), Some(due)) = (start_date, due_date)
+            && due < start
+        {
+            found.push((
+                "dueDate",
+                "The due date can't be before the start date.".to_owned(),
+            ));
+        }
+        if task
+            .estimate
+            .is_some_and(|estimate| !crate::work_item_commands::valid_estimate(estimate))
+        {
+            found.push(("estimate", super::planning::ESTIMATE_MESSAGE.to_owned()));
+        }
+        let milestone = task
+            .milestone
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let blocked_by = task
+            .blocked_by_refs
+            .iter()
+            .flatten()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| Blocker::Written(value.to_owned()))
+            .collect::<Vec<_>>();
+        if blocked_by.len() > MAX_BLOCKERS_PER_TASK {
+            found.push((
+                "blockedByRefs",
+                format!("Name at most {MAX_BLOCKERS_PER_TASK} blockers per task."),
+            ));
+        }
         for (field, message) in found {
             problems.push(BatchProblem::new(index, field, message).with_ref(reference.clone()));
         }
@@ -304,7 +401,35 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
             parent,
             parent_written,
             fields,
+            milestone,
+            start_date,
+            due_date,
+            estimate: task.estimate,
+            blocked_by,
         });
+    }
+    // A blocker that names a ref in the list is that task, wherever it is;
+    // anything else names an existing task.
+    let refs = drafts
+        .iter()
+        .enumerate()
+        .filter_map(|(at, draft)| Some((draft.reference.as_deref()?.to_lowercase(), at)))
+        .collect::<HashMap<_, _>>();
+    for (index, draft) in drafts.iter_mut().enumerate() {
+        for blocker in &mut draft.blocked_by {
+            let Blocker::Written(written) = blocker else {
+                continue;
+            };
+            if let Some(at) = refs.get(&written.to_lowercase()).copied() {
+                if at == index {
+                    problems.push(
+                        BatchProblem::new(index, "blockedByRefs", "A task can't block itself.")
+                            .with_ref(draft.reference.clone()),
+                    );
+                }
+                *blocker = Blocker::InBatch(at);
+            }
+        }
     }
     (drafts, problems)
 }
@@ -326,6 +451,10 @@ pub(super) struct PreparedTask {
     pub parent_field: &'static str,
     /// Custom field values, checked; None when the task sets none.
     pub field_values: Option<crate::work_item_fields::FieldValueChanges>,
+    /// Milestone, dates and estimate (AWD-168).
+    pub planning: crate::work_item_commands::NewTaskFields,
+    /// What blocks it, resolved.
+    pub blocked_by: Vec<Blocker>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -532,7 +661,34 @@ pub(super) async fn prepare(
                 }
             }
         };
+        let milestone_id = match draft.milestone.as_deref() {
+            Some(value) => {
+                match super::planning::milestone_change(transaction, project_id, value).await? {
+                    Some(found) => found,
+                    None => {
+                        problems.push(problem(
+                            draft,
+                            index,
+                            "milestone",
+                            format!(
+                                "{project_key} has no active milestone {}. See milestone_list.",
+                                echo(value)
+                            ),
+                        ));
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
         tasks.push(PreparedTask {
+            planning: crate::work_item_commands::NewTaskFields {
+                milestone_id,
+                start_date: draft.start_date,
+                due_date: draft.due_date,
+                estimate: draft.estimate,
+            },
+            blocked_by: draft.blocked_by.clone(),
             index,
             reference: draft.reference.clone(),
             title: draft.title.clone(),
@@ -769,7 +925,7 @@ pub(super) async fn create(
                 label_ids: &label_ids,
                 acceptance_criteria: &task.acceptance_criteria,
                 board_placement: None,
-                fields: Default::default(),
+                fields: task.planning,
                 activity_summary: summary,
                 activity_metadata,
                 activity_number_metadata: AllocatedNumberMetadata::Include,

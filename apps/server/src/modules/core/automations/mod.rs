@@ -22,6 +22,7 @@ impl CoreModule for Module {
             param: "hook_id",
             lookup: "SELECT space_id, workspace_id FROM incoming_hooks WHERE id = $1",
         });
+        module.operations(crate::automations::ops::register_ops);
         module.export(ExportPart {
             name: "automations",
             describe: "Automation rules (no secrets).",

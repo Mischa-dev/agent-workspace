@@ -62,9 +62,9 @@
   "threads/threadTimeline.ts": 1,
   "threads/useThreadRunActions.ts": 1,
   "views/api.ts": 18,
-  "whiteboards/api.ts": 15,
+  "whiteboards/api.ts": 14,
   "work-items/api.ts": 25,
   "work-items/moveApi.ts": 3,
-  "work-items/planningApi.ts": 12,
+  "work-items/planningApi.ts": 11,
   "workspace-templates/api.ts": 4
 }

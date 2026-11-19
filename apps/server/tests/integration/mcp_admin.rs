@@ -1234,6 +1234,7 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
             "projectId": project, "clientRequestId": format!("chain-{batch}"),
             "tasks": (0..count).map(|i| json!({"title": format!("Task {}", batch * 100 + i)})).collect::<Vec<_>>()
         })).await;
+        let result = super::support::long::finished(&setup.pool, result).await;
         assert_eq!(result["outcome"], "ok", "{result}");
         tasks.extend(
             result["value"]["tasks"]

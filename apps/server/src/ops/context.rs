@@ -96,6 +96,10 @@ pub struct OpContext {
     pub op: &'static str,
     /// [`super::Operation::ACROSS_WORKSPACES`].
     pub across_workspaces: bool,
+    /// The call is a preview (`PREVIEW` operations): the dispatcher rolls
+    /// its transaction back, and a wrapped command that writes on its own
+    /// connection must only preview too.
+    pub preview: bool,
 }
 
 /// One running call: the state, the context, and the transaction the

@@ -304,6 +304,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/scheduled-messages/{id}/send-now",
     "PUT /api/v1/settings/values/{key}",
     "POST /api/v1/settings/values/{key}/reset",
+    "POST /api/v1/things/{kind}/{id}/files",
     "PATCH /api/v1/threads/{id}",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
@@ -448,6 +449,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          the provider says of the subscription it names (tests/integration/billing.rs)",
     ),
     (
+        "POST /api/v1/client-timings",
+        "browser speed timings: counted per known name in process metrics, never \
+         stored with a workspace, and takes no ID",
+    ),
+    (
         "POST /api/v1/integrations/github/webhook",
         "GitHub's own signed delivery, checked against the app's webhook secret, not a \
          session; covered in the GitHub tests",
@@ -502,8 +508,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
-    "automation_write",
-    "bug_report_link_write",
+    "automation_create",
+    "automation_delete",
+    "automation_run_start",
+    "automation_update",
+    "change_undo",
     "channel_create",
     "channel_join",
     "channel_leave",
@@ -516,17 +525,22 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connection_update",
     "conversation_continue",
     "conversation_mark_read",
-    "conversation_members",
+    "conversation_members_update",
     "conversation_start",
     "conversation_update",
     "dashboard_create",
     "dashboard_delete",
     "dashboard_update",
     "decision_record",
-    "environment_write",
+    "page_make",
+    "environment_archive",
+    "environment_check",
+    "environment_create",
+    "environment_update",
     "file_delete",
     "file_upload",
-    "github_integration_write",
+    "github_automation_update",
+    "github_installation_link",
     "history_restore",
     "host_link",
     "host_agent_bind",
@@ -546,13 +560,32 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_store_revoke",
     "spend_limit_set",
     "workspace_export_start",
-    "label_write",
     "layout_preset_write",
-    "field_write",
+    "label_create",
+    "label_update",
+    "field_create",
+    "field_update",
+    "view_create",
+    "view_update",
+    "milestone_create",
+    "milestone_update",
+    "template_create",
+    "template_update",
+    "recurring_create",
+    "recurring_update",
+    "bug_report_link_create",
+    "bug_report_link_update",
     "collection_write",
+    "proposal_decide",
     "record_write",
+    "record_create",
+    "conversation_tab_set",
     "button_press",
     "sheet_write",
+    "sheet_view_create",
+    "sheet_view_update",
+    "sheet_view_delete",
+    "sheet_range_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -574,7 +607,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_schedule",
     "message_send",
     "message_update",
-    "milestone_write",
     "module_archive",
     "module_create",
     "module_part_link",
@@ -587,6 +619,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "notification_update",
     "package_install",
     "package_remove",
+    "directory_source_create",
+    "directory_source_remove",
+    "workspace_shape_set",
     "page_comment",
     "page_comment_update",
     "page_edit",
@@ -604,13 +639,14 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "pull_request_refresh",
     "reply_claim",
     "reply_pass",
-    "reply_progress",
+    "reply_progress_report",
     "reply_release",
     "reply_send",
-    "recurring_write",
     "reply_stop",
     "reply_retry",
-    "repository_write",
+    "repository_archive",
+    "repository_create",
+    "repository_prepare",
     "role_assign",
     "role_write",
     "run_activity_report",
@@ -632,6 +668,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
+    "inbox_view_set",
     "profile_update",
     "account_block_set",
     "dm_request_respond",
@@ -645,21 +682,18 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "task_create",
     "task_create_many",
     "task_criteria_update",
-    "task_depend",
     "task_from_template",
     "task_import",
     "task_launch",
     "task_link",
-    "task_link_pull_request",
+    "task_link_many",
+    "task_watch_set",
     "task_move",
-    "task_relate",
     "task_release",
     "task_reorder",
     "task_restore",
     "task_update",
     "task_update_many",
-    "task_watch",
-    "template_write",
     "thread_start",
     "thread_update",
     "usage_batch_launch",
@@ -671,6 +705,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
+    "whiteboard_propose",
     "whiteboard_link",
     "whiteboard_update",
     "whiteboard_trash_empty",
@@ -1398,6 +1433,8 @@ struct Targets {
     custom_emoji: Uuid,
     /// A thread in the sheet's comments (C1.3).
     comment_thread: Uuid,
+    /// A shared filter view of the sheet (C1.16).
+    sheet_view: Uuid,
 }
 
 /// The smallest PNG header a custom emoji passes with (C2.19).
@@ -1942,10 +1979,29 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("comments");
     }
+    // C1.16: a shared filter view of the sheet's first tab.
+    let sheet_view = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO sheet_views (id, workspace_id, space_id, sheet_id, tab_id, name, created_by_actor_id)
+        SELECT $1, $2, sheet.project_id, sheet.id,
+               (SELECT tab.id FROM sheet_tabs tab WHERE tab.sheet_id = sheet.id ORDER BY tab.position LIMIT 1),
+               'Net view', $3
+        FROM sheets sheet WHERE sheet.id = $4
+        "#,
+    )
+    .bind(sheet_view)
+    .bind(organization)
+    .bind(owner)
+    .bind(world.sheet)
+    .execute(pool)
+    .await
+    .expect("sheet view");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         connection,
+        sheet_view,
         schedule,
         custom_emoji,
         comment_thread,
@@ -2130,6 +2186,10 @@ struct Spares {
     scheduled: [Uuid; 2],
     harness: Uuid,
     bug_link: Uuid,
+    /// A rule A's own automation_delete removes.
+    rule: Uuid,
+    /// An environment A's own environment_archive archives.
+    environment: Uuid,
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
@@ -2357,6 +2417,36 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         pool,
         "SELECT id FROM bug_report_links WHERE name = $1",
         "Net spare",
+    )
+    .await;
+    let spare_rule = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/automations"),
+        json!({
+            "name": "Net spare rule",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+        }),
+    )
+    .await;
+    let spare_rule = spare_rule["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("spare rule");
+    ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/environments"),
+        json!({"name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
+    )
+    .await;
+    let spare_environment = scalar(
+        pool,
+        "SELECT id FROM project_environments WHERE name = $1",
+        "Net spare cloud",
     )
     .await;
     ok(
@@ -2791,6 +2881,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         scheduled: [scheduled[0], scheduled[1]],
         harness,
         bug_link,
+        rule: spare_rule,
+        environment: spare_environment,
         project_invitation,
         agent_connection,
         suggestions: [suggestions[0], suggestions[1]],
@@ -3817,7 +3909,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 ),
                 (
                     public(
-                        "label_write",
+                        "label_create",
                         json!({"projectId": b.project, "name": "Net public label"}),
                     ),
                     Expect::Refused,
@@ -4018,6 +4110,12 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             |_| Payload::Bytes("text/plain", b"Net file".to_vec()),
         )
         .query("?name=net.txt"),
+        path_case(
+            "POST /api/v1/things/{kind}/{id}/files",
+            &[same("page"), id(&a.page, &b.page)],
+            |_| Payload::Bytes("image/png", tiny_png()),
+        )
+        .query("?name=net.png"),
         path_case(
             "POST /api/v1/conversations/{id}/mark-seen",
             &[channel()],
@@ -5999,8 +6097,8 @@ async fn check_foreign_mcp(
         let result = structured(&body);
         let outcome = result["outcome"].clone();
         // A batch that changed nothing, naming each task it couldn't use.
-        let rejected_batch = outcome == "rejected"
-            && result["problems"]
+        let rejected_batch = result["code"] == "rejected"
+            && result["details"]["current"]["problems"]
                 .as_array()
                 .is_some_and(|problems| !problems.is_empty());
         let refused = status == StatusCode::FORBIDDEN
@@ -6158,22 +6256,38 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
         mcp_case(
-            "repository_write",
+            "repository_create",
             json!({"projectId": a.project, "owner": "net-org", "name": "net-mcp", "githubRepositoryId": 990_001, "defaultBranch": "main", "trustAcknowledged": true}),
             vec![json!({"projectId": b.project, "owner": "net-org", "name": "net-mcp-b", "githubRepositoryId": 990_002, "defaultBranch": "main", "trustAcknowledged": true})],
-        )
-        .rejecting(vec![
-            json!({"projectId": a.project, "repository": b.repository, "archive": true}),
-            json!({"projectId": a.project, "repository": b.repository, "prepare": true}),
-        ]),
+        ),
         mcp_case(
-            "github_integration_write",
+            "repository_prepare",
+            json!({"projectId": a.project, "repository": a.repository}),
+            vec![json!({"projectId": b.project, "repository": b.repository})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "repository": b.repository})])
+        .without_own("preparing clones the repository from GitHub"),
+        mcp_case(
+            "repository_archive",
+            json!({"projectId": a.project, "repository": a.repository}),
+            vec![json!({"projectId": b.project, "repository": b.repository})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "repository": b.repository})])
+        .without_own("A's repository is what the run and environment cases act on; archiving is checked over HTTP"),
+        mcp_case(
+            "github_automation_update",
             json!({"projectId": a.project, "pullRequestOpen": false}),
             vec![json!({"projectId": b.project, "pullRequestOpen": false})],
+        ),
+        mcp_case(
+            "github_installation_link",
+            json!({"projectId": a.project, "installationId": 990_003, "repositories": [a.repository]}),
+            vec![json!({"projectId": b.project, "installationId": 990_003, "repositories": [b.repository]})],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
-        ]),
+        ])
+        .without_own(NEEDS_GITHUB),
         // K1.29: adding a person who hasn't signed in yet. B's roles aren't
         // A's.
         mcp_case(
@@ -6328,6 +6442,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"name": "Net search", "query": "net"}),
             vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
         ),
+        // C2.11: inbox views are kept per workspace, and filter only to the
+        // workspace's own spaces; B's never change from A.
+        mcp_case(
+            "inbox_view_set",
+            json!({"name": "Net view", "filter": {"view": "unread"}}),
+            vec![
+                json!({"workspace": b.organization, "name": "Net view", "filter": {}}),
+                json!({"name": "Net spaces", "filter": {"spaces": [b.project]}}),
+            ],
+        ),
         // C2.39: only someone in the workspace called can be blocked, and a
         // request in B's DM is never A's to answer.
         mcp_case(
@@ -6377,15 +6501,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp b", "environmentId": bx.environment}),
         ]),
         mcp_case(
-            "environment_write",
+            "environment_create",
             json!({"projectId": a.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"}),
             vec![json!({"projectId": b.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
-            json!({"projectId": a.project, "environment": bx.environment, "archive": true}),
             json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
         ]),
+        mcp_case(
+            "environment_update",
+            json!({"projectId": a.project, "environment": ax.environment, "setupNotes": "Net mcp notes"}),
+            vec![json!({"projectId": b.project, "environment": bx.environment, "name": "Net"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
+            json!({"projectId": a.project, "environment": ax.environment, "repositoryId": b.repository}),
+        ]),
+        mcp_case(
+            "environment_check",
+            json!({"projectId": a.project, "environment": ax.environment}),
+            vec![json!({"projectId": b.project, "environment": bx.environment})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
+        mcp_case(
+            "environment_archive",
+            json!({"projectId": a.project, "environment": sp.environment}),
+            vec![json!({"projectId": b.project, "environment": bx.environment})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
         mcp_case(
             "model_catalog_write",
             json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
@@ -6549,7 +6692,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"messageId": b.file_message})],
         ),
         mcp_case(
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": a.group, "add": ["@wren"]}),
             vec![json!({"conversationId": b.group, "add": ["@mara"]})],
         )
@@ -6702,7 +6845,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .by_agent(),
         mcp_case(
-            "reply_progress",
+            "reply_progress_report",
             json!({"requestId": sp.reply_claim, "generation": generation(sp.reply_claim), "status": "Looking"}),
             vec![json!({"requestId": bx.claimed_reply, "generation": generation(bx.claimed_reply), "status": "Looking"})],
         )
@@ -6936,27 +7079,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             })],
         ),
         mcp_case(
-            "task_link_pull_request",
-            json!({
-                "taskId": a.task,
-                "expectedVersion": task_version(a.task),
-                "pullRequestId": a.pull_request,
-                "clientRequestId": "net-pr-own",
-            }),
-            vec![json!({
-                "taskId": b.task,
-                "expectedVersion": task_version(b.task),
-                "pullRequestId": b.pull_request,
-                "clientRequestId": "net-pr-b",
-            })],
-        )
-        .rejecting(vec![json!({
-            "taskId": a.task,
-            "expectedVersion": task_version(a.task),
-            "pullRequestId": b.pull_request,
-            "clientRequestId": "net-pr-mixed",
-        })]),
-        mcp_case(
             "task_reorder",
             json!({"taskIds": [sp.second_task], "afterTaskId": sp.task}),
             vec![json!({"taskIds": [b.task], "afterTaskId": b.subtask})],
@@ -6974,10 +7096,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"taskId": b.task, "handoff": "Net handoff"})],
         )
         .by_agent(),
+        // One case for every kind of link task_link makes: things, pull
+        // requests (which also take the task's version), blockers and
+        // related tasks.
         mcp_case(
             "task_link",
             json!({"taskId": a.task, "conversationId": a.channel}),
-            vec![json!({"taskId": b.task, "conversationId": b.channel})],
+            vec![
+                json!({"taskId": b.task, "conversationId": b.channel}),
+                json!({
+                    "taskId": b.task,
+                    "expectedVersion": task_version(b.task),
+                    "pullRequestId": b.pull_request,
+                    "clientRequestId": "net-pr-b",
+                }),
+                json!({"taskId": b.task, "blockedBy": [b.subtask]}),
+                json!({"taskId": b.task, "otherTaskId": b.subtask, "kind": "relates_to"}),
+            ],
         )
         .rejecting(
             [
@@ -6991,12 +7126,38 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ]
             .into_iter()
             .map(|(key, value)| with(&json!({"taskId": a.task}), key, value))
+            .chain([
+                json!({
+                    "taskId": a.task,
+                    "expectedVersion": task_version(a.task),
+                    "pullRequestId": b.pull_request,
+                    "clientRequestId": "net-pr-mixed",
+                }),
+                json!({"taskId": a.subtask, "blockedBy": [b.task]}),
+                json!({"taskId": a.subtask, "blocks": [b.task]}),
+                json!({"taskId": a.subtask, "otherTaskId": b.task, "kind": "relates_to"}),
+            ])
             .collect(),
         ),
         mcp_case(
-            "field_write",
+            "field_create",
             json!({"projectId": a.project, "name": "Net mcp field", "type": "number"}),
             vec![json!({"projectId": b.project, "name": "Net mcp field", "type": "number"})],
+        ),
+        mcp_case(
+            "field_update",
+            json!({
+                "projectId": a.project,
+                "field": ax.field,
+                "description": "Net mcp",
+                "expectedVersion": version("field_definitions", ax.field),
+            }),
+            vec![json!({
+                "projectId": b.project,
+                "field": bx.field,
+                "description": "Net",
+                "expectedVersion": version("field_definitions", bx.field),
+            })],
         )
         .rejecting(vec![json!({
             "projectId": a.project,
@@ -7059,6 +7220,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
         ]),
+        // C1.26: a page tab, only a page and channel of the caller's own.
+        mcp_case(
+            "conversation_tab_set",
+            json!({"conversationId": a.channel, "page": a.page}),
+            vec![json!({"conversationId": b.channel, "page": b.page})],
+        )
+        .rejecting(vec![json!({"conversationId": a.channel, "page": b.page})]),
+        // C2.21: a record made from a message, only from one here.
+        mcp_case(
+            "record_create",
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": a.message}),
+            vec![json!({"collection": b.collection, "title": "Net made"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
+            json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
+        ]),
         mcp_case(
             "button_press",
             json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),
@@ -7082,6 +7260,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": a.project, "sheet": b.sheet, "archived": true}),
                 json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
+        ),
+        // C1.16: a sheet's filter views live on its tabs; B's sheet and
+        // B's views can't be reached from A.
+        mcp_case(
+            "sheet_view_create",
+            json!({"sheetId": a.sheet, "name": "Net mcp view", "clientRequestId": "net-sheet-view"}),
+            vec![json!({"sheetId": b.sheet, "name": "Net taken", "clientRequestId": "net-sheet-view-b"})],
+        ),
+        mcp_case(
+            "sheet_view_update",
+            json!({"viewId": ax.sheet_view, "name": "Net renamed view"}),
+            vec![json!({"viewId": bx.sheet_view, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "sheet_view_delete",
+            json!({"viewId": ax.sheet_view}),
+            vec![json!({"viewId": bx.sheet_view})],
+        ),
+        // C1.20: B's sheet can't be given a named range from A.
+        mcp_case(
+            "sheet_range_set",
+            json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
+            vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
@@ -7156,9 +7357,24 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"dashboard": b.dashboard})],
         ),
         mcp_case(
-            "label_write",
+            "label_create",
             json!({"projectId": a.project, "name": "Net mcp label"}),
             vec![json!({"projectId": b.project, "name": "Net mcp label"})],
+        ),
+        mcp_case(
+            "label_update",
+            json!({
+                "projectId": a.project,
+                "label": ax.label,
+                "description": "Net mcp",
+                "expectedVersion": version("project_labels", ax.label),
+            }),
+            vec![json!({
+                "projectId": b.project,
+                "label": bx.label,
+                "description": "Net",
+                "expectedVersion": version("project_labels", bx.label),
+            })],
         )
         .rejecting(vec![json!({
             "projectId": a.project,
@@ -7224,6 +7440,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
+            "change_undo",
+            json!({"changeSetId": a.page_change}),
+            vec![json!({"changeSetId": b.page_change})],
+        ),
+        mcp_case(
+            "proposal_decide",
+            json!({"proposalId": a.page_suggestions[2], "decision": "reject"}),
+            vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
+        ),
+        mcp_case(
             "page_write",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),
             vec![
@@ -7255,6 +7481,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
+        ),
+        // C1.11: a proposal goes only on a board the caller can see.
+        mcp_case(
+            "whiteboard_propose",
+            json!({"whiteboardId": a.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]}),
+            vec![json!({"whiteboardId": b.whiteboard, "elements": [{"id": "netprop", "type": "rectangle",
+                   "x": 0, "y": 0, "width": 10, "height": 10, "version": 1, "versionNonce": 1}]})],
         ),
         mcp_case(
             "whiteboard_update",
@@ -7298,6 +7532,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "package_remove",
             json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
             vec![json!({"installId": b.package_install, "parts": "archive", "clientRequestId": "net-package-remove-b"})],
+        ),
+        // The directory (M1.11) and shapes (M1.17): a workspace's own list
+        // is the only one it can remove; adding one and setting a shape
+        // name no workspace but the caller's. A shape is previewed, so the
+        // cases after this keep every module on.
+        mcp_case(
+            "directory_source_create",
+            json!({"url": "https://lists.example/own-net.json", "clientRequestId": "net-directory-own"}),
+            vec![],
+        ),
+        mcp_case(
+            "directory_source_remove",
+            json!({"sourceId": a.directory_source}),
+            vec![json!({"sourceId": b.directory_source})],
+        ),
+        mcp_case(
+            "workspace_shape_set",
+            json!({"shape": "friends", "preview": true}),
+            vec![],
         ),
         // Built modules (M1.6). Linked, then unlinked, so A's collection
         // stays visible to the cases after these.
@@ -7447,14 +7700,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "title": "Net mcp decision", "conversationId": b.channel}),
             json!({"projectId": a.project, "title": "Net mcp decision", "supersedes": bx.decision}),
         ]),
+        // C1.25: a page made from B's message, thread or page can't
+        // happen from A, nor can A's page land in B's space.
         mcp_case(
-            "task_depend",
-            json!({"taskId": a.subtask, "blockedBy": [sp.task]}),
-            vec![json!({"taskId": b.task, "blockedBy": [b.subtask]})],
+            "page_make",
+            json!({"messages": [a.message], "clientRequestId": "net-page-make"}),
+            vec![json!({"messages": [b.message], "clientRequestId": "net-page-make-b"})],
         )
         .rejecting(vec![
-            json!({"taskId": a.subtask, "blockedBy": [b.task]}),
-            json!({"taskId": a.subtask, "blocks": [b.task]}),
+            json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
+            json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
+        ]),
+        mcp_case(
+            "task_link_many",
+            json!({"links": [{"taskId": a.subtask, "blockedBy": [sp.task]}]}),
+            vec![
+                json!({"links": [{"taskId": b.task, "blockedBy": [b.subtask]}]}),
+                json!({"projectId": b.project, "links": [{"taskId": b.task, "blockedBy": [b.subtask]}]}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"links": [{"taskId": a.subtask, "blockedBy": [b.task]}]}),
+            json!({"links": [{"taskId": a.subtask, "blocks": [b.task]}]}),
+            json!({"links": [{"taskId": sp.task, "blockedBy": [a.subtask]}, {"taskId": b.task, "blockedBy": [b.subtask]}]}),
         ]),
         mcp_case(
             "task_from_template",
@@ -7467,34 +7735,40 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "template": ax.task_template, "title": "Net", "milestone": bx.milestone}),
         ]),
         mcp_case(
-            "template_write",
+            "template_create",
             json!({"projectId": a.project, "name": "Net mcp template", "title": "Net templated", "subtasks": [{"title": "Net step"}]}),
+            vec![json!({"projectId": b.project, "name": "Net mcp template", "title": "Net"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "name": "Net typed", "title": "Net", "type": bx.task_type})]),
+        mcp_case(
+            "template_update",
+            json!({"projectId": a.project, "template": ax.task_template, "description": "Net mcp"}),
             vec![
-                json!({"projectId": b.project, "name": "Net mcp template", "title": "Net"}),
                 json!({"projectId": b.project, "template": bx.task_template, "title": "Net"}),
                 json!({"projectId": a.project, "template": bx.task_template, "title": "Net"}),
                 json!({"projectId": a.project, "template": bx.task_template, "archived": true}),
             ],
         )
-        .rejecting(vec![
-            json!({"projectId": a.project, "name": "Net typed", "title": "Net", "type": bx.task_type}),
-            json!({"projectId": a.project, "template": ax.task_template, "type": bx.task_type}),
-        ]),
+        .rejecting(vec![json!({"projectId": a.project, "template": ax.task_template, "type": bx.task_type})]),
         mcp_case(
-            "recurring_write",
+            "recurring_create",
             json!({"projectId": a.project, "template": ax.task_template, "frequency": "weekly", "weekdays": [4], "assignee": "me"}),
             vec![
                 json!({"projectId": b.project, "template": bx.task_template, "frequency": "daily"}),
-                json!({"projectId": b.project, "recurring": bx.recurring, "enabled": false}),
-                json!({"projectId": a.project, "recurring": bx.recurring, "enabled": false}),
-                json!({"projectId": a.project, "recurring": bx.recurring, "delete": true}),
                 json!({"projectId": a.project, "template": bx.task_template, "frequency": "daily"}),
             ],
         )
-        .rejecting(vec![
-            json!({"projectId": a.project, "template": ax.task_template, "frequency": "daily", "assignee": b.rook}),
-            json!({"projectId": a.project, "recurring": ax.recurring, "assignee": b.rook}),
-        ]),
+        .rejecting(vec![json!({"projectId": a.project, "template": ax.task_template, "frequency": "daily", "assignee": b.rook})]),
+        mcp_case(
+            "recurring_update",
+            json!({"projectId": a.project, "recurring": ax.recurring, "enabled": true}),
+            vec![
+                json!({"projectId": b.project, "recurring": bx.recurring, "enabled": false}),
+                json!({"projectId": a.project, "recurring": bx.recurring, "enabled": false}),
+                json!({"projectId": a.project, "recurring": bx.recurring, "delete": true}),
+            ],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "recurring": ax.recurring, "assignee": b.rook})]),
         mcp_case(
             "task_import",
             json!({"projectId": a.project, "source": "markdown", "text": "- [ ] Net imported"}),
@@ -7556,9 +7830,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .last(),
         mcp_case(
-            "bug_report_link_write",
+            "bug_report_link_create",
             json!({"projectId": a.project, "name": "Net mcp link"}),
             vec![json!({"projectId": b.project, "name": "Net mcp link"})],
+        ),
+        mcp_case(
+            "bug_report_link_update",
+            json!({"projectId": a.project, "linkId": ax.bug_link, "name": "Net mcp link renamed"}),
+            vec![json!({"projectId": b.project, "linkId": bx.bug_link, "name": "Net"})],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "linkId": bx.bug_link, "name": "Net"}),
@@ -7566,8 +7845,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "linkId": bx.bug_link, "delete": true}),
         ]),
         mcp_case(
-            "automation_write",
-            with(&with(&rule, "projectId", json!(a.project)), "operation", json!("create"))
+            "automation_create",
+            with(&rule, "projectId", json!(a.project))
                 .as_object()
                 .map(|fields| {
                     let mut fields = fields.clone();
@@ -7575,25 +7854,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                     Value::Object(fields)
                 })
                 .expect("rule"),
-            vec![
-                json!({"projectId": b.project, "operation": "run", "ruleId": b.rule}),
-                json!({
-                    "projectId": b.project,
-                    "operation": "create",
-                    "name": "Net mcp rule",
-                    "trigger": {"kind": "task_created"},
-                    "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
-                }),
-            ],
+            vec![json!({
+                "projectId": b.project,
+                "name": "Net mcp rule",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            })],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "operation": "update", "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)}),
-            json!({"projectId": a.project, "operation": "delete", "ruleId": b.rule}),
-            json!({"projectId": a.project, "operation": "run", "ruleId": b.rule}),
-            json!({"projectId": a.project, "operation": "run", "ruleId": a.rule, "taskId": b.task}),
             json!({
                 "projectId": a.project,
-                "operation": "create",
                 "name": "Net mcp rule b",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
@@ -7601,16 +7871,43 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             // K3.26: B's incoming hook can't start A's rule.
             json!({
                 "projectId": a.project,
-                "operation": "create",
                 "name": "Net mcp rule c",
                 "trigger": {"kind": "incoming_hook", "hookId": b.incoming_hook},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
             }),
         ]),
         mcp_case(
-            "milestone_write",
+            "automation_update",
+            json!({"projectId": a.project, "ruleId": a.rule, "name": "Net mcp rule renamed", "expectedVersion": version("automation_rules", a.rule)}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)}),
+        ]),
+        mcp_case(
+            "automation_run_start",
+            json!({"projectId": a.project, "ruleId": a.rule}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "ruleId": b.rule}),
+            json!({"projectId": a.project, "ruleId": a.rule, "taskId": b.task}),
+        ]),
+        mcp_case(
+            "automation_delete",
+            json!({"projectId": a.project, "ruleId": sp.rule}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "ruleId": b.rule})]),
+        mcp_case(
+            "milestone_create",
             json!({"projectId": a.project, "name": "Net mcp milestone", "addTasks": [a.subtask]}),
             vec![json!({"projectId": b.project, "name": "Net mcp milestone"})],
+        ),
+        mcp_case(
+            "milestone_update",
+            json!({"projectId": a.project, "milestoneId": ax.milestone, "description": "Net mcp", "expectedVersion": version("project_milestones", ax.milestone)}),
+            vec![json!({"projectId": b.project, "milestoneId": bx.milestone, "name": "Net", "expectedVersion": version("project_milestones", bx.milestone)})],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "milestoneId": bx.milestone, "name": "Net", "expectedVersion": version("project_milestones", bx.milestone)}),
@@ -7651,13 +7948,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "importId": b.plan, "commit": true, "expectedVersion": version("ai_plan_imports", b.plan)}),
         ]),
         mcp_case(
-            "task_relate",
-            json!({"taskId": a.subtask, "otherTaskId": sp.task, "kind": "relates_to"}),
-            vec![json!({"taskId": b.task, "otherTaskId": b.subtask, "kind": "relates_to"})],
-        )
-        .rejecting(vec![json!({"taskId": a.subtask, "otherTaskId": b.task, "kind": "relates_to"})]),
-        mcp_case(
-            "task_watch",
+            "task_watch_set",
             json!({"taskId": a.subtask, "watching": true}),
             vec![json!({"taskId": b.task, "watching": true})],
         ),

@@ -1,0 +1,147 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "company",
+  "version": "1.0.0",
+  "name": "Company",
+  "description": "Stricter roles for a bigger group: new people join as Employees, whose agents can read and post but not delete or approve, with Contractor and Read only roles ready.",
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": []
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "startup",
+        "changes": {},
+        "words": {}
+      }
+    },
+    {
+      "kind": "role",
+      "key": "employee",
+      "body": {
+        "name": "Employee",
+        "description": "Does the work in the projects they're given. Their agents can read, write tasks and pages and post, but never delete, approve runs or publish code.",
+        "baseRole": "member",
+        "permissions": [
+          "projects.view",
+          "tasks.view",
+          "tasks.create",
+          "tasks.edit",
+          "tasks.delete",
+          "channels.post",
+          "channels.create",
+          "pages.edit",
+          "whiteboards.edit",
+          "collections.edit",
+          "sheets.edit",
+          "collections.build",
+          "runs.launch",
+          "runs.interrupt",
+          "code.view",
+          "code.publish",
+          "directory.view"
+        ],
+        "agentLimit": [
+          "projects.view",
+          "tasks.view",
+          "tasks.create",
+          "tasks.edit",
+          "channels.post",
+          "pages.edit",
+          "collections.edit",
+          "sheets.edit",
+          "runs.launch",
+          "code.view"
+        ],
+        "default": true
+      }
+    },
+    {
+      "kind": "role",
+      "key": "contractor",
+      "body": {
+        "name": "Contractor",
+        "description": "Works on tasks and code they're given: no new channels, no approving runs, no deleting, and no automations.",
+        "baseRole": "member",
+        "permissions": [
+          "projects.view",
+          "tasks.view",
+          "tasks.create",
+          "tasks.edit",
+          "channels.post",
+          "pages.edit",
+          "whiteboards.edit",
+          "collections.edit",
+          "sheets.edit",
+          "runs.launch",
+          "runs.interrupt",
+          "code.view",
+          "code.publish"
+        ],
+        "agentLimit": [
+          "projects.view",
+          "tasks.view",
+          "tasks.edit",
+          "channels.post",
+          "code.view"
+        ],
+        "modulesOff": [
+          "automations"
+        ]
+      }
+    },
+    {
+      "kind": "role",
+      "key": "read_only",
+      "body": {
+        "name": "Read only",
+        "description": "Reads everything they're given and changes nothing, across the whole workspace.",
+        "baseRole": "viewer",
+        "permissions": [
+          "projects.view",
+          "tasks.view",
+          "code.view",
+          "directory.view"
+        ],
+        "agentLimit": []
+      }
+    },
+    {
+      "kind": "space",
+      "key": "company",
+      "body": {
+        "name": "Company",
+        "key": "CO"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          },
+          {
+            "name": "announcements"
+          },
+          {
+            "name": "help"
+          }
+        ]
+      }
+    }
+  ],
+  "needsAdmin": [
+    "role:employee",
+    "role:contractor",
+    "role:read_only"
+  ]
+}

@@ -207,21 +207,28 @@ fn text<'a>(body: &'a Value, field: &str) -> &'a str {
 async fn landing(
     connection: &mut PgConnection,
     workspace_id: Uuid,
+    viewer: Reader,
     place: &Place,
 ) -> Result<Option<Uuid>, AppError> {
     Ok(match place {
         Place::Space(id) => Some(*id),
+        // The installer's own starter space, found as the install will find
+        // it (another person's space with that key is never planned
+        // against: the install makes a new one).
         Place::New(space) => {
-            // visibility: the installer's own starter space, by key and name.
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM projects WHERE organization_id = $1 AND project_key = upper($2) \
-                 AND name = $3 AND archived_at IS NULL AND kind = $4 LIMIT 1",
+            let (Ok(name), Ok(key)) = (
+                crate::projects::normalize_project_name(&space.name),
+                crate::projects::normalize_project_key(&space.key),
+            ) else {
+                return Ok(None);
+            };
+            crate::workspace_templates::reusable_starter(
+                connection,
+                workspace_id,
+                viewer.account,
+                &name,
+                &key,
             )
-            .bind(workspace_id)
-            .bind(space.key.trim())
-            .bind(space.name.trim())
-            .bind(crate::spaces::SpaceKind::Project.stored())
-            .fetch_optional(&mut *connection)
             .await?
         }
         Place::Workspace => None,
@@ -300,7 +307,7 @@ pub async fn plan(
     package: &Package,
     place: &Place,
 ) -> Result<Plan, AppError> {
-    let space = landing(connection, workspace_id, place).await?;
+    let space = landing(connection, workspace_id, viewer, place).await?;
     let needs_space = "It goes in a space: install the package into one.";
     let mut items = Vec::new();
     let (mut turns_off, mut turns_on, mut roles, mut leaves) =
@@ -479,7 +486,16 @@ pub async fn plan(
     let plan_hash = format!(
         "sha256:{}",
         hex::encode(Sha256::digest(
-            canonical(&json!({ "digest": digest, "target": target, "items": items })).as_bytes()
+            canonical(&json!({
+                "digest": digest,
+                "target": target,
+                "items": items,
+                // What the switches item would turn off and on: another
+                // admin's switch change since the preview makes it stale.
+                "turnsOff": turns_off,
+                "turnsOn": turns_on,
+            }))
+            .as_bytes()
         ))
     );
     Ok(Plan {
@@ -507,33 +523,43 @@ pub fn part_hash(part: &Content) -> String {
     )
 }
 
+/// Whether `rest` (after `@` or `#`) is a reference's key: one word, so a
+/// page that opens with a Markdown heading or text that starts with an
+/// @mention stays text.
+fn reference_key(rest: &str) -> Option<&str> {
+    (!rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.')))
+    .then_some(rest)
+}
+
 /// `"@key"` strings resolved to the ids made (or reused) for those keys,
-/// and `"#name"` to channels'.
+/// and `"#name"` to channels'. Only a whole string is a reference: a
+/// one-word one, or one naming a channel exactly.
 pub fn resolve_refs(
     value: Value,
     collections: &HashMap<String, Uuid>,
     channels: &HashMap<String, Uuid>,
 ) -> Result<Value, String> {
-    // A reference is one token: "@key" or "#name", nothing else in the
-    // string. Text that only starts with @ or # is left alone.
-    let token = |rest: &str| {
-        !rest.is_empty()
-            && rest
-                .chars()
-                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
     Ok(match value {
         Value::String(text) => {
-            if let Some(key) = text.strip_prefix('@').filter(|key| token(key)) {
+            if let Some(key) = text.strip_prefix('@').and_then(reference_key) {
                 let id = collections
                     .get(key)
                     .ok_or_else(|| format!("@{key} names no collection in the package"))?;
                 Value::String(id.to_string())
-            } else if let Some(name) = text.strip_prefix('#').filter(|name| token(name)) {
-                let id = channels
-                    .get(&name.to_lowercase())
-                    .ok_or_else(|| format!("#{name} names no channel in the space"))?;
-                Value::String(id.to_string())
+            } else if let Some(name) = text.strip_prefix('#') {
+                // A channel's name may hold spaces ("#Release planning"), so
+                // a whole string naming one resolves; a one-word name that
+                // names none is refused; anything else is text.
+                match channels.get(&name.to_lowercase()) {
+                    Some(id) => Value::String(id.to_string()),
+                    None if reference_key(name).is_some() => {
+                        return Err(format!("#{name} names no channel in the space"));
+                    }
+                    None => Value::String(text),
+                }
             } else {
                 Value::String(text)
             }
@@ -718,14 +744,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_that_starts_like_a_reference_stays_text() {
+        let none = HashMap::new();
+        let kept = json!({"markdown": "# Hello\n", "instructions": "@lena reads this"});
+        assert_eq!(resolve_refs(kept.clone(), &none, &none), Ok(kept));
+    }
+
+    #[test]
     fn references_resolve_or_say_what_is_missing() {
         let feedback = Uuid::now_v7();
         let general = Uuid::now_v7();
         let collections = HashMap::from([("feedback".to_owned(), feedback)]);
-        let channels = HashMap::from([("general".to_owned(), general)]);
+        let planning = Uuid::now_v7();
+        let channels = HashMap::from([
+            ("general".to_owned(), general),
+            ("release planning".to_owned(), planning),
+        ]);
         let resolved = resolve_refs(
             json!({"trigger": {"collectionId": "@feedback"},
-                   "actions": [{"conversationId": "#General", "text": "plain"}]}),
+                   "actions": [{"conversationId": "#General", "text": "plain"},
+                               {"conversationId": "#Release planning"}]}),
             &collections,
             &channels,
         )
@@ -736,6 +774,11 @@ mod tests {
             general.to_string()
         );
         assert_eq!(resolved["actions"][0]["text"], "plain");
+        // A channel's name may hold spaces, as an export writes it.
+        assert_eq!(
+            resolved["actions"][1]["conversationId"],
+            planning.to_string()
+        );
         assert!(resolve_refs(json!("@missing"), &collections, &channels).is_err());
         // Text that only starts with # or @ is not a reference.
         let prose = json!({"body": "# Getting started", "note": "@rook see this"});

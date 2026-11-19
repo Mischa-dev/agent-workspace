@@ -283,6 +283,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     boundary_route!("metrics", Post, "/api/v1/client-errors", ClientTelemetry),
+    boundary_route!("metrics", Post, "/api/v1/client-timings", ClientTelemetry),
     boundary_route!(
         "auth/workos",
         Post,
@@ -997,6 +998,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
         WorkItemEdit
+    ),
+    // A thing's own file (C1.33): today a page's, by its editors.
+    policy_route!(
+        "files/http",
+        Post,
+        "/api/v1/things/{kind}/{id}/files",
+        PageEdit
     ),
     policy_route!("files/http", Delete, "/api/v1/files/{id}", WorkItemEdit),
     // Hiding a link preview follows the rule for removing the message: its

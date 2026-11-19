@@ -344,6 +344,7 @@ pub(super) fn checked_delivery(
                 | "notification_keywords.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
@@ -381,6 +382,7 @@ pub(super) fn checked_delivery(
                 | "notification_keywords.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );
@@ -404,6 +406,7 @@ pub(super) fn checked_delivery(
                 | "notification_keywords.changed"
                 | "sidebar.changed"
                 | "saved_searches.changed"
+                | "inbox_views.changed"
                 | "dm_rules.changed"
                 | "workspace.lifecycle.changed"
         );

@@ -9,6 +9,8 @@
 import { useMutation, type QueryClient, type QueryKey, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 
+import { toastError } from '../app/toastError'
+import { things, type Thing, type ThingRef } from '../data/things'
 import { isApiError } from './errors'
 import { callOp as callGenerated, type CallOptions } from './generated/client'
 import type { OpName, Operations } from './generated/operations'
@@ -83,9 +85,20 @@ export function opPrefix(name: OpName, workspaceId?: string): QueryKey {
 export function opQuery<N extends OpName>(name: N, input: OpInput<N>, options: { workspaceId?: string } = {}) {
   return {
     queryKey: opKey(name, input, options.workspaceId),
-    queryFn: ({ signal }: { signal?: AbortSignal }) =>
-      callOp(name, input, { workspaceId: options.workspaceId, signal, retries: 0 }),
+    queryFn: async ({ signal }: { signal?: AbortSignal }) => {
+      const value = await callOp(name, input, { workspaceId: options.workspaceId, signal, retries: 0 })
+      // Every thing in the answer goes to the store (W1.5).
+      things.normalise(value)
+      return value
+    },
   }
+}
+
+/** Whether a refusal says the thing changed since it was read. */
+export function isVersionConflict(error: unknown): boolean {
+  if (!isApiError(error) || error.code !== 'conflict') return false
+  const details = error.details as { reason?: unknown; code?: unknown } | null | undefined
+  return details?.reason === 'version' || details?.code === 'version'
 }
 
 /** A list read: the same as `opQuery`, named for what it reads. */
@@ -98,11 +111,34 @@ export const opList = opQuery
  */
 export function useOp<N extends OpName>(
   name: N,
-  options: { workspaceId?: string; invalidates?: OpName[]; onSuccess?: (value: OpOutput<N>) => void } = {},
+  options: {
+    workspaceId?: string
+    invalidates?: OpName[]
+    onSuccess?: (value: OpOutput<N>) => void
+    /** The change to show at once (W1.5): an overlay on one thing until the write settles. */
+    optimistic?: (input: OpInput<N>) => { ref: ThingRef; patch: Record<string, unknown> } | null
+    /** Read one thing again, after a version conflict. */
+    refetch?: (ref: ThingRef) => Promise<Thing | null>
+  } = {},
 ) {
   const queryClient = useQueryClient()
   const pending = useRef<string | null>(null)
   return useMutation({
+    onMutate: (input: OpInput<N> & { expectedVersion?: number }) => {
+      const shown = options.optimistic?.(input)
+      return shown ? { ref: shown.ref, overlay: things.overlay(shown.ref, shown.patch) } : {}
+    },
+    onError: (error, _input, context) => {
+      context?.overlay?.rollback()
+      // Someone changed it first: show theirs, and say so.
+      if (context?.ref && isVersionConflict(error)) {
+        const ref = context.ref
+        void options.refetch?.(ref).then((thing) => {
+          if (thing) things.put(thing)
+        })
+        toastError('Someone changed this first', error)
+      }
+    },
     mutationFn: async (input: OpInput<N> & { expectedVersion?: number }) => {
       pending.current ??= newRequestId()
       const { expectedVersion, ...rest } = input as OpInput<N> & { expectedVersion?: number }
@@ -115,7 +151,9 @@ export function useOp<N extends OpName>(
     onSettled: () => {
       pending.current = null
     },
-    onSuccess: async (value) => {
+    onSuccess: async (value, _input, context) => {
+      things.normalise(value)
+      context?.overlay?.settle()
       await invalidateOps(queryClient, options.invalidates ?? [], options.workspaceId)
       options.onSuccess?.(value)
     },

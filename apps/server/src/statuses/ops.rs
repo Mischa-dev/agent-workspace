@@ -23,9 +23,13 @@ pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<StatusSet>()
         .add::<StatusDelete>()
-        .add::<StatusList>()
-        .add::<AgentPause>()
-        .add::<AgentResume>();
+        .add::<StatusList>();
+}
+
+/// Pausing and resuming an agent belong to the Agents module: a workspace
+/// with it off (a Friends shape) shows no agent tools.
+pub fn register_agent_ops(registry: &mut Registry) {
+    registry.add::<AgentPause>().add::<AgentResume>();
 }
 
 /// Whose status a call changes: the caller's own, or an account they manage.
@@ -345,7 +349,7 @@ pub struct AgentPause;
 impl Operation for AgentPause {
     const NAME: &'static str = "agent_pause";
     const KIND: OpKind = OpKind::Change;
-    const MODULE: &'static str = "workspace";
+    const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Pause agent";
@@ -416,7 +420,7 @@ pub struct AgentResume;
 impl Operation for AgentResume {
     const NAME: &'static str = "agent_resume";
     const KIND: OpKind = OpKind::Change;
-    const MODULE: &'static str = "workspace";
+    const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Resume agent";

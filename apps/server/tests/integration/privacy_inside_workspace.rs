@@ -1999,6 +1999,133 @@ async fn personal_views_stay_their_owners() {
     world.finish().await;
 }
 
+/// Sheet filter views (C1.16) keep to their owner: someone else's personal
+/// view of a sheet is not listed to you and can't be renamed or removed by
+/// you, and a role that can't edit sheets can keep a view of its own but
+/// can't share one or name a range.
+#[tokio::test]
+async fn personal_sheet_views_stay_their_owners() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nate", "member")
+        .custom_role("Sheets reader", &["projects.view", "sheets.comment"])
+        .build("privacy_sheet_views")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Sheets reader"]).expect("role id"))
+    .bind(work)
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+    let (status, made) = send(
+        app,
+        world.people["lena"].browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/sheets"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": "Budget"}),
+        ),
+    )
+    .await;
+    let sheet = made
+        .pointer("/sheet/id")
+        .or_else(|| made.pointer("/id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("lena makes a sheet: {status} {made}"))
+        .to_owned();
+
+    let (status, made) = op(
+        &world.people["lena"].browser,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Lena's own",
+               "filters": [{"column": "A", "op": "notEmpty"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "lena makes a view: {status} {made}");
+    let mine = made["value"]["id"].as_str().expect("view id").to_owned();
+
+    let (_, listed) = op(
+        &world.people["mara"].browser,
+        "sheet_view_list",
+        json!({"sheetId": sheet}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        !listed.to_string().contains(&mine),
+        "mara sees lena's view: {listed}"
+    );
+    for (name, input) in [
+        (
+            "sheet_view_update",
+            json!({"viewId": mine, "name": "Mara's now"}),
+        ),
+        ("sheet_view_delete", json!({"viewId": mine})),
+    ] {
+        let (status, body) = op(&world.people["mara"].browser, name, input).await;
+        assert_ne!(body["outcome"], "ok", "mara {name}: {status} {body}");
+    }
+    let name = sqlx::query_scalar::<_, String>("SELECT name FROM sheet_views WHERE id = $1")
+        .bind(Uuid::parse_str(&mine).expect("id"))
+        .fetch_one(pool)
+        .await
+        .expect("lena's view");
+    assert_eq!(name, "Lena's own");
+
+    let nate = &world.people["nate"].browser;
+    let (status, body) = op(
+        nate,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Nate's own"}),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "nate keeps a view: {status} {body}");
+    let (status, body) = op(
+        nate,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Nate's shared", "shared": true}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate shares a view: {status} {body}");
+    // Naming a range (C1.20) changes the sheet for everyone: sheets.edit.
+    let (status, body) = op(
+        nate,
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Nates", "range": "A1:B2"}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate names a range: {status} {body}");
+    let (status, body) = op(
+        &world.people["lena"].browser,
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Lenas", "range": "A1:B2"}),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "lena names a range: {status} {body}");
+    world.finish().await;
+}
+
 /// Dashboards (T1.32) keep to their owner and read as the viewer: someone
 /// else's personal dashboard is not listed to you and can't be read,
 /// changed or removed by you; a role that can't build collections can't
@@ -2275,6 +2402,84 @@ async fn history_restore_needs_the_things_edit_permission() {
         "member: {restored}"
     );
     assert_eq!(body().await, "Paint it red.");
+    world.finish().await;
+}
+
+/// C1.11: a role that neither edits nor suggests on boards can't draw on
+/// one or leave a proposal there, from an agent or from the web.
+#[tokio::test]
+async fn board_proposals_need_the_suggest_permission() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("DRAW")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .agent("mara", "member")
+        .build("privacy_board_proposals")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, mara) = (&world.agents["rook"], &world.agents["mara"]);
+    let made = structured(
+        &call_tool(
+            app,
+            &mara.token,
+            &mara.session,
+            "whiteboard_create",
+            json!({"title": "Plan", "projectId": world.projects["DRAW"],
+                   "operations": [{"op": "add", "type": "rectangle", "id": "box", "text": "A"}],
+                   "clientRequestId": "privacy-board"}),
+        )
+        .await
+        .1,
+    );
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let board = made["value"]["whiteboard"]["id"].clone();
+    let element = json!({"id": "net", "type": "rectangle", "x": 0, "y": 0, "width": 10,
+                         "height": 10, "version": 1, "versionNonce": 1});
+
+    for (name, arguments) in [
+        (
+            "whiteboard_update_elements",
+            json!({"whiteboardId": board, "operations": [{"op": "add", "type": "ellipse", "id": "net"}]}),
+        ),
+        (
+            "whiteboard_propose",
+            json!({"whiteboardId": board, "elements": [element.clone()]}),
+        ),
+    ] {
+        let refused = structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        );
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "viewer agent {name}: {refused}"
+        );
+    }
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/whiteboard_propose",
+            Some("privacy-propose-vera"),
+            json!({"whiteboardId": board, "elements": [element]}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer person: {status} {refused}"
+    );
+    let proposals = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM proposals WHERE thing_kind = 'whiteboard'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("proposals");
+    assert_eq!(proposals, 0);
     world.finish().await;
 }
 
@@ -2936,6 +3141,9 @@ async fn channel_writes_keep_to_private_channels() {
         // C2.39: a conversation Omar can't read has no standing for him,
         // and no request of his to answer.
         ("dm_standing_get", json!({"conversationId": secret})),
+        // C2.8: nor its details' tabs.
+        ("conversation_file_list", json!({"conversationId": secret})),
+        ("conversation_tab_list", json!({"conversationId": secret})),
         (
             "dm_request_respond",
             json!({"conversationId": secret, "accept": true}),
@@ -2975,6 +3183,204 @@ async fn channel_writes_keep_to_private_channels() {
     }
     let (_, omars) = op(&omar.browser, "saved_search_list", json!({})).await;
     assert_eq!(omars["value"]["searches"], json!([]), "{omars}");
+
+    // C2.21: a record is made only from a message its maker can read, and
+    // only by a role that may add records.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/projects/{work}/collections"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"name": "Notes"}),
+    );
+    let (status, collection) = send(app, request).await;
+    assert_eq!(status, StatusCode::CREATED, "{collection}");
+    let collection = collection["collection"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let said = |channel: &str, words: &'static str| {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"content": text(words)}),
+        );
+        async move {
+            let (status, sent) = send(app, request).await;
+            assert!(status.is_success(), "{sent}");
+            sent["message"]["id"].as_str().expect("message").to_owned()
+        }
+    };
+    let hidden = said(&secret, "secret-plans launch day").await;
+    let shown = said(&open, "Open plans launch day").await;
+    let (status, refused) = op(
+        &omar.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": hidden, "saySo": true}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    assert!(!refused.to_string().contains("secret-plans"), "{refused}");
+    let (status, made) = op(
+        &omar.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": shown}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(made["value"]["title"], "Open plans launch day", "{made}");
+    let (status, refused) = op(
+        &nate.browser,
+        "record_create",
+        json!({"collection": collection, "fromMessageId": shown}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    let made_from = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT source_message_id FROM collection_records WHERE collection_id = $1::uuid",
+    )
+    .bind(&collection)
+    .fetch_all(pool)
+    .await
+    .expect("records");
+    assert_eq!(
+        made_from,
+        vec![Some(Uuid::parse_str(&shown).expect("shown"))]
+    );
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let chips = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(shown))
+        .map(|entry| entry["message"]["madeInto"].clone());
+    assert_eq!(
+        chips,
+        Some(json!([{"kind": "record", "id": made["value"]["id"]}])),
+        "{timeline}"
+    );
+
+    // C2.8: a channel's Tasks tab lists what its tasks are only to people
+    // who read the channel and may see tasks.
+    let (status, task) = op(
+        &lena.browser,
+        "task_create",
+        json!({"projectId": work, "title": "Plan launch", "fromMessageId": hidden}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{task}");
+    let (status, listed) = op(
+        &lena.browser,
+        "conversation_task_list",
+        json!({"conversationId": secret}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["value"]["tasks"][0]["how"], "made_from", "{listed}");
+    assert_eq!(
+        listed["value"]["tasks"][0]["title"], "Plan launch",
+        "{listed}"
+    );
+    let (status, refused) = op(
+        &omar.browser,
+        "conversation_task_list",
+        json!({"conversationId": secret}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    assert!(!refused.to_string().contains("Plan launch"), "{refused}");
+    let (status, refused) = op(
+        &nate.browser,
+        "conversation_task_list",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+
+    // C1.26: a page tab shows to everyone who reads the channel; only a
+    // poster sets one, and never on a channel they can't read.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/projects/{work}/pages"),
+        None,
+        json!({"title": "Launch plan", "body": "Dates"}),
+    );
+    let (status, page) = send(app, request).await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"]
+        .as_str()
+        .or_else(|| page["page"]["id"].as_str())
+        .expect("page")
+        .to_owned();
+    let (status, tabs) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": page}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tabs}");
+    let (status, seen) = op(
+        &omar.browser,
+        "conversation_tab_list",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert_eq!(seen["value"]["tabs"][0]["title"], "Launch plan", "{seen}");
+    // Moving the last tab to the front shifts the others along.
+    let mut pages = vec![page.clone()];
+    for title in ["Budget", "Retro"] {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": title, "body": "Notes"}),
+        );
+        let (status, made) = send(app, request).await;
+        assert!(status.is_success(), "{made}");
+        let id = made["id"]
+            .as_str()
+            .or_else(|| made["page"]["id"].as_str())
+            .expect("page")
+            .to_owned();
+        let (status, tabs) = op(
+            &lena.browser,
+            "conversation_tab_set",
+            json!({"conversationId": open, "page": id}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tabs}");
+        pages.push(id);
+    }
+    let (status, moved) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": pages[2], "position": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let titles: Vec<&str> = moved["value"]["tabs"]
+        .as_array()
+        .expect("tabs")
+        .iter()
+        .filter_map(|tab| tab["title"].as_str())
+        .collect();
+    assert_eq!(titles, ["Retro", "Launch plan", "Budget"], "{moved}");
+    for (who, conversation) in [(&omar.browser, &secret), (&nate.browser, &open)] {
+        let (status, refused) = op(
+            who,
+            "conversation_tab_set",
+            json!({"conversationId": conversation, "page": page}),
+        )
+        .await;
+        assert!(!status.is_success(), "{refused}");
+    }
 
     // Nate reads but can't post, so sets no topic, even on an open channel.
     let (status, refused) = op(

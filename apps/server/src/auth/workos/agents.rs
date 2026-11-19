@@ -314,6 +314,7 @@ async fn grant(
                 authentication_class: "workos_agent",
                 account_wide: false,
                 project_explicit: false,
+                workspace_id: None,
             }
         })
         .filter(|principal| principal.can_read()))

@@ -716,6 +716,10 @@ pub struct GraphEdge {
     pub from: Uuid,
     /// The task it blocks.
     pub to: Uuid,
+    /// The blocking task's key, such as AWD-12.
+    pub from_key: String,
+    /// The blocked task's key.
+    pub to_key: String,
     /// A pending AI suggestion, not a dependency yet.
     pub suggestion_id: Option<Uuid>,
     pub confidence: Option<f32>,
@@ -731,6 +735,9 @@ pub struct Graph {
     pub frontier: Vec<Uuid>,
     /// The longest chain of open work, by estimate (1 where unset).
     pub critical_path: Vec<Uuid>,
+    /// The frontier and critical path by task key, in the same order.
+    pub frontier_keys: Vec<String>,
+    pub critical_path_keys: Vec<String>,
     /// More tasks than the graph shows.
     pub truncated: bool,
 }
@@ -740,6 +747,63 @@ pub struct GraphFilter {
     pub milestone_id: Option<Uuid>,
     /// Show finished tasks that aren't blocking anything open.
     pub include_finished: bool,
+    /// Only tasks with this label (AWD-168), with what links to them.
+    pub label_id: Option<Uuid>,
+    /// Only the subtasks of this task, at any depth, with what links to them.
+    pub parent_id: Option<Uuid>,
+}
+
+/// The tasks a label or parent filter keeps, or None for no such filter.
+async fn filtered_tasks(
+    pool: &PgPool,
+    project_id: Uuid,
+    filter: &GraphFilter,
+) -> Result<Option<HashSet<Uuid>>, AppError> {
+    let mut kept: Option<HashSet<Uuid>> = None;
+    if let Some(label_id) = filter.label_id {
+        let ids = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT active.work_item_id FROM work_item_active_labels active
+                WHERE active.project_id = $1 AND active.label_id = $2
+                "#,
+            )
+            .bind(project_id)
+            .bind(label_id)
+            .fetch_all(connection)
+            .await
+        })
+        .await?;
+        kept = Some(ids.into_iter().collect());
+    }
+    if let Some(parent_id) = filter.parent_id {
+        let ids = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                WITH RECURSIVE under(id, depth) AS (
+                    SELECT child.id, 1 FROM task_rows child
+                    WHERE child.project_id = $1 AND child.parent_work_item_id = $2
+                    UNION
+                    SELECT child.id, under.depth + 1 FROM task_rows child
+                    JOIN under ON child.parent_work_item_id = under.id
+                    WHERE child.project_id = $1 AND under.depth < 20
+                )
+                SELECT DISTINCT id FROM under
+                "#,
+            )
+            .bind(project_id)
+            .bind(parent_id)
+            .fetch_all(connection)
+            .await
+        })
+        .await?;
+        let ids = ids.into_iter().collect::<HashSet<_>>();
+        kept = Some(match kept {
+            Some(labelled) => labelled.intersection(&ids).copied().collect(),
+            None => ids,
+        });
+    }
+    Ok(kept)
 }
 
 #[derive(FromRow)]
@@ -823,14 +887,17 @@ pub async fn graph(
         .await
     })
     .await?;
-    // Which tasks to show: open ones in this project (in the milestone, when
-    // filtered), the tasks linked to them, and finished ones on request.
+    // Which tasks to show: open ones in this project (in the milestone,
+    // with the label or under the parent, when filtered), the tasks linked
+    // to them, and finished ones on request.
+    let kept = filtered_tasks(pool, project_id, filter).await?;
     let in_scope = |row: &Row| {
         row.project_id == project_id
             && (!row.finished || filter.include_finished)
             && filter
                 .milestone_id
                 .is_none_or(|id| row.milestone_id == Some(id))
+            && kept.as_ref().is_none_or(|kept| kept.contains(&row.id))
     };
     let mut shown = loaded
         .rows
@@ -922,11 +989,17 @@ pub async fn graph(
         })
         .collect::<Vec<_>>();
     frontier.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    let key_of = |id: &Uuid| by_id.get(id).map(|row| row.key.clone()).unwrap_or_default();
+    let frontier = frontier.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+    let frontier_keys = frontier.iter().map(key_of).collect();
+    let critical_path_keys = critical.iter().map(key_of).collect();
     let mut graph_edges = edges
         .iter()
         .map(|(from, to)| GraphEdge {
             from: *from,
             to: *to,
+            from_key: key_of(from),
+            to_key: key_of(to),
             suggestion_id: None,
             confidence: None,
             reason: None,
@@ -941,6 +1014,8 @@ pub async fn graph(
             .map(|edge| GraphEdge {
                 from: edge.other_work_item_id,
                 to: edge.work_item_id,
+                from_key: key_of(&edge.other_work_item_id),
+                to_key: key_of(&edge.work_item_id),
                 suggestion_id: Some(edge.id),
                 confidence: Some(edge.confidence),
                 reason: Some(edge.reason),
@@ -949,8 +1024,10 @@ pub async fn graph(
     Ok(Graph {
         nodes,
         edges: graph_edges,
-        frontier: frontier.into_iter().map(|(_, id)| id).collect(),
+        frontier,
         critical_path: critical,
+        frontier_keys,
+        critical_path_keys,
         truncated,
     })
 }

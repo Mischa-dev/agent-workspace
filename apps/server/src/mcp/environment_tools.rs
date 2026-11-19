@@ -24,7 +24,7 @@ const PEOPLE_ONLY: &str =
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct EnvironmentWriteArguments {
+pub(crate) struct EnvironmentWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// An environment to change, archive, make the default or check, by ID
@@ -59,7 +59,7 @@ pub(super) struct EnvironmentWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct EnvironmentWriteValue {
+pub(crate) struct EnvironmentWriteValue {
     /// "added", "changed", "made_default", "archived" or "checked".
     pub done: String,
     /// The environment, unless it was archived.
@@ -112,7 +112,7 @@ fn keep_or_clear(given: Option<&String>, current: Option<String>) -> Option<Stri
     }
 }
 
-pub(super) async fn environment_write(
+pub(crate) async fn environment_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: EnvironmentWriteArguments,

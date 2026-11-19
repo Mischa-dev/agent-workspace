@@ -15,7 +15,6 @@ pub mod connections;
 pub mod cursor;
 pub mod envelope;
 pub mod http;
-pub mod mentions;
 pub mod ops;
 pub mod push;
 pub mod read;

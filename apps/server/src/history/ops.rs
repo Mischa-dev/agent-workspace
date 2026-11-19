@@ -274,11 +274,14 @@ impl Operation for HistoryRestore {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Restore a version";
-    const DESCRIPTION: &'static str = "Put an earlier version of a page or whiteboard back, as a \
+    const DESCRIPTION: &'static str = "Put an earlier version of a page, whiteboard or sheet back, as a \
         new version (nothing is lost: the current one stays in history). Pass expectedVersion \
         from the thing as you read it. Other kinds say why they can't yet.";
-    const EMITS: &'static [&'static str] =
-        &["page.version_restored", "whiteboard.version_restored"];
+    const EMITS: &'static [&'static str] = &[
+        "page.version_restored",
+        "whiteboard.version_restored",
+        "sheet.version_restored",
+    ];
 
     type Input = HistoryRestoreInput;
     type Output = HistoryRestoreOutput;
@@ -294,6 +297,7 @@ impl Operation for HistoryRestore {
         }
         let permission = match kind.as_str() {
             "page" => Perm::PagesEdit,
+            "sheet" => Perm::SheetsEdit,
             _ => Perm::WhiteboardsEdit,
         };
         {
@@ -335,7 +339,11 @@ impl Operation for HistoryRestore {
             input.expected_version,
         )
         .await?;
-        let audited = if kind == "page" { "page" } else { "whiteboard" };
+        let audited = match kind.as_str() {
+            "page" => "page",
+            "sheet" => "sheet",
+            _ => "whiteboard",
+        };
         call.audit_target(audited, id, json!({ "restoredVersion": input.version }));
         Ok(HistoryRestoreOutput {
             kind,

@@ -7,6 +7,7 @@
 //! longer holds being resumed. The operation layer (K2.3) serves its tools
 //! through the same handler, so a change that breaks a revision fails here.
 
+use super::support::long::{run_jobs, second_process};
 use super::{
     agent_interface::{connect_app, send},
     mcp_admin::{create_project, setup},
@@ -52,7 +53,12 @@ async fn post(
         if let Some(method) = payload["method"].as_str() {
             request = request.header("mcp-method", method);
         }
-        if let Some(name) = payload.pointer("/params/name").and_then(Value::as_str) {
+        // A task method names its task there.
+        if let Some(name) = payload
+            .pointer("/params/name")
+            .or_else(|| payload.pointer("/params/taskId"))
+            .and_then(Value::as_str)
+        {
             request = request.header("mcp-name", name);
         }
     }
@@ -160,12 +166,11 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
                         .all(|revision| versions.contains(&json!(revision)))),
                 "{discovered}"
             );
-            // The Tasks extension (long operations, K2.21) is something
-            // rmcp can serve; this server doesn't advertise it yet.
+            // The Tasks extension: long operations (K2.21).
             assert!(
                 result
                     .pointer("/capabilities/extensions")
-                    .is_none_or(|extensions| { !extensions.to_string().contains("tasks") }),
+                    .is_some_and(|extensions| extensions.to_string().contains("tasks")),
                 "{discovered}"
             );
             None
@@ -216,7 +221,7 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
         .await;
         assert_eq!(status, StatusCode::OK, "{revision} list: {listed}");
         let names = tool_names(&listed);
-        for expected in ["briefing", "projects_list", "decision_record"] {
+        for expected in ["briefing_get", "project_list", "decision_record"] {
             assert!(
                 names.contains(&expected.to_owned()),
                 "{revision}: {expected}"
@@ -313,4 +318,304 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
         Some(3),
         "{decisions}"
     );
+}
+
+fn many_tasks(project: &str, count: usize, request_id: &str) -> Value {
+    json!({
+        "name": "task_create_many",
+        "arguments": {
+            "projectId": project,
+            "clientRequestId": request_id,
+            "tasks": (0..count)
+                .map(|index| json!({ "title": format!("Long batch task {index}") }))
+                .collect::<Vec<_>>(),
+        }
+    })
+}
+
+/// K2.21: a long call is answered with a task (2026-07-28 with the Tasks
+/// extension) or `started` (older revisions), a job finishes it, and only
+/// the caller can read the answer, from any server process.
+#[tokio::test]
+async fn long_calls_finish_as_tasks_any_server_can_answer() {
+    let Some(setup) = setup("k2_long_tasks").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "LNG", "Long calls").await;
+    let token = connect_app(app, &setup.browser, "Long calls", "full").await;
+    let (_, other_token) = super::support::app::create_agent(
+        app,
+        &setup.browser,
+        &project,
+        "Other agent",
+        "other-agent",
+    )
+    .await;
+    let (second_app, second_state) = second_process(&setup.pool);
+
+    // 2026-07-28, declaring the Tasks extension: a task handle.
+    let mut call = request(
+        10,
+        "tools/call",
+        many_tasks(&project, 30, "long-a"),
+        STATELESS,
+    );
+    call["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+    let (status, _, started) = post(app, &token, STATELESS, None, call).await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    assert_eq!(
+        started.pointer("/result/resultType"),
+        Some(&json!("task")),
+        "{started}"
+    );
+    let task_id = started
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .expect("task id")
+        .to_owned();
+    let tasks_get = |id: u64, task: &str, declared: bool| {
+        let mut get = request(id, "tasks/get", json!({ "taskId": task }), STATELESS);
+        if declared {
+            get["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+                json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+        }
+        get
+    };
+    let (_, _, working) = post(app, &token, STATELESS, None, tasks_get(11, &task_id, true)).await;
+    assert_eq!(
+        working.pointer("/result/status"),
+        Some(&json!("working")),
+        "{working}"
+    );
+
+    // The second process runs the job and answers tasks/get.
+    assert!(run_jobs(&second_state).await >= 1);
+    let (_, _, done) = post(
+        &second_app,
+        &token,
+        STATELESS,
+        None,
+        tasks_get(12, &task_id, true),
+    )
+    .await;
+    assert_eq!(
+        done.pointer("/result/status"),
+        Some(&json!("completed")),
+        "{done}"
+    );
+    let envelope = done
+        .pointer("/result/result/structuredContent")
+        .expect("the call's answer");
+    assert_eq!(envelope["outcome"], "ok", "{envelope}");
+    let made = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE title LIKE 'Long batch task %'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(made, 30);
+
+    // Another account's tasks/get is not found.
+    let (_, _, refused) = post(
+        app,
+        &other_token,
+        STATELESS,
+        None,
+        tasks_get(13, &task_id, true),
+    )
+    .await;
+    assert!(refused.get("error").is_some(), "{refused}");
+    assert!(refused.get("result").is_none(), "{refused}");
+
+    // A small batch answers at once.
+    let mut small = request(
+        14,
+        "tools/call",
+        many_tasks(&project, 2, "long-small"),
+        STATELESS,
+    );
+    small["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+    let (_, _, answered) = post(app, &token, STATELESS, None, small).await;
+    assert_eq!(
+        answered.pointer("/result/structuredContent/outcome"),
+        Some(&json!("ok")),
+        "{answered}"
+    );
+
+    // 2025-06-18: `started`, and job_get finishes it.
+    let (_, session, _) = post(
+        app,
+        &token,
+        "2025-06-18",
+        None,
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "long-calls", "version": "1" }
+            }
+        }),
+    )
+    .await;
+    let session = session.expect("session");
+    post(
+        app,
+        &token,
+        "2025-06-18",
+        Some(&session),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    let (_, _, started) = post(
+        app,
+        &token,
+        "2025-06-18",
+        Some(&session),
+        request(
+            20,
+            "tools/call",
+            many_tasks(&project, 26, "long-b"),
+            "2025-06-18",
+        ),
+    )
+    .await;
+    let envelope = started
+        .pointer("/result/structuredContent")
+        .expect("envelope");
+    assert_eq!(envelope["outcome"], "started", "{started}");
+    let job_id = envelope["value"]["jobId"]
+        .as_str()
+        .expect("job id")
+        .to_owned();
+    // The same request id finds the same job instead of starting another.
+    let (_, _, again) = post(
+        app,
+        &token,
+        "2025-06-18",
+        Some(&session),
+        request(
+            21,
+            "tools/call",
+            many_tasks(&project, 26, "long-b"),
+            "2025-06-18",
+        ),
+    )
+    .await;
+    assert_eq!(
+        again.pointer("/result/structuredContent/value/jobId"),
+        Some(&json!(job_id)),
+        "{again}"
+    );
+    let job_get = |id: u64, job: &str| {
+        request(
+            id,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job } }),
+            "2025-06-18",
+        )
+    };
+    let (_, _, working) = post(
+        app,
+        &token,
+        "2025-06-18",
+        Some(&session),
+        job_get(22, &job_id),
+    )
+    .await;
+    assert_eq!(
+        working.pointer("/result/structuredContent/value/status"),
+        Some(&json!("working")),
+        "{working}"
+    );
+    assert!(run_jobs(&second_state).await >= 1);
+    let (_, _, done) = post(
+        app,
+        &token,
+        "2025-06-18",
+        Some(&session),
+        job_get(23, &job_id),
+    )
+    .await;
+    let value = done
+        .pointer("/result/structuredContent/value")
+        .expect("job");
+    assert_eq!(value["status"], "completed", "{done}");
+    assert_eq!(value["result"]["outcome"], "ok", "{done}");
+    // Another account's job_get is not found.
+    let (_, _, refused) = post(
+        app,
+        &other_token,
+        STATELESS,
+        None,
+        request(
+            24,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job_id } }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{refused}"
+    );
+
+    // The same person's read-only app can't make tasks, so it doesn't read
+    // the batch's answer either.
+    let other_app = connect_app(app, &setup.browser, "Read-only app", "read").await;
+    let (_, _, refused) = post(
+        app,
+        &other_app,
+        STATELESS,
+        None,
+        request(
+            25,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job_id } }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{refused}"
+    );
+
+    // Once the caller may no longer act where it ran (here the space is
+    // archived), the kept answer isn't shown, through either route.
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = (SELECT actor_id FROM project_memberships \
+         WHERE project_id = $1::uuid LIMIT 1) \
+         WHERE id = $1::uuid",
+    )
+    .bind(&project)
+    .execute(&setup.pool)
+    .await
+    .expect("archive the space");
+    let (_, _, hidden) = post(
+        app,
+        &token,
+        STATELESS,
+        None,
+        request(
+            26,
+            "tools/call",
+            json!({ "name": "job_get", "arguments": { "jobId": job_id } }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(
+        hidden.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{hidden}"
+    );
+    let (_, _, hidden) = post(app, &token, STATELESS, None, tasks_get(27, &task_id, true)).await;
+    assert!(hidden.get("error").is_some(), "{hidden}");
 }

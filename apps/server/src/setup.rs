@@ -107,6 +107,24 @@ fn new_code() -> String {
         .join("-")
 }
 
+/// Whether `code` is the open setup's code (none once it is claimed).
+async fn code_matches(connection: &mut PgConnection, code: &str) -> Result<bool, sqlx::Error> {
+    let stored = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT code_digest FROM server_setup WHERE id = 1 AND claimed_by_actor_id IS NULL",
+    )
+    .fetch_optional(connection)
+    .await?;
+    let given = digest(code);
+    Ok(stored.is_some_and(|stored| bool::from(stored.as_slice().ct_eq(&given))))
+}
+
+fn wrong_code() -> AppError {
+    AppError::Refused {
+        field: "code",
+        message: "That setup code isn't right. Copy it again from the server's setup-code file.",
+    }
+}
+
 async fn anyone_signs_in(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users)")
         .fetch_one(connection)
@@ -385,7 +403,23 @@ async fn set_up(
             return Err(error);
         }
     };
-    let _permit = match state.rate_limits.try_acquire_password_kdf() {
+    // Setup still open and the code right before the password is hashed:
+    // a set-up server, or a wrong code, costs no hashing (checked again
+    // below, under the lock).
+    let open = crate::tenancy::system("server.first_run", async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        if anyone_signs_in(&mut transaction).await? {
+            return Err(AppError::Conflict("setup", "this server is already set up"));
+        }
+        if !code_matches(&mut transaction, &request.code).await? {
+            drop(transaction);
+            state.rate_limits.note_login_failure().await;
+            return Err(wrong_code());
+        }
+        Ok(())
+    })
+    .await;
+    let _permit = match open.and_then(|()| state.rate_limits.try_acquire_password_kdf()) {
         Ok(permit) => permit,
         Err(error) => {
             request.person.password.zeroize();
@@ -400,20 +434,10 @@ async fn set_up(
         if anyone_signs_in(&mut transaction).await? {
             return Err(AppError::Conflict("setup", "this server is already set up"));
         }
-        let stored = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT code_digest FROM server_setup WHERE id = 1 AND claimed_by_actor_id IS NULL",
-        )
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let given = digest(&request.code);
-        let matches = stored.is_some_and(|stored| bool::from(stored.as_slice().ct_eq(&given)));
-        if !matches {
+        if !code_matches(&mut transaction, &request.code).await? {
             drop(transaction);
             state.rate_limits.note_login_failure().await;
-            return Err(AppError::Refused {
-                field: "code",
-                message: "That setup code isn't right. Copy it again from the server's setup-code file.",
-            });
+            return Err(wrong_code());
         }
         let person = create_person(
             &mut transaction,
@@ -426,11 +450,13 @@ async fn set_up(
             },
         )
         .await?;
-        sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
-            .bind(person.user_id)
-            .bind(password_phc)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)",
+        )
+        .bind(person.user_id)
+        .bind(password_phc)
+        .execute(&mut *transaction)
+        .await?;
         let established = establish_session_in_transaction(
             &state.config,
             &headers,
@@ -453,9 +479,13 @@ async fn set_up(
         .await?;
         match &request.workspace {
             Some(workspace) => {
-                if let Err(refusal) =
-                    new_workspace(&mut transaction, &headers, &established.principal, workspace)
-                        .await?
+                if let Err(refusal) = new_workspace(
+                    &mut transaction,
+                    &headers,
+                    &established.principal,
+                    workspace,
+                )
+                .await?
                 {
                     return Ok(refusal);
                 }

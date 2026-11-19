@@ -26,6 +26,10 @@ use crate::{
     },
 };
 
+pub mod claims;
+pub mod planning;
+pub mod reads;
+
 pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<TaskCreate>()
@@ -35,7 +39,11 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<TaskCommentCreate>()
         .add::<TaskCommentUpdate>()
         .add::<TaskCommentDelete>()
-        .add::<TaskCriteriaUpdate>();
+        .add::<TaskCriteriaUpdate>()
+        .add::<claims::TaskClaim>()
+        .add::<claims::TaskRelease>();
+    planning::register_ops(registry);
+    reads::register_ops(registry);
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -137,6 +145,14 @@ pub struct TaskCreateInput {
     /// name or ID (project_open lists them). Left out, it's a plain task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Made from this message, one in the same space you can read: the task
+    /// links back to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_message_id: Option<IdRef>,
+    /// With fromMessageId, also say so in its conversation ("… made a
+    /// message here into a task"). Off unless asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say_so: Option<bool>,
 }
 
 impl Targeted for TaskCreateInput {
@@ -144,8 +160,9 @@ impl Targeted for TaskCreateInput {
         match (self.parent_id, self.project_id) {
             (Some(parent), _) => Target::thing("task", parent.id()),
             (None, Some(space)) => Target::Space(space.id()),
-            // A connection held to one space makes it there; anyone else
-            // is asked which space.
+            // A connection held to one space makes it there (the
+            // dispatcher locates it in that space); anyone else is asked
+            // which space.
             (None, None) => Target::Workspace(None),
         }
     }
@@ -157,6 +174,7 @@ impl Operation for TaskCreate {
     const MODULE: &'static str = "tasks";
     const PERMISSION: Option<Perm> = Some(Perm::TasksCreate);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const HELD_SPACE_BY_DEFAULT: bool = true;
     const TITLE: &'static str = "Create task";
     const DESCRIPTION: &'static str = "Create a task in a space, or a subtask (parentId). \
         Optional: status and type by name, labels, acceptanceCriteria (a list), assignee (me or \
