@@ -17,6 +17,15 @@ use crate::{
     ops::{Idempotency, OpCall, OpError, OpKind, Operation, Target, Targeted, refs::IdRef},
 };
 
+/// What a question's first call keeps for its retries: the picture and
+/// where the thread was anchored.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AskKept {
+    file_id: Uuid,
+    anchor: serde_json::Value,
+}
+
 /// Most elements one question is about (a board anchor's limit).
 const MAX_ELEMENTS: usize = 50;
 /// The longest question.
@@ -187,9 +196,10 @@ impl Operation for WhiteboardAsk {
             None => IdempotencyKey::parse(&Uuid::now_v7().to_string()),
         }
         .map_err(|_| OpError::invalid("clientRequestId", "Pass a short request id."))?;
-        // A retry reuses the picture the first call kept, so the question it
-        // posts is the same one and replays (the message's request hash
-        // counts its files).
+        // A retry reuses the picture and anchor the first call kept, so the
+        // question it posts is the same one and replays (the message's
+        // request hash counts its files and its anchor), even when the
+        // elements have moved since.
         let prepared = files::prepare_upload(Upload {
             name: "selection.png".to_owned(),
             declared_type: Some("image/png".to_owned()),
@@ -230,8 +240,11 @@ impl Operation for WhiteboardAsk {
                 other?
             }
         };
-        let picture_id = match reserved {
-            IdempotencyOutcome::Replay(replay) => replay.decode::<Uuid>()?,
+        let (picture_id, anchor) = match reserved {
+            IdempotencyOutcome::Replay(replay) => {
+                let kept = replay.decode::<AskKept>()?;
+                (kept.file_id, kept.anchor)
+            }
             IdempotencyOutcome::Reserved(reservation) => {
                 let row = files::store_prepared(
                     state,
@@ -245,14 +258,17 @@ impl Operation for WhiteboardAsk {
                     &mut transaction,
                     &reservation,
                     axum::http::StatusCode::CREATED,
-                    &row.id,
+                    &AskKept {
+                        file_id: row.id,
+                        anchor: anchor.clone(),
+                    },
                 )
                 .await?;
                 if let Err(error) = transaction.commit().await {
                     files::discard_stored(state, &row).await;
                     return Err(AppError::from(error).into());
                 }
-                row.id
+                (row.id, anchor)
             }
         };
         let content = json!({
