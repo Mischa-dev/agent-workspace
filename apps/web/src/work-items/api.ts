@@ -1,6 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, type OpInput } from '../api/ops'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
@@ -259,13 +259,13 @@ export function normalizeCard(value: unknown): WorkItemCard {
   }
 }
 
-function workItemLinkPath(
-  projectId: string,
-  workItemId: string,
-  collection: 'threads' | 'repositories' | 'pull-requests',
-  targetId: string,
+/** Links or unlinks a record on a task with `task_link`, then reads the task as it is now. */
+async function linkOnTask(
+  input: { projectId: string; workItemId: string; idempotencyKey: string; expectedVersion?: number },
+  link: Omit<OpInput<'task_link'>, 'taskId' | 'expectedVersion'>,
 ) {
-  return `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/${collection}/${encodeURIComponent(targetId)}`
+  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion })
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 export async function setWorkItemThreadLink(input: {
@@ -275,10 +275,7 @@ export async function setWorkItemThreadLink(input: {
   linked: boolean
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(await requestJson<unknown>(
-    workItemLinkPath(input.projectId, input.workItemId, 'threads', input.threadId),
-    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: {} },
-  ))
+  return linkOnTask(input, { conversationId: input.threadId, ...(input.linked ? {} : { remove: true }) })
 }
 
 export async function setWorkItemRepositoryLink(input: {
@@ -289,12 +286,7 @@ export async function setWorkItemRepositoryLink(input: {
   role?: 'primary' | 'related'
   idempotencyKey: string
 }) {
-  const path = workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)
-  return normalizeWorkItem(await requestJson<unknown>(path, {
-    method: input.role ? 'POST' : 'DELETE',
-    idempotencyKey: input.idempotencyKey,
-    json: input.role ? { expectedVersion: input.expectedVersion, role: input.role } : { expectedVersion: input.expectedVersion },
-  }))
+  return linkOnTask(input, { repositoryId: input.repositoryId, ...(input.role ? { role: input.role } : { remove: true }) })
 }
 
 /** Links a pull request to a task (confirming a suggested one), or unlinks it (dismissing a suggestion). */
@@ -306,10 +298,7 @@ export async function setWorkItemPullRequestLink(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(await requestJson<unknown>(
-    workItemLinkPath(input.projectId, input.workItemId, 'pull-requests', input.pullRequestId),
-    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion } },
-  ))
+  return linkOnTask(input, { pullRequestId: input.pullRequestId, ...(input.linked ? {} : { remove: true }) })
 }
 
 /** Merges a task's pull request on GitHub if its head is still the one shown. */
@@ -319,10 +308,7 @@ export async function mergeWorkItemPullRequest(input: {
   pullRequestId: string
   expectedHeadSha: string
 }) {
-  return record(await requestJson<unknown>(
-    projectPath(input.projectId, `pull-requests/${encodeURIComponent(input.pullRequestId)}/merge`),
-    { method: 'POST', idempotencyKey: crypto.randomUUID(), json: { expectedHeadSha: input.expectedHeadSha } },
-  ))
+  return callOp('pull_request_merge', { pullRequestId: input.pullRequestId, expectedHeadSha: input.expectedHeadSha })
 }
 
 export async function setWorkItemPrimaryRepository(input: {
@@ -332,10 +318,7 @@ export async function setWorkItemPrimaryRepository(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  const path = `${workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)}/primary`
-  return normalizeWorkItem(await requestJson<unknown>(path, {
-    method: 'POST', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion },
-  }))
+  return linkOnTask(input, { repositoryId: input.repositoryId, role: 'primary' })
 }
 
 export async function workWithWorker(input: {

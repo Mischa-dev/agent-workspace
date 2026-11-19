@@ -434,9 +434,9 @@ describe('Work Item detail', () => {
     const prompt = [
       'Use the Agent Workspace MCP server.',
       `Project ID: ${projectId}`,
-      `Project URL: http://127.0.0.1:3100/projects/${projectId}`,
+      `Project URL: http://127.0.0.1:3100/w/-/s/${projectId}`,
       `Task ID: ${workItemId}`,
-      `Task URL: http://127.0.0.1:3100/projects/${projectId}/work-items/${workItemId}`,
+      `Task URL: http://127.0.0.1:3100/w/-/s/${projectId}/tasks/${workItemId}`,
       'Task key: AW-1',
       'Load the task and its project instructions through MCP before changing anything.',
       'Work in the repository matched by this Git origin. Set the task to In Progress only when meaningful work begins.',
