@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import sys
+import threading
 import types
 import unittest
 from dataclasses import dataclass
@@ -342,6 +343,54 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         await adapter.disconnect()
         self.assertEqual([c["requestId"] for c in workspace.named("reply_claim")], ["w1"])
 
+
+    async def test_past_one_page_each_finished_turn_reads_the_inbox_again(self):
+        backlog = [{"requestId": f"w{i}", "status": "pending"} for i in range(adapter_module.INBOX_PAGE + 3)]
+        answered = set()
+        workspace = FakeWorkspace()
+
+        def inbox(name, arguments, call=workspace.call_tool):
+            if name == "inbox_list":
+                workspace.calls.append((name, dict(arguments)))
+                left = [item for item in backlog if item["requestId"] not in answered]
+                return ok({"requests": left[: arguments.get("limit", 20)]})
+            return call(name, arguments)
+
+        workspace.call_tool = inbox
+        adapter = adapter_module.AgentWorkspaceAdapter(Config(), tools=workspace, channel=FakeChannel())
+        await adapter.connect()
+        # One conversation answers one request at a time.
+        for _ in range(400):
+            await asyncio.sleep(0.005)
+            for event in list(adapter.handled):
+                if event.message_id not in answered:
+                    answered.add(event.message_id)
+                    await adapter.on_processing_complete(event, Outcome.SUCCESS)
+            if len(answered) == len(backlog):
+                break
+        await adapter.disconnect()
+
+        self.assertEqual(workspace.named("inbox_list")[0]["limit"], adapter_module.INBOX_PAGE)
+        self.assertEqual(len(answered), len(backlog))
+
+    async def test_a_stop_while_the_claim_is_on_its_way_starts_no_turn(self):
+        claim_answered = threading.Event()
+        call = self.workspace.call_tool
+
+        def slow_claim(name, arguments):
+            if name == "reply_claim":
+                claim_answered.wait(2)
+            return call(name, arguments)
+
+        self.workspace.call_tool = slow_claim
+        taking = asyncio.ensure_future(self.adapter._take("r1"))
+        await asyncio.sleep(0.05)
+        await self.adapter._cancelled("r1")
+        claim_answered.set()
+        await taking
+
+        self.assertEqual(self.adapter.handled, [])
+        self.assertEqual(self.workspace.named("reply_send"), [])
 
 class RegistrationTest(unittest.TestCase):
     def test_register_names_the_platform_and_its_settings(self):

@@ -58,6 +58,9 @@ type Held = {
   closed: boolean
 }
 
+/** How many waiting requests one pick-up reads (the most inbox_list gives). */
+export const INBOX_PAGE = 50
+
 let clientSequence = 0
 function clientId(): string {
   clientSequence++
@@ -69,16 +72,33 @@ export class WorkspaceBridge {
   private readonly held = new Map<string, Held>()
   /** Requests being claimed now: the stream and the pick-up can name the same one. */
   private readonly claiming = new Set<string>()
+  /** Requests cancelled while their claim was still on its way. */
+  private readonly cancelledWhileClaiming = new Set<string>()
+  /** The last pick-up came back full: more may wait behind it. */
+  private backlog = false
+  private pickingUp: Promise<void> | null = null
 
   constructor(options: BridgeOptions) {
     this.options = options
   }
 
-  /** Requests already waiting, so a restart misses nothing. */
-  async pickUpWaiting(): Promise<void> {
+  /** Requests already waiting, so a restart misses nothing. Past one page,
+   * it reads again each time a turn ends, until the backlog is gone. */
+  pickUpWaiting(): Promise<void> {
+    this.pickingUp ??= this.readWaiting().finally(() => {
+      this.pickingUp = null
+    })
+    return this.pickingUp
+  }
+
+  private async readWaiting(): Promise<void> {
     try {
-      const value = await this.call<{ requests?: { requestId: string; status: string }[] }>('inbox_list', {})
-      for (const item of value?.requests ?? []) {
+      const value = await this.call<{ requests?: { requestId: string; status: string }[] }>('inbox_list', {
+        limit: INBOX_PAGE,
+      })
+      const requests = value?.requests ?? []
+      this.backlog = requests.length >= INBOX_PAGE
+      for (const item of requests) {
         if (item.status === 'pending' || item.status === 'claimed') void this.take(item.requestId)
       }
     } catch (error) {
@@ -95,6 +115,9 @@ export class WorkspaceBridge {
       if (held) {
         held.closed = true
         held.stop.abort()
+      } else if (this.claiming.has(ask.requestId)) {
+        // Stop came before the claim's answer: the turn must not start.
+        this.cancelledWhileClaiming.add(ask.requestId)
       }
       return
     }
@@ -116,6 +139,7 @@ export class WorkspaceBridge {
       await this.claimAndRun(requestId)
     } finally {
       this.claiming.delete(requestId)
+      this.cancelledWhileClaiming.delete(requestId)
     }
   }
 
@@ -126,6 +150,10 @@ export class WorkspaceBridge {
     } catch (error) {
       // Someone else took it, or it was withdrawn.
       this.options.log?.info?.(`agent-workspace: couldn't claim ${requestId}: ${String(error)}`)
+      return
+    }
+    if (this.cancelledWhileClaiming.has(requestId)) {
+      this.options.log?.info?.(`agent-workspace: ${requestId} was stopped before its turn began`)
       return
     }
     const request = claim.request
@@ -229,6 +257,7 @@ export class WorkspaceBridge {
   private close(held: Held) {
     held.closed = true
     this.held.delete(held.requestId)
+    if (this.backlog) void this.pickUpWaiting()
   }
 
   /** The request a conversation is being answered under, if any. */

@@ -336,6 +336,73 @@ async fn person_op(
     body
 }
 
+/// A2.27: the tools that aren't operations yet are guarded too. A deny
+/// guard on everything stops a page written by hand-written tool; a review
+/// guard holds it, and once allowed the same call goes through once.
+#[tokio::test]
+async fn guards_hold_hand_written_tools_too() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_tools")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let write = |title: &str| json!({"projectId": space, "title": title, "body": "Notes."});
+    let pool = world.pool().clone();
+    let pages = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Plan'")
+                .fetch_one(&pool)
+                .await
+                .expect("pages")
+        }
+    };
+
+    let denied = op(
+        &world,
+        "guard_set",
+        json!({"name": "Hands off", "action": "deny"}),
+    )
+    .await;
+    let refused = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(refused.to_string().contains("Hands off"), "{refused}");
+    assert_eq!(pages().await, 0);
+    op(
+        &world,
+        "guard_set",
+        json!({"guardId": denied["guard"]["id"], "remove": true}),
+    )
+    .await;
+
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let held = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(held["pendingReview"], true, "{held}");
+    assert_eq!(pages().await, 0);
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["requestId"], "optionId": "allow"}),
+    )
+    .await;
+    let made = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(pages().await, 1);
+    let next = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(next["pendingReview"], true, "{next}");
+}
+
 /// A2.27: a team's own guards. A deny guard stops the changes it matches
 /// and nothing else; a review guard holds a change until a reviewer allows
 /// it, then the same call goes through once; declined, it is refused. A
