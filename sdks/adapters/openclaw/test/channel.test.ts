@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { WorkspaceBridge, type Turn, type TurnHandle } from '../src/bridge.ts'
+import { INBOX_PAGE, WorkspaceBridge, type Turn, type TurnHandle } from '../src/bridge.ts'
 import { CHANNEL, agentWorkspaceChannelPlugin, normalizeTarget, sendText, startAccount, type ResolvedAccount } from '../src/channel.ts'
 
 const envelope = JSON.parse(readFileSync(new URL('../../../fixtures/delivery/envelope.json', import.meta.url), 'utf8'))
@@ -285,6 +285,55 @@ test('a turn the host turns away gives the request back, and waiting ones are pi
 
   assert.deepEqual(workspace.named('reply_claim').map((a) => a.requestId), ['w1', 'r1'])
   assert.deepEqual(workspace.named('reply_release').map((a) => a.requestId).sort(), ['r1', 'w1'])
+  assert.deepEqual(workspace.named('reply_send'), [])
+})
+
+test('past one page of waiting requests, each finished turn reads the inbox again', async () => {
+  // The inbox answers at most a page; answered requests leave it.
+  const backlog = Array.from({ length: INBOX_PAGE + 3 }, (_, i) => ({ requestId: `w${i}`, status: 'pending' }))
+  const workspace = new FakeWorkspace()
+  const answered = new Set<string>()
+  const callTool = workspace.callTool.bind(workspace)
+  workspace.callTool = async (name: string, args: Record<string, unknown>) => {
+    if (name === 'inbox_list') {
+      workspace.calls.push({ name, args: { ...args } })
+      return ok({ requests: backlog.filter((item) => !answered.has(item.requestId)).slice(0, Number(args.limit ?? 20)) })
+    }
+    return callTool(name, args)
+  }
+  const bridge = new WorkspaceBridge({
+    tools: workspace,
+    runTurn: async (turn, handle) => {
+      await settle()
+      answered.add(turn.requestId)
+      await handle.deliver('Done.', 'final')
+    },
+  })
+  await bridge.pickUpWaiting()
+  for (let i = 0; i < 10 && answered.size < backlog.length; i++) await settle()
+
+  assert.equal(workspace.named('inbox_list')[0].limit, INBOX_PAGE)
+  assert.equal(answered.size, backlog.length)
+  assert.equal(new Set(workspace.named('reply_claim').map((a) => a.requestId)).size, backlog.length)
+})
+
+test('a Stop that arrives while the claim is on its way starts no turn', async () => {
+  const workspace = new FakeWorkspace([{ requestId: 'w1', status: 'pending' }])
+  let answerClaim: () => void = () => {}
+  const callTool = workspace.callTool.bind(workspace)
+  workspace.callTool = async (name: string, args: Record<string, unknown>) => {
+    if (name === 'reply_claim') await new Promise<void>((resolve) => (answerClaim = resolve))
+    return callTool(name, args)
+  }
+  const turns: string[] = []
+  const bridge = new WorkspaceBridge({ tools: workspace, runTurn: async (turn) => void turns.push(turn.requestId) })
+  await bridge.pickUpWaiting()
+  await settle()
+  await bridge.hear(replyEvent('reply.cancelled', 'w1'))
+  answerClaim()
+  await settle()
+
+  assert.deepEqual(turns, [])
   assert.deepEqual(workspace.named('reply_send'), [])
 })
 
