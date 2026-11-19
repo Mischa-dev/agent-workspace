@@ -654,7 +654,7 @@ pub(crate) fn document() -> Value {
         // means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "The result, or a refusal: see its `outcome`.",
+                "description": "Result or refusal (see `outcome`).",
                 "content": { "application/json": { "schema": output } },
             })
         });

@@ -65,8 +65,9 @@ fn needs(meta: &OpMeta) -> String {
     }
     if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
         text.push_str(
-            " Send a clientRequestId to make a retry safe; without one the change runs once \
-             and is not retry-safe (replaySafe: false).",
+            // Short: it ends every such tool's description, and the public
+            // API document holds them all. The answer's replaySafe says the rest.
+            " A clientRequestId makes retries safe.",
         );
     }
     text
