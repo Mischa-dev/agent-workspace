@@ -40,6 +40,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/windows", post(windows_route))
         .route("/api/v1/host/notices", post(notice_route))
         .route("/api/v1/host/agents/register", post(register_route))
+        .route("/api/v1/host/runs", post(adopt_route))
+        .route("/api/v1/host/runs/{run_id}/model", post(model_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
         .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
@@ -208,6 +210,42 @@ async fn windows_route(
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
     let host = host_caller(&state, &headers).await?;
     Ok(Json(super::windows::report(&state, &host, request).await?))
+}
+
+/// A2.26: a run the host started itself, adopted once.
+async fn adopt_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<super::adopt::AdoptRequest>,
+) -> Result<(StatusCode, Json<super::adopt::Adopted>), HostError> {
+    let host = host_caller(&state, &headers).await?;
+    let adopted = super::adopt::adopt(&state, &host, request).await?;
+    let status = if adopted.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(adopted)))
+}
+
+/// A1.25: one model turn for the built-in assistant's run, by the run's
+/// credential (see `builtin::assistant`).
+async fn model_route(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+    ApiJson(turn): ApiJson<agent_workspace_host_protocol::ModelTurn>,
+) -> Response {
+    let Some(token) = bearer(&headers) else {
+        return super::builtin::assistant::ModelRefusal::Unauthorized.into_response();
+    };
+    if let Err(error) = state.rate_limits.check_mcp_auth(token).await {
+        return error.into_response();
+    }
+    match super::builtin::assistant::model_turn(&state, token, run_id, turn).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(refusal) => refusal.into_response(),
+    }
 }
 
 async fn notice_route(

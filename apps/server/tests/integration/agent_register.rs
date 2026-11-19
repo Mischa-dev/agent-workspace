@@ -84,11 +84,14 @@ async fn a_host_proposes_an_agent_and_someone_who_may_add_agents_approves_it() {
     // The owner sees the host's offer; lena, who can't add agents, can't.
     let offers = op(&world, owner, "agent_offer_list", json!({})).await;
     assert_eq!(offers["outcome"], "ok", "{offers}");
-    assert_eq!(
-        offers["value"]["offers"][0]["offer"]["id"], "new",
-        "{offers}"
-    );
-    assert_eq!(offers["value"]["offers"][0]["hostId"], host.id.to_string());
+    // The built-in host's own offers come first; this host's follow.
+    let from_host: Vec<&Value> = offers["value"]["offers"]
+        .as_array()
+        .expect("offers")
+        .iter()
+        .filter(|offer| offer["hostId"] == host.id.to_string())
+        .collect();
+    assert_eq!(from_host[0]["offer"]["id"], "new", "{offers}");
     let refused = op(&world, lena, "agent_offer_list", json!({})).await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
 

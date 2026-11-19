@@ -455,13 +455,14 @@ async fn conversation_scope(
         return Ok(None);
     };
     let space = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_scalar::<_, Uuid>(lookup)
+        sqlx::query_scalar::<_, Option<Uuid>>(lookup)
             .bind(id)
             .fetch_optional(connection)
             .await
     })
     .await?;
-    Ok(space.map(crate::modules::gate::Scope::Project))
+    // A DM or group is in no space, so no workspace closes it.
+    Ok(space.flatten().map(crate::modules::gate::Scope::Project))
 }
 
 /// Lock the workspace row and read its lifecycle.
@@ -934,7 +935,7 @@ async fn retire_owned_accounts(
          updated_at = now() WHERE actor_id = ANY($1) AND enabled",
         "UPDATE project_memberships SET enabled = false, disabled_at = now(), \
          version = version + 1, updated_at = now() WHERE actor_id = ANY($1) AND enabled",
-        "UPDATE mcp_client_credentials SET status = 'revoked', revoked_at = now(), \
+        "UPDATE account_credentials SET status = 'revoked', revoked_at = now(), \
          version = version + 1, updated_at = now() WHERE actor_id = ANY($1) AND status = 'active'",
         "UPDATE mcp_oauth_grants SET revoked_at = now() \
          WHERE actor_id = ANY($1) AND revoked_at IS NULL",
@@ -971,9 +972,12 @@ fn tenant_column(table: &str) -> Option<&'static str> {
 
 /// Server-wide tables the deletion walks into: the hosts the workspace owns,
 /// the connections still at home there (`delivery::connections::rehome_from`
-/// first moves those that reach on elsewhere), and what hangs off them.
-/// Every other server-wide table is never touched (accounts stay, R19).
+/// first moves those that reach on elsewhere), what hangs off them, and the
+/// credentials narrowed to it (one space's secret). Every other server-wide
+/// table is never touched (accounts stay, R19), so a credential that reaches
+/// every workspace its account is in stays too.
 const OWNED_GLOBAL_TABLES: &[(&str, &str)] = &[
+    ("account_credentials", "workspace_id"),
     ("hosts", "owner_workspace_id"),
     ("host_enrolments", "owner_workspace_id"),
     ("host_agents", ""),

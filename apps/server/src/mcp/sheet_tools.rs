@@ -22,8 +22,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ARCHIVED_PROJECT_MESSAGE, StoredRole, ToolResult, insert_audit, mark_via, parse_id,
-        public_url, role_allows,
+        ARCHIVED_PROJECT_MESSAGE, StoredRole, ToolResult, insert_audit, link_url, mark_via,
+        parse_id, role_allows,
     },
     talk::can_write_in,
     writes::{REQUEST_ID_MESSAGE, parse_request_id},
@@ -56,7 +56,11 @@ const MAX_READ_ROWS: usize = 500;
 const MAX_ECHOED_CELLS: usize = 200;
 
 fn sheet_url(state: &AppState, project_id: Uuid, sheet_id: Uuid) -> String {
-    public_url(state, &format!("/projects/{project_id}/sheets/{sheet_id}"))
+    link_url(
+        state,
+        None,
+        &crate::addresses::Target::space(project_id, crate::addresses::Place::Sheet(sheet_id)),
+    )
 }
 
 /// AWD-75: whether Sheets is off in the project, for its workspace or the
@@ -81,7 +85,6 @@ async fn read_access<T>(
     match memory::project_access(
         &state.pool,
         principal.actor_id,
-        principal.actor_kind,
         principal.project_id,
         Action::ProjectView,
     )

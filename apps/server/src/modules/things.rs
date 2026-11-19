@@ -76,7 +76,7 @@ struct ThingRow {
     project_id: Option<Uuid>,
     /// For a thing across a workspace (no project): that workspace.
     organization_id: Option<Uuid>,
-    /// For conversations: whether they're in the hidden direct project.
+    /// For conversations: whether they're a DM or group (in no space).
     direct: bool,
     /// For a thread: the conversation it was started in. For a record: its
     /// collection.
@@ -178,6 +178,7 @@ const PAGES_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = ANY($1) AND page.project_id = ANY($2) AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
 "#;
 
 const DECISIONS_SQL: &str = r#"
@@ -217,10 +218,10 @@ const CONVERSATIONS_SQL: &str = r#"
            CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
            NULL::uuid AS owner_id, NULL::text AS owner_name,
            conversation.project_id, NULL::uuid AS organization_id,
-           project.kind = 'direct' AS direct, conversation.parent_channel_id AS parent_id
+           conversation.project_id IS NULL AS direct, conversation.parent_channel_id AS parent_id
     FROM conversations conversation
-    JOIN projects project ON project.id = conversation.project_id
-    WHERE conversation.id = ANY($1) AND conversation.project_id = ANY($2)
+    WHERE conversation.id = ANY($1)
+      AND (conversation.project_id IS NULL OR conversation.project_id = ANY($2))
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $3)
 "#;
@@ -782,7 +783,7 @@ mod tests {
         // onto the wrong placeholders.
         let expected = [
             ("task", 2),
-            ("page", 2),
+            ("page", 3),
             ("decision", 3),
             ("whiteboard", 3),
             ("thread", 3),

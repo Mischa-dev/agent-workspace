@@ -72,15 +72,7 @@ function runReadiness(readiness: string) {
   return `Run account ${humanize(readiness).toLocaleLowerCase()}`
 }
 
-export function TeamSettings({
-  organizationId,
-  organizationRole,
-  projectId,
-}: {
-  organizationId?: string
-  organizationRole: string
-  projectId: string
-}) {
+export function TeamSettings({ organizationId, projectId }: { organizationId?: string; projectId: string }) {
   const queryClient = useQueryClient()
   const experience = useProjectExperience(projectId)
   const runsOn = experience.moduleOn('runs')
@@ -89,10 +81,8 @@ export function TeamSettings({
     queryFn: () => listRoles(organizationId ?? ''),
     enabled: Boolean(organizationId),
   })
-  // Custom roles you may give: admin-based ones only owners give.
-  const customRoles = (roles.data?.roles ?? []).filter(
-    (role) => !role.builtIn && role.capabilities.assign && (role.baseRole !== 'admin' || organizationRole === 'owner'),
-  )
+  // Custom roles you may give (the server applies the tiers).
+  const customRoles = (roles.data?.roles ?? []).filter((role) => !role.builtIn && role.capabilities.assign)
   // Roles you may invite someone to, built-in ones included: inviting needs
   // "invite members", not "manage members" (the server works it out as the
   // invitation endpoint does).
@@ -204,7 +194,6 @@ export function TeamSettings({
           </OneTimeValue>
         )}
         <InviteForm
-          canInviteAdmin={organizationRole === 'owner'}
           inviteRoles={inviteRoles}
           rolesLoaded={Boolean(roles.data)}
           disabled={issueMutation.isPending}
@@ -298,13 +287,11 @@ export function TeamSettings({
 }
 
 function InviteForm({
-  canInviteAdmin,
   inviteRoles,
   rolesLoaded,
   disabled,
   onSubmit,
 }: {
-  canInviteAdmin: boolean
   inviteRoles: WorkspaceRoleView[]
   rolesLoaded: boolean
   disabled: boolean
@@ -315,8 +302,8 @@ function InviteForm({
   const offers = (key: string) => !rolesLoaded || inviteRoles.some((entry) => entry.builtIn && entry.key === key)
   const offersMember = offers('member')
   const offersViewer = offers('viewer')
-  const offersAdmin = canInviteAdmin && inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
-  const customRoles = inviteRoles.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || canInviteAdmin))
+  const offersAdmin = inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = inviteRoles.filter((entry) => !entry.builtIn)
   const firstOffered = offersMember
     ? 'member'
     : offersViewer

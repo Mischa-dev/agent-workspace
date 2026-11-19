@@ -5,12 +5,14 @@ import type {
   OrganizationSummary,
   SessionResponse,
 } from '../auth/session'
+import { permissionsOf } from './permissions'
 
 export const organization: OrganizationSummary = {
   id: '019fb600-0000-7000-8000-000000000000',
   name: 'Mischa',
   slug: 'mischa',
   role: 'owner',
+  permissions: permissionsOf('owner'),
 }
 export const projectAId = '019fb600-0000-7000-8000-000000000001'
 export const projectBId = '019fb600-0000-7000-8000-000000000002'
@@ -50,6 +52,7 @@ export function project(
     name,
     archivedAt: null,
     role: 'owner',
+    permissions: permissionsOf(typeof overrides.role === 'string' ? overrides.role : 'owner'),
     version: 1,
     attentionCount: 0,
     capabilities: {

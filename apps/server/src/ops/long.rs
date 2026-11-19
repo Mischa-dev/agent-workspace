@@ -150,7 +150,7 @@ impl KeptCaller {
             r#"
             SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND status = 'active')
                AND ($2::uuid IS NULL OR EXISTS (
-                   SELECT 1 FROM mcp_client_credentials credential
+                   SELECT 1 FROM account_credentials credential
                    WHERE credential.id = $2 AND credential.status = 'active'
                      AND credential.revoked_at IS NULL))
                AND ($3::uuid IS NULL OR EXISTS (
@@ -187,6 +187,7 @@ impl KeptCaller {
             limits,
             requested_by: self.requested_by,
             run_id: self.run_id,
+            credential_id: self.credential_id,
             for_run: self.for_run,
         }))
     }

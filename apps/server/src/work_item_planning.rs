@@ -143,7 +143,7 @@ pub async fn task_links(
     let visible = "((item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id)) \
          AND EXISTS (SELECT 1 FROM project_memberships sees_task \
              WHERE sees_task.project_id = item.project_id AND sees_task.actor_id = $4 \
-               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')))";
+               AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM work_item_dependencies dependency
@@ -242,7 +242,7 @@ pub async fn task_links(
     let shown = |task: &TaskRef| {
         sees_here
             && (task.project_id == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     task.project_id,
                     crate::policy::Permission::TasksView,
@@ -1099,9 +1099,15 @@ pub async fn set_watching(
     let rows = if watching {
         sqlx::query(
             r#"
-            INSERT INTO work_item_watchers (project_id, work_item_id, actor_id)
-            SELECT $1, item.id, $3 FROM task_rows item WHERE item.project_id = $1 AND item.id = $2
-            ON CONFLICT DO NOTHING
+            INSERT INTO follows (
+                workspace_id, space_id, account_id, target_kind, target_id, level,
+                created_by_account_id
+            )
+            SELECT space.organization_id, $1, $3, 'task', item.id, 'everything', $3
+            FROM task_rows item JOIN projects space ON space.id = item.project_id
+            WHERE item.project_id = $1 AND item.id = $2
+            ON CONFLICT (account_id, target_kind, target_id)
+            DO UPDATE SET level = 'everything' WHERE follows.level <> 'everything'
             "#,
         )
         .bind(project_id)
@@ -1111,7 +1117,8 @@ pub async fn set_watching(
         .await?
     } else {
         sqlx::query(
-            "DELETE FROM work_item_watchers WHERE project_id = $1 AND work_item_id = $2 AND actor_id = $3",
+            "DELETE FROM follows \
+             WHERE space_id = $1 AND target_kind = 'task' AND target_id = $2 AND account_id = $3",
         )
         .bind(project_id)
         .bind(task_id)
@@ -1132,11 +1139,12 @@ pub async fn watchers(
     Ok(sqlx::query_as::<_, (Uuid, String, String, String)>(
         r#"
         SELECT actor.id, actor.kind, membership.display_name, membership.handle
-        FROM work_item_watchers watcher
-        JOIN actors actor ON actor.id = watcher.actor_id
+        FROM follows watcher
+        JOIN actors actor ON actor.id = watcher.account_id
         JOIN project_memberships membership
-          ON membership.project_id = watcher.project_id AND membership.actor_id = watcher.actor_id
-        WHERE watcher.project_id = $1 AND watcher.work_item_id = $2 AND membership.enabled
+          ON membership.project_id = watcher.space_id AND membership.actor_id = watcher.account_id
+        WHERE watcher.space_id = $1 AND watcher.target_kind = 'task' AND watcher.target_id = $2
+          AND membership.enabled
         ORDER BY lower(membership.display_name), actor.id
         "#,
     )

@@ -37,12 +37,12 @@ pub(crate) async fn visible_to(
            AND ($5::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_task
                WHERE sees_task.project_id = $2 AND sees_task.actor_id = $1
-                 AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+                 AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
            ))
            AND ($4::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_code
                WHERE sees_code.project_id = $2 AND sees_code.actor_id = $1
-                 AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+                 AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
            ))
            -- A record's events (AWD-110) while it's in the project, in a
            -- collection that isn't archived.
@@ -162,7 +162,10 @@ pub(crate) async fn task_data(
         "archived": task.archived,
         "version": task.version,
         "updatedAt": task.updated_at,
-        "url": format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::task(project_id, task.id).legacy_path()
+        ),
     })))
 }
 
@@ -214,7 +217,17 @@ pub(crate) async fn record_data(
         "archived": line.archived,
         "version": line.version,
         "updatedAt": line.updated_at,
-        "url": format!("{origin}/projects/{project_id}/collections/{collection_id}?record={record_id}"),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::space(
+                project_id,
+                crate::addresses::Place::Record {
+                    collection: collection_id,
+                    record: record_id,
+                },
+            )
+            .legacy_path()
+        ),
     })))
 }
 

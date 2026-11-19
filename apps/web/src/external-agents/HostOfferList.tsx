@@ -8,7 +8,8 @@ import { useHostOffers } from './addPaths'
 
 /**
  * A2.20: "Start one on a linked host": the offers of the hosts you may use
- * here (yours and the workspace's), in the hosts' own words. Choosing one
+ * here (yours and the workspace's), in the hosts' own words, and this
+ * server's own assistant (A1.25). Choosing one
  * tells the host who chose it and links to its page when it has one on its
  * own address; the host sets the agent up there (anything secret stays on the
  * host) and then proposes it here, which asks you to approve it. Shown only
@@ -28,6 +29,11 @@ export function HostOfferList() {
           const id = String(offer.id ?? '')
           const title = typeof offer.title === 'string' ? offer.title : id
           const summary = typeof offer.summary === 'string' ? offer.summary : null
+          // The built-in assistant (A1.25): says what to set when the
+          // workspace has no model yet, and is added at once when chosen.
+          const unavailable = typeof offer.unavailable === 'string' ? offer.unavailable : null
+          const opening = offer.start as { adds?: boolean } | undefined
+          const adds = opening?.adds === true
           return (
             <li className="aw-agents__joinable-row" key={`${hostId}:${id}`}>
               <span className="aw-agents__joinable-name">
@@ -36,27 +42,36 @@ export function HostOfferList() {
                   {summary ? `${summary} · ` : ''}
                   {hostName}
                 </span>
+                {unavailable && <span className="aw-quiet"> {unavailable}</span>}
               </span>
               <Button
                 busy={start.isPending && start.variables?.host === hostId && start.variables?.offerId === id}
-                disabled={start.isPending}
+                disabled={start.isPending || unavailable !== null}
                 onClick={() =>
                   start.mutate(
                     { host: hostId, offerId: id },
                     {
-                      onError: (error) => toastError(`${hostName} wasn’t reached`, error),
+                      onError: (error) =>
+                        toastError(adds ? `${title} wasn’t added` : `${hostName} wasn’t reached`, error),
                       onSuccess: (result) => {
                         setPage(result.page ? { hostName, url: result.page } : null)
-                        showToast({
-                          title: `Sent to ${hostName}`,
-                          description: 'When it’s done, it asks you here to approve the new agent.',
-                        })
+                        showToast(
+                          result.accountId
+                            ? {
+                                title: `Added ${title}`,
+                                description: 'It answers its DMs and mentions now.',
+                              }
+                            : {
+                                title: `Sent to ${hostName}`,
+                                description: 'When it’s done, it asks you here to approve the new agent.',
+                              },
+                        )
                       },
                     },
                   )
                 }
               >
-                Start
+                {adds ? 'Add' : 'Start'}
               </Button>
             </li>
           )

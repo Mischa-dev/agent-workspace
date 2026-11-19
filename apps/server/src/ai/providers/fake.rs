@@ -13,7 +13,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
-use super::{Completion, CompletionRequest, ProviderError, ProviderManifest};
+use super::{
+    Chat, ChatRequest, Completion, CompletionRequest, ModelPart, ModelRole, ModelStop,
+    ProviderError, ProviderManifest,
+};
 use crate::provider::manifest::ModelEntry;
 
 /// The gateway adds this to the instructions when it retries after a reply
@@ -56,6 +59,103 @@ pub fn complete(request: &CompletionRequest<'_>) -> Result<Completion, ProviderE
         output_tokens: i64::try_from(text.len()).unwrap_or(0) / 4,
         text,
     })
+}
+
+/// A1.25: an assistant's turn by rules. `[[call NAME {json}]]` in the
+/// latest message calls the tool NAME (when offered) with that input;
+/// tool results are answered with which tools ran; anything else is heard
+/// back by its last line. `[[unavailable]]` fails like a provider outage.
+pub fn chat(request: &ChatRequest<'_>) -> Result<Chat, ProviderError> {
+    let last = request
+        .turn
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == ModelRole::User)
+        .ok_or_else(|| ProviderError::BadRequest("no message".to_owned()))?;
+    let results = last
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            ModelPart::ToolResult { name, is_error, .. } => Some(format!(
+                "{name} {}",
+                if *is_error { "failed" } else { "worked" }
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let text = last.text();
+    if text.contains("[[unavailable]]") {
+        return Err(ProviderError::Unavailable("HTTP 503".to_owned()));
+    }
+    let (parts, stop) = if !results.is_empty() {
+        (
+            vec![ModelPart::Text {
+                text: format!("Done: {}.", results.join(", ")),
+            }],
+            ModelStop::End,
+        )
+    } else if let Some((name, input)) = directive(&text) {
+        if request.turn.tools.iter().any(|tool| tool.name == name) {
+            (
+                vec![ModelPart::ToolCall {
+                    id: format!("fake-{}", request.turn.messages.len()),
+                    name,
+                    input,
+                }],
+                ModelStop::ToolUse,
+            )
+        } else {
+            (
+                vec![ModelPart::Text {
+                    text: format!("I can't use {name}."),
+                }],
+                ModelStop::End,
+            )
+        }
+    } else {
+        let heard = text
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect::<String>();
+        (
+            vec![ModelPart::Text {
+                text: format!("Heard: {heard}"),
+            }],
+            ModelStop::End,
+        )
+    };
+    let size = request.turn.system.len()
+        + request
+            .turn
+            .messages
+            .iter()
+            .map(|message| serde_json::to_string(message).map_or(0, |json| json.len()))
+            .sum::<usize>();
+    Ok(Chat {
+        input_tokens: i64::try_from(size).unwrap_or(0) / 4 + 1,
+        output_tokens: 8,
+        parts,
+        stop,
+    })
+}
+
+/// `[[call NAME {json}]]`: the tool and its input.
+fn directive(text: &str) -> Option<(String, Value)> {
+    let start = text.find("[[call ")? + "[[call ".len();
+    let rest = &text[start..];
+    let end = rest.find("]]")?;
+    let inner = rest[..end].trim();
+    let (name, input) = inner.split_once(' ').unwrap_or((inner, "{}"));
+    Some((
+        name.to_owned(),
+        serde_json::from_str(input.trim()).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 fn answer(prompt_id: &str, input: &Value) -> Result<Value, ProviderError> {

@@ -120,33 +120,15 @@ pub fn matching_preset(switches: &state::Switches) -> Option<String> {
         .map(|preset| preset.id.clone())
 }
 
-async fn member_role(
-    connection: &mut sqlx::PgConnection,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-) -> Result<String, AppError> {
-    sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT membership.role
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
-        WHERE membership.organization_id = $1 AND membership.actor_id = $2
-          AND membership.enabled
-        "#,
-    )
-    .bind(organization_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *connection)
-    .await?
-    .ok_or(AppError::NotFound("workspace"))
-}
-
 async fn view(
     connection: &mut sqlx::PgConnection,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<ModulesResponse, AppError> {
-    let role = member_role(connection, principal, organization_id).await?;
+    let manages =
+        crate::workspace::standing_of(connection, principal.actor_id, organization_id, false)
+            .await?
+            .may(crate::policy::Permission::ModulesManage);
     let switches = state::switches(connection, organization_id).await?;
     let set = state::for_member(connection, organization_id, principal.actor_id).await?;
     Ok(ModulesResponse {
@@ -157,7 +139,7 @@ async fn view(
             .collect(),
         presets: manifest::presets(),
         preset: matching_preset(&switches),
-        can_manage: matches!(role.as_str(), "owner" | "admin"),
+        can_manage: manages,
     })
 }
 
@@ -260,13 +242,7 @@ pub(crate) async fn change_modules_in(
     if wanted.is_empty() {
         return Err(AppError::Validation("switches"));
     }
-    settings::authorize_workspace_manage_as(
-        &mut **transaction,
-        actor_id,
-        crate::policy::ActorKind::Human,
-        organization_id,
-    )
-    .await?;
+    settings::authorize_workspace_manage_as(&mut **transaction, actor_id, organization_id).await?;
     if let Some(space_id) = space {
         return change_space_switches(transaction, actor_id, organization_id, space_id, &wanted)
             .await;

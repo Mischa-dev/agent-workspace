@@ -26,6 +26,8 @@ export type OrganizationSummary = {
   name: string
   slug: string
   role: OrganizationRole
+  /** What the caller may do in this workspace (K1.26); ask with `can`, never the role's name. */
+  permissions: string[]
   /** `suspended` or `deleting` when the workspace refuses changes (H1.24); missing means active. */
   lifecycle?: 'active' | 'importing' | 'suspended' | 'deleting'
 }
@@ -118,7 +120,10 @@ function normalizeOrganization(value: unknown): OrganizationSummary | null {
       ? record.lifecycle
       : undefined
   if (!id || !name || !slug || !role) return null
-  return lifecycle ? { id, name, slug, role, lifecycle } : { id, name, slug, role }
+  const permissions = Array.isArray(record.permissions)
+    ? record.permissions.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  return lifecycle ? { id, name, slug, role, permissions, lifecycle } : { id, name, slug, role, permissions }
 }
 
 function normalizeUser(value: unknown): SessionUser | null {

@@ -575,7 +575,7 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
                user_account.display_name, user_account.authentication_epoch, address.address
         FROM users user_account
         JOIN actors actor ON actor.id = user_account.actor_id
-         AND actor.status = 'active' AND actor.kind = 'human'
+         AND actor.status = 'active' AND actor.kind = 'human' -- // kind-check: mechanical (a person signs in with a password)
         JOIN user_password_credentials credential ON credential.user_id = user_account.id
         JOIN user_email_addresses address ON address.user_id = user_account.id
          AND address.verified_at IS NOT NULL
@@ -719,7 +719,7 @@ async fn live_reset(
          AND user_account.status = 'active'
          AND user_account.authentication_epoch = reset.authentication_epoch
         JOIN actors actor ON actor.id = user_account.actor_id
-         AND actor.status = 'active' AND actor.kind = 'human'
+         AND actor.status = 'active' AND actor.kind = 'human' -- // kind-check: mechanical (a person signs in with a password)
         WHERE reset.token_digest = $1 AND reset.consumed_at IS NULL
           AND reset.expires_at > now() AND reset.failed_attempts < $2
         FOR UPDATE OF reset

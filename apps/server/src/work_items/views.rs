@@ -107,8 +107,9 @@ const REVIEW_WHERE: &str = r#"
     AND status.semantic_category IN ('review', 'verification')
     AND item.assignee_actor_id IS DISTINCT FROM $1
     AND (item.created_by_actor_id = $1
-         OR EXISTS (SELECT 1 FROM work_item_watchers watcher
-                     WHERE watcher.work_item_id = item.id AND watcher.actor_id = $1))
+         OR EXISTS (SELECT 1 FROM follows watcher
+                     WHERE watcher.target_kind = 'task' AND watcher.target_id = item.id
+                       AND watcher.account_id = $1))
 "#;
 
 /// Claimed by the reader or by an agent they connected.

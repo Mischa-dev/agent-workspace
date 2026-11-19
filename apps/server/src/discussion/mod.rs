@@ -122,6 +122,29 @@ pub(crate) async fn ensure_subject_takes_messages(
     Ok(())
 }
 
+/// The kind of thing a conversation discusses: its comments conversation,
+/// or a thread under one. `None` for any other conversation.
+pub(crate) async fn subject_kind_of(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+) -> Result<Option<SubjectKind>, AppError> {
+    let kind = sqlx::query_scalar::<_, String>(
+        r#"
+        -- visibility: the caller holds the conversation, checked by its lock
+        SELECT COALESCE(parent.subject_kind, conversation.subject_kind)
+        FROM conversations conversation
+        LEFT JOIN conversations parent
+          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
+        WHERE conversation.id = $1
+          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(kind.as_deref().and_then(SubjectKind::parse))
+}
+
 /// The thing's comments conversation and its project, made if it doesn't
 /// exist yet, when `creator` may see the thing and it takes comments. A
 /// board outside any project keeps its comments in the workspace space,
@@ -328,7 +351,9 @@ pub(crate) async fn post(
 
     let content = match body {
         CommentBody::Content(content) => content,
-        CommentBody::Text(text) => crate::mcp::content_from_text(state, project_id, &text).await?,
+        CommentBody::Text(text) => {
+            crate::mcp::content_from_text(state, project_id, None, &text).await?
+        }
     };
     let outcome = append_message_command_with(
         state,

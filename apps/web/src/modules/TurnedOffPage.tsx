@@ -1,6 +1,7 @@
 import { here } from '../app/href'
 import { useNavigate } from 'react-router-dom'
 
+import { can } from '../auth/can'
 import { useAuthenticatedSession } from '../auth/session'
 import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { useShellPage } from '../shell/shellStore'
@@ -19,7 +20,7 @@ export function TurnedOffPage({ module }: { module: string }) {
   const name = moduleName(module)
   useShellPage({ mainClassName: 'aw-main--page' })
   const manages = session.organizations.some(
-    (organization) => organization.id === workspaceId && (organization.role === 'owner' || organization.role === 'admin'),
+    (organization) => organization.id === workspaceId && can(organization, 'modules.manage'),
   )
   return (
     <div className="aw-page" role="status">

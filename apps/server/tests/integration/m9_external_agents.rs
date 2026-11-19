@@ -123,7 +123,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     );
 
     let stored = sqlx::query_as::<_, (Vec<u8>, String, Option<Uuid>)>(
-        "SELECT token_digest, token_prefix, external_agent_connection_id FROM mcp_client_credentials WHERE id = $1",
+        "SELECT token_digest, token_prefix, external_agent_connection_id FROM account_credentials WHERE id = $1",
     )
     .bind(credential_id)
     .fetch_one(&pool)
@@ -1477,7 +1477,7 @@ fn read_request(uri: &str, cookie: &str) -> Request<Body> {
 
 async fn response_json(response: axum::response::Response) -> Value {
     let status = response.status();
-    let body = to_bytes(response.into_body(), 1_000_000)
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read response body");
     serde_json::from_slice(&body).unwrap_or_else(|error| {
