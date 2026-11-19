@@ -72,6 +72,10 @@ pub static MCP_AUTH: Bucket = exact("mcp.auth", 600, MINUTE);
 /// Run reports (A1.3) from one account: 20 a second on average, in bursts
 /// of up to 100.
 pub static RUN_REPORTS: Bucket = chunked("runs.reports", 100, Duration::from_secs(5), 5);
+/// A run's streamed reply (A1.17), per run credential: kept apart from
+/// [`MCP_AUTH`] so live words never starve the run's own tool calls. Hosts
+/// gather words for a moment, so 20 a second is room to spare.
+pub static RUN_STREAMS: Bucket = exact("runs.stream", 1200, MINUTE);
 /// Tokens that didn't resolve, across every caller. Valid tokens never
 /// spend it; while it's spent, only tokens that authenticated lately are
 /// looked up.
@@ -373,10 +377,24 @@ impl RateLimiters {
             .await
     }
 
+    /// [`Self::check_mcp_auth`] for a piece of a run's streamed reply,
+    /// charged to its own budget.
+    pub async fn check_run_stream(&self, untrusted_token: &str) -> Result<(), AppError> {
+        self.check_token(&RUN_STREAMS, untrusted_token).await
+    }
+
     /// Before a bearer token is looked up: charged to the token. While
     /// tokens that didn't resolve have spent the shared budget, only a token
     /// that authenticated lately is looked up.
     pub async fn check_mcp_auth(&self, untrusted_token: &str) -> Result<(), AppError> {
+        self.check_token(&MCP_AUTH, untrusted_token).await
+    }
+
+    async fn check_token(
+        &self,
+        bucket: &'static Bucket,
+        untrusted_token: &str,
+    ) -> Result<(), AppError> {
         let key = digest(untrusted_token);
         if let Some(retry_after) = self
             .limits
@@ -389,7 +407,7 @@ impl RateLimiters {
         {
             return Err(AppError::rate_limited(retry_after));
         }
-        self.limits.check(&MCP_AUTH, LimitKey::Secret(&key)).await
+        self.limits.check(bucket, LimitKey::Secret(&key)).await
     }
 
     /// A bearer token that didn't resolve.
@@ -722,6 +740,7 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&WORKSPACE_CALLS, LimitScope::Workspace),
     (&MCP_AUTH, LimitScope::Credential),
     (&RUN_REPORTS, LimitScope::Account),
+    (&RUN_STREAMS, LimitScope::Credential),
     (&MCP_AUTH_FAILURES, LimitScope::ServerFailuresOnly),
     (&OAUTH_CEREMONIES, LimitScope::Client),
     (&OAUTH_CEREMONY_SENDERS, LimitScope::Address),

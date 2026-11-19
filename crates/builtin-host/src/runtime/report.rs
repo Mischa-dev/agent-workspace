@@ -4,7 +4,7 @@
 //! carried, as any host reports. The built-in host's own step names
 //! (`command_started`, `run_failed`, ...) travel in `payload.step`.
 
-use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter};
+use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter, StreamDelta};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
@@ -239,6 +239,23 @@ impl RunReports {
         )
         .await?;
         Ok(())
+    }
+}
+
+impl RunReports {
+    /// Words of the reply as they arrive, shown live and never stored. A
+    /// piece that isn't taken is gone; the finished reply still arrives.
+    pub async fn stream(&self, stream_id: Uuid, delta: String) -> Result<(), AppError> {
+        let delta = StreamDelta { stream_id, delta };
+        let reporter = self.reporter.lock().await.clone();
+        match reporter.stream(&delta).await {
+            Err(ClientError::Refused(401, _)) => {
+                let fresh = Self::fresh(&self.client, self.run_id, self.start_command_id).await?;
+                *self.reporter.lock().await = fresh.clone();
+                fresh.stream(&delta).await.map_err(unavailable)
+            }
+            other => other.map_err(unavailable),
+        }
     }
 }
 

@@ -410,6 +410,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          but the built-in assistant's, is refused (tests/integration/a1_host_protocol.rs)",
     ),
     (
+        "POST /api/v1/host/runs/{run_id}/stream",
+        "a run's own credential showing its reply live in its own conversation; any run but \
+         its own is refused, and nothing is stored (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
         "POST /api/v1/host/describe",
         "a host's own call with its own token, about itself; no session and no workspace ID \
          (tests/integration/a1_host_protocol.rs)",

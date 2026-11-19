@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/agents/register", post(register_route))
         .route("/api/v1/host/runs", post(adopt_route))
         .route("/api/v1/host/runs/{run_id}/model", post(model_route))
+        .route("/api/v1/host/runs/{run_id}/stream", post(stream_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
         .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
@@ -251,6 +252,25 @@ async fn model_route(
     match super::builtin::assistant::model_turn(&state, token, run_id, turn).await {
         Ok(reply) => Json(reply).into_response(),
         Err(refusal) => refusal.into_response(),
+    }
+}
+
+/// A1.17: a run's reply as it arrives, shown live and never stored.
+async fn stream_route(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+    ApiJson(delta): ApiJson<agent_workspace_host_protocol::StreamDelta>,
+) -> Result<(StatusCode, Json<Value>), HostError> {
+    let token = bearer(&headers).ok_or(HostError::Unauthorized)?;
+    state.rate_limits.check_run_stream(token).await?;
+    match super::stream::delta(&state, token, run_id, delta).await {
+        Ok(()) => Ok((StatusCode::ACCEPTED, Json(json!({})))),
+        Err(HostError::Unauthorized) => {
+            state.rate_limits.note_mcp_auth_failure().await;
+            Err(HostError::Unauthorized)
+        }
+        Err(error) => Err(error),
     }
 }
 

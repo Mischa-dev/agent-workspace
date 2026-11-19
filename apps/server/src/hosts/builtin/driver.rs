@@ -715,7 +715,6 @@ async fn start_admitted_run(
     if let Err(error) = provider::start_run(
         state,
         Arc::clone(reports),
-        run.project_id,
         run.run_id,
         run.conversation_id,
         run.execution_profile_id,

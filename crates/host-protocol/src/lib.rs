@@ -371,6 +371,21 @@ pub struct PlanWindow {
     pub limit_reached: bool,
 }
 
+/// `POST /api/v1/host/runs/{runId}/stream`: words of the agent's reply as
+/// they arrive, shown live to the people in the run's conversation and
+/// never stored. Every piece of one reply carries the same `streamId`; the
+/// finished reply is still sent as a message (or a `text_message`
+/// activity said in the thread).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamDelta {
+    pub stream_id: Uuid,
+    pub delta: String,
+}
+
+/// The most one streamed piece may carry, in bytes.
+pub const MAX_STREAM_DELTA_BYTES: usize = 16 * 1024;
+
 /// `POST /api/v1/host/runs`: a run the host started itself (a schedule or
 /// trigger on its side) for one of its bound agents. Adopted once: the same
 /// `hostRunRef` finds the same run.

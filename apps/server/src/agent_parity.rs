@@ -1091,6 +1091,11 @@ mod tests {
                 "a built-in assistant run asking for its next model turn, with its own credential",
             ),
         ),
+        (
+            Post,
+            "/api/v1/host/runs/{run_id}/stream",
+            Plumbing("a run's reply shown live as it arrives, with the run's own credential"),
+        ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),
         (Post, "/connect/confirm", Plumbing("OAuth")),

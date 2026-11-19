@@ -14,7 +14,6 @@ use crate::{
     git_runtime::worktree_is_dirty,
     hosts::builtin::report::{self, RunReports},
     message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
-    realtime::RealtimeEvent,
 };
 
 pub mod catalog;
@@ -200,7 +199,6 @@ const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 pub async fn start_run(
     state: &AppState,
     reports: Arc<RunReports>,
-    project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
     execution_profile_id: Uuid,
@@ -373,9 +371,7 @@ pub async fn start_run(
         state,
         reports,
         provider,
-        project_id,
         run_id,
-        conversation_id,
         provider_thread_id.clone(),
         turn_id,
     );
@@ -391,9 +387,7 @@ fn spawn_drive(
     state: &AppState,
     reports: Arc<RunReports>,
     provider: Box<dyn HarnessSession>,
-    project_id: Uuid,
     run_id: Uuid,
-    conversation_id: Uuid,
     thread_for_task: String,
     turn_id: String,
 ) {
@@ -403,9 +397,7 @@ fn spawn_drive(
             background_state.clone(),
             Arc::clone(&reports),
             provider,
-            project_id,
             run_id,
-            conversation_id,
             thread_for_task,
             turn_id,
         )
@@ -435,14 +427,11 @@ pub(crate) async fn follow_recovered_run(
     run_id: Uuid,
     worktree: PathBuf,
 ) -> Result<bool, AppError> {
-    let Some((project_id, conversation_id, provider_thread_id, execution_profile_id, turn_id)) =
-        sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, String)>(
+    let Some((provider_thread_id, execution_profile_id, turn_id)) =
+        sqlx::query_as::<_, (String, Uuid, String)>(
             r#"
-            SELECT c.project_id, ar.conversation_id, ps.provider_thread_id,
-                   ar.execution_profile_id, ar.provider_turn_id
-            -- visibility: the run worker reads its own run's conversation
+            SELECT ps.provider_thread_id, ar.execution_profile_id, ar.provider_turn_id
             FROM agent_runs ar
-            JOIN conversations c ON c.id = ar.conversation_id
             JOIN provider_sessions ps ON ps.id = ar.provider_session_id
             WHERE ar.id = $1 AND ar.provider_turn_id IS NOT NULL
             "#,
@@ -490,9 +479,7 @@ pub(crate) async fn follow_recovered_run(
         state,
         reports,
         provider,
-        project_id,
         run_id,
-        conversation_id,
         provider_thread_id,
         turn_id,
     );
@@ -723,14 +710,49 @@ struct RecoveryCompletion<'a> {
     dirty: bool,
 }
 
+/// How long a reply's words gather before they go out live.
+const STREAM_GATHER: Duration = Duration::from_millis(150);
+
+/// Sends the reply's gathered words, if any. Live words are a courtesy:
+/// a failure is logged, never the run's.
+async fn flush_stream(
+    reports: &RunReports,
+    stream_id: Uuid,
+    streamed: &mut String,
+    due: &mut Option<tokio::time::Instant>,
+) {
+    *due = None;
+    if streamed.is_empty() {
+        return;
+    }
+    let mut piece = std::mem::take(streamed);
+    // One call carries at most the protocol's limit; a longer gather (rare)
+    // goes out in pieces on character boundaries.
+    while !piece.is_empty() {
+        let mut end = piece
+            .len()
+            .min(agent_workspace_host_protocol::MAX_STREAM_DELTA_BYTES);
+        while !piece.is_char_boundary(end) {
+            end -= 1;
+        }
+        let rest = piece.split_off(end);
+        if let Err(error) = reports.stream(stream_id, piece).await {
+            tracing::debug!(
+                error_category = AppError::from(error).log_category(),
+                "streamed words not shown"
+            );
+            return;
+        }
+        piece = rest;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     state: AppState,
     reports: Arc<RunReports>,
     mut provider: Box<dyn HarnessSession>,
-    project_id: Uuid,
     run_id: Uuid,
-    conversation_id: Uuid,
     provider_thread_id: String,
     turn_id: String,
 ) -> Result<(), AppError> {
@@ -741,6 +763,10 @@ async fn drive_turn(
     let stopping = || state.supervisors.is_shutting_down() || lease_lost.is_cancelled();
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
+    // The reply's words go out live through the host protocol, gathered for
+    // a moment so a fast harness costs a few calls a second, not one a word.
+    let mut streamed = String::new();
+    let mut stream_due: Option<tokio::time::Instant> = None;
     // The model a turn's tokens were on when the harness doesn't say.
     let run_model = crate::runs::usage::builtin_scope_of(crate::db::scoped(&state.pool), run_id)
         .await
@@ -763,6 +789,9 @@ async fn drive_turn(
                         return Err(provider_error(run_id, "read event", error));
                     }
                 };
+                if !matches!(event, HarnessEvent::MessageDelta(_)) {
+                    flush_stream(&reports, message_stream_id, &mut streamed, &mut stream_due).await;
+                }
                 match event {
                     HarnessEvent::Request(request) => handle_provider_request(
                         &state,
@@ -777,18 +806,10 @@ async fn drive_turn(
                             provider.shutdown().await;
                             return Err(provider_message_error(run_id, error));
                         }
-                        // To the conversation's sockets on every instance (K5.5).
-                        crate::realtime::ephemeral::stream_delta(&state, RealtimeEvent {
-                            event_id: Uuid::now_v7(),
-                            kind: "message.delta",
-                            project_id,
-                            conversation_id: Some(conversation_id),
-                            payload: json!({
-                                "message_id": message_stream_id,
-                                "agent_run_id": run_id,
-                                "delta": delta
-                            }),
-                        }).await;
+                        streamed.push_str(&delta);
+                        stream_due.get_or_insert_with(|| {
+                            tokio::time::Instant::now() + STREAM_GATHER
+                        });
                     }
                     HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {
@@ -892,6 +913,13 @@ async fn drive_turn(
                     | HarnessEvent::ItemCompleted(_)
                     | HarnessEvent::Ignored => {}
                 }
+            }
+            () = async {
+                if let Some(due) = stream_due {
+                    tokio::time::sleep_until(due).await;
+                }
+            }, if stream_due.is_some() => {
+                flush_stream(&reports, message_stream_id, &mut streamed, &mut stream_due).await;
             }
             // Stop arrives as a wake on the control channel from whichever
             // server took it (`hosts::builtin::transition`); the check every
