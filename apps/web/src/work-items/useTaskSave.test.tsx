@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { useUpdateWorkItem } from './hooks'
+import { discardOutbound, useOutbound, type OutboundEntry } from '../data/outbound'
+import { useQueueWorkItemUpdate, useUpdateWorkItem } from './hooks'
 import { EMPTY_PLANNING } from './testFixtures'
 import type { WorkItem } from './types'
 import { useTaskSave } from './useTaskSave'
 
-vi.mock('./hooks', () => ({ useUpdateWorkItem: vi.fn() }))
+vi.mock('./hooks', () => ({ useUpdateWorkItem: vi.fn(), useQueueWorkItemUpdate: vi.fn() }))
+vi.mock('../data/outbound', () => ({ useOutbound: vi.fn(() => []), discardOutbound: vi.fn() }))
 
 const task: WorkItem = {
   id: 'task-a',
@@ -42,15 +44,57 @@ const conflict = (current: WorkItem) =>
 
 function setup(mutateAsync: ReturnType<typeof vi.fn>) {
   vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useUpdateWorkItem>)
+  vi.mocked(useQueueWorkItemUpdate).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useQueueWorkItemUpdate>)
   const client = new QueryClient()
   client.setQueryData(queryKeys.workItem(task.projectId, task.id), task)
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
   return { client, ...renderHook(() => useTaskSave(task), { wrapper }) }
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(useOutbound).mockReturnValue([])
+})
+
+// Offline: queueOp keeps the edit on the device under its request id, then answers null.
+const keptOffline = () =>
+  vi.fn().mockImplementation(async (input: { idempotencyKey: string }) => {
+    vi.mocked(useOutbound).mockReturnValue([{ id: input.idempotencyKey } as OutboundEntry])
+    return null
+  })
 
 describe('useTaskSave', () => {
+  it('shows an edit kept offline, and lets it go once it has been sent', async () => {
+    const mutateAsync = keptOffline()
+    const { client, result, rerender } = setup(mutateAsync)
+
+    act(() => result.current.save('priority', { priority: 'urgent' }))
+    await waitFor(() => expect(result.current.queued).toBe(true))
+    expect(client.getQueryData<WorkItem>(queryKeys.workItem(task.projectId, task.id))?.priority).toBe('urgent')
+    expect(result.current.baseFor('priority')).toBe('urgent')
+
+    rerender()
+    expect(result.current.queued).toBe(true)
+    vi.mocked(useOutbound).mockReturnValue([])
+    rerender()
+    await waitFor(() => expect(result.current.queued).toBe(false))
+    expect(result.current.stopped).toEqual([])
+  })
+
+  it('turns an edit kept offline that the server refused into a failed save', async () => {
+    const mutateAsync = keptOffline()
+    const { result, rerender } = setup(mutateAsync)
+
+    act(() => result.current.save('dueDate', { dueDate: '2026-12-01' }))
+    await waitFor(() => expect(result.current.queued).toBe(true))
+    const { idempotencyKey } = mutateAsync.mock.calls[0][0] as { idempotencyKey: string }
+
+    vi.mocked(useOutbound).mockReturnValue([{ id: idempotencyKey, refused: 'You can’t change this task.' } as OutboundEntry])
+    rerender()
+    await waitFor(() => expect(result.current.stopped).toEqual([expect.objectContaining({ field: 'dueDate', state: 'failed', message: 'You can’t change this task.' })]))
+    expect(discardOutbound).toHaveBeenCalledWith(idempotencyKey)
+  })
+
   it('stops instead of overwriting when someone else changed the same field, and keeps yours only when asked', async () => {
     const theirs = { ...task, title: 'Parse the CLI flags', version: 2 }
     const mutateAsync = vi.fn().mockRejectedValueOnce(conflict(theirs)).mockResolvedValue({ ...theirs, title: 'Mine', version: 3 })
