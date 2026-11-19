@@ -12,10 +12,10 @@ import { isWorkspacePath, workspaceRoutePath } from './href'
 import type { ModuleRoute, WebModule } from '../modules/define'
 import { WEB_MODULES } from '../modules/registry'
 import { ShellLayout } from '../shell/ShellLayout'
-import { ThingRedirect } from './ThingRedirect'
 import { WorkspaceBoundary, WorkspaceProvider, WorkspaceRedirect } from './WorkspaceBoundary'
 import {
   DesignSystemPage,
+  ThingRedirect,
   ForgotPasswordPage,
   HomePage,
   JoinPage,

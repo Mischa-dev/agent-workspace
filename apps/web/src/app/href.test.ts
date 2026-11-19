@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  hrefFor,
   isWorkspacePath,
   legacyPathOf,
   setCurrentWorkspaceSlug,
   spaceHref,
   spaceIdOf,
   spaceSettingsHref,
-  thingHref,
   workspaceHref,
   workspaceRoutePath,
   workspaceSlugOf,
 } from './href'
+import { hrefFor, thingHref } from './thingHref'
 
 describe('workspace addresses', () => {
   it('builds a workspace page’s address from its old path or its new one', () => {

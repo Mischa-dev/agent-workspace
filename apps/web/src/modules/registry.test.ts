@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { PART_IDS } from '../experience/parts'
 import { routePaths } from '../app/routes'
 import { MODULE_IDS } from './names'
-import { REGISTERED_FOLDERS, WEB_MODULES, paletteEntries, phoneTabs, sidebarRows } from './registry'
+import { REGISTERED_FOLDERS, WEB_MODULES, paletteEntries, sidebarRows } from './registry'
+import { phoneTabs } from '../shell/phoneTabsModel'
 
 // M1.4: the web registrations against the manifests (`modules/*.json` at the
 // root of the repository), which name each module's web folder.

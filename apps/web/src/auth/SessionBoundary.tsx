@@ -11,7 +11,6 @@ import {
   useSession,
 } from './session'
 import { RealtimeProvider } from '../realtime/RealtimeProvider'
-import { DocumentTitle } from '../shell/DocumentTitle'
 import { Button } from '../ui'
 
 // Loads after the page: it only keeps the account's saved theme in step.
@@ -19,6 +18,8 @@ const AppearanceSync = lazy(() => import('../theme/AppearanceSync'))
 // Loads after the page too: it sends what was written offline once the connection is back.
 const Outbox = lazy(() => import('../app/Outbox'))
 // A run you asked for that finishes elsewhere says so.
+// The tab's title follows the page from just after the first paint.
+const DocumentTitle = lazy(() => import('../shell/DocumentTitle').then((module) => ({ default: module.DocumentTitle })))
 const RunFinishedToasts = lazy(() => import('../runs/RunFinishedToasts'))
 
 export function SessionBoundary() {
@@ -90,8 +91,8 @@ export function SessionBoundary() {
     <AuthenticatedSessionProvider session={session.data}>
       <RealtimeProvider>
         <Outlet />
-        <DocumentTitle />
         <Suspense fallback={null}>
+          <DocumentTitle />
           <AppearanceSync />
           <Outbox />
           <RunFinishedToasts />
