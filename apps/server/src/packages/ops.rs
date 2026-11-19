@@ -57,7 +57,8 @@ pub struct PackageExportInput {
     /// A built module, by key (built modules arrive later; refused today).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
-    /// The workspace's setup: switches, layout and roles. (`workspace`
+    /// The workspace's setup: switches, layout, roles and the themes it
+    /// offers. (`workspace`
     /// itself names which workspace, as on every operation.)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_workspace: bool,

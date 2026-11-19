@@ -458,6 +458,7 @@ pub(crate) async fn install(
                     | ContentKind::Skill
                     | ContentKind::Agent
                     | ContentKind::Module
+                    | ContentKind::Theme
             )
         {
             record(&mut objects, kind, key, id);
@@ -477,6 +478,12 @@ pub(crate) async fn install(
             body
         };
         let made = match part.kind {
+            // Offered to the workspace at once, owned by whoever installs it.
+            ContentKind::Theme => {
+                let (name, document) = super::format::check_theme(&body)
+                    .map_err(|message| invalid_at(field(""), message))?;
+                crate::themes::insert_offered(tx, workspace, actor, &name, &document).await?
+            }
             ContentKind::Form => {
                 let space = space.ok_or(OpError::Unavailable)?;
                 let name = crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))

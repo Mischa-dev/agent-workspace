@@ -1,8 +1,8 @@
 //! `package_export`'s work: a package from a live setup, through each
 //! part's portable form (M1 section 3.6). A space gives its roles, channels,
 //! collections, forms, automations, outbound webhooks and skill pages (and
-//! its pages when asked); the workspace gives its switches, layout and
-//! roles. Ids never leave: a collection a form or rule names becomes
+//! its pages when asked); the workspace gives its switches, layout, roles
+//! and the themes it offers. Ids never leave: a collection a form or rule names becomes
 //! `@<key>`, a channel `#name`, and anything else the installer must choose
 //! again (an environment, an agent profile, a webhook's address) is left
 //! out and named in the part's `needsSetup`.
@@ -59,10 +59,32 @@ pub(crate) async fn export(
     };
     let mut package = from_template(&name, &name, "", &definition);
     let Some(space_id) = space_id else {
-        // A workspace's setup without a space: switches, layout, roles.
+        // A workspace's setup without a space: switches, layout, roles and
+        // the themes it offers (everyone in it sees those).
         package
             .contents
             .retain(|part| !matches!(part.kind, ContentKind::Space | ContentKind::Channels));
+        let mut keys = Keys::default();
+        for part in &package.contents {
+            keys.seed(part.kind, &part.key);
+        }
+        let offered = sqlx::query_as::<_, (String, Value)>(
+            "SELECT name, document FROM themes WHERE workspace_id = $1 AND offered \
+             ORDER BY lower(name), created_at LIMIT 50",
+        )
+        .bind(workspace_id)
+        .fetch_all(&mut *connection)
+        .await?;
+        for (name, document) in offered {
+            let key = keys.take(ContentKind::Theme, &name);
+            package.needs_admin.push(format!("theme:{key}"));
+            package.contents.push(Content {
+                kind: ContentKind::Theme,
+                key,
+                path: None,
+                body: Some(json!({ "name": name, "document": document })),
+            });
+        }
         return Ok(package.sealed());
     };
     package.target = PackageTarget::Space;

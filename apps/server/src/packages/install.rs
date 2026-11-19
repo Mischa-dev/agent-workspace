@@ -277,6 +277,10 @@ const AGENT_BY_KEY: &str = "SELECT found.id, {visible} FROM agent_templates foun
 const MODULE_BY_KEY: &str = "SELECT found.id, {visible} FROM modules found \
      WHERE found.workspace_id = $1 AND found.archived_at IS NULL AND found.module_key = $2";
 
+/// A theme the workspace offers by this name: installing reuses it.
+const THEME_BY_NAME: &str = "SELECT id FROM themes WHERE workspace_id = $1 AND offered \
+     AND lower(name) = lower($2) ORDER BY created_at LIMIT 1";
+
 const IN_ANOTHER_SPACE: &str = "One with this key is in a space you aren't in, so it's left out.";
 
 /// A workspace-keyed thing by key, and its id only when the viewer may see it.
@@ -371,6 +375,15 @@ pub async fn plan(
                 if held.is_some() {
                     line.action = "update".to_owned();
                 }
+                line.needs_admin = true;
+                line
+            }
+            // A theme is offered to the whole workspace, which needs its
+            // settings permission wherever the package lands.
+            ContentKind::Theme => {
+                let name = text(&body, "name");
+                let held = existing(connection, THEME_BY_NAME, workspace_id, name).await?;
+                let mut line = found("theme", key, name, held);
                 line.needs_admin = true;
                 line
             }

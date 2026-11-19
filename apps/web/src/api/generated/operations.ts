@@ -80,7 +80,7 @@ export type ConnectionView = { accountId: string; consecutiveFailures: number; d
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
-export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
+export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent" | "theme"
 
 export type ContextMessage = { author: string; authorId: string; authorKind: string; createdAt: string; edited?: boolean; messageId: string; removed?: boolean; text: string; trust: string }
 
