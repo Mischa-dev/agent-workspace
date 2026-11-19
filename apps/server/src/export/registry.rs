@@ -1074,6 +1074,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "project_pages",
                 references: &[
                     ("project_id", "projects"),
+                    ("parent_page_id", "project_pages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                 ],
