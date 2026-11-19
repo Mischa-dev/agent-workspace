@@ -2043,20 +2043,20 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
     // Tables with a UUID `id` and one of these parent columns.
     let tables = sqlx::query_as::<_, (String, String)>(
         r#"
-        SELECT parent.table_name::text, parent.column_name::text
-        FROM information_schema.columns parent
-        JOIN information_schema.columns own
-          ON own.table_schema = parent.table_schema
-         AND own.table_name = parent.table_name
-         AND own.column_name = 'id'
-         AND own.data_type = 'uuid'
-        JOIN information_schema.tables listed
-          ON listed.table_schema = parent.table_schema
-         AND listed.table_name = parent.table_name
-         AND listed.table_type = 'BASE TABLE'
-        WHERE parent.table_schema = current_schema()
-          AND parent.data_type = 'uuid'
-          AND parent.column_name IN (
+        -- From pg_catalog: the same join over information_schema's views
+        -- took twenty seconds a sweep, three sweeps a test.
+        SELECT listed.relname::text, parent.attname::text
+        FROM pg_class listed
+        JOIN pg_namespace schema
+          ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
+        JOIN pg_attribute own
+          ON own.attrelid = listed.oid AND own.attname = 'id'
+         AND own.atttypid = 'uuid'::regtype AND NOT own.attisdropped
+        JOIN pg_attribute parent
+          ON parent.attrelid = listed.oid AND parent.attnum > 0
+         AND parent.atttypid = 'uuid'::regtype AND NOT parent.attisdropped
+        WHERE listed.relkind IN ('r', 'p')
+          AND parent.attname IN (
               'organization_id', 'project_id', 'conversation_id', 'work_item_id',
               'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id',
               -- K4.3 (G6): the names new tables use (ruling R1).
