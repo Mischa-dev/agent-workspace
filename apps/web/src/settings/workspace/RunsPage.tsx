@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import type { OrganizationSummary } from '../../auth/session'
 import { listWorkspaceHarnesses, modelCatalogKey } from '../../execution/api'
 import type { Project } from '../../projects/types'
@@ -30,7 +31,7 @@ function WorkspaceRuns({ projects, workspace }: { projects: Project[]; workspace
   const effective = useEffectiveSettings(target)
   const harnesses = useQuery({ queryKey: modelCatalogKey(workspace.id), queryFn: () => listWorkspaceHarnesses(workspace.id) })
   useSectionScroll(effective.isSuccess && !harnesses.isPending)
-  const manager = workspace.role === 'owner' || workspace.role === 'admin'
+  const manager = can(workspace, 'settings.manage')
   const readOnly = effective.data ? !effective.data.capabilities.manageWorkspace : false
 
   return (

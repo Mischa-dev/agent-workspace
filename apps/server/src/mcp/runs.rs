@@ -10,18 +10,16 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, parse_id, public_url, snippet},
+    common::{ToolResult, link_url, parse_id, snippet},
 };
 use crate::{
     AppState,
+    addresses::{Place, Target},
     error::AppError,
     hosts::builtin::http::{StartRunRequest, interrupt_run_in, retry_run_in, start_run_in},
     idempotency::IdempotencyKey,
-    policy::ActorKind,
     runs::{RunCaller, brief},
 };
-
-const NOT_FOR_AGENTS: &str = "Agents ask a person to start a run with run_request; run_start spends a person's own provider account.";
 
 /// AWD-75: the projects the caller belongs to where `module` is off for
 /// them, for lists that reach projects through membership rather than a
@@ -171,7 +169,7 @@ pub(super) struct RunListValue {
 }
 
 fn run_value(state: &AppState, row: brief::BriefRow) -> RunValue {
-    let url = public_url(state, &run_path(&row));
+    let url = link_url(state, None, &run_target(&row));
     let brief::Stage {
         key: stage,
         next,
@@ -214,21 +212,25 @@ fn run_value(state: &AppState, row: brief::BriefRow) -> RunValue {
 /// Where a run opens: its conversation (DMs, groups and their threads live
 /// under Messages, everything else under its project), or the run page for
 /// a run in no conversation.
-fn run_path(row: &brief::BriefRow) -> String {
+fn run_target(row: &brief::BriefRow) -> Target {
     let (Some(conversation_id), Some(project_id)) = (row.conversation_id, row.project_id) else {
-        return format!("/runs/{}", row.id);
+        return Target::Run(row.id);
     };
     match (
         row.conversation_kind.as_deref().unwrap_or("thread"),
         row.parent_kind.as_deref(),
         row.parent_conversation_id,
     ) {
-        ("dm" | "group", _, _) => format!("/messages/{conversation_id}"),
-        ("thread", Some("dm" | "group"), Some(parent)) => {
-            format!("/messages/{parent}?thread={conversation_id}")
-        }
-        ("channel", _, _) => format!("/projects/{project_id}/channels/{conversation_id}"),
-        _ => format!("/projects/{project_id}/threads/{conversation_id}"),
+        ("dm" | "group", _, _) => Target::Direct {
+            id: conversation_id,
+            thread: None,
+        },
+        ("thread", Some("dm" | "group"), Some(parent)) => Target::Direct {
+            id: parent,
+            thread: Some(conversation_id),
+        },
+        ("channel", _, _) => Target::space(project_id, Place::Channel(conversation_id)),
+        _ => Target::space(project_id, Place::Thread(conversation_id)),
     }
 }
 
@@ -307,9 +309,6 @@ pub(super) async fn run_start(
 ) -> ToolResult<RunValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
     }
     let Some(thread_id) = parse_id(&arguments.thread_id) else {
         return ToolResult::invalid("threadId", "Pass the thread's ID or link.");
@@ -458,9 +457,6 @@ pub(super) async fn run_retry(
 ) -> ToolResult<RunValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
     }
     let (run_id, request_id, key) = match control_key(&arguments) {
         Ok(parts) => parts,
@@ -657,6 +653,10 @@ mod tests {
             parent_conversation_id: parent.map(|(id, _)| id),
             parent_kind: parent.map(|(_, kind)| kind.to_owned()),
         }
+    }
+
+    fn run_path(row: &brief::BriefRow) -> String {
+        run_target(row).legacy_path()
     }
 
     #[test]

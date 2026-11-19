@@ -90,6 +90,12 @@ pub struct OpContext {
     pub workspace_id: Uuid,
     /// Today's project id.
     pub space_id: Option<Uuid>,
+    /// The DM or group the call is about, when it is in no space.
+    pub direct: Option<Uuid>,
+    /// The workspace the request named, if it named one: for a call about a
+    /// DM or group, which is in none, where the caller's own things (such
+    /// as sidebar sections) are.
+    pub requested_workspace: Option<Uuid>,
     pub target: Target,
     /// Set for every write.
     pub request_id: Option<String>,
@@ -225,19 +231,16 @@ impl From<&OpContext> for crate::conversations::MessageCommandActor {
             actor_kind: actor_kind_key(ctx.caller.kind).to_owned(),
             mcp_credential: match (&ctx.edge, ctx.caller.connection_id) {
                 (
-                    Edge::Mcp {
-                        credential_id: Some(credential_id),
-                        ..
-                    }
-                    | Edge::PublicApi {
-                        credential_id: Some(credential_id),
-                        ..
-                    },
+                    Edge::Mcp { credential_id, .. } | Edge::PublicApi { credential_id, .. },
                     Some(connection_id),
-                ) => Some(crate::conversations::MessageMcpCredential {
-                    credential_id: *credential_id,
-                    connection_id,
-                }),
+                ) => credential_id
+                    // A narrow token (K1.24) is the credential the call came
+                    // through, though it is no MCP credential.
+                    .or(ctx.caller.credential_id)
+                    .map(|credential_id| crate::conversations::MessageMcpCredential {
+                        credential_id,
+                        connection_id,
+                    }),
                 _ => None,
             },
             via_grant_id: ctx.caller.via_grant_id,

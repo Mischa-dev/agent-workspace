@@ -908,7 +908,7 @@ async fn bound_host(
 async fn kept_nowhere(pool: &sqlx::PgPool, secret: &str) {
     for table in [
         "host_commands",
-        "run_credentials",
+        "access_tokens",
         "run_activities",
         "runs",
         "events",
@@ -973,7 +973,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
             .as_str()
             .expect("credential")
             .to_owned();
-        assert!(token.starts_with("awr_"), "{token}");
+        assert!(token.starts_with("aw_at_"), "{token}");
         assert!(
             command["workspaceCredential"]["scope"]
                 .as_str()
@@ -1052,7 +1052,9 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     assert!(
         refreshed["workspaceCredential"]["token"]
             .as_str()
-            .is_some_and(|token| token.starts_with("awr_")),
+            .is_some_and(
+                |token| token.starts_with(agent_workspace_server::access::tokens::TOKEN_PREFIX)
+            ),
         "{refreshed}"
     );
     credentials.push(
@@ -1097,7 +1099,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     .await;
     assert_eq!(done["outcome"], "ok", "{done}");
     let live = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM run_credentials WHERE run_id = $1 AND revoked_at IS NULL",
+        "SELECT count(*) FROM access_tokens WHERE run_id = $1 AND revoked_at IS NULL",
     )
     .bind(run)
     .fetch_one(&setup.pool)
@@ -1144,7 +1146,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     }
     assert_eq!(run_state(&setup.pool, second).await, "interrupted");
     let live = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM run_credentials WHERE run_id = $1 AND revoked_at IS NULL",
+        "SELECT count(*) FROM access_tokens WHERE run_id = $1 AND revoked_at IS NULL",
     )
     .bind(second)
     .fetch_one(&setup.pool)
@@ -1156,7 +1158,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         kept_nowhere(&setup.pool, token).await;
     }
     let digest_only = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM run_credentials WHERE token_digest = sha256(convert_to($1, 'UTF8'))",
+        "SELECT count(*) FROM access_tokens WHERE token_digest = sha256(convert_to($1, 'UTF8'))",
     )
     .bind(&credentials[0])
     .fetch_one(&setup.pool)

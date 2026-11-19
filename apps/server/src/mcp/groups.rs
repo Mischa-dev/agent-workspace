@@ -19,7 +19,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, mark_via, parse_id, project_role, public_url, resolve_people,
+        ToolResult, insert_audit, link_url, mark_via, parse_id, project_role,
+        resolve_conversation_members, resolve_direct_people,
     },
 };
 use crate::{
@@ -30,7 +31,6 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
-    policy::ActorKind,
     replies::continue_conversation_in,
 };
 
@@ -50,16 +50,12 @@ pub(crate) struct MemberRef {
 
 impl From<ActorView> for MemberRef {
     fn from(actor: ActorView) -> Self {
+        let agent = actor.kind == "external_agent"; // kind-check: mechanical (a display label)
         Self {
             id: actor.id.to_string(),
             name: actor.display_name,
             handle: actor.handle,
-            kind: if actor.kind == "external_agent" {
-                "agent"
-            } else {
-                "person"
-            }
-            .to_owned(),
+            kind: if agent { "agent" } else { "person" }.to_owned(),
         }
     }
 }
@@ -132,7 +128,7 @@ pub(crate) struct ContinueValue {
     pub idempotent_replay: bool,
 }
 
-const AGENTS_ONLY_LEAVE: &str = "Agents can leave a group, but only a person can add or remove others, because whoever is added can read the whole history. Ask a person in the group.";
+const ONLY_LEAVE: &str = "You can leave this group, but your role doesn't let you add or remove others (conversations.members), because whoever is added can read the whole history. Ask someone in the group whose role does.";
 
 /// A conversation the caller can see in the project this call is scoped to,
 /// and can still reach through this connection.
@@ -146,55 +142,17 @@ async fn visible_conversation(
     else {
         return Ok(None);
     };
-    if row.project_id != principal.project_id
-        || project_role(state, principal, row.project_id)
-            .await?
-            .is_none()
+    if row.place() != principal.project_id {
+        return Ok(None);
+    }
+    // A DM or group is reached by seeing it; a space's, through the
+    // caller's place there.
+    if let Some(space) = row.project_id
+        && project_role(state, principal, space).await?.is_none()
     {
         return Ok(None);
     }
     Ok(Some(row))
-}
-
-/// Members of a space by actor ID or @handle, enabled or not, so a former
-/// member can still be removed from a group. Returns the first one that
-/// isn't a member.
-async fn resolve_members(
-    state: &AppState,
-    project_id: Uuid,
-    people: &[String],
-) -> Result<Result<Vec<Uuid>, String>, AppError> {
-    let mut resolved = Vec::new();
-    for person in people {
-        let person = person.trim();
-        let found = if let Ok(actor_id) = person.parse::<Uuid>() {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
-            )
-            .bind(project_id)
-            .bind(actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        } else {
-            sqlx::query_scalar::<_, Uuid>(
-                r#"
-                SELECT actor_id FROM project_memberships
-                WHERE project_id = $1 AND lower(handle) = lower($2)
-                ORDER BY enabled DESC, actor_id
-                LIMIT 1
-                "#,
-            )
-            .bind(project_id)
-            .bind(person.trim_start_matches('@'))
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        };
-        match found {
-            Some(actor_id) => resolved.push(actor_id),
-            None => return Ok(Err(person.to_owned())),
-        }
-    }
-    Ok(Ok(resolved))
 }
 
 pub(crate) async fn conversation_members(
@@ -244,12 +202,29 @@ pub(crate) async fn conversation_members(
         let Some(row) = visible_conversation(state, principal, conversation_id).await? else {
             return Ok(ToolResult::not_found("That conversation"));
         };
+        // Private channels have members too (K4.11); a thread under one
+        // follows it.
+        let channel = match (row.kind.as_str(), row.parent_kind.as_deref()) {
+            ("channel", _) => Some(row.id),
+            ("thread", Some("channel")) => row.parent_channel_id,
+            _ => None,
+        };
+        let private_channel = match channel {
+            Some(channel) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT visibility FROM conversations WHERE id = $1 -- visibility: checked above",
+                )
+                .bind(channel)
+                .fetch_one(crate::db::scoped(&state.pool))
+                .await?
+                    == "members"
+            }
+            None => false,
+        };
         let group_id = match (row.kind.as_str(), row.effective_kind()) {
             ("group", _) => row.id,
             ("thread", "group") => row.membership_conversation_id(),
-            // C2.6: a private channel's managers change its members.
-            ("channel", _) if row.private => row.id,
-            ("thread", _) if row.private => row.parent_channel_id.unwrap_or(row.id),
+            _ if private_channel => channel.unwrap_or(row.id),
             (_, "dm") => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
@@ -259,41 +234,32 @@ pub(crate) async fn conversation_members(
             _ => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
-                    "This channel is open to everyone in the project. To add someone to the project, an owner or admin uses project_member_set.",
+                    "This channel is open to everyone in the project. To add someone to the project, an owner or admin uses space_member_add.",
                 ));
             }
         };
-        // Groups predate C2.6's rule; a private channel's managers are
-        // whoever made it and whoever they choose, of any kind.
-        let is_person = row.private || principal.actor_kind == ActorKind::Human;
-        if !is_person && !add.is_empty() {
-            return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE));
-        }
-        let add_ids = match resolve_people(state, row.project_id, &add).await? {
+        let add_ids = match resolve_direct_people(state, principal.actor_id, &add).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
             Err(who) => {
                 return Ok(ToolResult::invalid(
                     "add",
                     format!(
-                        "{who} isn't someone you can add. People and agents need to be in Messages first; try people_search."
+                        "{who} isn't someone you can add: they need to share a workspace with you. Try people_search."
                     ),
                 ));
             }
         };
-        let remove_ids = match resolve_members(state, row.project_id, &remove).await? {
+        let remove_ids = match resolve_conversation_members(state, group_id, &remove).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
             Err(who) => {
                 return Ok(ToolResult::invalid(
                     "remove",
                     format!(
-                        "{who} isn't in Messages. Use an actor ID or @handle from conversation_open."
+                        "{who} isn't in this group. Use an actor ID or @handle from conversation_open."
                     ),
                 ));
             }
         };
-        if !is_person && remove_ids.iter().any(|id| *id != principal.actor_id) {
-            return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE));
-        }
         if let Some(both) = add_ids.intersection(&remove_ids).next() {
             let who = add
                 .iter()
@@ -344,7 +310,6 @@ pub(crate) async fn conversation_members(
             &mut transaction,
             GroupEditor {
                 actor_id: principal.actor_id,
-                actor_kind: principal.actor_kind,
             },
             group_id,
             &add_ids,
@@ -366,7 +331,7 @@ pub(crate) async fn conversation_members(
                     "A group can have at most {MAX_GROUP_MEMBERS} members. Remove someone first."
                 )));
             }
-            Err(AppError::Forbidden) => return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE)),
+            Err(AppError::Forbidden) => return Ok(ToolResult::denied(ONLY_LEAVE)),
             Err(AppError::VersionConflict {
                 current_version, ..
             }) => {
@@ -380,7 +345,7 @@ pub(crate) async fn conversation_members(
             insert_audit(
                 &mut transaction,
                 principal,
-                change.project_id,
+                crate::spaces::place(change.project_id),
                 "conversation.mcp_members_changed",
                 "conversation",
                 group_id,
@@ -407,7 +372,14 @@ pub(crate) async fn conversation_members(
             added: change.added.into_iter().map(MemberRef::from).collect(),
             removed: change.removed.into_iter().map(MemberRef::from).collect(),
             left,
-            url: public_url(state, &format!("/messages/{group_id}")),
+            url: link_url(
+                state,
+                None,
+                &crate::addresses::Target::Direct {
+                    id: group_id,
+                    thread: None,
+                },
+            ),
             idempotent_replay: false,
         };
         if let Some(reservation) = &reservation {
@@ -479,7 +451,6 @@ pub(crate) async fn conversation_continue(
         let outcome = match continue_conversation_in(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             conversation_id,
         )
         .await
@@ -487,7 +458,7 @@ pub(crate) async fn conversation_continue(
             Ok(outcome) => outcome,
             Err(AppError::NotFound(_)) => {
                 return Ok(ToolResult::denied(
-                    "Letting replies continue here needs the replies.steer permission.",
+                    "Your role here doesn't let you give the agents another round (replies.steer). Ask someone in the group.",
                 ));
             }
             Err(error) => return Err(error),

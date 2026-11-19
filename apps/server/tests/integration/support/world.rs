@@ -241,7 +241,13 @@ impl WorldBuilder {
         for (handle, role) in &self.agents {
             let (actor, token) = create_agent(&app, &setup.browser, &space, handle, handle).await;
             for project in &project_ids {
-                add_member(&setup, project, actor, role).await;
+                // Adding gives member or viewer; a higher role is set after.
+                if matches!(role.as_str(), "member" | "viewer") {
+                    add_member(&setup, project, actor, role).await;
+                } else {
+                    add_member(&setup, project, actor, "member").await;
+                    set_role(&setup.pool, project, actor, role).await;
+                }
             }
             let connection = sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM external_agent_connections WHERE actor_id = $1 AND status = 'active' ORDER BY created_at LIMIT 1",

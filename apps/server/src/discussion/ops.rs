@@ -79,7 +79,6 @@ fn creator(ctx: &OpContext) -> ThreadCreator {
     };
     ThreadCreator {
         actor_id: ctx.caller.account_id,
-        actor_kind: ctx.caller.kind,
         project_id: ctx.caller.confined_space,
         session_id,
         authentication_class: class,
@@ -508,7 +507,6 @@ impl Operation for CommentThreadUpdate {
         input: CommentThreadUpdateInput,
     ) -> Result<CommentThreadUpdated, OpError> {
         let actor_id = call.account_id();
-        let actor_kind = call.ctx.caller.kind;
         let reach = call.ctx.caller.connection_id;
         let thread_id = input.thread_id.id();
         let status = input.status.trim().to_owned();
@@ -548,9 +546,7 @@ impl Operation for CommentThreadUpdate {
         if !in_comments {
             return Err(OpError::not_found("That thread"));
         }
-        let updated =
-            crate::conversations::update_thread(tx, actor_id, actor_kind, thread_id, &patch)
-                .await?;
+        let updated = crate::conversations::update_thread(tx, actor_id, thread_id, &patch).await?;
         call.audit_target(
             "conversation",
             thread_id,

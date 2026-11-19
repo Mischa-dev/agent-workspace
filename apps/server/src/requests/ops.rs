@@ -109,6 +109,10 @@ pub struct RequestOpenInput {
     /// when there are no options).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_text: Option<bool>,
+    /// Sensitive: only someone holding "answer sensitive requests" may
+    /// answer it, even when it names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitive: Option<bool>,
     /// Who it's for: accounts, or roles.
     pub audience: AudienceInput,
     /// The conversation it's about; the people asked must see it.
@@ -247,6 +251,7 @@ impl Operation for RequestOpen {
             "detail": input.detail,
             "options": input.options,
             "allowText": input.allow_text,
+            "sensitive": input.sensitive,
             "audience": {"accounts": accounts, "roles": input.audience.roles},
             "expiresInSeconds": input.expires_in_seconds,
             "onExpiry": input.on_expiry,

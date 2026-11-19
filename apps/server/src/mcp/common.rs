@@ -172,9 +172,9 @@ impl<T> ToolResult<T> {
 /// else the person belongs to. None when the caller's reach is every Project
 /// `actor_can_access_project` allows.
 pub(super) fn confined_project(principal: &McpPrincipal) -> Option<Uuid> {
-    ((principal.actor_kind == ActorKind::Human && !principal.account_wide)
-        || principal.is_run_credential())
-    .then_some(principal.project_id)
+    let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's grant)
+    ((person && !principal.account_wide) || principal.is_run_credential())
+        .then_some(principal.project_id)
 }
 
 /// Projects this caller can act in right now.
@@ -210,8 +210,13 @@ pub(super) async fn accessible_project_ids_in(
         WHERE project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
           AND ($3::uuid IS NULL OR project.organization_id = $3)
-        ORDER BY project.id
-        LIMIT 500
+        -- DMs and groups live in no space (K4.17): their place, where the
+        -- caller reaches them.
+        UNION ALL
+        SELECT direct_scope_id()
+        WHERE $2::uuid IS NULL OR agent_connection_can_reach_direct($2)
+        ORDER BY 1
+        LIMIT 501
         "#,
     )
     .bind(principal.actor_id)
@@ -239,6 +244,24 @@ pub(super) async fn scope_projects(
 /// credentials act in their own project by default.
 pub(super) fn project_is_chosen(principal: &McpPrincipal) -> bool {
     principal.project_explicit || !principal.account_wide
+}
+
+/// A connection anchored in the workspace's own space (an agent made at
+/// workspace level, or for Messages only) that names no project: it acts
+/// across the workspace, so that space's shape isn't where it works, and a
+/// new task needs a project named (K4.17).
+pub(crate) async fn anchored_in_workspace(
+    connection: &mut sqlx::PgConnection,
+    principal: &McpPrincipal,
+) -> Result<bool, AppError> {
+    if principal.project_explicit || principal.account_wide {
+        return Ok(false);
+    }
+    Ok(
+        crate::spaces::get(connection, principal.actor_id, principal.project_id)
+            .await?
+            .is_some_and(|space| space.kind == crate::spaces::SpaceKind::Workspace),
+    )
 }
 
 /// A stored membership role: the plain role, and the custom role's
@@ -289,7 +312,6 @@ pub(super) fn role_allows(
 ) -> bool {
     super::mcp_policy_allows(
         principal.actor_id,
-        principal.actor_kind,
         project_id,
         &role.role,
         role.role_permissions.as_deref(),
@@ -331,7 +353,8 @@ pub(super) async fn insert_audit(
     )
     .bind(Uuid::now_v7())
     .bind(principal.actor_id)
-    .bind(project_id)
+    // A DM or group is in no space.
+    .bind(crate::spaces::space_of(project_id))
     .bind(principal.authentication_class)
     .bind(action)
     .bind(target_kind)
@@ -520,14 +543,28 @@ pub(super) fn public_url(state: &AppState, path: &str) -> String {
     format!("{}{path}", super::oauth::public_origin(state))
 }
 
-pub(super) fn conversation_path(project_id: Uuid, kind: &str, id: Uuid, direct: bool) -> String {
-    if direct {
-        format!("/messages/{id}")
-    } else if kind == "thread" {
-        format!("/projects/{project_id}/threads/{id}")
-    } else {
-        format!("/projects/{project_id}/channels/{id}")
-    }
+/// The URL of `target`, in `workspace` when the caller knows it
+/// (`addresses::link`).
+pub(super) fn link_url(
+    state: &AppState,
+    workspace: Option<Uuid>,
+    target: &crate::addresses::Target,
+) -> String {
+    public_url(state, &crate::addresses::link(state, workspace, target))
+}
+
+pub(super) fn conversation_path(
+    state: &AppState,
+    project_id: Uuid,
+    kind: &str,
+    id: Uuid,
+    direct: bool,
+) -> String {
+    crate::addresses::link(
+        state,
+        None,
+        &crate::addresses::Target::conversation(project_id, kind, id, None, direct, false),
+    )
 }
 
 #[derive(Debug, FromRow)]
@@ -541,23 +578,44 @@ struct HandleRow {
 pub(crate) async fn content_from_text(
     state: &AppState,
     project_id: Uuid,
+    conversation: Option<Uuid>,
     text: &str,
 ) -> Result<serde_json::Value, AppError> {
-    let handles = sqlx::query_as::<_, HandleRow>(
-        r#"
-        SELECT membership.actor_id, lower(membership.handle) AS handle
-        FROM project_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
-        "#,
-    )
-    .bind(project_id)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?
-    .into_iter()
-    .map(|row| (row.handle, row.actor_id))
-    .collect::<HashMap<_, _>>();
+    // A DM or group is in no space: its own members, by the names they go
+    // by there, are the ones a handle can name.
+    let query = match conversation {
+        Some(conversation) if crate::spaces::kind::holds_messages(project_id) => {
+            sqlx::query_as::<_, HandleRow>(
+                r#"
+                SELECT member.actor_id, lower(profile.handle) AS handle
+                FROM conversations conversation
+                -- visibility: the names in a conversation the caller sends to, checked there
+                JOIN conversation_members member
+                  ON member.conversation_id = COALESCE(conversation.parent_channel_id, conversation.id)
+                JOIN actors actor ON actor.id = member.actor_id AND actor.status = 'active'
+                CROSS JOIN LATERAL account_profile(member.actor_id, conversation.workspace_id) profile
+                WHERE conversation.id = $1
+                "#,
+            )
+            .bind(conversation)
+        }
+        _ => sqlx::query_as::<_, HandleRow>(
+            r#"
+            SELECT membership.actor_id, lower(membership.handle) AS handle
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active'
+              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (system and worker actors have no handle to mention)
+            "#,
+        )
+        .bind(project_id),
+    };
+    let handles = query
+        .fetch_all(crate::db::scoped(&state.pool))
+        .await?
+        .into_iter()
+        .map(|row| (row.handle, row.actor_id))
+        .collect::<HashMap<_, _>>();
     Ok(serde_json::json!({ "version": 1, "nodes": text_nodes(text, &handles) }))
 }
 
@@ -570,7 +628,7 @@ pub(super) async fn comment_content_from_text(
     project_id: Uuid,
     text: &str,
 ) -> Result<serde_json::Value, AppError> {
-    let content = content_from_text(state, project_id, text).await?;
+    let content = content_from_text(state, project_id, None, text).await?;
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(project_id)
@@ -711,38 +769,142 @@ fn is_handle_character(value: char) -> bool {
     value.is_ascii_alphanumeric() || value == '_' || value == '-'
 }
 
-/// Resolve people given as actor IDs or `@handles` among a Project's members.
-pub(super) async fn resolve_people(
+/// People and agents by actor ID or @handle whom `caller` may name in a DM
+/// or group: active accounts in a workspace the caller is an enabled member
+/// of, by the handle they go by in one of those. Returns the first one
+/// that isn't.
+pub(super) async fn resolve_direct_people(
     state: &AppState,
-    project_id: Uuid,
+    caller: Uuid,
     people: &[String],
 ) -> Result<Result<Vec<Uuid>, String>, AppError> {
     let mut resolved = Vec::new();
     for person in people {
         let person = person.trim();
-        let found = if let Ok(actor_id) = person.parse::<Uuid>() {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2 AND enabled",
-            )
-            .bind(project_id)
-            .bind(actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        } else {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND lower(handle) = lower($2) AND enabled",
-            )
-            .bind(project_id)
-            .bind(person.trim_start_matches('@'))
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        };
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT actor.id
+            FROM actors actor
+            JOIN organization_memberships theirs
+              ON theirs.actor_id = actor.id AND theirs.enabled
+            JOIN organization_memberships mine
+              ON mine.organization_id = theirs.organization_id
+             AND mine.actor_id = $1 AND mine.enabled
+            LEFT JOIN organization_actor_profiles profile
+              ON profile.organization_id = theirs.organization_id
+             AND profile.actor_id = actor.id
+            WHERE actor.status = 'active'
+              AND (actor.id::text = lower($2) OR lower(profile.handle) = lower($3))
+            ORDER BY actor.id
+            LIMIT 1
+            "#,
+        )
+        .bind(caller)
+        .bind(person)
+        .bind(person.trim_start_matches('@'))
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
         match found {
             Some(actor_id) => resolved.push(actor_id),
             None => return Ok(Err(person.to_owned())),
         }
     }
     Ok(Ok(resolved))
+}
+
+/// Members of a DM or group by actor ID or @handle, so a former member can
+/// still be removed. Returns the first one that isn't a member.
+pub(super) async fn resolve_conversation_members(
+    state: &AppState,
+    conversation_id: Uuid,
+    people: &[String],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    let mut resolved = Vec::new();
+    for person in people {
+        let person = person.trim();
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT member.actor_id
+            FROM conversation_members member
+            WHERE member.conversation_id = $1
+              AND (member.actor_id::text = lower($2)
+                   OR EXISTS (
+                       SELECT 1 FROM organization_actor_profiles profile
+                       WHERE profile.actor_id = member.actor_id
+                         AND lower(profile.handle) = lower($3)))
+            ORDER BY member.actor_id
+            LIMIT 1
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(person)
+        .bind(person.trim_start_matches('@'))
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+        match found {
+            Some(actor_id) => resolved.push(actor_id),
+            None => return Ok(Err(person.to_owned())),
+        }
+    }
+    Ok(Ok(resolved))
+}
+
+/// The name each tool gives the space it acts in, when it takes one:
+/// `projectId` for most hand-written tools, `spaceId` for the newer ones.
+fn space_key(tool: &str) -> Option<&'static str> {
+    static KEYS: std::sync::OnceLock<std::collections::HashMap<String, &'static str>> =
+        std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        super::McpServer::tools()
+            .list_all()
+            .into_iter()
+            .chain(crate::ops::mcp::tools())
+            .filter_map(|tool| {
+                let properties = tool.input_schema.get("properties")?.as_object()?;
+                let key = match (
+                    properties.contains_key("projectId"),
+                    properties.contains_key("spaceId"),
+                ) {
+                    (true, false) => "projectId",
+                    (false, true) => "spaceId",
+                    _ => return None,
+                };
+                Some((tool.name.to_string(), key))
+            })
+            .collect()
+    })
+    .get(tool)
+    .copied()
+}
+
+/// K4.21: every tool that takes a space takes it as `spaceId` or as
+/// `projectId`, whichever it names, so the arguments are given the name
+/// the tool reads. Both, naming different spaces, is refused.
+pub(super) fn space_arg(
+    tool: &str,
+    arguments: &mut Option<rmcp::model::JsonObject>,
+) -> Result<(), &'static str> {
+    let (Some(key), Some(arguments)) = (space_key(tool), arguments.as_mut()) else {
+        return Ok(());
+    };
+    let other = if key == "spaceId" {
+        "projectId"
+    } else {
+        "spaceId"
+    };
+    let Some(given) = arguments.remove(other) else {
+        return Ok(());
+    };
+    match arguments.get(key) {
+        Some(named) if *named != given => {
+            Err("spaceId and projectId name different spaces. Give one of them.")
+        }
+        Some(_) => Ok(()),
+        None => {
+            arguments.insert(key.to_owned(), given);
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 
+import { can } from '../../auth/can'
 import { requestJson } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
@@ -96,7 +97,7 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
         </form>
       </Section>
       <ProfileSection name={session.user.displayName} />
-      <EmailSection canSetUpEmail={workspace?.role === 'owner'} />
+      <EmailSection canSetUpEmail={can(workspace, 'settings.manage')} />
       <Section
         description="Used only to find pull requests that ask for your review."
         id="github-username-heading"

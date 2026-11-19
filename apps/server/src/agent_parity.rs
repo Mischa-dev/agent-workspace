@@ -205,7 +205,7 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/members",
-            Tool("project_member_set"),
+            Tool("space_member_add"),
         ),
         (
             Patch,
@@ -956,7 +956,7 @@ mod tests {
         (
             Patch,
             "/api/v1/projects/{project_id}/members/{actor_id}",
-            Tool("project_member_set"),
+            Tool("space_member_update"),
         ),
         (
             Post,
@@ -1055,18 +1055,10 @@ mod tests {
         ),
         (Post, "/api/v2/w/{workspace}/ops/{name}", Op),
         (Post, "/api/v2/ops/{name}", Op),
-        (Post, "/api/v1/projects", Tool("project_create")),
-        (Patch, "/api/v1/projects/{id}", Tool("project_update")),
-        (
-            Post,
-            "/api/v1/projects/{id}/archive",
-            Tool("project_archive"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{id}/restore",
-            Tool("project_archive"),
-        ),
+        (Post, "/api/v1/projects", Tool("space_create")),
+        (Patch, "/api/v1/projects/{id}", Tool("space_update")),
+        (Post, "/api/v1/projects/{id}/archive", Tool("space_archive")),
+        (Post, "/api/v1/projects/{id}/restore", Tool("space_restore")),
         (
             Put,
             "/api/v1/projects/rail-order",

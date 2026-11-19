@@ -123,12 +123,13 @@ describe('session wire normalization', () => {
     ]
 
     expect(normalizeSessionResponse(wire).organizations).toEqual([
-      wire.organizations[0],
+      { ...wire.organizations[0], permissions: [] },
       {
         id: '019fb600-0000-7000-8000-000000000016',
         name: 'Admin Organization',
         slug: 'admin-organization',
         role: 'admin',
+        permissions: [],
       },
     ])
   })

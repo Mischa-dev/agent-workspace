@@ -152,13 +152,8 @@ pub(super) async fn model_catalog_write(
             organization_id,
         )
         .await?;
-        settings::authorize_workspace_manage_as(
-            &state.pool,
-            principal.actor_id,
-            principal.actor_kind,
-            organization_id,
-        )
-        .await?;
+        settings::authorize_workspace_manage_as(&state.pool, principal.actor_id, organization_id)
+            .await?;
         let (done, action, model, view) = match change {
             Change::Save(model, overrides) => {
                 let view = execution::save_overrides_in(

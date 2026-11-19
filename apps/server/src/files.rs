@@ -119,7 +119,8 @@ impl FileRow {
 }
 
 const FILE_COLUMNS: &str = r#"
-    file.id, file.project_id, file.work_item_id, NULL::uuid AS comment_id,
+    file.id, COALESCE(file.project_id, direct_scope_id()) AS project_id,
+    file.work_item_id, NULL::uuid AS comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
     file.preview_text,
@@ -148,7 +149,11 @@ const READABLE: &str = r#"
     file.removed_at IS NULL
     AND file.blob_deleted_at IS NULL
     AND ($5::uuid IS NULL OR file.project_id = $5)
-    AND CASE WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
+    -- A DM's or group's file (no space) by the conversation's rule alone.
+    AND CASE WHEN file.project_id IS NULL
+             THEN file.conversation_id IS NOT NULL
+                  AND ($3::uuid IS NULL OR agent_connection_can_reach_direct($3))
+        WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
         ELSE EXISTS (
             SELECT 1
             FROM project_memberships membership
@@ -180,7 +185,7 @@ const READABLE: &str = r#"
             WHERE task_membership.project_id = file.project_id
               AND task_membership.actor_id = $2
               AND task_membership.enabled
-              AND custom_role_allows(task_membership.role_id, 'tasks.view')
+              AND role_allows(task_membership.role, task_membership.role_id, 'tasks.view')
         )
     END
 "#;
@@ -394,7 +399,6 @@ impl Purpose {
 pub(crate) async fn thing_destination(
     pool: &PgPool,
     editor: Uuid,
-    editor_kind: crate::policy::ActorKind,
     thing: ThingKind,
     thing_id: Uuid,
 ) -> Result<Destination, AppError> {
@@ -404,7 +408,6 @@ pub(crate) async fn thing_destination(
             crate::memory::project_access(
                 pool,
                 editor,
-                editor_kind,
                 project_id,
                 crate::policy::Action::PageEdit,
             )
@@ -469,11 +472,15 @@ async fn organization_of(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-        .bind(project_id)
-        .fetch_optional(executor)
-        .await?
-        .ok_or(AppError::NotFound("project"))
+    // A place: a space's workspace, or the direct scope for a DM's file.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT organization_id FROM projects WHERE id = $1 \
+         UNION ALL SELECT id FROM organizations WHERE id = $1 AND id = direct_scope_id()",
+    )
+    .bind(project_id)
+    .fetch_optional(executor)
+    .await?
+    .ok_or(AppError::NotFound("project"))
 }
 
 /// Stores an upload in `destination` for `uploader` and returns it. The
@@ -620,7 +627,7 @@ pub(crate) async fn store_prepared(
             storage_key, image_width, image_height, thumbnail_key,
             thumbnail_bytes, attached_at, thing_kind, thing_id, purpose, preview_text
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+        VALUES ($1, $2, NULLIF($3, direct_scope_id()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
                 CASE WHEN $16 THEN now() END, $17, $18, $19, $20)
         RETURNING {FILE_COLUMNS}
         "#

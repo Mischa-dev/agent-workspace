@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -278,7 +279,10 @@ pub(crate) async fn task_fields(
     );
     fields.insert(
         "task.url",
-        format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        format!(
+            "{origin}{}",
+            crate::addresses::link(state, None, &Target::task(project_id, task.id))
+        ),
     );
     fields.insert(
         "task.priority",
@@ -294,7 +298,10 @@ pub(crate) async fn task_fields(
         "task.pages",
         pages
             .iter()
-            .map(|(id, title)| format!("- {title}: {origin}/projects/{project_id}/pages/{id}"))
+            .map(|(id, title)| {
+                let page = crate::addresses::link(state, None, &Target::page(project_id, *id));
+                format!("- {title}: {origin}{page}")
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     );
@@ -314,7 +321,13 @@ pub(crate) async fn task_fields(
     .await?;
     fields.insert(
         "project.skills",
-        skills_field(&skills, &format!("{origin}/projects/{project_id}/pages")),
+        skills_field(
+            &skills,
+            &format!(
+                "{origin}{}",
+                crate::addresses::link(state, None, &Target::space(project_id, Place::Pages))
+            ),
+        ),
     );
     Ok(fields)
 }
@@ -569,7 +582,6 @@ impl LaunchCaller {
     fn thread_creator(&self) -> crate::conversations::threads::ThreadCreator {
         crate::conversations::threads::ThreadCreator::plain(
             self.actor_id,
-            self.actor_kind,
             self.session_id,
             self.authentication_class(),
             self.request_id.clone(),
@@ -880,7 +892,6 @@ async fn can_manage(state: &AppState, caller: &LaunchCaller, project_id: Uuid) -
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::SettingsManage,
     )
@@ -1192,7 +1203,6 @@ async fn plan_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1202,8 +1212,7 @@ async fn plan_for(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
-    let list =
-        environments::list_for(state, caller.actor_id, caller.actor_kind, project_id).await?;
+    let list = environments::list_for(state, caller.actor_id, project_id).await?;
     let environment_id = query
         .environment_id
         .filter(|id| {
@@ -1423,7 +1432,6 @@ pub(crate) async fn launch_tasks(
     let organization_id = environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkerInvoke,
     )
@@ -1435,7 +1443,6 @@ pub(crate) async fn launch_tasks(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1621,6 +1628,7 @@ pub(crate) async fn launch_tasks(
         .await?;
     let immediate =
         request.work_item_ids.len() == 1 && request.start_when == StartWhen::Now && !request.queue;
+    let person_caller = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
     let mut launch_ids = Vec::new();
     for work_item_id in &request.work_item_ids {
         let task = load_task(&mut *transaction, project_id, *work_item_id).await?;
@@ -1675,7 +1683,7 @@ pub(crate) async fn launch_tasks(
         // within the app's limit: it starts only within that limit when the
         // queue drains.
         .bind(
-            caller.actor_kind == ActorKind::Human
+            person_caller
                 && (caller.mcp
                     || crate::policy::current_agent_limit(
                         caller.actor_id,
@@ -1802,7 +1810,6 @@ async fn task_thread(
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ThreadCreate,
     )
@@ -2301,13 +2308,7 @@ async fn hand_off(
     if !settings.is_empty() {
         text.push_str(&format!("\n\nSettings: {}", settings.join(" ")));
     }
-    let actor_kind = match caller.actor_kind {
-        ActorKind::Human => "human",
-        ActorKind::ExternalAgent => "external_agent",
-        ActorKind::ExecutionWorker => "execution_worker",
-        ActorKind::Integration => "integration",
-        ActorKind::System => "system",
-    };
+    let actor_kind = crate::accounts::actor_kind_key(caller.actor_kind);
     let outcome = crate::conversations::append_message_command(
         state,
         crate::conversations::MessageCommandActor {
@@ -2486,21 +2487,20 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         // directly, in a batch or through an app-made automation) must still
         // be within that app's agent limit as it is now. Source mcp covers
         // rows queued before the flag was set on every insert.
-        let limits =
-            if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
-                let mut connection = crate::db::scoped_tx(&state.pool).await?;
-                Some(
-                    crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
-                        .await?
-                        .limits,
-                )
-            } else {
-                None
-            };
+        let person = kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+        let limits = if (queued.source == "mcp" || queued.made_through_app) && person {
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
+            Some(
+                crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                    .await?
+                    .limits,
+            )
+        } else {
+            None
+        };
         let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
-            kind,
             queued.project_id,
             Action::WorkerInvoke,
         );
@@ -2526,7 +2526,6 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             let view = memory::project_access(
                 &state.pool,
                 queued.requested_by_actor_id,
-                kind,
                 queued.project_id,
                 Action::WorkItemView,
             );
@@ -2743,7 +2742,6 @@ pub(crate) async fn list_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2807,7 +2805,6 @@ pub(crate) async fn cancel(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2902,7 +2899,7 @@ pub(crate) async fn queue_tag_launches(
           AND actor.status = 'active'
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
-          AND ((actor.kind = 'execution_worker' AND worker.id IS NOT NULL)
+          AND ((actor.kind = 'execution_worker' AND worker.id IS NOT NULL) -- // kind-check: mechanical (a profile agent runs on its worker)
                OR EXISTS (
                    SELECT 1 FROM host_agents binding
                    JOIN hosts host ON host.id = binding.host_id
@@ -2928,7 +2925,7 @@ pub(crate) async fn queue_tag_launches(
             .bind(message_id)
             .fetch_one(&mut **transaction)
             .await?;
-    if crate::policy::agent_limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
+    if crate::access::limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
         return Ok(());
     }
     // An app acting for the author is in this call when its limit is set.
@@ -2990,12 +2987,18 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     else {
         return Ok(());
     };
-    if message.removed || message.author_kind != "human" {
+    // A run's own messages never start runs; anyone else's tag does when
+    // their role lets them start runs here.
+    let Some(author_kind) = actor_kind(&message.author_kind) else {
+        return Ok(());
+    };
+    let from_a_run = author_kind == ActorKind::ExecutionWorker; // kind-check: mechanical (a run's own output doesn't start runs)
+    if message.removed || from_a_run {
         return Ok(());
     }
     let caller = LaunchCaller {
         actor_id: message.author_actor_id,
-        actor_kind: ActorKind::Human,
+        actor_kind: author_kind,
         via_grant_id: None,
         mcp: false,
         session_id: None,
@@ -3022,7 +3025,6 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     let access = memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         message.project_id,
         Action::WorkerInvoke,
     );

@@ -70,10 +70,15 @@ async fn conversation_value(
         parent_kind.as_deref(),
         view.parent_channel_id,
     ) {
-        ("thread", Some("dm" | "group"), Some(parent_id)) => {
-            format!("/messages/{parent_id}?thread={}", view.id)
-        }
-        (kind, _, _) => conversation_path(view.project_id, kind, view.id, kind == "group"),
+        ("thread", Some("dm" | "group"), Some(parent_id)) => crate::addresses::link(
+            state,
+            None,
+            &crate::addresses::Target::Direct {
+                id: parent_id,
+                thread: Some(view.id),
+            },
+        ),
+        (kind, _, _) => conversation_path(state, view.project_id, kind, view.id, kind == "group"),
     };
     Ok(ConversationValue {
         id: view.id.to_string(),
@@ -148,7 +153,6 @@ pub(crate) async fn channel_create(
         let messages_space = match memory::project_access(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::ChannelCreate,
         )
@@ -209,7 +213,7 @@ pub(crate) async fn channel_create(
             "conversation.channel_created",
             "conversation",
             channel_id,
-            serde_json::json!({}),
+            serde_json::json!({ "private": arguments.private.unwrap_or(false) }),
         )
         .await?;
         transaction.commit().await?;
@@ -323,7 +327,6 @@ pub(crate) async fn conversation_update(
             let (_, restored) = set_conversation_archived(
                 &mut transaction,
                 principal.actor_id,
-                principal.actor_kind,
                 conversation_id,
                 &["channel", "thread"],
                 false,
@@ -356,7 +359,6 @@ pub(crate) async fn conversation_update(
                 update_thread(
                     &mut transaction,
                     principal.actor_id,
-                    principal.actor_kind,
                     conversation_id,
                     &ThreadPatch {
                         name: arguments.name.clone(),
@@ -373,7 +375,6 @@ pub(crate) async fn conversation_update(
                 rename_conversation(
                     &mut transaction,
                     principal.actor_id,
-                    principal.actor_kind,
                     conversation_id,
                     name,
                 )
@@ -386,7 +387,6 @@ pub(crate) async fn conversation_update(
             let (current, archived) = set_conversation_archived(
                 &mut transaction,
                 principal.actor_id,
-                principal.actor_kind,
                 conversation_id,
                 &["channel", "thread"],
                 true,

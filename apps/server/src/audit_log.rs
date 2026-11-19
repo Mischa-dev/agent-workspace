@@ -19,7 +19,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, ApiQuery, AppError},
-    workspace::caller_role,
+    workspace::standing_of,
 };
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -191,16 +191,17 @@ struct EventsResponse {
     next_cursor: Option<String>,
 }
 
-/// Owners and admins of the workspace read its log.
+/// Those whose workspace role holds "Read the audit log" (`settings.audit`;
+/// owners and admins to start with) read it.
 async fn require_reader(
     state: &AppState,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    if caller_role(&mut connection, principal, organization_id, false)
+    if standing_of(&mut connection, principal.actor_id, organization_id, false)
         .await?
-        .manages()
+        .may(crate::policy::Permission::SettingsAudit)
     {
         Ok(())
     } else {
@@ -412,7 +413,7 @@ async fn facets(
                actor.kind
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent')
+         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system has no profile)
         LEFT JOIN organization_actor_profiles profile
           ON profile.organization_id = membership.organization_id
          AND profile.actor_id = membership.actor_id
@@ -464,7 +465,7 @@ async fn facets(
     let projects = sqlx::query_as::<_, FacetProject>(
         r#"
         SELECT id, name, project_key AS key FROM projects
-        WHERE organization_id = $1 AND kind NOT IN ('direct', 'workspace')
+        WHERE organization_id = $1 AND kind <> 'workspace'
         ORDER BY archived_at NULLS FIRST, lower(name), id
         LIMIT 500
         "#,

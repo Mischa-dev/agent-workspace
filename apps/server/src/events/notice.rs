@@ -123,6 +123,15 @@ pub async fn stage(
             Some(p.version),
             None,
         ),
+        P::ConversationMemberAdded(p) => (
+            &catalog::CONVERSATION_MEMBER_ADDED,
+            "conversation",
+            p.conversation_id,
+            None,
+            conversation(p.conversation_id),
+            Some(p.version),
+            None,
+        ),
         P::AgentRunUpdated(p) => (
             if p.state.is_some_and(|state| state.is_terminal()) {
                 &catalog::RUN_FINISHED
@@ -377,8 +386,10 @@ pub async fn stage(
         NewEvent {
             id: event_id,
             ty,
-            workspace_id: None,
-            space_id: Some(project_id),
+            // A DM or group has no space: its events belong to the direct
+            // scope and are heard by its participants.
+            workspace_id: (project_id == crate::spaces::DIRECT).then_some(project_id),
+            space_id: (project_id != crate::spaces::DIRECT).then_some(project_id),
             thing,
             access_thing: access,
             version,

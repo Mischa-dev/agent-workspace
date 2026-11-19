@@ -339,7 +339,8 @@ pub(crate) struct WorkspaceUpdateValue {
     pub modules_off: Vec<String>,
 }
 
-const MANAGERS_ONLY: &str = "Only the workspace's owners and admins who manage its settings change it, as people, on the web or through an app connected as themselves.";
+const MANAGERS_ONLY: &str =
+    "Only someone whose role manages the workspace's settings (or modules) changes it.";
 
 pub(crate) async fn workspace_update(
     state: &AppState,
@@ -348,9 +349,6 @@ pub(crate) async fn workspace_update(
 ) -> ToolResult<WorkspaceUpdateValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != crate::policy::ActorKind::Human {
-        return ToolResult::denied(MANAGERS_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -391,7 +389,7 @@ pub(crate) async fn workspace_update(
                     .bind(organization_id)
                     .fetch_one(&mut *transaction)
                     .await?;
-            let (_, metadata) = crate::workspace::rename_workspace_in(
+            let metadata = crate::workspace::rename_workspace_in(
                 &mut transaction,
                 principal.actor_id,
                 organization_id,
