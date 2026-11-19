@@ -50,6 +50,7 @@ export const PART_IDS = [
   'page.nesting',
   'page.recent_edits',
   'sheet.charts',
+  'sheet.validation',
   'page.references',
   'tech.task_keys',
   'tech.run_usage',

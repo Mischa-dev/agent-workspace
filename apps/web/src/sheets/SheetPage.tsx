@@ -545,7 +545,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
         })),
         { separator: true },
         { label: 'Conditional formatting', onSelect: () => setEditingRules(true) },
-        { label: 'Data validation', onSelect: () => setEditingValidation(true) },
+        ...(experience.shows('sheet.validation') ? [{ label: 'Data validation', onSelect: () => setEditingValidation(true) }] : []),
         { label: 'Clear formatting', onSelect: () => look({ clear: true }) },
       ]
     : []
@@ -867,7 +867,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
           tab={tab}
         />
       ) : null}
-      {editingValidation && tab ? (
+      {editingValidation && tab && experience.shows('sheet.validation') ? (
         <SheetValidationDialog
           onClose={() => setEditingValidation(false)}
           onSave={async (rules) => {
