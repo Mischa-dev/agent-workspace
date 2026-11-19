@@ -35,12 +35,19 @@ export function pickToBulk(result: PickResult): BulkChanges | null {
   return pickToPatch(result) as BulkChanges
 }
 
-/** The task the server sent back with a 409 version conflict, if it did. */
+/**
+ * The task the server sent back with a version conflict, if it did: the old
+ * routes' `version_conflict` carries it as `details.current`, an operation's
+ * `conflict` (reason `version`) as `details.current.task`.
+ */
 export function conflictCurrent(error: unknown): WorkItem | null {
-  if (!isApiError(error) || error.code !== 'version_conflict') return null
-  const details = error.details
-  if (!details || typeof details !== 'object' || !('current' in details)) return null
-  return normalizeWorkItem((details as { current: unknown }).current)
+  if (!isApiError(error)) return null
+  const details = error.details as { current?: unknown; reason?: unknown } | null | undefined
+  if (!details || typeof details !== 'object' || !details.current) return null
+  if (error.code === 'version_conflict') return normalizeWorkItem(details.current)
+  if (error.code !== 'conflict' || details.reason !== 'version') return null
+  const current = details.current as { task?: unknown }
+  return current.task ? normalizeWorkItem(current.task) : null
 }
 
 export function bulkProblems(error: unknown): BulkProblem[] {

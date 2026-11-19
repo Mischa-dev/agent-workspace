@@ -113,6 +113,7 @@ describe('document title', () => {
     expect(pageTitleFor('/projects/p1/work-items', '?view=board', projects, null)).toBe('Board · Agent Workspace')
     expect(pageTitleFor('/projects/p1/channels/c1', '', projects, '#general')).toBe('#general · Agent Workspace')
     expect(pageTitleFor('/projects/p1/next', '', projects, null)).toBe('Planning · Agent Workspace')
+    expect(pageTitleFor('/w/acme/s/p1/tasks', '', projects, null)).toBe('Tasks · Agent Workspace')
     expect(pageTitleFor('/messages', '', projects, null)).toBe('Messages')
     expect(pageTitleFor('/settings/account/appearance', '', projects, null)).toBe('Appearance')
     expect(pageTitleFor('/settings/workspace/members', '', projects, null)).toBe('Settings')

@@ -1,5 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
+import { ApiError, isApiError } from '../api/errors'
 import { callOp, type OpInput } from '../api/ops'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
@@ -264,7 +265,9 @@ async function linkOnTask(
   input: { projectId: string; workItemId: string; idempotencyKey: string; expectedVersion?: number },
   link: Omit<OpInput<'task_link'>, 'taskId' | 'expectedVersion'>,
 ) {
-  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion })
+  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
+    (error: unknown) => refuseAsMovedOn(error, input),
+  )
   return getWorkItem(input.projectId, input.workItemId)
 }
 
@@ -702,8 +705,26 @@ async function changeCriteria(
     'task_criteria_update',
     { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations: [operation] },
     { requestId: input.idempotencyKey },
-  )
+  ).catch((error: unknown) => refuseAsMovedOn(error, input))
   return getWorkItem(input.projectId, input.workItemId)
+}
+
+/**
+ * For task writes whose conflicts don't carry the task (criteria, links):
+ * read it, and if it moved on past the version the change was made against,
+ * refuse the way `task_update` does, so the editor loads the newer one.
+ */
+async function refuseAsMovedOn(error: unknown, input: { projectId: string; workItemId: string; expectedVersion?: number }): Promise<never> {
+  if (!isApiError(error) || error.code !== 'conflict' || input.expectedVersion === undefined) throw error
+  const current = await getWorkItem(input.projectId, input.workItemId).catch(() => null)
+  if (!current || current.version === input.expectedVersion) throw error
+  throw new ApiError({
+    status: error.status,
+    code: 'conflict',
+    message: error.message,
+    details: { reason: 'version', currentVersion: current.version, current: { task: current } },
+    requestId: error.requestId,
+  })
 }
 
 export async function createAcceptanceCriterion(input: {
