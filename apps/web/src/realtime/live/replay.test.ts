@@ -9,8 +9,8 @@ import { parseFrames, replay, type Seed } from './replay'
 // W1.7: every recorded stream under fixtures/ (from e2e/live-streams.spec.ts,
 // re-recorded with RECORD_FRAMES=1) replays through the real live connection
 // with its seed, and meets its expectations file. All are protocol 2's
-// (W1.6); the first four were recorded on protocol 1 and rewrapped as
-// `event` frames when its path went (W1.6b), with the same expectations.
+// (W1.6): the first four were recorded again on it when protocol 1's path
+// went (W1.6b) and meet the expectations they met on protocol 1.
 
 type Count = number | { min: number }
 type Expectations = {
