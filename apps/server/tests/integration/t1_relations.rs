@@ -197,6 +197,27 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     assert_eq!(changed["outcome"], "ok", "{changed}");
     let people = query("Testers").await;
     assert_eq!(value_of(&people, "Bo", "Builds"), Value::Null, "{people}");
+    // Bo's history has both sides of it, with the values to put back.
+    let paired = sqlx::query_as::<_, (Value, Value, Value)>(
+        "SELECT history.changes -> 0 -> 'after', history.changes -> 0 -> 'was', \
+                history.changes -> 0 -> 'is' \
+         FROM collection_record_history history \
+         JOIN collection_records record ON record.id = history.record_id \
+         WHERE record.project_id = $1 AND record.title = 'Bo' \
+           AND history.changes -> 0 ->> 'name' = 'Builds' \
+         ORDER BY history.version",
+    )
+    .bind(project_id)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("Bo's history");
+    assert_eq!(
+        paired,
+        vec![
+            (json!(["Build 1"]), Value::Null, json!([build_one])),
+            (json!([]), json!([build_one]), Value::Null),
+        ]
+    );
     assert_eq!(
         value_of(&query("Builds").await, "Build 1", "Hours"),
         json!(11)

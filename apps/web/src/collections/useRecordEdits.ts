@@ -7,6 +7,7 @@ import type { FieldReference, FieldValue } from '../fields/fieldModel'
 import {
   collectionKeys,
   createRecord,
+  getRecord,
   updateRecord,
   type CollectionRecord,
   type RecordBody,
@@ -100,20 +101,6 @@ export function useRecordEdits(projectId: string, collectionId: string) {
     })
   }, [client, collectionId, patch, projectId, withUnsaved])
 
-  /** The record as this page holds it now: opened, or in a loaded list. */
-  const cached = useCallback(
-    (recordId: string): CollectionRecord | null => {
-      const opened = client.getQueryData<RecordBody>(collectionKeys.record(projectId, collectionId, recordId))?.record
-      if (opened) return opened
-      for (const [, data] of client.getQueriesData<InfiniteData<RecordPage>>({ queryKey: collectionKeys.allRecords(projectId, collectionId) })) {
-        const found = data?.pages.flatMap((page) => page.records).find((entry) => entry.id === recordId)
-        if (found) return found
-      }
-      return null
-    },
-    [client, collectionId, projectId],
-  )
-
   // Undo saves through `save` itself, which it can only name once made.
   const saveRef = useRef<((record: CollectionRecord, change: RecordChange, reference?: FieldReference, undoable?: boolean) => Promise<boolean>) | null>(null)
 
@@ -136,7 +123,9 @@ export function useRecordEdits(projectId: string, collectionId: string) {
         try {
           return await updateRecord(projectId, collectionId, record.id, version, change)
         } catch (error) {
-          const latest = isApiError(error) && error.code === 'version_conflict' ? (error.details as { currentVersion?: unknown } | null)?.currentVersion : null
+          // An undo goes only on the version it checked: sent again on top
+          // of a newer one, it could take back someone else's change.
+          const latest = undoable && isApiError(error) && error.code === 'version_conflict' ? (error.details as { currentVersion?: unknown } | null)?.currentVersion : null
           if (typeof latest !== 'number') throw error
           return updateRecord(projectId, collectionId, record.id, latest, change)
         }
@@ -148,8 +137,10 @@ export function useRecordEdits(projectId: string, collectionId: string) {
             undo: async () => {
               // Once the change itself has saved.
               await inOrder(`record:${record.id}`, async () => undefined)
-              const now = cached(record.id)
-              if (!now || touched(now, change) !== saved) throw new Error(`${recordName(record)} changed since, so it wasn’t undone.`)
+              // As the server has it now: this page may not have heard of a
+              // change made since.
+              const now = (await getRecord(projectId, collectionId, record.id)).record
+              if (touched(now, change) !== saved) throw new Error(`${recordName(record)} changed since, so it wasn’t undone.`)
               if (!(await saveRef.current?.(now, inverse, undefined, false))) throw new Error(`${recordName(record)} didn’t change back.`)
             },
           }
@@ -188,7 +179,7 @@ export function useRecordEdits(projectId: string, collectionId: string) {
           return false
         })
     },
-    [cached, collectionId, patch, projectId, refresh, withUnsaved],
+    [collectionId, patch, projectId, refresh, withUnsaved],
   )
   useEffect(() => {
     saveRef.current = save

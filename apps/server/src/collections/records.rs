@@ -537,7 +537,7 @@ const MAX_KEPT_STORED_BYTES: usize = 16 * 1024;
 /// (`before`, `after`, for people) and, when small enough, the stored
 /// values themselves (`was`, `is`, for showing and putting back a version;
 /// T1.41). A stored value of null is a cleared field.
-fn change_entry(
+pub(super) fn change_entry(
     field: &str,
     name: &str,
     before: Value,
@@ -560,7 +560,7 @@ fn change_entry(
 /// record created or changed, with the names of the fields that changed,
 /// for webhooks, automations and activity.
 #[allow(clippy::too_many_arguments)]
-async fn insert_history(
+pub(super) async fn insert_history(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,

@@ -90,6 +90,16 @@ describe('conditions and sections (T1.28)', () => {
     expect(shownFields(asked, { kind: 'bug', steps: 'Open it' }).map((field) => field.id)).toEqual(['kind', 'steps', 'more', 'who'])
   })
 
+  it('reads an unticked checkbox as No, as the server does', () => {
+    const ticked = normalizeQuestions([
+      { id: 'agree', name: 'Agree', type: 'checkbox' },
+      { id: 'why', name: 'Why not', type: 'text', showIf: { field: 'agree', isOneOf: ['No'] } },
+    ])
+    expect(shownFields(ticked, {}).map((field) => field.id)).toEqual(['agree'])
+    expect(shownFields(ticked, { agree: true }).map((field) => field.id)).toEqual(['agree'])
+    expect(shownFields(ticked, { agree: false }).map((field) => field.id)).toEqual(['agree', 'why'])
+  })
+
   it('never asks for a hidden question, and leaves its answer out', () => {
     expect(missing(internal, { title: 'Dark mode', kind: 'idea' })).toBeNull()
     expect(missing(internal, { title: 'Crash', kind: 'bug' })).toBe('Fill in Steps.')

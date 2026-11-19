@@ -68,19 +68,20 @@ pub async fn write_pairs(
         removed.sort_unstable();
         let mut all = added.iter().chain(&removed).copied().collect::<Vec<_>>();
         all.sort_unstable();
+        let pair_key = pair.to_string();
         // In ID order, so two writes pairing the same records can't
-        // deadlock.
-        sqlx::query(
-            "SELECT id FROM collection_records \
+        // deadlock; with the pair's values as they were, for their history.
+        let was = sqlx::query_as::<_, (Uuid, Option<Value>)>(
+            "SELECT id, field_values -> $4 FROM collection_records \
              WHERE project_id = $1 AND collection_id = $2 AND id = ANY($3) \
              ORDER BY id FOR UPDATE",
         )
         .bind(project_id)
         .bind(collection)
         .bind(&all)
-        .execute(&mut *connection)
+        .bind(&pair_key)
+        .fetch_all(&mut *connection)
         .await?;
-        let pair_key = pair.to_string();
         let own = record.to_string();
         sqlx::query(
             r#"
@@ -140,6 +141,7 @@ pub async fn write_pairs(
         .bind(actor_id)
         .execute(&mut *connection)
         .await?;
+        record_history(connection, project_id, actor_id, collection, pair, was).await?;
         match changes
             .iter_mut()
             .find(|change: &&mut PairChange| change.collection_id == collection)
@@ -152,6 +154,105 @@ pub async fn write_pairs(
         }
     }
     Ok(Ok(changes))
+}
+
+/// A history entry on each paired record whose `pair` field changed from
+/// what `was` holds, so its earlier versions can be shown and put back
+/// like any other change.
+async fn record_history(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    actor_id: Uuid,
+    collection: Uuid,
+    pair: Uuid,
+    was: Vec<(Uuid, Option<Value>)>,
+) -> Result<(), AppError> {
+    let ids = was.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let now = sqlx::query_as::<_, (Uuid, i64, Option<Value>)>(
+        "SELECT id, version, field_values -> $3 FROM collection_records \
+         WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&ids)
+    .bind(pair.to_string())
+    .fetch_all(&mut *connection)
+    .await?;
+    let changed = now
+        .into_iter()
+        .filter_map(|(id, version, is)| {
+            let before = was.iter().find(|(other, _)| *other == id)?.1.clone();
+            (before != is).then_some((id, version, before, is))
+        })
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM field_definitions WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(pair)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default();
+    let named = |value: &Option<Value>| {
+        value
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| id.as_str()?.parse::<Uuid>().ok())
+            .collect::<Vec<_>>()
+    };
+    let mut mentioned = changed
+        .iter()
+        .flat_map(|(_, _, before, is)| named(before).into_iter().chain(named(is)))
+        .collect::<Vec<_>>();
+    mentioned.sort_unstable();
+    mentioned.dedup();
+    let titles = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, title FROM collection_records WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&mentioned)
+    .fetch_all(&mut *connection)
+    .await?;
+    let read = |value: &Option<Value>| {
+        Value::Array(
+            named(value)
+                .into_iter()
+                .map(|id| {
+                    let title = titles
+                        .iter()
+                        .find(|(other, _)| *other == id)
+                        .map_or_else(String::new, |(_, title)| title.clone());
+                    Value::String(title)
+                })
+                .collect(),
+        )
+    };
+    let field = pair.to_string();
+    for (id, version, before, is) in changed {
+        let entry = super::records::change_entry(
+            &field,
+            &name,
+            read(&before),
+            read(&is),
+            (before.as_ref(), is.as_ref()),
+        );
+        super::records::insert_history(
+            connection,
+            project_id,
+            collection,
+            id,
+            actor_id,
+            "updated",
+            vec![entry],
+            version,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// After `changes`: the paired records' worked-out values, the records

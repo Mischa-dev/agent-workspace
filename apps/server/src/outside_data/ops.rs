@@ -1308,7 +1308,10 @@ impl Operation for DataQueryRun {
             super::Bound::of(parameter.kind, values.get(name))
                 .map_err(|why| invalid("parameters", format!("{name}: {why}.")))?;
         }
-        let reviewed = query.review == ReviewState::Reviewed;
+        // A run with values of its own lands in the draft place, seen only
+        // by those who connect data: the shared, reviewed answer is the
+        // query's defaults, and only those.
+        let reviewed = query.review == ReviewState::Reviewed && values.is_empty();
         let me = call.ctx.caller.account_id;
         let tx = call.tx().await?;
         let fresh = !full

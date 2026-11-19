@@ -83,7 +83,8 @@ export function normalizeQuestions(value: unknown, audience: 'public' | 'interna
 /** The words an answer gives a condition: options by name, a checkbox as Yes or No. */
 function answerWords(field: PublicField, value: Answers[string] | undefined): string[] {
   if (value === undefined) return []
-  if (typeof value === 'boolean') return value ? ['yes', 'true'] : []
+  // As the server reads them: an explicit No is an answer too.
+  if (typeof value === 'boolean') return value ? ['yes', 'true'] : ['no', 'false']
   const values = Array.isArray(value) ? value : [value]
   return values
     .map((entry) => entry.trim())

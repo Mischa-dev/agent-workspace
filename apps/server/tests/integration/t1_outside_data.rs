@@ -280,6 +280,27 @@ async fn reviewed_shared_answers_reach_viewers_and_writes_never_reach_the_databa
         json!([["alpha", 30], ["beta", 5]]),
         "{seen}"
     );
+    // Someone who connects data trying a value of their own sees that
+    // answer; everyone else keeps the reviewed answer for the defaults.
+    let (_, tried) = ada
+        .call(
+            app,
+            tool(
+                "data_query_run",
+                json!({"query": totals, "parameters": {"least": 100}}),
+            ),
+        )
+        .await;
+    ok(&tried);
+    run_due_jobs(&world.state).await;
+    let (_, mine) = ada.call(app, get(&totals)).await;
+    assert_eq!(ok(&mine)["answer"]["rows"], json!([]), "{mine}");
+    let (_, still) = vera.call(app, get(&totals)).await;
+    assert_eq!(
+        ok(&still)["answer"]["rows"],
+        json!([["alpha", 30], ["beta", 5]]),
+        "{still}"
+    );
 
     // On a shared dashboard: the shared query shows; an unshared one may
     // not be put there.
