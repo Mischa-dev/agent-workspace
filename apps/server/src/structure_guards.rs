@@ -171,15 +171,15 @@ pub(crate) const RULES: &[Rule] = &[
 // P0.26 landed (and counted again over build 1O's operation layer, which
 // merged before these rules reached main). Lower one when its allowances go
 // down; never raise one.
-const RAW_ROLE_CHECKS_CEILING: usize = 40;
-const CUSTOM_ROLE_ALLOWS_CEILING: usize = 23;
+const RAW_ROLE_CHECKS_CEILING: usize = 37;
+const CUSTOM_ROLE_ALLOWS_CEILING: usize = 18;
 const WORKSPACE_ROLE_ENUM_CEILING: usize = 32;
-const ACCOUNT_KIND_CHECKS_CEILING: usize = 264;
+const ACCOUNT_KIND_CHECKS_CEILING: usize = 192;
 // K1.1: role names compared in Rust, the old access core called by hand,
 // and account kinds compared as stored strings. Set from today's counts.
 const RUST_ROLE_CHECKS_CEILING: usize = 36;
-const ACCESS_BYPASSES_CEILING: usize = 81;
-const ACCOUNT_KIND_STRINGS_CEILING: usize = 58;
+const ACCESS_BYPASSES_CEILING: usize = 67;
+const ACCOUNT_KIND_STRINGS_CEILING: usize = 48;
 const AGENT_RUNS_SQL_CEILING: usize = 111;
 const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 6;
 const CONVERSATION_INSERTS_CEILING: usize = 6;
@@ -197,7 +197,7 @@ const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 10;
 // K4.18: links into the web app built by hand instead of by the address
 // module. The rest move when links switch to workspace addresses (K4.19).
-const HAND_BUILT_LINKS_CEILING: usize = 83;
+const HAND_BUILT_LINKS_CEILING: usize = 82;
 // K5.17 (ruling R24 rule 3): what a transaction-mode pooler can't carry.
 const SESSION_ADVISORY_LOCKS_CEILING: usize = 0;
 const POOLER_SAFE_SQL_CEILING: usize = 0;

@@ -122,6 +122,8 @@ pub async fn list(
           AND project.archived_at IS NULL
           AND actor_can_access_project($1, $3, project.id)
           AND ($4::uuid IS NULL OR project.id = $4)
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
+               OR page_visible_to(page.id, $1))
         ORDER BY page.project_id <> $2, lower(page.title), page.id
         LIMIT 200
         "#,
@@ -214,10 +216,13 @@ async fn template_page(
         JOIN projects here ON here.id = $2
         WHERE page.id = $1 AND page.is_template AND page.archived_at IS NULL
           AND project.organization_id = here.organization_id
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation'
+               OR page_visible_to(page.id, $3))
         "#,
     )
     .bind(page_id)
     .bind(project_id)
+    .bind(writer.actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("template"))?;
@@ -231,7 +236,6 @@ async fn template_page(
     project_access(
         &mut **transaction,
         writer.actor_id,
-        writer.actor_kind,
         template_project,
         Action::ProjectView,
     )

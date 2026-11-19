@@ -271,11 +271,7 @@ async fn every_kind_keeps_its_row_in_step_and_converts_once() {
     )
     .await;
     assert!(row(pool, &board).await.deleted);
-    call(
-        "project_update",
-        json!({"projectId": work, "name": "Gates"}),
-    )
-    .await;
+    call("space_update", json!({"spaceId": work, "name": "Gates"})).await;
     assert_eq!(row(pool, &work).await.title.as_deref(), Some("Gates"));
     let sheet_version = row(pool, &sheet).await.version;
     call(

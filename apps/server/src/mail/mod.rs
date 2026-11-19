@@ -368,7 +368,7 @@ pub async fn transport_for_actor(
           ON mail.organization_id = membership.organization_id AND mail.enabled
         LEFT JOIN users user_account ON user_account.actor_id = membership.actor_id
         WHERE membership.actor_id = $1 AND membership.enabled
-          AND (membership.role = 'owner'
+          AND (membership.role = $2
                OR NOT EXISTS (
                    SELECT 1 FROM organization_memberships other
                    WHERE other.actor_id = membership.actor_id AND other.enabled
@@ -380,6 +380,7 @@ pub async fn transport_for_actor(
         "#,
     )
     .bind(actor_id)
+    .bind(crate::access::tier::OWNER)
     .fetch_optional(connection).await }).await?;
     match organization_id {
         Some(organization_id) => transport(state, organization_id).await,

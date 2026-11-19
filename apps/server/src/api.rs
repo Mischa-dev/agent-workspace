@@ -15,7 +15,7 @@ use crate::{
     auth::AuthenticatedActor,
     error::AppError,
     hosts::builtin::http::{self, authorize_project_action},
-    policy::{Action, ProjectScope, Resource},
+    policy::Action,
 };
 
 pub fn router() -> Router<AppState> {
@@ -105,10 +105,6 @@ async fn development_bootstrap(
         bootstrap.membership_role_permissions.as_deref(),
         bootstrap.membership_enabled,
         Action::ProjectView,
-        Resource::Project(ProjectScope::thread(
-            bootstrap.project_id,
-            bootstrap.thread_id,
-        )),
     )?;
 
     Ok(Json(DevelopmentBootstrap {

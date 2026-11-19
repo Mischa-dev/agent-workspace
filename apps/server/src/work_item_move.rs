@@ -584,8 +584,12 @@ async fn check_access(
     }))
 }
 
-fn public_url(state: &AppState, path: &str) -> String {
-    format!("{}{path}", crate::invitations::public_origin(state))
+fn link_url(state: &AppState, target: &crate::addresses::Target) -> String {
+    format!(
+        "{}{}",
+        crate::invitations::public_origin(state),
+        crate::addresses::link(state, None, target)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2252,9 +2256,9 @@ async fn carry_over(
             to: new_key,
             id: new_id.to_string(),
             title: task.title.clone(),
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{target_project_id}/work-items/{new_id}"),
+                &crate::addresses::Target::task(target_project_id, new_id),
             ),
         });
     }
@@ -2306,12 +2310,9 @@ async fn replayed(
             .into_iter()
             .map(|task| MovedTask {
                 title: titles.get(&task.id).cloned().unwrap_or_default(),
-                url: public_url(
+                url: link_url(
                     state,
-                    &format!(
-                        "/projects/{}/work-items/{}",
-                        receipt.target_project_id, task.id
-                    ),
+                    &crate::addresses::Target::task(receipt.target_project_id, task.id),
                 ),
                 id: task.id.to_string(),
                 from: task.from,
@@ -2634,7 +2635,7 @@ async fn already_moved(
                 } else {
                     String::new()
                 },
-                url: public_url(state, &format!("/projects/{project_id}/work-items/{id}")),
+                url: link_url(state, &crate::addresses::Target::task(project_id, id)),
             })
             .collect(),
     ))

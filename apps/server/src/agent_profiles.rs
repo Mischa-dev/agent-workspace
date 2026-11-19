@@ -28,9 +28,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    environments::{authorize_project, principal_kind},
+    environments::authorize_project,
     error::{ApiJson, ApiPath, AppError},
-    policy::{Action, ActorKind},
+    policy::Action,
     settings,
 };
 
@@ -186,27 +186,14 @@ fn takes(manifest: &crate::provider::manifest::AdapterManifest, option: &str) ->
 pub async fn list_profiles(
     state: &AppState,
     viewer: Uuid,
-    viewer_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<ProfileList, AppError> {
-    let organization_id = authorize_project(
-        &state.pool,
-        viewer,
-        viewer_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
-    let can_manage = viewer_kind == ActorKind::Human
-        && crate::memory::project_access(
-            &state.pool,
-            viewer,
-            viewer_kind,
-            project_id,
-            Action::SettingsManage,
-        )
-        .await
-        .is_ok();
+    let organization_id =
+        authorize_project(&state.pool, viewer, project_id, Action::ProjectView).await?;
+    let can_manage =
+        crate::memory::project_access(&state.pool, viewer, project_id, Action::SettingsManage)
+            .await
+            .is_ok();
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
@@ -243,9 +230,8 @@ async fn list_http(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ProfileList>, AppError> {
-    let kind = principal_kind(&principal)?;
     Ok(Json(
-        list_profiles(&state, principal.actor_id, kind, project_id).await?,
+        list_profiles(&state, principal.actor_id, project_id).await?,
     ))
 }
 
@@ -514,7 +500,7 @@ async fn default_worker(
         SELECT worker.provider_connection_id, worker.execution_profile_id,
                worker.enabled, worker.pending_setup
         FROM execution_workers worker
-        JOIN actors actor ON actor.id = worker.actor_id AND actor.kind = 'execution_worker'
+        JOIN actors actor ON actor.id = worker.actor_id AND actor.kind = 'execution_worker' -- // kind-check: mechanical (a profile's worker account runs it)
         WHERE worker.project_id = $1
           AND NOT EXISTS (
               SELECT 1 FROM agent_profiles profile WHERE profile.execution_worker_id = worker.id
@@ -557,13 +543,9 @@ async fn manage(
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
     require_authenticated_write(state, headers, principal).await?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
         project_id,
         Action::SettingsManage,
     )
@@ -673,11 +655,38 @@ pub(crate) async fn create_in(
             return Err(AppError::Validation("handle"));
         }
     }
+    // K1.8: a profile agent is an agent account of the workspace, in its
+    // directory with a workspace role like any agent; its worker role in the
+    // project is how runs reach it.
     let actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(actor_id)
-        .execute(&mut **transaction)
-        .await?;
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id, created_by_actor_id) \
+         VALUES ($1, 'execution_worker', $2, $3)",
+    )
+    .bind(actor_id)
+    .bind(organization_id)
+    .bind(caller_id)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, $3) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(organization_id)
+    .bind(actor_id)
+    .bind(crate::policy::MembershipRole::Member.key())
+    .execute(&mut **transaction)
+    .await?;
+    // Its maker is named as one of its managers, as for any agent (K1.6).
+    sqlx::query(
+        "INSERT INTO account_managers (account_id, manager_account_id, workspace_id, added_by_actor_id) \
+         VALUES ($1, $2, $3, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(actor_id)
+    .bind(caller_id)
+    .bind(organization_id)
+    .execute(&mut **transaction)
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
@@ -872,6 +881,17 @@ pub(crate) async fn update_in(
     .bind(actor_id)
     .execute(&mut **transaction)
     .await?;
+    // Its name is the same in every seat it has, such as the workspace's
+    // own space (K1.28); the handle stays its project's.
+    sqlx::query(
+        "UPDATE project_memberships SET display_name = $3, updated_at = now() \
+         WHERE actor_id = $2 AND project_id <> $1 AND display_name <> $3",
+    )
+    .bind(project_id)
+    .bind(current.actor_id)
+    .bind(&clean.name)
+    .execute(&mut **transaction)
+    .await?;
     sqlx::query(
         r#"
         UPDATE execution_workers
@@ -976,7 +996,7 @@ pub(crate) async fn remove_in(
     // reaction) refuses the delete, and it's hidden instead.
     let deleted = !used && {
         let mut attempt = sqlx::Acquire::begin(&mut **transaction).await?;
-        match delete_profile_rows(&mut attempt, project_id, profile_id, worker_id, actor_id).await {
+        match delete_profile_rows(&mut attempt, profile_id, worker_id, actor_id).await {
             Ok(()) => {
                 attempt.commit().await?;
                 true
@@ -1029,7 +1049,6 @@ pub(crate) async fn remove_in(
 
 async fn delete_profile_rows(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
     profile_id: Uuid,
     worker_id: Uuid,
     actor_id: Uuid,
@@ -1042,8 +1061,22 @@ async fn delete_profile_rows(
         .bind(worker_id)
         .execute(&mut **transaction)
         .await?;
-    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
-        .bind(project_id)
+    // Its worker seat in the project, and the workspace's own space it
+    // joined as a member of the workspace (K1.8).
+    sqlx::query("DELETE FROM project_memberships WHERE actor_id = $1")
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM account_managers WHERE account_id = $1")
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    // The default connection its workspace membership gave it (A2).
+    sqlx::query("DELETE FROM agent_connections WHERE account_id = $1")
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM organization_memberships WHERE actor_id = $1")
         .bind(actor_id)
         .execute(&mut **transaction)
         .await?;
@@ -1055,7 +1088,7 @@ async fn delete_profile_rows(
     .bind(actor_id)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query("DELETE FROM actors WHERE id = $1 AND kind = 'execution_worker'")
+    sqlx::query("DELETE FROM actors WHERE id = $1 AND kind = 'execution_worker'") // kind-check: mechanical (a profile's own worker account)
         .bind(actor_id)
         .execute(&mut **transaction)
         .await?;
@@ -1219,17 +1252,9 @@ pub struct PresenceList {
 pub async fn presence(
     state: &AppState,
     viewer: Uuid,
-    viewer_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<PresenceList, AppError> {
-    authorize_project(
-        &state.pool,
-        viewer,
-        viewer_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
+    authorize_project(&state.pool, viewer, project_id, Action::ProjectView).await?;
     let agents = sqlx::query_as::<_, AgentPresence>(&format!(
         r#"
         WITH members AS (
@@ -1270,7 +1295,7 @@ pub async fn presence(
             FROM work
         )
         SELECT member.actor_id, member.name, member.handle,
-               CASE WHEN member.actor_kind = 'execution_worker' THEN 'worker' ELSE 'agent' END AS kind,
+               CASE WHEN member.actor_kind = 'execution_worker' THEN 'worker' ELSE 'agent' END AS kind, -- // kind-check: mechanical (a display label)
                profile.id AS profile_id, profile.avatar, profile.color, profile.description,
                profile.harness,
                CASE WHEN ranked.actor_id IS NULL THEN 'idle'
@@ -1317,9 +1342,8 @@ async fn presence_http(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<PresenceList>, AppError> {
-    let kind = principal_kind(&principal)?;
     Ok(Json(
-        presence(&state, principal.actor_id, kind, project_id).await?,
+        presence(&state, principal.actor_id, project_id).await?,
     ))
 }
 

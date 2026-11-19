@@ -22,6 +22,7 @@ import {
   installAppShellLifecycle,
 } from '../test/appHarness'
 import { App } from './App'
+import { permissionsOf } from '../test/permissions'
 
 describe('App Project creation and settings', () => {
   installAppShellLifecycle()
@@ -104,18 +105,21 @@ describe('App Project creation and settings', () => {
           name: 'Member Organization',
           slug: 'member',
           role: 'member',
+          permissions: permissionsOf('member'),
         },
         {
           id: adminOrganizationId,
           name: 'Admin Organization',
           slug: 'admin',
           role: 'admin',
+          permissions: permissionsOf('admin'),
         },
         {
           id: ownerOrganizationId,
           name: 'Owner Organization',
           slug: 'owner',
           role: 'owner',
+          permissions: permissionsOf('owner'),
         },
       ],
     }
@@ -147,6 +151,7 @@ describe('App Project creation and settings', () => {
           name: 'Member Organization',
           slug: 'member',
           role: 'member',
+          permissions: permissionsOf('member'),
         },
       ],
     })
@@ -389,6 +394,7 @@ describe('App Project creation and settings', () => {
     const viewerProject = {
       ...projectB,
       role: 'viewer',
+      permissions: permissionsOf('viewer'),
       capabilities: {
         view: true,
         manage: false,
@@ -439,7 +445,7 @@ describe('App Project creation and settings', () => {
       screen.queryByRole('button', { name: 'Archive project' }),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Viewer')).toBeVisible()
-    expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')
+    expect(screen.getByRole('note')).toHaveTextContent('Your role here is read-only')
     const sections = screen.getByRole('list', { name: 'Project settings' })
     expect(within(sections).queryByRole('link', { name: 'Run requests' })).not.toBeInTheDocument()
     expect(within(sections).queryByRole('link', { name: 'Automation' })).not.toBeInTheDocument()

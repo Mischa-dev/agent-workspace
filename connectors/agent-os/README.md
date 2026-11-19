@@ -36,8 +36,21 @@ It runs beside an Agent OS installation and dials out to the workspace:
   running after `taskDeadlineSeconds` is stopped.
 - **Stop** is `task-cancel`.
 
-Steering a running task, answering its questions, offers and agent actions
-come with the next step of the connector (runs, offers and actions).
+- **Tasks started in Agent OS itself** (a schedule there, say) for a served
+  agent are found every `adoptSeconds` through `operations.listTasks` and
+  added to the workspace as runs of their agent, once each (the task id
+  finds the same run again), then watched and reported like any start.
+  Agent OS doesn't report a task's steps, so such a run says only that it is
+  working until it ends.
+- **Usage**: `operations.usage` gives the plan windows of the accounts Agent
+  OS runs on; they show on the workspace's usage page.
+- **Offers**: `offers` lists what the host offers to set up when someone adds
+  an agent from it.
+- **Agent actions**: with `operations.pause` and `operations.memory`, each
+  agent gets "Pause" and "What it remembers" on its page.
+
+Each of these is off until its operation is named in the configuration.
+Steering a running task and answering its questions are not supported.
 
 ## Tests
 

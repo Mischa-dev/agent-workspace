@@ -116,6 +116,9 @@ pub async fn hear_now(
 
 async fn carry_out(state: &AppState, client: &HostClient, command: &Command) -> Option<Ack> {
     match command.kind {
+        CommandKind::Start if super::assistant::is_assistant_start(command) => {
+            Some(super::assistant::accept_start(state, command).await)
+        }
         CommandKind::Start => Some(start(state, client, command).await),
         CommandKind::Inspect => Some(inspect(state, command).await),
         CommandKind::Answer => Some(answered(state, command).await),
@@ -164,7 +167,7 @@ async fn answered(state: &AppState, command: &Command) -> Ack {
     if goes_on && detail_state(state, run_id).await.as_deref() != Some("blocked") {
         return Ack::new(AckOutcome::Accepted);
     }
-    let reports = match RunReports::open(state, run_id).await {
+    let reports = match super::report::open(state, run_id).await {
         Ok(reports) => reports,
         Err(error) => {
             tracing::warn!(%run_id, error_category = error.log_category(), "a run's answer wasn't heard");
@@ -213,6 +216,18 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
     let Some(run_id) = command.run_id else {
         return Ack::new(AckOutcome::Done);
     };
+    if detail_state(state, run_id).await.is_none() {
+        // An assistant run has no detail: its record ends here, which
+        // retires its credential, so its next model or tool call is
+        // refused and its turn stops there.
+        return match end_without_detail(state, run_id).await {
+            Ok(()) => Ack::new(AckOutcome::Done),
+            Err(error) => {
+                tracing::warn!(%run_id, error_category = error.log_category(), "a run didn't stop");
+                Ack::new(AckOutcome::Uncertain)
+            }
+        };
+    }
     if is_done(state, run_id).await {
         return Ack::new(AckOutcome::Done);
     }
@@ -222,7 +237,7 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
         .and_then(serde_json::Value::as_str)
         .unwrap_or(crate::runs::state::STOPPED_BY_REQUESTER)
         .to_owned();
-    let stopped = match RunReports::open(state, run_id).await {
+    let stopped = match super::report::open(state, run_id).await {
         Ok(reports) => stop(state, &reports, run_id, &reason, "The run was interrupted.").await,
         Err(error) => Err(error),
     };
@@ -233,6 +248,21 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
             Ack::new(AckOutcome::Uncertain)
         }
     }
+}
+
+/// End, as cancelled, a run of this host that has no detail row (an
+/// assistant's): nothing if it already finished.
+async fn end_without_detail(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::runs::ops::end_by_service(
+        &mut transaction,
+        run_id,
+        crate::runs::RunState::Cancelled,
+        "Stopped.",
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Whether the host is done with the run (or never had it).
@@ -327,27 +357,27 @@ async fn start(state: &AppState, client: &HostClient, command: &Command) -> Ack 
         return Ack::new(AckOutcome::Uncertain);
     };
     // The run's reports carry the credential its start brought; the start
-    // is kept so a later turn (or a restart) can fetch a fresh one.
+    // is kept so a later turn (or a restart) can fetch a fresh one. Two
+    // passes can carry out the same start at once (a kick's and the tick's):
+    // only the one that takes it goes on, so the other never fetches a
+    // credential that would replace the first one's.
+    let claimed = match claimed {
+        Some(run) => match take_start(state, run_id, run.claim_id, command.command_id).await {
+            Ok(true) => Some(run),
+            Ok(false) => None,
+            Err(_) => return Ack::new(AckOutcome::Uncertain),
+        },
+        None => None,
+    };
     let reports = match claimed {
-        Some(_) => {
-            if remember_start(state, run_id, command.command_id)
-                .await
-                .is_err()
-            {
-                return Ack::new(AckOutcome::Uncertain);
-            }
-            match RunReports::for_start(client.clone(), run_id, command.command_id).await {
-                Ok(reports) => Some(Arc::new(reports)),
-                Err(_) => return Ack::new(AckOutcome::Uncertain),
-            }
-        }
+        Some(_) => match RunReports::for_start(client.clone(), run_id, command.command_id).await {
+            Ok(reports) => Some(Arc::new(reports)),
+            Err(_) => return Ack::new(AckOutcome::Uncertain),
+        },
         None => None,
     };
     let Some(run) = claimed else {
-        let going = detail_state(state, run_id)
-            .await
-            .is_some_and(|state| matches!(state.as_str(), "working" | "blocked" | "recovering"));
-        return if going {
+        return if start_going(state, run_id, command.command_id).await {
             Ack::new(AckOutcome::Accepted)
         } else {
             refused("not_waiting", "That run isn't waiting to start.")
@@ -369,14 +399,50 @@ async fn start(state: &AppState, client: &HostClient, command: &Command) -> Ack 
     }
 }
 
-/// Keep the start a run's credential comes from.
-async fn remember_start(state: &AppState, run_id: Uuid, command_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("UPDATE agent_runs SET start_command_id = $2 WHERE id = $1")
-        .bind(run_id)
-        .bind(command_id)
-        .execute(crate::db::scoped(&state.pool))
-        .await?;
-    Ok(())
+/// Take a start for this carry-out: keep the start the run's credential
+/// comes from, unless this start was already taken. A concurrent taker waits
+/// on the row and then finds it taken.
+async fn take_start(
+    state: &AppState,
+    run_id: Uuid,
+    claim_id: Uuid,
+    command_id: Uuid,
+) -> Result<bool, AppError> {
+    let taken = sqlx::query(
+        r#"
+        UPDATE agent_runs SET start_command_id = $3
+         WHERE id = $1 AND state = 'starting'
+           AND scheduler_claim_id = $2
+           AND repository_workspace_id IS NULL
+           AND start_command_id IS DISTINCT FROM $3
+        "#,
+    )
+    .bind(run_id)
+    .bind(claim_id)
+    .bind(command_id)
+    .execute(crate::db::scoped(&state.pool))
+    .await?
+    .rows_affected();
+    Ok(taken == 1)
+}
+
+/// Whether a start that isn't this carry-out's to make is under way: the run
+/// went on, or another carry-out of this same start is admitting it.
+async fn start_going(state: &AppState, run_id: Uuid, command_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT state IN ('working', 'blocked', 'recovering')
+            OR (state = 'starting' AND start_command_id = $2)
+          FROM agent_runs WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(command_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
 }
 
 /// The run a start is for, as the scheduler claimed it.

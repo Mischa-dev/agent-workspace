@@ -94,7 +94,7 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
 
   if (!workspace) return null
   const data = roles.data
-  const owner = workspace.role === 'owner'
+  const owner = data?.canManageAdminRoles === true
 
   return (
     <>

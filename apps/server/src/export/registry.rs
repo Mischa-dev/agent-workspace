@@ -23,9 +23,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("actor_id", "actors"),
                     ("project_id", "projects"),
                     ("session_id", "sessions"),
-                    ("mcp_credential_id", "mcp_client_credentials"),
+                    ("mcp_credential_id", "account_credentials"),
                     ("mcp_oauth_grant_id", "mcp_oauth_grants"),
                     ("external_agent_connection_id", "external_agent_connections"),
+                    ("requested_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -58,6 +59,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("group_id", "account_groups"),
                     ("account_id", "actors"),
                     ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "role_grants",
+                table: "role_grants",
+                references: &[
+                    ("space_id", "projects"),
+                    ("group_id", "account_groups"),
+                    ("role_id", "workspace_roles"),
+                    ("granted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -299,10 +312,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "operation_tasks",
                 "long calls in flight and their answers for a week (K2.21); a call on this server, not the workspace's content",
-            ),
-            (
-                "mcp_client_credentials",
-                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
                 "mcp_oauth_access_tokens",
@@ -568,6 +577,28 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "follows",
+                table: "follows",
+                references: &[
+                    ("space_id", "projects"),
+                    ("account_id", "actors"),
+                    ("created_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "guards",
+                table: "guards",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_account_id", "actors"),
+                    ("updated_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_harnesses",
                 table: "custom_harnesses",
                 references: &[
@@ -579,6 +610,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "guard_holds",
+                "runtime state of this server (queues, leases, retries)",
+            ),
             (
                 "agent_schedules",
                 "runtime state of this server (queues, leases, retries)",
@@ -687,6 +722,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("origin_message_id", "messages"),
                     ("archived_by_actor_id", "actors"),
                     ("thread_status_changed_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "conversation_agent_settings",
+                table: "conversation_agent_settings",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("account_id", "actors"),
+                    ("set_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -972,17 +1019,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_watchers",
-                table: "work_item_watchers",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_items",
                 table: "work_items",
                 references: &[
@@ -1081,7 +1117,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "thing_grants",
+            "who else may see one page, and its share links (a link is a credential); shared again after import",
+        )],
     },
     ExportDecl {
         module: "collections",
@@ -1842,8 +1881,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
-                "run_credentials",
-                "short-lived credentials, kept as digests, that end with their run",
+                "access_tokens",
+                "short-lived tokens, kept as digests, that lapse within a day",
             ),
             (
                 "repository_workspaces",

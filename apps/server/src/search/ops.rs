@@ -435,7 +435,13 @@ impl Operation for PlaceSearch {
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
-        let modules = ProjectModules::load(tx, account, &spaces).await?;
+        // DMs and groups live in no space (K4.17): the direct scope, when
+        // the caller reaches it.
+        let mut with_direct = spaces.clone();
+        if reachable.contains(&crate::spaces::DIRECT) {
+            with_direct.push(crate::spaces::DIRECT);
+        }
+        let modules = ProjectModules::load(tx, account, &with_direct).await?;
         // Each kind shows where the module whose manifest lists it is on.
         let on = |kind: super::SearchKind, spaces: &[Uuid]| {
             kind.module()
@@ -447,7 +453,7 @@ impl Operation for PlaceSearch {
             &super::projects_showing_tasks(&pool, account, &spaces).await?,
         );
         let page_spaces = on(super::SearchKind::Pages, &spaces);
-        let chat_spaces = modules.with_conversations(&spaces);
+        let chat_spaces = modules.with_conversations(&with_direct);
         let tx = call.tx().await?;
         let mut hits = Vec::new();
 
@@ -489,17 +495,38 @@ impl Operation for PlaceSearch {
         }
 
         // Channels by name; DMs and groups by the other people in them.
-        let rows = sqlx::query_as::<_, (Uuid, String, String, Uuid, String, Option<String>)>(
+        // DMs and groups are in no space (K4.15): those this workspace keeps
+        // and personal ones, their people by their name here when they have
+        // one, else in any workspace.
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                String,
+                Option<Uuid>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             r#"
+            WITH person AS (
+                SELECT DISTINCT ON (profile.actor_id) profile.actor_id,
+                       profile.display_name, profile.handle
+                FROM organization_actor_profiles profile
+                ORDER BY profile.actor_id, (profile.organization_id = $4) DESC,
+                         profile.organization_id
+            )
             SELECT conversation.id, conversation.kind, conversation.name, space.id, space.name,
                    (SELECT string_agg(person.display_name, ', ' ORDER BY person.display_name)
                     FROM conversation_members them
-                    JOIN project_memberships person
-                      ON person.project_id = them.project_id AND person.actor_id = them.actor_id
+                    JOIN person ON person.actor_id = them.actor_id
                     WHERE them.conversation_id = conversation.id AND them.actor_id <> $2) AS people
             FROM conversations conversation
-            JOIN projects space ON space.id = conversation.project_id
-            WHERE conversation.project_id = ANY($1)
+            LEFT JOIN projects space ON space.id = conversation.project_id
+            WHERE COALESCE(conversation.project_id, direct_scope_id()) = ANY($1)
+              AND (conversation.project_id IS NOT NULL
+                   OR conversation.workspace_id IN ($4, direct_scope_id()))
               AND conversation.kind IN ('channel', 'dm', 'group')
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $2)
@@ -507,9 +534,7 @@ impl Operation for PlaceSearch {
                    OR (conversation.kind <> 'channel' AND EXISTS (
                        SELECT 1
                        FROM conversation_members them
-                       JOIN project_memberships person
-                         ON person.project_id = them.project_id
-                        AND person.actor_id = them.actor_id
+                       JOIN person ON person.actor_id = them.actor_id
                        WHERE them.conversation_id = conversation.id
                          AND them.actor_id <> $2
                          AND (lower(person.display_name) LIKE $3 ESCAPE '\'
@@ -521,6 +546,7 @@ impl Operation for PlaceSearch {
         .bind(&chat_spaces)
         .bind(account)
         .bind(&pattern)
+        .bind(workspace)
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
@@ -538,17 +564,16 @@ impl Operation for PlaceSearch {
             } else {
                 name.clone()
             };
-            let target = if channel {
-                Target::space(space, Place::Channel(id))
-            } else {
-                Target::Direct { id, thread: None }
+            let target = match (channel, space) {
+                (true, Some(space)) => Target::space(space, Place::Channel(id)),
+                _ => Target::Direct { id, thread: None },
             };
             hits.push(PlaceHit {
                 score: score(if channel { &name } else { &title }, &typed).max(1),
                 kind,
                 id,
                 title,
-                detail: channel.then_some(space_name),
+                detail: if channel { space_name } else { None },
                 path: Some(addresses.in_workspace(workspace, &target)),
             });
         }
@@ -626,6 +651,7 @@ impl Operation for PlaceSearch {
             JOIN projects project ON project.id = page.project_id
             WHERE page.project_id = ANY($1)
               AND page.archived_at IS NULL
+              AND page.memory_for_kind IS DISTINCT FROM 'conversation'
               AND lower(page.title) LIKE $2 ESCAPE '\'
             ORDER BY page.updated_at DESC
             LIMIT 20

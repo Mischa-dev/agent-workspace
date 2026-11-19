@@ -28,6 +28,9 @@ pub struct Caller {
     /// caller's own.
     pub requested_by: Option<Uuid>,
     pub run_id: Option<Uuid>,
+    /// The credential the call came through (a secret, a token, an app's
+    /// grant), recorded on what it writes (K1.25). `None` in the browser.
+    pub credential_id: Option<Uuid>,
     /// A host's run credential (A1.12): it acts for the run's agent in the
     /// run's space, and a worker membership there holds what a run
     /// delegates to its agent (`holding::RUN_DELEGATION`).
@@ -68,6 +71,7 @@ impl Caller {
             limits: None,
             requested_by: None,
             run_id: None,
+            credential_id: None,
             for_run: false,
         }
     }
@@ -92,6 +96,7 @@ impl Caller {
             limits,
             requested_by: None,
             run_id: None,
+            credential_id: Some(principal.credential_id),
             for_run: principal.is_run_credential(),
         }
     }

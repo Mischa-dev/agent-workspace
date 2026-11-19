@@ -43,7 +43,7 @@ pub(crate) async fn reader(state: &AppState, ctx: &OpContext) -> Result<McpPrinc
         && let Some(credential) = principal.mcp_credential_id
     {
         let anchor = sqlx::query_scalar::<_, Uuid>(
-            "SELECT project_id FROM mcp_client_credentials WHERE id = $1 AND actor_id = $2",
+            "SELECT project_id FROM account_credentials WHERE id = $1 AND actor_id = $2",
         )
         .bind(credential)
         .bind(principal.actor_id)

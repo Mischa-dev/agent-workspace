@@ -3,15 +3,17 @@
 //! A workspace (an `organizations` row) can be renamed, lists its people and
 //! agents with their workspace roles, invites people to the workspace rather
 //! than one project, hands ownership to someone else, and lets people leave.
-//! Owners and admins manage it; a role an owner sets here sticks, where it
-//! used to follow project roles only (`memberships::sync_organization_role`
-//! now leaves explicit roles alone).
+//! A workspace role is set here and nowhere else: project roles never
+//! change it (K1.19).
 //!
-//! Who may do what:
-//! - any member reads the workspace and its member list;
-//! - owners and admins rename it, invite, and remove members (admins only
-//!   plain members, never with the admin role);
-//! - owners change roles between admin and member, and transfer ownership;
+//! Who may do what is the caller's workspace role (`standing_of`), one rule
+//! for people and agents alike:
+//! - any member reads the workspace, and its member list with "See the
+//!   workspace member directory";
+//! - "Manage settings" renames it, "Read the audit log" reads its log,
+//!   "Invite people" invites and "Change roles and remove people" manages
+//!   members; an admin-tier caller only those below admin;
+//! - owners give admin-tier roles and transfer ownership;
 //! - anyone leaves, except the last owner.
 
 use axum::{
@@ -42,6 +44,8 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     invitations::engine::{self, Family},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
+    policy::{MembershipRole, Permission},
+    roles::Standing,
 };
 
 const MAX_EXPIRY_HOURS: i32 = 30 * 24;
@@ -97,113 +101,33 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 // Roles
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkspaceRole {
-    Owner,
-    Admin,
-    Member,
-}
-
-impl WorkspaceRole {
-    fn parse(value: &str) -> Result<Self, AppError> {
-        match value {
-            "owner" => Ok(Self::Owner),
-            "admin" => Ok(Self::Admin),
-            "member" => Ok(Self::Member),
-            _ => Err(AppError::Internal("stored workspace role")),
-        }
-    }
-
-    pub(crate) fn manages(self) -> bool {
-        matches!(self, Self::Owner | Self::Admin)
-    }
-}
-
-/// The caller's role for managing members: an owner or admin whose custom
-/// role leaves out "manage members" counts as a member here.
-async fn member_manager_role(
-    connection: &mut sqlx::PgConnection,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-    lock: bool,
-) -> Result<WorkspaceRole, AppError> {
-    let role = caller_role(connection, principal, organization_id, lock).await?;
-    if !role.manages() {
-        return Ok(role);
-    }
-    let standing = crate::roles::standing(connection, organization_id, principal.actor_id).await?;
-    Ok(
-        if standing
-            .permissions
-            .contains(crate::policy::Permission::MembersManage)
-        {
-            role
-        } else {
-            WorkspaceRole::Member
-        },
-    )
-}
-
-/// Whether the caller's workspace role, custom role included, keeps
-/// `permission`: an owner or admin narrowed by a custom role is held to it.
-async fn caller_may(
-    connection: &mut sqlx::PgConnection,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-    permission: crate::policy::Permission,
-) -> Result<bool, AppError> {
-    Ok(
-        crate::roles::standing(connection, organization_id, principal.actor_id)
-            .await?
-            .permissions
-            .contains(permission),
-    )
-}
-
-/// The caller's role in the workspace, if they're an active person in it.
-/// `lock` holds the row until the transaction ends.
-pub(crate) async fn caller_role(
-    connection: &mut sqlx::PgConnection,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-    lock: bool,
-) -> Result<WorkspaceRole, AppError> {
-    role_of(connection, principal.actor_id, organization_id, lock).await
-}
-
-/// `caller_role` for any actor: their role in the workspace, if they're an
-/// active person in it.
-pub(crate) async fn role_of(
+/// The caller's standing in the workspace (ruling R19: one rule for
+/// everyone): their role's tier and what it lets them do, a custom role and
+/// an app's agent limit included. `lock` holds their membership row until
+/// the transaction ends.
+pub(crate) async fn standing_of(
     connection: &mut sqlx::PgConnection,
     actor_id: Uuid,
     organization_id: Uuid,
     lock: bool,
-) -> Result<WorkspaceRole, AppError> {
-    let sql = if lock {
-        r#"
-        SELECT membership.role
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.organization_id = $1 AND membership.actor_id = $2
-          AND membership.enabled AND actor.status = 'active' AND actor.kind = 'human'
-        FOR UPDATE OF membership
-        "#
-    } else {
-        r#"
-        SELECT membership.role
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.organization_id = $1 AND membership.actor_id = $2
-          AND membership.enabled AND actor.status = 'active' AND actor.kind = 'human'
-        "#
-    };
-    let role = sqlx::query_scalar::<_, String>(sql)
+) -> Result<Standing, AppError> {
+    if lock {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT membership.actor_id
+            FROM organization_memberships membership
+            WHERE membership.organization_id = $1 AND membership.actor_id = $2
+              AND membership.enabled
+            FOR UPDATE OF membership
+            "#,
+        )
         .bind(organization_id)
         .bind(actor_id)
         .fetch_optional(&mut *connection)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    WorkspaceRole::parse(&role)
+    }
+    crate::roles::standing(connection, organization_id, actor_id).await
 }
 
 /// What the caller may do to one member.
@@ -220,40 +144,44 @@ pub(crate) struct MemberCapabilities {
 }
 
 /// The rules for managing one member, in one place so the list and the
-/// write agree.
+/// write agree. Whoever may change roles and remove people
+/// (`members.manage`) does so for anyone below an owner; an admin-tier
+/// caller only for those below admin, and nobody for an owner or
+/// themselves. `target_connects_apps` is whether apps act for the target.
 pub(crate) fn member_capabilities(
-    caller: WorkspaceRole,
+    caller: Standing,
     caller_is_target: bool,
-    target_role: WorkspaceRole,
-    target_is_person: bool,
+    target_tier: MembershipRole,
+    target_connects_apps: bool,
     target_enabled: bool,
 ) -> MemberCapabilities {
     if caller_is_target && target_enabled {
         return MemberCapabilities {
-            limit_apps: target_is_person,
+            limit_apps: target_connects_apps,
             ..MemberCapabilities::default()
         };
     }
-    if caller_is_target || !target_enabled || target_role == WorkspaceRole::Owner {
+    if caller_is_target
+        || !target_enabled
+        || target_tier == MembershipRole::Owner
+        || !caller.may(Permission::MembersManage)
+    {
         return MemberCapabilities::default();
     }
-    match caller {
-        WorkspaceRole::Owner => MemberCapabilities {
-            change_role: target_is_person,
+    if caller.role == MembershipRole::Owner {
+        return MemberCapabilities {
+            change_role: true,
             remove: true,
             assign_role: true,
-            limit_apps: target_is_person,
-        },
-        WorkspaceRole::Admin => {
-            let member = target_role == WorkspaceRole::Member;
-            MemberCapabilities {
-                change_role: false,
-                remove: member,
-                assign_role: member,
-                limit_apps: member && target_is_person,
-            }
-        }
-        WorkspaceRole::Member => MemberCapabilities::default(),
+            limit_apps: target_connects_apps,
+        };
+    }
+    let below = target_tier != MembershipRole::Admin;
+    MemberCapabilities {
+        change_role: false,
+        remove: below,
+        assign_role: below,
+        limit_apps: below && target_connects_apps,
     }
 }
 
@@ -310,22 +238,14 @@ struct WorkspaceCapabilities {
     delete: bool,
 }
 
-fn role_name(role: WorkspaceRole) -> &'static str {
-    match role {
-        WorkspaceRole::Owner => "owner",
-        WorkspaceRole::Admin => "admin",
-        WorkspaceRole::Member => "member",
-    }
-}
-
-/// The workspace as `actor` sees it, holding `role`. Every handler that
-/// returns a workspace view goes through here, so its capabilities agree.
+/// The workspace as `actor` sees it. Every handler that returns a workspace
+/// view goes through here, so its capabilities agree.
 async fn load_workspace(
     connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
     actor_id: Uuid,
-    role: WorkspaceRole,
 ) -> Result<WorkspaceView, AppError> {
+    let standing = standing_of(&mut *connection, actor_id, organization_id, false).await?;
     let row = sqlx::query_as::<_, WorkspaceRow>(
         r#"
         SELECT organization.id, organization.name, organization.slug, organization.version,
@@ -333,41 +253,39 @@ async fn load_workspace(
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND actor.kind IN ('human', 'external_agent')) AS member_count,
+                   AND actor.kind IN ('human', 'external_agent')) AS member_count, -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND actor.kind = 'human') AS people_count,
+                   AND actor.kind = 'human') AS people_count, -- // kind-check: mechanical (a display count)
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND actor.kind = 'external_agent') AS agent_count,
+                   AND actor.kind = 'external_agent') AS agent_count, -- // kind-check: mechanical (a display count)
                (SELECT count(*) FROM projects project
                  WHERE project.organization_id = organization.id
-                   AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')) AS project_count,
+                   AND project.archived_at IS NULL AND project.kind <> 'workspace') AS project_count,
                (SELECT count(*) FROM organization_memberships membership
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND membership.role = 'owner') AS owner_count,
+                   AND membership.role = $2) AS owner_count,
                organization.lifecycle, organization.delete_after
         FROM organizations organization
         WHERE organization.id = $1
         "#,
     )
     .bind(organization_id)
+    .bind(MembershipRole::Owner.key())
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("workspace"))?;
-    let delete = crate::roles::standing(&mut *connection, organization_id, actor_id)
-        .await?
-        .permissions
-        .contains(crate::policy::Permission::WorkspaceDelete);
+    let owner = standing.role == MembershipRole::Owner;
     Ok(WorkspaceView {
         id: row.id,
         name: row.name,
         slug: row.slug,
         version: row.version,
         created_at: row.created_at,
-        role: role_name(role),
+        role: standing.role.key(),
         member_count: row.member_count,
         people_count: row.people_count,
         agent_count: row.agent_count,
@@ -375,12 +293,12 @@ async fn load_workspace(
         lifecycle: row.lifecycle,
         delete_after: row.delete_after,
         capabilities: WorkspaceCapabilities {
-            rename: role.manages(),
-            manage_members: role.manages(),
-            transfer_ownership: role == WorkspaceRole::Owner,
-            leave: role != WorkspaceRole::Owner || row.owner_count > 1,
-            view_audit_log: role.manages(),
-            delete,
+            rename: standing.may(Permission::SettingsManage),
+            manage_members: standing.may(Permission::MembersManage),
+            transfer_ownership: owner,
+            leave: !owner || row.owner_count > 1,
+            view_audit_log: standing.may(Permission::SettingsAudit),
+            delete: standing.may(Permission::WorkspaceDelete),
         },
     })
 }
@@ -391,8 +309,7 @@ async fn read_workspace(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<WorkspaceView>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    let view = load_workspace(&mut connection, organization_id, principal.actor_id, role).await?;
+    let view = load_workspace(&mut connection, organization_id, principal.actor_id).await?;
     Ok(Json(view))
 }
 
@@ -424,7 +341,7 @@ async fn rename_workspace(
 ) -> Result<Json<WorkspaceView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (role, renamed) = rename_workspace_in(
+    let renamed = rename_workspace_in(
         &mut transaction,
         principal.actor_id,
         organization_id,
@@ -448,7 +365,7 @@ async fn rename_workspace(
         )
         .await?;
     }
-    let view = load_workspace(&mut transaction, organization_id, principal.actor_id, role).await?;
+    let view = load_workspace(&mut transaction, organization_id, principal.actor_id).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -460,9 +377,8 @@ pub(crate) struct WorkspaceChange<'a> {
     pub slug: Option<&'a str>,
 }
 
-/// Rename a workspace or change its slug, for an owner or admin who may
-/// manage its settings. Returns the caller's role, and the audit metadata
-/// when something changed (the caller records the row). A changed slug
+/// Rename a workspace or change its slug, for someone who may manage its
+/// settings. Returns the audit metadata when something changed (the caller records the row). A changed slug
 /// keeps the old one as a retired slug (K4.5).
 pub(crate) async fn rename_workspace_in(
     transaction: &mut Transaction<'_, Postgres>,
@@ -470,18 +386,15 @@ pub(crate) async fn rename_workspace_in(
     organization_id: Uuid,
     change: WorkspaceChange<'_>,
     expected_version: i64,
-) -> Result<(WorkspaceRole, Option<serde_json::Value>), AppError> {
+) -> Result<Option<serde_json::Value>, AppError> {
     let name = change.name.map(normalize_workspace_name).transpose()?;
     let slug = change.slug.map(slug::check_new).transpose()?;
     if name.is_none() && slug.is_none() {
         return Err(AppError::Validation("workspace name"));
     }
-    let role = role_of(transaction, actor_id, organization_id, true).await?;
-    if !role.manages()
-        || !crate::roles::standing(transaction, organization_id, actor_id)
-            .await?
-            .permissions
-            .contains(crate::policy::Permission::SettingsManage)
+    if !standing_of(transaction, actor_id, organization_id, true)
+        .await?
+        .may(Permission::SettingsManage)
     {
         return Err(AppError::Forbidden);
     }
@@ -513,13 +426,13 @@ pub(crate) async fn rename_workspace_in(
         metadata.insert("slug".into(), slug.into());
     }
     if metadata.is_empty() {
-        return Ok((role, None));
+        return Ok(None);
     }
     sqlx::query("UPDATE organizations SET version = version + 1 WHERE id = $1")
         .bind(organization_id)
         .execute(&mut **transaction)
         .await?;
-    Ok((role, Some(serde_json::Value::Object(metadata))))
+    Ok(Some(serde_json::Value::Object(metadata)))
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +493,7 @@ const MEMBER_COLUMNS: &str = r#"
     (SELECT count(*) FROM project_memberships project_membership
       JOIN projects project ON project.id = project_membership.project_id
       WHERE project.organization_id = membership.organization_id
-        AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')
+        AND project.archived_at IS NULL AND project.kind <> 'workspace'
         AND project_membership.actor_id = membership.actor_id
         AND project_membership.enabled) AS project_count
 "#;
@@ -588,7 +501,7 @@ const MEMBER_COLUMNS: &str = r#"
 const MEMBER_FROM: &str = r#"
     FROM organization_memberships membership
     JOIN actors actor ON actor.id = membership.actor_id
-     AND actor.kind IN ('human', 'external_agent')
+     AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
     LEFT JOIN organization_actor_profiles profile
       ON profile.organization_id = membership.organization_id
      AND profile.actor_id = membership.actor_id
@@ -599,18 +512,14 @@ const MEMBER_FROM: &str = r#"
 
 fn member_view(
     row: MemberRow,
-    caller: WorkspaceRole,
+    caller: Standing,
     principal: &AuthenticatedActor,
 ) -> Result<MemberView, AppError> {
-    let target_role = WorkspaceRole::parse(&row.role)?;
+    let target_tier =
+        MembershipRole::parse(&row.role).ok_or(AppError::Internal("stored workspace role"))?;
     let is_you = row.actor_id == principal.actor_id;
-    let capabilities = member_capabilities(
-        caller,
-        is_you,
-        target_role,
-        row.kind == "human",
-        row.enabled,
-    );
+    let connects_apps = row.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
+    let capabilities = member_capabilities(caller, is_you, target_tier, connects_apps, row.enabled);
     Ok(MemberView {
         actor_id: row.actor_id,
         kind: row.kind,
@@ -620,7 +529,7 @@ fn member_view(
         role_name: row.role_name.unwrap_or_else(|| row.role.clone()),
         role: row.role,
         role_id: row.role_id,
-        agent_limit: (caller.manages() || is_you)
+        agent_limit: (caller.may(Permission::MembersManage) || is_you)
             .then_some(row.agent_limit)
             .flatten(),
         enabled: row.enabled,
@@ -638,18 +547,12 @@ async fn list_members(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<MembersResponse>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let caller = member_manager_role(&mut connection, &principal, organization_id, false).await?;
+    let caller = standing_of(&mut connection, principal.actor_id, organization_id, false).await?;
     // "See the workspace member directory", by the caller's workspace role:
     // every built-in role holds it; a custom role only when an owner or an
     // admin who manages roles gives it (Settings, Roles). Without it the
     // list is only the caller themselves.
-    let sees_members = caller_may(
-        &mut connection,
-        &principal,
-        organization_id,
-        crate::policy::Permission::DirectoryView,
-    )
-    .await?;
+    let sees_members = caller.may(Permission::DirectoryView);
     // Removed members are listed only for those who manage the workspace.
     let rows = sqlx::query_as::<_, MemberRow>(&format!(
         r#"
@@ -664,7 +567,7 @@ async fn list_members(
         "#
     ))
     .bind(organization_id)
-    .bind(caller.manages())
+    .bind(caller.may(Permission::MembersManage))
     .bind(sees_members)
     .bind(principal.actor_id)
     .fetch_all(&mut *connection)
@@ -735,8 +638,8 @@ async fn update_member(
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
-    let caller = member_manager_role(&mut transaction, &principal, organization_id, true).await?;
-    if !caller.manages() {
+    let caller = standing_of(&mut transaction, principal.actor_id, organization_id, true).await?;
+    if !caller.may(Permission::MembersManage) {
         return Err(AppError::NotFound("workspace member"));
     }
     let target = lock_member(&mut transaction, organization_id, actor_id).await?;
@@ -746,11 +649,12 @@ async fn update_member(
             current_version: target.version,
         });
     }
+    let connects_apps = target.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
     let capabilities = member_capabilities(
         caller,
         actor_id == principal.actor_id,
-        WorkspaceRole::parse(&target.role)?,
-        target.kind == "human",
+        MembershipRole::parse(&target.role).ok_or(AppError::Internal("stored workspace role"))?,
+        connects_apps,
         target.enabled,
     );
     if let Some(role) = next_role {
@@ -828,7 +732,7 @@ async fn lock_member(
         SELECT actor.kind, membership.role, membership.enabled, membership.version
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent')
+         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to manage)
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
         FOR UPDATE OF membership
         "#,
@@ -843,7 +747,7 @@ async fn lock_member(
 /// Take someone out of the workspace and every project in it, and revoke
 /// what they could use there. Refuses when they're the only owner of a
 /// project, which would leave it without one.
-async fn remove_from_workspace(
+pub(crate) async fn remove_from_workspace(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
     actor_id: Uuid,
@@ -875,18 +779,19 @@ async fn remove_from_workspace(
             SELECT 1 FROM project_memberships mine
             JOIN projects project ON project.id = mine.project_id
             WHERE project.organization_id = $1 AND project.archived_at IS NULL
-              AND project.kind NOT IN ('direct', 'workspace')
-              AND mine.actor_id = $2 AND mine.enabled AND mine.role = 'owner'
+              AND project.kind <> 'workspace'
+              AND mine.actor_id = $2 AND mine.enabled AND mine.role = $3
               AND NOT EXISTS (
                   SELECT 1 FROM project_memberships other
                   WHERE other.project_id = mine.project_id AND other.actor_id <> $2
-                    AND other.enabled AND other.role = 'owner'
+                    AND other.enabled AND other.role = $3
               )
         )
         "#,
     )
     .bind(organization_id)
     .bind(actor_id)
+    .bind(MembershipRole::Owner.key())
     .fetch_one(&mut **transaction)
     .await?;
     if sole_owner {
@@ -913,7 +818,7 @@ async fn remove_from_workspace(
     .await?;
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials credential
+        UPDATE account_credentials credential
         SET status = 'revoked', version = credential.version + 1, revoked_at = now(),
             updated_at = now()
         FROM projects project
@@ -990,24 +895,25 @@ async fn transfer_ownership(
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
-    let caller = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    if caller != WorkspaceRole::Owner {
+    let caller = standing_of(&mut transaction, principal.actor_id, organization_id, true).await?;
+    if caller.role != MembershipRole::Owner {
         return Err(AppError::Forbidden);
     }
+    // Any active member can be given the workspace, a person or an agent.
     let target = lock_member(&mut transaction, organization_id, request.actor_id).await?;
     let target_active = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE actor_id = $1 AND status = 'active')",
+        "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND status = 'active')",
     )
     .bind(request.actor_id)
     .fetch_one(&mut *transaction)
     .await?;
-    if target.kind != "human" || !target.enabled || !target_active {
+    if !target.enabled || !target_active {
         return Err(AppError::NotFound("workspace member"));
     }
     sqlx::query(
         r#"
         UPDATE organization_memberships
-        SET role = CASE WHEN actor_id = $2 THEN 'owner' ELSE 'admin' END,
+        SET role = CASE WHEN actor_id = $2 THEN $4 ELSE $5 END, role_id = NULL,
             role_explicit = true, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND actor_id IN ($2, $3)
         "#,
@@ -1015,6 +921,8 @@ async fn transfer_ownership(
     .bind(organization_id)
     .bind(request.actor_id)
     .bind(principal.actor_id)
+    .bind(MembershipRole::Owner.key())
+    .bind(MembershipRole::Admin.key())
     .execute(&mut *transaction)
     .await?;
     audit(
@@ -1028,13 +936,7 @@ async fn transfer_ownership(
         serde_json::json!({ "previousRole": target.role }),
     )
     .await?;
-    let view = load_workspace(
-        &mut transaction,
-        organization_id,
-        principal.actor_id,
-        WorkspaceRole::Admin,
-    )
-    .await?;
+    let view = load_workspace(&mut transaction, organization_id, principal.actor_id).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -1053,18 +955,21 @@ async fn leave_workspace(
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
-    let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
-    if role == WorkspaceRole::Owner {
+    let role = standing_of(&mut transaction, principal.actor_id, organization_id, true)
+        .await?
+        .role;
+    if role == MembershipRole::Owner {
         let other_owners = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT count(*) FROM organization_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
             WHERE membership.organization_id = $1 AND membership.actor_id <> $2
-              AND membership.enabled AND membership.role = 'owner'
+              AND membership.enabled AND membership.role = $3
             "#,
         )
         .bind(organization_id)
         .bind(principal.actor_id)
+        .bind(MembershipRole::Owner.key())
         .fetch_one(&mut *transaction)
         .await?;
         if other_owners == 0 {
@@ -1086,7 +991,7 @@ async fn leave_workspace(
         "workspace_membership.left",
         "actor",
         Some(principal.actor_id),
-        serde_json::json!({ "role": role_name(role) }),
+        serde_json::json!({ "role": role.key() }),
     )
     .await?;
     transaction.commit().await?;
@@ -1153,19 +1058,16 @@ async fn list_invitations(
     Ok(Json(InvitationsResponse { invitations }))
 }
 
-/// A workspace's invitations, newest first, for an owner or admin who may
-/// invite people.
+/// A workspace's invitations, newest first, for someone who may invite
+/// people.
 pub(crate) async fn workspace_invitations_for(
     connection: &mut sqlx::PgConnection,
     actor_id: Uuid,
     organization_id: Uuid,
 ) -> Result<Vec<InvitationView>, AppError> {
-    let role = role_of(&mut *connection, actor_id, organization_id, false).await?;
-    if !role.manages()
-        || !crate::roles::standing(&mut *connection, organization_id, actor_id)
-            .await?
-            .permissions
-            .contains(crate::policy::Permission::MembersInvite)
+    if !standing_of(&mut *connection, actor_id, organization_id, false)
+        .await?
+        .may(Permission::MembersInvite)
     {
         return Err(AppError::Forbidden);
     }
@@ -1210,14 +1112,15 @@ struct IssuedInvitation {
     invitation_url: String,
 }
 
-/// Whether `issuer` may invite someone with `role`: owners invite admins
-/// and members, admins invite members.
-pub(crate) fn may_invite(issuer: WorkspaceRole, role: &str) -> bool {
-    match role {
-        "admin" => issuer == WorkspaceRole::Owner,
-        "member" => issuer.manages(),
-        _ => false,
-    }
+/// Whether `issuer`, who may invite people, may invite someone with `role`:
+/// an admin-tier role comes only from an owner.
+pub(crate) fn may_invite(issuer: Standing, role: &str) -> bool {
+    issuer.may(Permission::MembersInvite)
+        && match MembershipRole::parse(role) {
+            Some(MembershipRole::Admin) => issuer.role == MembershipRole::Owner,
+            Some(MembershipRole::Member) => true,
+            _ => false,
+        }
 }
 
 fn generate_token() -> (String, String, [u8; 32]) {
@@ -1300,13 +1203,8 @@ pub(crate) async fn issue_workspace_invitation_in(
     {
         return Err(AppError::Validation("invitation note"));
     }
-    let caller = role_of(&mut *transaction, actor_id, organization_id, true).await?;
-    let standing = crate::roles::standing(&mut *transaction, organization_id, actor_id).await?;
-    if !caller.manages()
-        || !standing
-            .permissions
-            .contains(crate::policy::Permission::MembersInvite)
-    {
+    let standing = standing_of(&mut *transaction, actor_id, organization_id, true).await?;
+    if !standing.may(Permission::MembersInvite) {
         return Err(AppError::Forbidden);
     }
     // A custom role is invited as the workspace role it's based on, and
@@ -1348,7 +1246,7 @@ pub(crate) async fn issue_workspace_invitation_in(
             }
         }
     };
-    if !may_invite(caller, &invited_role) {
+    if !may_invite(standing, &invited_role) {
         return Err(if matches!(invited_role.as_str(), "admin" | "member") {
             AppError::Forbidden
         } else {
@@ -1441,15 +1339,10 @@ pub(crate) async fn revoke_workspace_invitation_in(
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("workspace_invitation"))?;
-    let caller = role_of(&mut *transaction, actor_id, organization_id, true)
+    let caller = standing_of(&mut *transaction, actor_id, organization_id, true)
         .await
         .map_err(|_| AppError::NotFound("workspace_invitation"))?;
-    if !may_invite(caller, &role)
-        || !crate::roles::standing(&mut *transaction, organization_id, actor_id)
-            .await?
-            .permissions
-            .contains(crate::policy::Permission::MembersInvite)
-    {
+    if !may_invite(caller, &role) {
         return Err(AppError::Forbidden);
     }
     if version != expected_version {
@@ -1511,13 +1404,12 @@ fn valid_invitation_sql(lock: bool) -> String {
         FROM workspace_invitations invitation
         JOIN organizations organization ON organization.id = invitation.organization_id
         JOIN actors issuer_actor ON issuer_actor.id = invitation.issued_by_actor_id
-          AND issuer_actor.kind = 'human' AND issuer_actor.status = 'active'
+          AND issuer_actor.status = 'active'
         JOIN organization_memberships issuer
           ON issuer.organization_id = invitation.organization_id
          AND issuer.actor_id = invitation.issued_by_actor_id AND issuer.enabled
         WHERE invitation.token_prefix = $1 AND invitation.status = 'active'
           AND invitation.expires_at > now()
-          AND (issuer.role = 'owner' OR (issuer.role = 'admin' AND invitation.role = 'member'))
         {}
         "#,
         if lock {
@@ -1811,7 +1703,7 @@ async fn accept_existing_user(
         FROM users user_account
         JOIN actors actor ON actor.id = user_account.actor_id
         WHERE user_account.id = $1 AND user_account.status = 'active'
-          AND actor.status = 'active' AND actor.kind = 'human'
+          AND actor.status = 'active' AND actor.kind = 'human' -- // kind-check: mechanical (a signed-in user accepts an invitation)
         FOR UPDATE OF user_account
         "#,
     )
@@ -1927,7 +1819,13 @@ async fn set_default_workspace(
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    caller_role(&mut transaction, &principal, request.organization_id, true).await?;
+    standing_of(
+        &mut transaction,
+        principal.actor_id,
+        request.organization_id,
+        true,
+    )
+    .await?;
     sqlx::query("UPDATE users SET default_organization_id = $2, updated_at = now() WHERE id = $1")
         .bind(principal.user_id)
         .bind(request.organization_id)
@@ -1937,8 +1835,44 @@ async fn set_default_workspace(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The workspace someone works in: the one they chose if they still belong
-/// to it, else the earliest they joined.
+/// The workspace a workspace-level request acts in (K4.6): the one it
+/// names, if the account is an enabled member of it and it is active; with
+/// none named, the account's only workspace. It is never inferred from the
+/// last one used: an account in several must say which.
+pub(crate) async fn named_or_only(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    named: Option<Uuid>,
+) -> Result<Uuid, AppError> {
+    let reach = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT membership.organization_id
+        FROM organization_memberships membership
+        JOIN organizations workspace
+          ON workspace.id = membership.organization_id AND workspace.lifecycle = 'active'
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE membership.actor_id = $1 AND membership.enabled
+          AND ($2::uuid IS NULL OR membership.organization_id = $2)
+        LIMIT 2
+        "#,
+    )
+    .bind(actor_id)
+    .bind(named)
+    .fetch_all(&mut *connection)
+    .await?;
+    match reach.as_slice() {
+        [only] => Ok(*only),
+        [] => Err(AppError::NotFound("organization")),
+        _ => Err(AppError::Refused {
+            field: "workspaceId",
+            message: "You belong to more than one workspace: say which one.",
+        }),
+    }
+}
+
+/// Where `/` lands and what an old address without a workspace means: the
+/// workspace the person last chose if they still belong to it, else the
+/// earliest they joined. Never the target of a request (K4.6).
 pub(crate) async fn default_workspace<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
@@ -2004,49 +1938,71 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    fn standing(role: MembershipRole, permissions: crate::policy::PermissionSet) -> Standing {
+        Standing {
+            actor_id: Uuid::nil(),
+            role,
+            permissions,
+        }
+    }
+
+    fn built_in(role: MembershipRole) -> Standing {
+        standing(role, crate::policy::PermissionSet::built_in(role))
+    }
+
     #[test]
     fn only_owners_change_roles_and_nobody_touches_owners_or_themselves() {
-        use WorkspaceRole::{Admin, Member, Owner};
-        let owner_on_admin = member_capabilities(Owner, false, Admin, true, true);
+        use MembershipRole::{Admin, Member, Owner};
+        let owner_on_admin = member_capabilities(built_in(Owner), false, Admin, true, true);
         assert!(owner_on_admin.change_role && owner_on_admin.remove);
-        let owner_on_agent = member_capabilities(Owner, false, Member, false, true);
-        assert!(!owner_on_agent.change_role && owner_on_agent.remove);
+        let owner_on_agent = member_capabilities(built_in(Owner), false, Member, false, true);
+        assert!(owner_on_agent.change_role && owner_on_agent.remove && !owner_on_agent.limit_apps);
         assert_eq!(
-            member_capabilities(Owner, false, Owner, true, true),
+            member_capabilities(built_in(Owner), false, Owner, true, true),
             MemberCapabilities::default()
         );
         assert_eq!(
-            member_capabilities(Owner, true, Owner, true, true),
+            member_capabilities(built_in(Owner), true, Owner, true, true),
             MemberCapabilities {
                 limit_apps: true,
                 ..MemberCapabilities::default()
             },
             "people limit their own apps and nothing else about themselves"
         );
-        let admin_on_member = member_capabilities(Admin, false, Member, true, true);
+        let admin_on_member = member_capabilities(built_in(Admin), false, Member, true, true);
         assert!(!admin_on_member.change_role && admin_on_member.remove);
         assert_eq!(
-            member_capabilities(Admin, false, Admin, true, true),
+            member_capabilities(built_in(Admin), false, Admin, true, true),
             MemberCapabilities::default()
         );
         assert_eq!(
-            member_capabilities(Member, false, Member, true, true),
+            member_capabilities(built_in(Member), false, Member, true, true),
             MemberCapabilities::default()
         );
         assert_eq!(
-            member_capabilities(Owner, false, Member, true, false),
+            member_capabilities(built_in(Owner), false, Member, true, false),
+            MemberCapabilities::default()
+        );
+        // An owner whose custom role leaves out "manage members" manages nobody.
+        let narrowed = standing(
+            Owner,
+            crate::policy::PermissionSet::built_in(Owner).without(Permission::MembersManage),
+        );
+        assert_eq!(
+            member_capabilities(narrowed, false, Member, true, true),
             MemberCapabilities::default()
         );
     }
 
     #[test]
     fn admins_invite_members_and_owners_invite_admins() {
-        assert!(may_invite(WorkspaceRole::Owner, "admin"));
-        assert!(may_invite(WorkspaceRole::Owner, "member"));
-        assert!(!may_invite(WorkspaceRole::Admin, "admin"));
-        assert!(may_invite(WorkspaceRole::Admin, "member"));
-        assert!(!may_invite(WorkspaceRole::Member, "member"));
-        assert!(!may_invite(WorkspaceRole::Owner, "owner"));
+        use MembershipRole::{Admin, Member, Owner};
+        assert!(may_invite(built_in(Owner), "admin"));
+        assert!(may_invite(built_in(Owner), "member"));
+        assert!(!may_invite(built_in(Admin), "admin"));
+        assert!(may_invite(built_in(Admin), "member"));
+        assert!(!may_invite(built_in(Member), "member"));
+        assert!(!may_invite(built_in(Owner), "owner"));
     }
 
     #[test]

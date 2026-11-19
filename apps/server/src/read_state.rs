@@ -26,6 +26,7 @@ pub struct ReadState {
 /// None when it was already at or past `sequence`.
 pub async fn mark_seen(
     transaction: &mut Transaction<'_, Postgres>,
+    // The conversation's place: its space, or the direct scope.
     project_id: Uuid,
     conversation_id: Uuid,
     actor_id: Uuid,
@@ -37,7 +38,7 @@ pub async fn mark_seen(
             project_id, conversation_id, actor_id, highest_seen_sequence, version
         )
         VALUES ($1, $2, $3, $4, 1)
-        ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
+        ON CONFLICT (conversation_id, actor_id) DO UPDATE
         SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
             version = conversation_read_states.version + 1,
             updated_at = now()
@@ -45,7 +46,7 @@ pub async fn mark_seen(
         RETURNING highest_seen_sequence, version
         "#,
     )
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(conversation_id)
     .bind(actor_id)
     .bind(sequence)
@@ -129,8 +130,6 @@ pub async fn unread_summary(
                LEAST(COALESCE(mentioned.count, 0), $5)::bigint AS mentions,
                conversation_notification_level($1, conversation.id) = 'nothing' AS muted
         FROM conversations conversation
-        JOIN project_memberships me
-          ON me.project_id = conversation.project_id AND me.actor_id = $1 AND me.enabled
         LEFT JOIN conversation_read_states read_state
           ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
         CROSS JOIN LATERAL (
@@ -158,8 +157,15 @@ pub async fn unread_summary(
               AND notification.archived_at IS NULL
         ) mentioned ON true
         WHERE conversation.archived_at IS NULL
-          AND ($2::uuid IS NULL OR (conversation.project_id = $2
-                                    AND conversation.kind IN ('channel', 'dm', 'group')))
+          -- A space's conversations to its members; DMs and groups (no
+          -- space) by the visibility rule alone.
+          AND (conversation.project_id IS NULL OR EXISTS (
+                SELECT 1 FROM project_memberships me
+                WHERE me.project_id = conversation.project_id AND me.actor_id = $1
+                  AND me.enabled))
+          AND ($2::uuid IS NULL
+               OR (COALESCE(conversation.project_id, direct_scope_id()) = $2
+                   AND conversation.kind IN ('channel', 'dm', 'group')))
           AND (NOT $3 OR (conversation.kind IN ('dm', 'group') AND EXISTS (
                 SELECT 1 FROM conversation_members member
                 WHERE member.conversation_id = conversation.id AND member.actor_id = $1)))

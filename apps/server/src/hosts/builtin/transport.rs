@@ -46,9 +46,12 @@ impl InProcess {
 impl Transport for InProcess {
     fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
         Box::pin(async move {
+            // In process there is no socket: the loopback name stands for
+            // the server itself (MCP checks the host it is called by).
             let mut builder = axum::http::Request::builder()
                 .method(request.method)
-                .uri(&request.path);
+                .uri(&request.path)
+                .header("host", "localhost");
             for (name, value) in &request.headers {
                 builder = builder.header(*name, value);
             }
@@ -66,11 +69,22 @@ impl Transport for InProcess {
                 .await
                 .map_err(|error| ClientError::Http(error.to_string()))?;
             let status = response.status().as_u16();
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect();
             let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .map_err(|error| ClientError::Http(error.to_string()))?
                 .to_vec();
-            Ok(HttpResponse { status, body })
+            Ok(HttpResponse {
+                status,
+                body,
+                headers,
+            })
         })
     }
 }

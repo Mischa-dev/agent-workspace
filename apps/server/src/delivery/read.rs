@@ -71,6 +71,7 @@ struct Row {
     addressed: bool,
     own: bool,
     following: bool,
+    ambient: bool,
     raiser: bool,
     for_you: bool,
     required: bool,
@@ -111,14 +112,24 @@ pub async fn read_batch(
                COALESCE(e.actor_account_id = $1, false) AS own,
                CASE e.thing_kind::text
                    WHEN 'task' THEN EXISTS (
-                           SELECT 1 FROM work_item_watchers w
-                           WHERE w.work_item_id = e.thing_id AND w.actor_id = $1)
-                       OR EXISTS (
                            SELECT 1 FROM task_rows t
                            WHERE t.id = e.thing_id AND t.assignee_actor_id = $1)
                    WHEN 'run' THEN {run_followed}
                    ELSE false
-               END AS following,
+               END
+               -- A2.9: what it follows (the thing, its conversation or its
+               -- space); the discussion only for 'everything'.
+               OR EXISTS (
+                   SELECT 1 FROM follows f
+                   WHERE f.account_id = $1
+                     AND f.target_id IN (e.thing_id, e.conversation_id, e.space_id)
+                     AND (f.level = 'everything'
+                          OR NOT (e.type LIKE '%.commented' OR e.type LIKE 'message.%'
+                                  OR e.type LIKE 'comment.%'))) AS following,
+               COALESCE(e.type = 'message.created' AND EXISTS (
+                   SELECT 1 FROM conversation_agent_settings s
+                   WHERE s.conversation_id = e.conversation_id AND s.account_id = $1
+                     AND s.ambient), false) AS ambient,
                COALESCE(e.thing_kind::text = 'request' AND EXISTS (
                    SELECT 1 FROM requests r
                    WHERE r.id = e.thing_id AND r.raised_by_account_id = $1), false) AS raiser,
@@ -226,6 +237,11 @@ async fn module_on(
     ) else {
         return Ok(true);
     };
+    // A DM's or group's event is in no workspace, so no workspace's
+    // switches turn it off (K4.25).
+    if row.event.workspace_id == crate::spaces::DIRECT {
+        return Ok(true);
+    }
     let place = (row.event.workspace_id, row.event.space_id);
     let set = match known.get(&place) {
         Some(set) => *set,
@@ -295,6 +311,7 @@ fn accept(row: &Row, subscriptions: &[Subscription]) -> Option<Reason> {
             addressed: row.addressed,
             own: row.own,
             following: row.following,
+            ambient: row.ambient,
             raiser: row.raiser,
             for_you: row.for_you,
             required: row.required,

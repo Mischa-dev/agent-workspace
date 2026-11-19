@@ -1,10 +1,12 @@
 //! Anthropic's Messages API, with structured output against the prompt's
-//! JSON Schema (`output_config.format`).
+//! JSON Schema (`output_config.format`), and tool use for an assistant's
+//! turns (A1.25).
 
 use serde_json::{Value, json};
 
 use super::{
-    Completion, CompletionRequest, ProviderError, ProviderManifest, base_url, model, send, tokens,
+    Chat, ChatRequest, Completion, CompletionRequest, ModelPart, ModelRole, ModelStop,
+    ProviderError, ProviderManifest, address, base_url, model, object, send, tokens, tool_schema,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -57,6 +59,110 @@ pub async fn complete(
     parse(&reply)
 }
 
+pub fn chat_body(request: &ChatRequest<'_>) -> Value {
+    let messages = request
+        .turn
+        .messages
+        .iter()
+        .filter(|message| !message.parts.is_empty())
+        .map(|message| {
+            let content = message
+                .parts
+                .iter()
+                .map(|part| match part {
+                    ModelPart::Text { text } => json!({"type": "text", "text": text}),
+                    ModelPart::ToolCall { id, name, input } => {
+                        json!({"type": "tool_use", "id": id, "name": name, "input": object(input)})
+                    }
+                    ModelPart::ToolResult {
+                        id,
+                        output,
+                        is_error,
+                        ..
+                    } => json!({"type": "tool_result", "tool_use_id": id,
+                                "content": output, "is_error": is_error}),
+                })
+                .collect::<Vec<_>>();
+            let role = match message.role {
+                ModelRole::User => "user",
+                ModelRole::Assistant => "assistant",
+            };
+            json!({"role": role, "content": content})
+        })
+        .collect::<Vec<_>>();
+    let mut body = json!({
+        "model": request.model,
+        "max_tokens": request.max_output_tokens,
+        "system": request.turn.system,
+        "messages": messages,
+    });
+    if !request.turn.tools.is_empty() {
+        body["tools"] = request
+            .turn
+            .tools
+            .iter()
+            .map(|tool| {
+                json!({"name": tool.name, "description": tool.description,
+                       "input_schema": tool_schema(&tool.input_schema)})
+            })
+            .collect();
+    }
+    body
+}
+
+pub async fn chat(
+    client: &reqwest::Client,
+    request: &ChatRequest<'_>,
+) -> Result<Chat, ProviderError> {
+    let key = request.api_key.ok_or(ProviderError::Unauthorized)?;
+    let url = format!(
+        "{}/v1/messages",
+        address(request.base_url, DEFAULT_BASE_URL)?
+    );
+    let reply = send(
+        client
+            .post(url)
+            .timeout(request.timeout)
+            .header("x-api-key", key.expose())
+            .header("anthropic-version", API_VERSION)
+            .json(&chat_body(request)),
+    )
+    .await?;
+    parse_chat(&reply)
+}
+
+pub fn parse_chat(reply: &Value) -> Result<Chat, ProviderError> {
+    let stop = match reply.get("stop_reason").and_then(Value::as_str) {
+        Some("refusal") => return Err(ProviderError::Refused),
+        Some("max_tokens") => ModelStop::MaxTokens,
+        Some("tool_use") => ModelStop::ToolUse,
+        _ => ModelStop::End,
+    };
+    let parts = reply
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|block| match block.get("type").and_then(Value::as_str) {
+            Some("text") => Some(ModelPart::Text {
+                text: block.get("text")?.as_str()?.to_owned(),
+            }),
+            Some("tool_use") => Some(ModelPart::ToolCall {
+                id: block.get("id")?.as_str()?.to_owned(),
+                name: block.get("name")?.as_str()?.to_owned(),
+                input: block.get("input").cloned().unwrap_or(Value::Null),
+            }),
+            _ => None,
+        })
+        .collect();
+    Ok(Chat {
+        parts,
+        stop,
+        input_tokens: tokens(reply.pointer("/usage/input_tokens")),
+        output_tokens: tokens(reply.pointer("/usage/output_tokens")),
+    })
+}
+
 pub fn parse(reply: &Value) -> Result<Completion, ProviderError> {
     match reply.get("stop_reason").and_then(Value::as_str) {
         Some("refusal") => return Err(ProviderError::Refused),
@@ -85,6 +191,61 @@ pub fn parse(reply: &Value) -> Result<Completion, ProviderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::providers::{ModelMessage, ModelTool, ModelTurn};
+
+    #[test]
+    fn a_turn_with_tools_round_trips() {
+        let turn = ModelTurn {
+            system: "Be brief.".to_owned(),
+            messages: vec![
+                ModelMessage::user("Open AW-1"),
+                ModelMessage {
+                    role: ModelRole::Assistant,
+                    parts: vec![ModelPart::ToolCall {
+                        id: "t1".to_owned(),
+                        name: "task_open".to_owned(),
+                        input: json!({"taskId": "AW-1"}),
+                    }],
+                },
+                ModelMessage {
+                    role: ModelRole::User,
+                    parts: vec![ModelPart::ToolResult {
+                        id: "t1".to_owned(),
+                        name: "task_open".to_owned(),
+                        output: "{}".to_owned(),
+                        is_error: false,
+                    }],
+                },
+            ],
+            tools: vec![ModelTool {
+                name: "task_open".to_owned(),
+                description: "Open a task".to_owned(),
+                input_schema: json!({"type": "object"}),
+            }],
+            max_output_tokens: None,
+        };
+        let request = ChatRequest {
+            model: "m",
+            turn: &turn,
+            max_output_tokens: 100,
+            api_key: None,
+            base_url: None,
+            timeout: std::time::Duration::from_secs(1),
+        };
+        let body = chat_body(&request);
+        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(body["messages"][2]["content"][0]["tool_use_id"], "t1");
+        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+        let chat = parse_chat(&json!({
+            "stop_reason": "tool_use",
+            "content": [{"type": "text", "text": "Looking."},
+                        {"type": "tool_use", "id": "t2", "name": "search", "input": {"q": "x"}}],
+            "usage": {"input_tokens": 5, "output_tokens": 2}
+        }))
+        .expect("chat");
+        assert_eq!(chat.stop, ModelStop::ToolUse);
+        assert_eq!(chat.parts.len(), 2);
+    }
 
     #[test]
     fn replies_are_read_from_text_blocks() {

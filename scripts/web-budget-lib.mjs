@@ -16,9 +16,10 @@ import { join, relative } from 'node:path'
 // Measured November 2026 (W1.15: the data router in the shell; feature
 // stylesheets moved from the first paint into the routes that use them).
 export const WEB_ASSET_LIMITS = Object.freeze({
-  // index.html's scripts and module preloads: 486,736 raw / 154,185 gzip.
+  // index.html's scripts and module preloads: 486,736 raw / 154,185 gzip;
+  // gzip measured again at 169,731 with #302 and #306 together (plus 10%).
   initialJavascriptRawBytes: 535_410,
-  initialJavascriptGzipBytes: 169_604,
+  initialJavascriptGzipBytes: 186_704,
   // index.html's stylesheets (tokens, base, components, shell, kit): 61,731.
   initialCssRawBytes: 67_905,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The

@@ -13,6 +13,16 @@
       "name": "<what it is called>"
     }
   },
+  "offers": [
+    {"id": "<offer id>", "title": "<what it sets up>", "description": "<one line>"}
+  ],
+  "operations": {
+    "listTasks": "<operation that lists tasks>",
+    "usage": "<operation that reports usage by plan window>",
+    "pause": "<operation that pauses an agent>",
+    "memory": "<operation that shows what an agent remembers>"
+  },
+  "adoptSeconds": 30,
   "pollSeconds": 8,
   "taskDeadlineSeconds": 3600,
   "maxReplyCharacters": 19500

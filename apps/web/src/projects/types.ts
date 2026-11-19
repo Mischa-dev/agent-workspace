@@ -40,8 +40,12 @@ export type Project = {
   organizationId: string
   key: string
   name: string
+  /** An emoji shown beside the name (K4.7), when it has one. */
+  icon?: string | null
   archivedAt: string | null
   role: string
+  /** What the caller may do here (K1.26); ask with `can`, never the role's name. */
+  permissions?: string[]
   version: number
   attentionCount: number
   /** AWD-75: the modules off for you in this project (its workspace, or your role there). */
