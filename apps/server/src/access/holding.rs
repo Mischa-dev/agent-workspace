@@ -84,12 +84,14 @@ pub async fn load_direct(
     if let Some(limits) = &caller.limits {
         // A kept DM follows its workspace's limit; a personal one what the
         // limit allows in any workspace.
+        // A kept DM in a workspace the limit doesn't name holds nothing.
         let limit = match limits.organizations.get(&workspace_id) {
             Some(limit) => *limit,
-            None => limits
+            None if workspace_id == crate::spaces::DIRECT => limits
                 .organizations
                 .values()
                 .fold(PermissionSet::EMPTY, |all, limit| all.union(*limit)),
+            None => PermissionSet::EMPTY,
         };
         permissions = permissions.intersect(limit);
     }

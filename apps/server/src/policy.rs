@@ -373,10 +373,14 @@ pub fn agent_limit_hides_direct(
         .try_with(|limits| {
             (limits.actor_id == actor_id).then(|| match limits.organizations.get(&workspace_id) {
                 Some(limit) => !limit.contains(permission),
-                None => !limits
+                // A personal DM, in no workspace, follows what the limit
+                // allows in any; a kept one in a workspace the limit doesn't
+                // name holds nothing.
+                None if workspace_id == crate::spaces::DIRECT => !limits
                     .organizations
                     .values()
                     .any(|limit| limit.contains(permission)),
+                None => true,
             })
         })
         .ok()

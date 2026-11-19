@@ -302,7 +302,22 @@ async fn secrets_exchange_rotate_and_revoke() {
     .await;
     assert_eq!(own["outcome"], "ok", "{own}");
     let rook_secret = own["value"]["secret"].as_str().expect("secret").to_owned();
-    assert!(token_for(&world.app, &rook_secret).await.is_some());
+    // Its short-lived token never makes a lasting secret.
+    let rook_token = token_for(&world.app, &rook_secret)
+        .await
+        .expect("rook's token");
+    let rook_session = initialize(&world.app, &rook_token)
+        .await
+        .expect("rook's session");
+    let lasting = super::support::app::tool(
+        &world.app,
+        &rook_token,
+        &rook_session,
+        "credential_create",
+        json!({"name": "from a token", "clientRequestId": "rook-2"}),
+    )
+    .await;
+    assert_ne!(lasting["outcome"], "ok", "{lasting}");
     world.finish().await;
 }
 

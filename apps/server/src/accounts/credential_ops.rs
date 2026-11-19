@@ -45,7 +45,19 @@ async fn may_manage_secrets(
             Err(_) => return Err(OpError::not_found("That account")),
         }
     }
-    if caller.limits.is_some() || caller.via_grant_id.is_some() {
+    // A short-lived token never makes a lasting secret, which would outlive
+    // the token and the secret it came from.
+    let through_token = match caller.credential_id {
+        Some(credential) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM access_tokens WHERE id = $1)",
+        )
+        .bind(credential)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(AppError::from)?,
+        None => false,
+    };
+    if through_token || caller.limits.is_some() || caller.via_grant_id.is_some() {
         return Err(OpError::Denied {
             reason: crate::ops::DenyReason::Delegation,
             message: "Secrets are made and changed with the account's own sign-in or secret, \

@@ -2108,12 +2108,8 @@ pub(crate) async fn caller_reach(
         else {
             return Ok((PermissionSet::EMPTY, Some(AgentLimits::default())));
         };
-        // An agent's token narrowed to nothing holds what the agent holds
-        // through its connection in the token's workspace, as its secret
-        // would. A person's is kept to the token's workspace and spaces.
-        if !person && scope.permissions.is_none() && !scope.listed_spaces {
-            return Ok((reach, limits));
-        }
+        // Kept to the token's workspace and spaces, whoever holds it, even
+        // when it narrows nothing else.
         let (reach, limits) = scope.narrow(principal.actor_id, reach, limits.as_ref());
         return Ok((reach, Some(limits)));
     }
