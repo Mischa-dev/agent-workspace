@@ -699,6 +699,7 @@ function PageEditor({
 }) {
   // The version this edit started from, kept even when the page refetches
   // underneath, so a save can't quietly replace someone else's newer one.
+  const showsNesting = useProjectExperience(projectId).shows('page.nesting')
   const [restored] = useState(() => {
     const draft = readLocal<PageDraft>(draftKey(page.id))
     return draft && (draft.title !== page.title || draft.body !== page.body || draft.note) ? draft : null
@@ -819,14 +820,16 @@ function PageEditor({
       )}
       {suggesting ? null : (
         <>
-          <SelectField label="Inside page" onChange={(event) => setParent(event.target.value)} value={parent}>
-            <option value="">None: it sits at the top</option>
-            {parentChoices(siblings.data?.pages ?? [], page.id).map((choice) => (
-              <option key={choice.id} value={choice.id}>
-                {[...choice.path, choice.title].join(' / ')}
-              </option>
-            ))}
-          </SelectField>
+          {showsNesting ? (
+            <SelectField label="Inside page" onChange={(event) => setParent(event.target.value)} value={parent}>
+              <option value="">None: it sits at the top</option>
+              {parentChoices(siblings.data?.pages ?? [], page.id).map((choice) => (
+                <option key={choice.id} value={choice.id}>
+                  {[...choice.path, choice.title].join(' / ')}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
           <Checkbox
             checked={isTemplate}
             description="New pages can start from a copy of it, with {{date}}, {{author}} and {{project}} filled in."
