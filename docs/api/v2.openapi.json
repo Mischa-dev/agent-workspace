@@ -101371,6 +101371,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -101566,6 +101578,18 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
                             },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
@@ -102238,6 +102262,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -102433,6 +102469,18 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
                             },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
@@ -103555,6 +103603,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -103750,6 +103810,18 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
                             },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
@@ -108880,6 +108952,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -109076,6 +109160,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -109212,7 +109308,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_update": {
       "post": {
-        "description": "Change a task: title, description, priority, assignee, delegate (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, or clear the blocker and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. Needs \"Edit tasks\" where it acts.",
+        "description": "Change a task: title, description, priority, assignee, delegate (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, or clear the blocker and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. If your role only suggests on tasks, a change to its own fields becomes a proposal (proposalId) that someone who edits the task accepts or rejects, from its request card or with proposal_decide; it is then written as yours. Needs \"Suggest task changes\" where it acts.",
         "operationId": "task_update",
         "parameters": [
           {
@@ -109356,6 +109452,13 @@
                   },
                   "milestone": {
                     "description": "Put it in this active milestone, by name or ID (see milestone_list);\n\"none\" takes it out.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "description": "When your role only suggests on tasks and the change becomes a\nproposal: why, for whoever decides it (up to 500 characters).",
                     "type": [
                       "string",
                       "null"
@@ -109514,6 +109617,18 @@
                                 "null"
                               ]
                             },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
+                            },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",
                               "type": "string"
@@ -109709,6 +109824,18 @@
                                 "string",
                                 "null"
                               ]
+                            },
+                            "proposalId": {
+                              "description": "When the caller's role only suggests on tasks: the proposal the\nchange became, for someone who edits the task to accept or reject\n(proposal_decide). The task itself is unchanged.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "proposed": {
+                              "description": "The parts the proposal sets, each with how it read before and after.",
+                              "items": true,
+                              "type": "array"
                             },
                             "resultId": {
                               "description": "The change's own id (a comment's id, for a comment).",

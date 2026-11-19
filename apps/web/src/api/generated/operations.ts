@@ -1486,7 +1486,7 @@ export type StatusSetOutput = { accountId: string; awayUntil?: string | null; cl
 
 export type TaskArchiveInput = { expectedVersion: number; taskId: string }
 
-export type TaskArchiveOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskArchiveOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskClaimInput = { minutes?: number | null; note?: string | null; taskId: string }
 
@@ -1494,7 +1494,7 @@ export type TaskClaimOutput = { claimedAt: string; claimedBy: string; expiresAt:
 
 export type TaskCommentCreateInput = { attachmentIds?: string[] | null; replyToCommentId?: string | null; taskId: string; text: string }
 
-export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskCommentDeleteInput = { commentId: string; taskId: string }
 
@@ -1506,7 +1506,7 @@ export type TaskCommentUpdateOutput = { changed: boolean; commentId: string; rev
 
 export type TaskCreateInput = { acceptanceCriteria?: string[] | null; afterTaskId?: string | null; assignee?: string | null; beforeTaskId?: string | null; collection?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; fromMessageId?: string | null; labels?: string[] | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; projectId?: string | null; saySo?: boolean | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
 
-export type TaskCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskCreateManyInput = { clientRequestId?: string | null; createMissingLabels?: boolean | null; preview?: boolean | null; projectId?: string | null; tasks: NewTask[] }
 
@@ -1554,11 +1554,11 @@ export type TaskReorderOutput = { changed: boolean; column: string[]; status: st
 
 export type TaskRestoreInput = { expectedVersion: number; taskId: string }
 
-export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
-export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; cycle?: string | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
+export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; cycle?: string | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; note?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
 
-export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskUpdateManyInput = { addLabels?: string[] | null; archived?: boolean | null; assignee?: string | null; clearAssignee?: boolean | null; clientRequestId?: string | null; dueDate?: string | null; expectedVersions?: Record<string, number> | null; fields?: Record<string, unknown> | null; milestone?: string | null; preview?: boolean | null; priority?: string | null; projectId?: string | null; removeLabels?: string[] | null; status?: string | null; taskIds: string[]; type?: string | null }
 

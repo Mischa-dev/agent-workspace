@@ -10,9 +10,11 @@
 //! `sheets::proposals` (cells, each with the input it read; C1.11); boards
 //! through `whiteboards::proposals` (elements, each with the copy it read;
 //! C1.11); records through `collections::record_proposals` (fields, each
-//! with the stored value it read; T1.41). A record proposal raises a
-//! request card for the people who edit it (`raise_request`); answering
-//! the card decides the proposal (`settled`).
+//! with the stored value it read; T1.41); tasks through
+//! `mcp::task_proposals` (their own fields and custom fields, likewise;
+//! T1.41). A record or task proposal raises a request card for the people
+//! who edit it (`raise_request`); answering the card decides the proposal
+//! (`settled`).
 //!
 //! `proposal_list` and `proposal_decide` (in `ops.rs`) are the one way to
 //! read and decide them; the page tools and routes for suggestions stay as
@@ -28,7 +30,7 @@ use uuid::Uuid;
 use crate::{access, error::AppError, memory::Writer, page_docs::suggestions};
 
 /// The kinds a proposal can be about today.
-pub const PROPOSABLE_KINDS: &[&str] = &["page", "record", "sheet", "whiteboard"];
+pub const PROPOSABLE_KINDS: &[&str] = &["page", "record", "sheet", "task", "whiteboard"];
 
 /// A proposal as it's listed.
 #[derive(Clone, Debug, Serialize, FromRow, JsonSchema)]
@@ -78,6 +80,7 @@ const SELECT: &str = r#"
              WHEN 'sheet' THEN (SELECT sheet.name FROM sheets sheet WHERE sheet.id = proposal.thing_id)
              WHEN 'whiteboard' THEN (SELECT board.title FROM whiteboards board WHERE board.id = proposal.thing_id)
              WHEN 'record' THEN (SELECT record.title FROM collection_records record WHERE record.id = proposal.thing_id)
+             WHEN 'task' THEN (SELECT task.title FROM task_rows task WHERE task.id = proposal.thing_id)
            END AS thing_title,
            proposal.space_id, proposal.operation, proposal.author_actor_id AS author_id,
            author.display_name AS author, proposal.note, proposal.base_version,
@@ -289,6 +292,41 @@ pub async fn decide(
                 writer,
                 may_edit,
                 may_build,
+                thing_id,
+                proposal_id,
+                decision,
+            )
+            .await?;
+            if decided.is_ok() {
+                crate::requests::withdraw_about(transaction, REQUEST_SUBJECT, &[proposal_id])
+                    .await?;
+            }
+            Ok(decided)
+        }
+        "task" if parts.is_some() => Ok(Err(suggestions::Refusal::NotYours(
+            "A task proposal is accepted whole; parts are for sheets and whiteboards.",
+        ))),
+        "task" => {
+            let creator = sqlx::query_scalar::<_, Uuid>(
+                "SELECT created_by_actor_id FROM work_items WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            let may_edit = access::write_mode(
+                transaction,
+                caller,
+                "task",
+                space_id,
+                creator == Some(caller.account_id),
+                Some("tasks"),
+            )
+            .await?
+            .is_ok_and(|grant| grant.mode == access::WriteMode::Direct);
+            let decided = crate::mcp::task_proposals::decide(
+                transaction,
+                writer,
+                may_edit,
                 thing_id,
                 proposal_id,
                 decision,

@@ -158,6 +158,7 @@ mod t1_record_proposals;
 mod t1_record_templates;
 mod t1_relations;
 mod t1_rules;
+mod t1_task_proposals;
 mod t1_task_record_owner;
 mod t1_task_records_migration;
 mod t1_triage;

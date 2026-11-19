@@ -326,6 +326,10 @@ pub struct TaskUpdateInput {
     /// true clears its blocker and moves it to review. Pass it on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_for_review: Option<bool>,
+    /// When your role only suggests on tasks and the change becomes a
+    /// proposal: why, for whoever decides it (up to 500 characters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl TaskUpdateInput {
@@ -338,6 +342,7 @@ impl TaskUpdateInput {
                 "expectedVersion",
                 "blockedReason",
                 "readyForReview",
+                "note",
             ] {
                 object.remove(own);
             }
@@ -357,7 +362,9 @@ impl Operation for TaskUpdate {
     const NAME: &'static str = "task_update";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    // Suggest is the floor: `run` asks `access::write_mode` whether the
+    // change lands (edit) or waits as a proposal (suggest only, T1.41).
+    const PERMISSION: Option<Perm> = Some(Perm::TasksSuggest);
     const PROPOSABLE: bool = true;
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const DESTRUCTIVE: bool = true;
@@ -368,8 +375,11 @@ impl Operation for TaskUpdate {
         or archive it (archived: true; false restores; pass it on its own). Mark it blocked \
         with blockedReason, or clear the blocker and move it to review with readyForReview: \
         true (each on its own). Pass the version you last read as expectedVersion; on a \
-        conflict, open it again and retry.";
-    const EMITS: &'static [&'static str] = &["task.updated"];
+        conflict, open it again and retry. If your role only suggests on tasks, a change to \
+        its own fields becomes a proposal (proposalId) that someone who edits the task accepts \
+        or rejects, from its request card or with proposal_decide; it is then written as yours.";
+    const EMITS: &'static [&'static str] =
+        &["task.updated", "task.proposals_changed", "request.raised"];
 
     type Input = TaskUpdateInput;
     type Output = TaskWritten;
@@ -386,6 +396,14 @@ impl Operation for TaskUpdate {
                 "Pass blockedReason or readyForReview on its own, then make other changes with \
                  the new version.",
             ));
+        }
+        if let Some(written) = propose_instead(call, &input).await? {
+            // The dispatcher writes the audit row for a proposal.
+            if call.ctx.request_id.is_some() {
+                call.key_honoured();
+            }
+            call.mark_replayed(written.idempotent_replay);
+            return Ok(written);
         }
         let written = match (input.blocked_reason.clone(), input.ready_for_review) {
             (Some(reason), _) => {
@@ -413,11 +431,205 @@ impl Operation for TaskUpdate {
                     "readyForReview takes true; to block it again, pass blockedReason.",
                 ));
             }
-            (None, None) => task_commands::update(call.state, call.ctx, &input).await?,
+            (None, None) => {
+                // A note is for proposals; a direct change has none.
+                let mut direct = serde_json::to_value(&input).map_err(|_| OpError::Unavailable)?;
+                if let Some(object) = direct.as_object_mut() {
+                    object.remove("note");
+                }
+                task_commands::update(call.state, call.ctx, &direct).await?
+            }
         };
         settled(call, &written);
         Ok(written)
     }
+}
+
+/// When the caller only suggests on tasks (T1.41), keeps the change as a
+/// proposal and answers for it; None when the change is theirs to make.
+async fn propose_instead(
+    call: &mut OpCall<'_>,
+    input: &TaskUpdateInput,
+) -> Result<Option<TaskWritten>, OpError> {
+    use crate::mcp::task_proposals::{self, Asked, Proposed};
+    let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+    let task_id = input.task_id.id();
+    let caller = call.ctx.caller.clone();
+    let author = crate::work_item_commands::CommandActor::from(call.ctx);
+    let principal = task_commands::principal_for(call.ctx, Some(space_id));
+    let request_id = call.ctx.request_id.clone();
+    let tx = call.tx().await?;
+    let (creator, number, title, version) = sqlx::query_as::<_, (uuid::Uuid, i64, String, i64)>(
+        "SELECT created_by_actor_id, number, title, version FROM task_rows \
+         WHERE id = $1 AND project_id = $2",
+    )
+    .bind(task_id)
+    .bind(space_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(crate::error::AppError::from)?
+    .ok_or_else(|| OpError::not_found("task"))?;
+    // Unlocked: the direct path takes its own locks in its own transaction.
+    let mode = crate::access::write_mode(
+        tx,
+        &caller,
+        "task",
+        space_id,
+        creator == author.actor_id,
+        Some("tasks"),
+    )
+    .await?
+    .map_err(|_| OpError::from(crate::error::AppError::Forbidden))?
+    .mode;
+    if mode != crate::access::WriteMode::Propose {
+        return Ok(None);
+    }
+    let denied = |message: String| OpError::Denied {
+        reason: crate::ops::DenyReason::Rule,
+        message: message.into(),
+    };
+    let edit_only = input.parent_id.is_some()
+        || input.clear_parent.is_some()
+        || input.position.is_some()
+        || input.before_task_id.is_some()
+        || input.after_task_id.is_some()
+        || input.archived.is_some()
+        || input.milestone.is_some()
+        || input.cycle.is_some()
+        || input.delegate.is_some()
+        || input.blocked_reason.is_some()
+        || input.ready_for_review.is_some();
+    if edit_only {
+        return Err(denied(task_proposals::EDIT_ONLY.to_owned()));
+    }
+    let note = input
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|note| !note.is_empty());
+    if note.is_some_and(|note| note.chars().count() > 500) {
+        return Err(OpError::invalid("note", "Keep a note to 500 characters."));
+    }
+    if input.clear_assignee == Some(true) && input.assignee.is_some() {
+        return Err(OpError::invalid(
+            "assignee",
+            "Pass assignee or clearAssignee, not both.",
+        ));
+    }
+    // A retry with the same request id answers as the first call did.
+    let reservation = match request_id.as_deref() {
+        Some(request_id) => {
+            let key = crate::idempotency::IdempotencyKey::parse(request_id)?;
+            let scope =
+                crate::idempotency::resource_bound_scope("task_proposals", task_id, "propose")?;
+            let hash = crate::idempotency::RequestHash::for_value(input)?;
+            match crate::idempotency::reserve(tx, author.actor_id, &scope, &key, hash).await? {
+                crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+                    let mut written = replay.decode::<TaskWritten>()?;
+                    written.idempotent_replay = true;
+                    return Ok(Some(written));
+                }
+                crate::idempotency::IdempotencyOutcome::Reserved(reservation) => Some(reservation),
+            }
+        }
+        None => None,
+    };
+    let estimate = if input.clear_estimate == Some(true) {
+        Some(None)
+    } else {
+        input.estimate.map(Some)
+    };
+    let asked = Asked {
+        title: input.title.as_deref(),
+        description: input.description.as_deref(),
+        priority: input.priority.as_deref(),
+        status: input.status.as_deref(),
+        item_type: input.item_type.as_deref(),
+        assignee: if input.clear_assignee == Some(true) {
+            Some("none")
+        } else {
+            input.assignee.as_deref()
+        },
+        add_labels: input.add_labels.as_deref().unwrap_or_default(),
+        remove_labels: input.remove_labels.as_deref().unwrap_or_default(),
+        start_date: input.start_date.as_deref(),
+        due_date: input.due_date.as_deref(),
+        estimate,
+        fields: input.fields.as_ref(),
+    };
+    let proposed = task_proposals::propose(
+        tx,
+        &author,
+        &principal,
+        caller.via_grant_id,
+        task_id,
+        input.expected_version,
+        &asked,
+        note,
+    )
+    .await?;
+    let (proposal, changes) = match proposed {
+        Proposed::Made { id, changes } => (id, changes),
+        Proposed::Unchanged => {
+            return Err(OpError::invalid(
+                "update",
+                "That wouldn't change anything on the task.",
+            ));
+        }
+        Proposed::Problem(field, message) if field == "expectedVersion" => {
+            return Err(OpError::Conflict {
+                reason: crate::ops::ConflictReason::State {
+                    code: "task_changed",
+                },
+                message: message.into(),
+                current: None,
+            });
+        }
+        Proposed::Problem(field, message) => {
+            return Err(OpError::Invalid {
+                field: field.into(),
+                message: message.into(),
+            });
+        }
+        Proposed::Refused(message) => return Err(denied(message)),
+    };
+    let key = sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+        .bind(space_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+    let key = format!("{key}-{number}");
+    crate::proposals::raise_request(
+        tx,
+        proposal,
+        &format!("Accept a change to {key} \"{title}\"?"),
+        Some(creator),
+    )
+    .await?;
+    let written = TaskWritten {
+        work_item_id: task_id.to_string(),
+        version,
+        changed_fields: Vec::new(),
+        activity_id: None,
+        result_id: proposal.to_string(),
+        idempotent_replay: false,
+        key: Some(key),
+        url: None,
+        message: Some(
+            "Your role here suggests changes to tasks, so this is a proposal. The task changes \
+             once someone who edits it accepts."
+                .to_owned(),
+        ),
+        labels: None,
+        proposal_id: Some(proposal.to_string()),
+        proposed: changes,
+    };
+    if let Some(reservation) = reservation {
+        crate::idempotency::complete(tx, &reservation, axum::http::StatusCode::OK, &written)
+            .await?;
+    }
+    call.audit_target("proposal", proposal, json!({ "task": task_id }));
+    Ok(Some(written))
 }
 
 // ---------------------------------------------------------------------------

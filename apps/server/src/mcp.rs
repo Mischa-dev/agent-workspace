@@ -116,6 +116,7 @@ pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
 pub(crate) mod task_move;
+pub(crate) mod task_proposals;
 pub(crate) mod tasks;
 mod tool_permissions;
 mod usage_tools;

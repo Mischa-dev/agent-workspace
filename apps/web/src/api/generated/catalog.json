@@ -2620,7 +2620,10 @@
     "emits": [
       "page.discussion.updated",
       "sheet.proposals_changed",
-      "whiteboard.proposals_changed"
+      "whiteboard.proposals_changed",
+      "record.proposals_changed",
+      "task.proposals_changed",
+      "task.updated"
     ],
     "idempotent": true,
     "kind": "change",
@@ -3150,7 +3153,9 @@
     "emits": [
       "request.answered",
       "record.updated",
-      "record.proposals_changed"
+      "record.proposals_changed",
+      "task.updated",
+      "task.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
@@ -3865,14 +3870,16 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "task.updated"
+      "task.updated",
+      "task.proposals_changed",
+      "request.raised"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
     "module": "tasks",
     "name": "task_update",
-    "permission": "tasks.edit",
+    "permission": "tasks.suggest",
     "preview": false,
     "proposable": true,
     "title": "Update task"

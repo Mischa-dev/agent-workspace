@@ -312,6 +312,12 @@ pub static TASK_DELEGATED: EventType = addressed(
     Some("task"),
     "A task was handed to you to do",
 );
+pub static TASK_PROPOSALS_CHANGED: EventType = fact(
+    "task.proposals_changed",
+    "tasks",
+    Some("task"),
+    "A change to a task was proposed, or a proposal on it decided",
+);
 pub static TASK_TRIAGED: EventType = fact(
     "task.triaged",
     "tasks",
@@ -770,6 +776,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_UPDATED,
         &TASK_ASSIGNED,
         &TASK_DELEGATED,
+        &TASK_PROPOSALS_CHANGED,
         &TASK_TRIAGED,
         &TASK_SNOOZE_ENDED,
         &TRIAGE_RULES_CHANGED,

@@ -326,6 +326,8 @@ impl Operation for RequestAnswer {
         "request.answered",
         "record.updated",
         "record.proposals_changed",
+        "task.updated",
+        "task.proposals_changed",
     ];
     const TITLE: &'static str = "Answer a request";
     const DESCRIPTION: &'static str = "Answer a request asked of you or a role you hold (request_list for_me lists them): pick an option by its id, type an answer, or both. An answer is final; it goes back to whoever asked, and a run waiting on it goes on.";
