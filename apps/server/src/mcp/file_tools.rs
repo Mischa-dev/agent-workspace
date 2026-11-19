@@ -413,6 +413,10 @@ pub(super) struct FileUploadArguments {
     /// With taskId: hold the file for a comment instead, attached when you
     /// pass its fileId in task_comment's attachmentIds.
     pub for_comment: Option<bool>,
+    /// Or keep the file on another thing you can edit, such as a page:
+    /// {"kind": "page", "id": "<page ID>"}. Show it in the page with a block
+    /// of its own: `[name](/files/<fileId> "embed")` in page_write.
+    pub thing: Option<ThingArgument>,
     /// The file name people see, such as report.md or screenshot.png.
     pub name: String,
     /// The MIME type. Images are recognized from their bytes; otherwise the
@@ -425,6 +429,16 @@ pub(super) struct FileUploadArguments {
     /// Makes uploading safe to retry: send the same one again and you get
     /// the file the first call stored, not a second copy.
     pub client_request_id: Option<String>,
+}
+
+/// A thing a file can belong to.
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ThingArgument {
+    /// "page".
+    pub kind: String,
+    /// Its ID.
+    pub id: String,
 }
 
 pub(super) async fn file_upload(
@@ -466,19 +480,32 @@ pub(super) async fn file_upload(
     let target = match (
         arguments.conversation_id.as_deref(),
         arguments.task_id.as_deref(),
+        arguments.thing.as_ref(),
     ) {
-        (Some(conversation), None) => {
+        (None, None, Some(thing)) => {
+            let Some(kind) = files::ThingKind::parse(thing.kind.trim()) else {
+                return ToolResult::invalid("thing", "Files can be kept on a page: kind \"page\".");
+            };
+            let Some(thing_id) = parse_id(&thing.id) else {
+                return ToolResult::invalid("thing", "Pass the page's ID.");
+            };
+            thing_upload_destination(state, principal, kind, thing_id).await
+        }
+        (Some(conversation), None, None) => {
             let Some(conversation_id) = parse_id(conversation) else {
                 return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
             };
             conversation_destination(state, principal, conversation_id).await
         }
-        (None, Some(task)) => {
+        (None, Some(task), None) => {
             let for_comment = arguments.for_comment.unwrap_or(false);
             task_destination(state, principal, task, for_comment).await
         }
         _ => {
-            return ToolResult::invalid("conversationId", "Pass either conversationId or taskId.");
+            return ToolResult::invalid(
+                "conversationId",
+                "Pass one of conversationId, taskId or thing.",
+            );
         }
     };
     let outcome = async {
@@ -554,7 +581,7 @@ pub(super) async fn file_upload(
             ..FileSummary::from(&row)
         }),
         Err(AppError::NotFound(_)) => {
-            ToolResult::not_found("That conversation or task (or you can't post there)")
+            ToolResult::not_found("That conversation, task or page (or you can't add to it)")
         }
         Err(AppError::PayloadTooLarge) => ToolResult::invalid(
             "dataBase64",
@@ -661,6 +688,35 @@ async fn conversation_destination(
         },
         limit,
     ))
+}
+
+/// Where an upload to a thing goes, and the most it may be, once the caller
+/// may edit it in a space this connection reaches.
+async fn thing_upload_destination(
+    state: &AppState,
+    principal: &McpPrincipal,
+    thing: files::ThingKind,
+    thing_id: Uuid,
+) -> Result<(Destination, usize), AppError> {
+    let destination = files::thing_destination(
+        &state.pool,
+        principal.actor_id,
+        principal.actor_kind,
+        thing,
+        thing_id,
+    )
+    .await?;
+    let project_id = destination.project_id();
+    if !can_write_in(state, principal, project_id, Action::PageEdit).await?
+        || !accessible_project_ids(state, principal)
+            .await?
+            .contains(&project_id)
+    {
+        return Err(AppError::NotFound("page"));
+    }
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    let limit = files::upload_limit(&mut connection, project_id).await?;
+    Ok((destination, limit))
 }
 
 /// Where an upload to a task goes, and the most it may be, once the caller

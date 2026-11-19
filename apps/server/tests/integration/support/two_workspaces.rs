@@ -70,7 +70,9 @@ pub(crate) struct World {
     /// A comment thread on `page` (AWD-53), and two edits the agent
     /// suggested to it (it asks to suggest: its role edits), pending.
     pub(crate) page_thread: Uuid,
-    pub(crate) page_suggestions: [Uuid; 2],
+    pub(crate) page_suggestions: [Uuid; 3],
+    /// A change to a page of the owner's that nothing else touches.
+    pub(crate) page_change: Uuid,
     pub(crate) repository: Uuid,
     pub(crate) pull_request: Uuid,
     pub(crate) pull_request_url: String,
@@ -924,7 +926,7 @@ async fn build_workspace(
         succeeded(&structured(&claimed)["outcome"]),
         "{label} claim: {claimed}"
     );
-    let mut page_suggestions = [Uuid::nil(); 2];
+    let mut page_suggestions = [Uuid::nil(); 3];
     for (index, slot) in page_suggestions.iter_mut().enumerate() {
         let (_, suggested) = call_tool(
             app,
@@ -942,6 +944,27 @@ async fn build_workspace(
         *slot = Uuid::parse_str(&string_at(&suggested, "/value/suggestion/suggestionId"))
             .expect("suggestion id");
     }
+    // A page only the owner's app edits, so its one change can be undone
+    // whatever the other cases do to the launch page (C1.9).
+    let undo_page = call(
+        "page_write",
+        json!({"projectId": project, "title": format!("Undo notes{m}"), "body": "One"}),
+    )
+    .await;
+    let undo_page = string_at(&undo_page, "/value/id");
+    call(
+        "page_edit",
+        json!({"pageId": undo_page, "edits": [{"op": "append", "markdown": format!("Two{m}")}]}),
+    )
+    .await;
+    let page_change = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM document_change_sets WHERE thing_id = $1::uuid \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&undo_page)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the edit made a change set");
 
     let (status, invitation) = send(
         app,
@@ -1862,6 +1885,7 @@ async fn build_workspace(
         page,
         page_thread,
         page_suggestions,
+        page_change,
         repository,
         pull_request,
         pull_request_url,

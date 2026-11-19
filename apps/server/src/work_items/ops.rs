@@ -856,6 +856,54 @@ impl Operation for TaskTriage {
         for task in &tasks {
             call.audit_target("task", task.task_id, json!({ "action": input.action }));
         }
+        // A decline's reason is a comment on each task, posted through the
+        // send pipeline once the decision commits.
+        if let (super::triage::TriageAction::Decline, Some(reason)) = (
+            input.action,
+            input
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty()),
+        ) {
+            for task in &tasks {
+                let actor: crate::conversations::MessageCommandActor = call.ctx.into();
+                let creator = crate::discussion::ops::creator(call.ctx);
+                let task_id = task.task_id;
+                let text = reason.to_owned();
+                let key = format!(
+                    "triage-decline-{}-{}",
+                    task_id.simple(),
+                    call.ctx.request_id.as_deref().map_or_else(
+                        || uuid::Uuid::now_v7().simple().to_string(),
+                        ToOwned::to_owned,
+                    )
+                );
+                call.after_commit(Box::new(move |state| {
+                    Box::pin(async move {
+                        let Ok(key) = crate::idempotency::IdempotencyKey::parse(&key) else {
+                            return;
+                        };
+                        if let Err(error) = crate::discussion::post(
+                            &state,
+                            actor,
+                            creator,
+                            crate::discussion::SubjectKind::Task,
+                            task_id,
+                            crate::discussion::CommentPlace::Stream,
+                            key,
+                            crate::discussion::CommentBody::Text(text),
+                            &[],
+                            None,
+                        )
+                        .await
+                        {
+                            tracing::warn!(?error, %task_id, "a declined task's reason wasn't posted");
+                        }
+                    })
+                }));
+            }
+        }
         Ok(TaskTriageOutput { tasks })
     }
 }

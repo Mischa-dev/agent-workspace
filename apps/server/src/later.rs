@@ -1006,7 +1006,6 @@ async fn notify(
         conversation_id: row.conversation_id,
         message_id: row.message_id,
         work_item_id: row.work_item_id,
-        comment_id: None,
         agent_run_id: None,
         pull_request_id: None,
         detail: serde_json::json!({

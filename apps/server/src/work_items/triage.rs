@@ -260,19 +260,17 @@ pub async fn triage(
     if task_ids.is_empty() || task_ids.len() > MAX_TASKS {
         return refused("taskIds", format!("Name 1 to {MAX_TASKS} tasks."));
     }
-    let reason = match request
+    // The reason itself is posted by the caller once the decision commits
+    // (a comment goes through the send pipeline).
+    if request
         .reason
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
+        .is_some_and(|text| text.trim().chars().count() > MAX_REASON_CHARACTERS)
     {
-        Some(text) if text.chars().count() > MAX_REASON_CHARACTERS => {
-            return refused(
-                "reason",
-                format!("Keep the reason to {MAX_REASON_CHARACTERS} characters."),
-            );
-        }
-        other => other,
-    };
+        return refused(
+            "reason",
+            format!("Keep the reason to {MAX_REASON_CHARACTERS} characters."),
+        );
+    }
     let snooze = match (request.action, request.until) {
         (TriageAction::Snooze, None) => {
             return refused(
@@ -359,9 +357,6 @@ pub async fn triage(
                 Ok(()) => {}
                 Err(refusal) => return Ok(Err(refusal)),
             }
-            if let (TriageAction::Decline, Some(reason)) = (request.action, reason) {
-                comment(transaction, actor, task_id, reason).await?;
-            }
         }
         work_item_commands::mark_triaged(transaction, actor, task_id, snooze).await?;
         crate::events::emit(
@@ -429,37 +424,6 @@ async fn move_to(
         ),
         _ => Err(AppError::Internal("triage move")),
     }
-}
-
-/// Posts `text` on the task as the actor's comment.
-async fn comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
-    task_id: Uuid,
-    text: &str,
-) -> Result<(), AppError> {
-    let content = crate::message_content::MessageContent::from_plain_text(text)
-        .map_err(|_| AppError::Validation("reason"))?
-        .into_parts()
-        .0;
-    let version = sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
-        .bind(task_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    work_item_commands::insert_task_comment(
-        transaction,
-        actor,
-        work_item_commands::NewTaskComment {
-            work_item_id: task_id,
-            version,
-            content,
-            reply_to: None,
-            attachments: &[],
-            audit_action: "work_item.triage_comment_posted",
-        },
-    )
-    .await?;
-    Ok(())
 }
 
 async fn read_back(

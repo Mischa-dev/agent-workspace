@@ -555,6 +555,7 @@ async fn pipeline<O: Operation>(
         start_queued_runs: false,
         keyed: false,
         audited: false,
+        after_commit: Vec::new(),
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -654,6 +655,9 @@ async fn pipeline<O: Operation>(
     }
     if call.start_queued_runs {
         crate::scheduler::kick(state.clone());
+    }
+    for work in std::mem::take(&mut call.after_commit) {
+        work(state.clone()).await;
     }
     Ok(answer)
 }

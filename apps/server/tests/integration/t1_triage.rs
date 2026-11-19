@@ -158,10 +158,10 @@ async fn triage_lands_orders_rules_and_wakes_snoozes() {
     assert_eq!(declined["outcome"], "ok", "{declined}");
     assert_eq!(status_of(quiet.clone()).await.0, "canceled");
     let commented = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_comments comment \
-         JOIN work_items task ON task.id = comment.work_item_id \
+        "SELECT count(*) FROM work_item_timeline_entries entry \
+         JOIN work_items task ON task.id = entry.work_item_id \
          JOIN projects project ON project.id = task.project_id \
-         WHERE project.project_key || '-' || task.number = $1",
+         WHERE entry.kind = 'comment' AND project.project_key || '-' || task.number = $1",
     )
     .bind(&quiet)
     .fetch_one(pool)

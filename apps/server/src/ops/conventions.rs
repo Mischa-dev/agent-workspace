@@ -28,6 +28,10 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "forward",
             "report",
             "install",
+            // A page made from other things (messages, a thread, blocks).
+            "make",
+            // A change kept for someone who edits the thing to decide (C1.11).
+            "propose",
         ],
     ),
     (
@@ -40,6 +44,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "update_elements",
             "archive",
             "restore",
+            "undo",
             "delete",
             "move",
             "reorder",

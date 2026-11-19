@@ -194,10 +194,30 @@ const KINDS: &[(&str, &str)] = &[
          WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
     ),
     (
+        "change_set",
+        "SELECT change.workspace_id, change.space_id FROM document_change_sets change \
+         WHERE change.id = $1 \
+           AND subject_visible_to(change.thing_kind, change.thing_id, $2)",
+    ),
+    (
+        "proposal",
+        "SELECT proposal.workspace_id, proposal.space_id FROM proposals proposal \
+         WHERE proposal.id = $1 \
+           AND subject_visible_to(proposal.thing_kind, proposal.thing_id, $2)",
+    ),
+    (
         "sheet",
         "SELECT project.organization_id, project.id FROM sheets sheet \
          JOIN projects project ON project.id = sheet.project_id \
          WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
+    ),
+    // C1.16: a sheet's view, for whoever sees the sheet and, for a
+    // personal one, only its owner.
+    (
+        "sheet_view",
+        "SELECT view.workspace_id, view.space_id FROM sheet_views view \
+         WHERE view.id = $1 AND subject_visible_to('sheet', view.sheet_id, $2) \
+           AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
     ),
     (
         "record_template",
@@ -392,6 +412,8 @@ fn what_of(kind: &str) -> &'static str {
         "milestone" => "That milestone",
         "run" => "That run",
         "page" => "That page",
+        "proposal" => "That proposal",
+        "change_set" => "That change",
         "sheet" => "That sheet",
         "record" => "That record",
         "form" => "That form",

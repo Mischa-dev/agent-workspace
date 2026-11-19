@@ -401,3 +401,42 @@
   align-items: flex-start;
   gap: var(--space-2);
 }
+
+/* The start of a text or code file, under its card (C1.33). */
+.aw-file:has(.aw-file__preview) {
+  flex-wrap: wrap;
+}
+
+.aw-file__preview {
+  flex-basis: 100%;
+  max-height: 9em;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A file shown in a page (C1.33): a picture at its own size, never wider than the page. */
+.aw-file-embed {
+  margin: 0;
+}
+
+.aw-file-embed img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+
+.aw-file-embed figcaption {
+  margin-top: var(--space-1);
+  color: var(--content-fg-muted);
+  font-size: 0.875em;
+}

@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::sheets::http::router);
+        module.operations(crate::sheets::ops::register_ops);
         module.export(ExportPart {
             name: "sheets",
             describe: "Sheets as workbooks.",

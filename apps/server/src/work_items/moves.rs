@@ -54,6 +54,7 @@ fn mover(
         source: browser_actor(headers, principal, source_project_id)?,
         target: browser_actor(headers, principal, target_project_id)?,
         surface: Surface::Web,
+        poster: Some(super::comments::browser_poster(principal, headers)?),
     })
 }
 

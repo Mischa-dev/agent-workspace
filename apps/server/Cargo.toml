@@ -21,6 +21,7 @@ chrono = "0.4.45"
 crc32fast = "1.5.2"
 dotenvy = "0.15.7"
 flate2 = "1.1.10"
+fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs"] }
 fs2 = "0.4.3"
 futures-util = "0.3.33"
 hex = "0.4.3"
