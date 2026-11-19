@@ -481,21 +481,49 @@ async fn a_connected_module_holds_what_was_approved_until_it_is_revoked() {
     let listing = as_app(&world, &secret, "connected_module_list", json!({})).await;
     assert_eq!(listing.0, StatusCode::OK, "{listing:?}");
 
-    // Dropping a scope from the manifest takes it away at once.
+    // Dropping a scope from the manifest takes it away at once, when the
+    // daily re-read finds it: no one has to ask.
     app.lock().expect("app").manifest = builds(
         &origin,
         json!([{"scope": "members.view", "why": "To show who started a build.", "required": true}]),
     );
-    let narrowed = tool(
+    sqlx::query(
+        "UPDATE module_apps SET manifest_fetched_at = now() - interval '2 days' \
+         WHERE module_id = $1::uuid",
+    )
+    .bind(module.as_str())
+    .execute(&pool)
+    .await
+    .expect("an old read");
+    jobs::enqueue(&pool, jobs::NewJob::new("connected_module.refetch_sweep"))
+        .await
+        .expect("sweep");
+    pump(&world).await;
+    let scopes: Vec<String> =
+        sqlx::query_scalar("SELECT scopes_approved FROM module_apps WHERE module_id = $1::uuid")
+            .bind(module.as_str())
+            .fetch_one(&pool)
+            .await
+            .expect("scopes");
+    assert_eq!(scopes, ["members.view"]);
+    let listing = as_app(&world, &secret, "connected_module_list", json!({})).await;
+    assert!(refused(&listing), "{listing:?}");
+    let announced: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM events WHERE type = 'module.connected' AND thing_id = $1::uuid",
+    )
+    .bind(module.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("events");
+    assert!(announced > 0, "the workspace hears of it");
+    let again = tool(
         &world,
         "desk",
         "connected_module_refresh",
         json!({"moduleId": module}),
     )
     .await;
-    assert_eq!(narrowed["value"]["refreshed"], "applied", "{narrowed}");
-    let listing = as_app(&world, &secret, "connected_module_list", json!({})).await;
-    assert!(refused(&listing), "{listing:?}");
+    assert_eq!(again["value"]["refreshed"], "unchanged", "{again}");
 
     // Revoked: the next call is refused, the module is off, and the code
     // and secrets are gone.

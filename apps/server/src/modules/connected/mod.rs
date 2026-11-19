@@ -750,6 +750,7 @@ pub(crate) async fn install(
     .map_err(AppError::from)?;
     things::register_kinds(transaction, workspace_id, module_id, manifest).await?;
     send_code_later(transaction, workspace_id, module_id).await?;
+    announce(transaction, workspace_id, module_id).await?;
     Ok(module_id)
 }
 
@@ -850,9 +851,11 @@ pub(crate) async fn refresh(
         .execute(&mut **transaction)
         .await
         .map_err(AppError::from)?;
+        announce(transaction, row.workspace_id, row.module_id).await?;
         return Ok(Refreshed::Pending);
     }
     apply_manifest(transaction, row, fetched).await?;
+    announce(transaction, row.workspace_id, row.module_id).await?;
     Ok(Refreshed::Applied)
 }
 
@@ -1000,6 +1003,7 @@ pub(crate) async fn approve(
     .execute(&mut **transaction)
     .await
     .map_err(AppError::from)?;
+    announce(transaction, row.workspace_id, row.module_id).await?;
     Ok(())
 }
 
@@ -1074,6 +1078,118 @@ pub(crate) async fn revoke(
     .await
     .map_err(AppError::from)?;
     crate::modules::gate::forget_everywhere(transaction, row.workspace_id).await?;
+    announce(transaction, row.workspace_id, row.module_id).await?;
+    Ok(())
+}
+
+/// Tells the workspace's other tabs, agents and webhooks that a connected
+/// module changed (installed, re-read, approved or revoked); they read it
+/// again with their own access.
+async fn announce(
+    transaction: &mut Transaction<'static, Postgres>,
+    workspace_id: Uuid,
+    module_id: Uuid,
+) -> Result<(), AppError> {
+    let mut event = crate::events::NewEvent::thing(
+        &crate::events::catalog::MODULE_CONNECTED,
+        workspace_id,
+        "module",
+        module_id,
+    )
+    .audience(crate::events::Audience::Workspace);
+    event.space_id = None;
+    crate::events::emit(transaction, event.workspace(workspace_id)).await?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------ re-reading manifests
+
+/// Looks for connected modules whose manifest wasn't read in a day, and
+/// queues a re-read of each.
+pub const REFETCH_SWEEP_KIND: &str = "connected_module.refetch_sweep";
+/// Re-reads one connected module's manifest, as `connected_module_refresh`
+/// does: a narrower one applies, a wider one waits for approval.
+pub const REFETCH_KIND: &str = "connected_module.refetch";
+const REFETCH_EVERY: Duration = Duration::from_secs(60 * 60);
+const REFETCH_AFTER_HOURS: i32 = 24;
+const REFETCH_BATCH: i64 = 50;
+
+/// Queues the due re-reads (the oldest first, a batch an hour).
+pub(crate) async fn queue_due_refetches(state: &AppState) -> Result<usize, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let due = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT module_id, workspace_id FROM module_apps \
+         WHERE revoked_at IS NULL \
+           AND manifest_fetched_at < now() - make_interval(hours => $1) \
+         ORDER BY manifest_fetched_at LIMIT $2",
+    )
+    .bind(REFETCH_AFTER_HOURS)
+    .bind(REFETCH_BATCH)
+    .fetch_all(&mut *transaction)
+    .await?;
+    for (module_id, workspace_id) in &due {
+        crate::jobs::enqueue(
+            &mut *transaction,
+            NewJob::new(REFETCH_KIND)
+                .payload(json!({ "moduleId": module_id }))
+                .workspace(*workspace_id)
+                .unique(format!("{REFETCH_KIND}:{module_id}"))
+                .max_attempts(3),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(due.len())
+}
+
+/// Re-reads one module's manifest. The fetch happens outside any
+/// transaction; a module that can't be reached keeps what it has and is
+/// tried again the next day.
+async fn refetch(state: &AppState, workspace_id: Uuid, module_id: Uuid) -> Result<(), JobError> {
+    let Some(address) = crate::db::scoped_one(&state.pool, async |connection| {
+        get(connection, workspace_id, module_id, false).await
+    })
+    .await?
+    .filter(|row| row.revoked_at.is_none())
+    .map(|row| row.manifest_url) else {
+        return Ok(());
+    };
+    let fetched = match fetch(state, &address).await {
+        Ok(fetched) => fetched,
+        Err(error) => {
+            tracing::warn!(
+                module_id = %module_id,
+                outcome = error.outcome(),
+                "connected module manifest re-read failed"
+            );
+            sqlx::query("UPDATE module_apps SET manifest_fetched_at = now() WHERE module_id = $1")
+                .bind(module_id)
+                .execute(crate::db::scoped(&state.pool))
+                .await?;
+            return Ok(());
+        }
+    };
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let Some(row) = get(&mut transaction, workspace_id, module_id, true).await? else {
+        return Ok(());
+    };
+    if row.revoked_at.is_some() {
+        return Ok(());
+    }
+    // Scopes it no longer asks for are dropped in the name of whoever
+    // approved it last.
+    let approver = row.approved_by_actor_id;
+    match refresh(&mut transaction, &row, &fetched, approver).await {
+        Ok(_) => {}
+        // A manifest that now names another module is left for a person
+        // to look at (connected_module_refresh says why).
+        Err(OpError::Invalid { .. }) => {
+            transaction.rollback().await?;
+            return Ok(());
+        }
+        Err(error) => return Err(JobError::retry(error.outcome())),
+    }
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -1203,6 +1319,29 @@ pub fn register_jobs(registry: &mut JobRegistry) {
                 // It may not hold its signing secret yet: ask again later.
                 None => Err(JobError::retry("the file source didn't answer")),
             }
+        },
+    );
+    registry.register(REFETCH_SWEEP_KIND, |context: JobContext| async move {
+        queue_due_refetches(&context.state).await?;
+        Ok(())
+    });
+    registry.every(REFETCH_SWEEP_KIND, REFETCH_EVERY);
+    registry.register_with_timeout(
+        REFETCH_KIND,
+        Duration::from_secs(60),
+        |context: JobContext| async move {
+            let module_id = context
+                .job
+                .payload
+                .get("moduleId")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<Uuid>().ok())
+                .ok_or_else(|| JobError::permanent("payload"))?;
+            let workspace_id = context
+                .job
+                .organization_id
+                .ok_or_else(|| JobError::permanent("workspace"))?;
+            refetch(&context.state, workspace_id, module_id).await
         },
     );
 }

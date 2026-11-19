@@ -678,6 +678,12 @@ pub static MODULE_PANEL_PRESSED: EventType = fact(
     None,
     "Someone pressed a button or sent a form in a connected module's panel",
 );
+pub static MODULE_CONNECTED: EventType = signal(
+    "module.connected",
+    "workspace",
+    None,
+    "A connected module was installed, re-read, approved or revoked",
+);
 pub static MODULE_EVENT: EventType = fact(
     "module.event",
     "workspace",
@@ -847,6 +853,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONNECTED_THING_CHANGED,
         &MODULE_OPERATION_RAN,
         &MODULE_PANEL_PRESSED,
+        &MODULE_CONNECTED,
         &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,

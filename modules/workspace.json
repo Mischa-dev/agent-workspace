@@ -172,7 +172,7 @@
       "theme.changed", "workspace_themes.changed", "saved_searches.changed", "setting.changed", "role.changed", "workspace.member_changed", "workspace.lifecycle_changed", "space.created", "space.updated", "space.archived",
       "space.restored", "space.member.changed", "group.changed",
       "connected_thing.changed", "module.operation_ran", "module.panel_pressed",
-      "module.event"],
+      "module.connected", "module.event"],
     "listens": []
   },
   "notifications": ["thing_update"],
