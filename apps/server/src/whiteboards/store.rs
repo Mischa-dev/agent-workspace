@@ -1083,6 +1083,14 @@ pub async fn copy_files(
     to: Uuid,
     actor: Uuid,
 ) -> Result<(), AppError> {
+    // Images still in the old table are held first: this waits out a move
+    // of one of them in flight (whose row is then in `files`, which the
+    // next statement sees), and the move job skips the ones held until
+    // this commits, so each image is copied from exactly one store.
+    sqlx::query("SELECT 1 FROM whiteboard_files WHERE whiteboard_id = $1 FOR SHARE")
+        .bind(from)
+        .execute(&mut **transaction)
+        .await?;
     sqlx::query(
         r#"
         INSERT INTO files (
