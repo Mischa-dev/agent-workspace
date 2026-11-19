@@ -35,6 +35,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "make",
             // A change kept for someone who edits the thing to decide (C1.11).
             "propose",
+            // A template made from what's there, such as a workspace (K2.17).
+            "save",
         ],
     ),
     (
@@ -79,6 +81,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "test",
             "press",
             "remove",
+            // A template's modules, layout and roles put in place (K2.17).
+            "apply",
             // You go into or out of something, such as a channel (C2.7).
             "join",
             "leave",

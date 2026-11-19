@@ -884,7 +884,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "agent_limit_set",
+        "app_limit_set",
         json!({"permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
@@ -893,7 +893,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "agent_limit_set",
+        "app_limit_set",
         json!({"lift": true}),
     )
     .await;

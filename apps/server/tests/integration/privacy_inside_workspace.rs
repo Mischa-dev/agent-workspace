@@ -3132,7 +3132,7 @@ async fn roles_and_caps_change_only_for_those_the_rules_allow() {
     )
     .await;
     refused(
-        "agent_limit_set",
+        "app_limit_set",
         "l-6",
         json!({"account": milo, "permissions": ["tasks.view"]}),
     )
@@ -3144,7 +3144,7 @@ async fn roles_and_caps_change_only_for_those_the_rules_allow() {
         &world.app,
         lena.request(
             "POST",
-            &op("agent_limit_set"),
+            &op("app_limit_set"),
             Some("l-8"),
             json!({"permissions": ["tasks.view"]}),
         ),

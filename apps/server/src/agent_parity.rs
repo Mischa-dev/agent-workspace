@@ -40,26 +40,26 @@ mod tests {
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
-        (Put, "/api/v1/settings/values/{key}", Tool("settings_set")),
+        (Put, "/api/v1/settings/values/{key}", Tool("setting_update")),
         (
             Post,
             "/api/v1/settings/values/{key}/reset",
-            Tool("settings_set"),
+            Tool("setting_update"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/layout",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/layout/rules",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/layout",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
@@ -74,17 +74,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/layout/presets",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_update"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_update"),
         ),
         (
             Post,
@@ -245,7 +245,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Tool("agent_limit_set"),
+            Tool("app_limit_set"),
         ),
         (
             Post,
@@ -270,12 +270,12 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/invitations",
-            Tool("invitation_write"),
+            Tool("invitation_create"),
         ),
         (
             Post,
             "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
@@ -594,13 +594,13 @@ mod tests {
             Tool("thread_start"),
         ),
         (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
-        (Post, "/api/v1/projects/{id}/pages", Tool("page_write")),
+        (Post, "/api/v1/projects/{id}/pages", Tool("page_create")),
         (
             Post,
             "/api/v1/projects/{id}/pages/import",
-            Person("a file from the person's own computer; agents write the page with page_write"),
+            Person("a file from the person's own computer; agents write the page with page_create"),
         ),
-        (Patch, "/api/v1/pages/{id}", Tool("page_write")),
+        (Patch, "/api/v1/pages/{id}", Tool("page_update")),
         (
             Post,
             "/api/v1/pages/{id}/document/sync",
@@ -609,9 +609,13 @@ mod tests {
         (
             Post,
             "/api/v1/pages/{id}/document/updates",
-            Tool("page_edit"),
+            Tool("page_update_blocks"),
         ),
-        (Post, "/api/v1/pages/{id}/comments", Tool("page_comment")),
+        (
+            Post,
+            "/api/v1/pages/{id}/comments",
+            Tool("page_comment_create"),
+        ),
         (
             Patch,
             "/api/v1/pages/{id}/comments/{comment_id}",
@@ -926,17 +930,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/invitations",
-            Tool("invitation_write"),
+            Tool("invitation_create"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/replace",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
@@ -1412,12 +1416,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/save-as-template",
-            Tool("project_template_write"),
+            Tool("project_template_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            Tool("project_template_write"),
+            Tool("project_template_update"),
         ),
         (
             Post,

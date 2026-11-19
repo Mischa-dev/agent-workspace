@@ -283,7 +283,7 @@ pub(crate) async fn search_tool(
 // ---------------------------------------------------------------------------
 // Pages
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageListArguments {
     /// The project, or "workspace" for the workspace's own pages.
@@ -366,7 +366,7 @@ pub(crate) async fn page_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageGetArguments {
     pub page_id: String,
@@ -911,7 +911,7 @@ async fn suggest_text(
 /// How much of a block page_blocks shows without includeMarkdown.
 const BLOCK_PREVIEW_CHARACTERS: usize = 120;
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageBlocksArguments {
     pub page_id: String,
@@ -1332,7 +1332,7 @@ fn missing_block<T>(message: String, reference: &str) -> ToolResult<T> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageEditArguments {
     pub page_id: String,
@@ -1355,7 +1355,7 @@ pub(crate) struct PageEditArguments {
     pub thread_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageEditInput {
     /// replace, insertBefore, insertAfter, delete, or append (to the end of
@@ -1613,7 +1613,7 @@ pub(crate) async fn page_edit(
 // folders. skill_get also returns the skill as a SKILL.md, so an agent can
 // keep a copy where its own harness looks for skills.
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SkillListArguments {
     pub project_id: String,
@@ -1685,7 +1685,7 @@ pub(crate) async fn skill_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "skill_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SkillGetArguments {
     // Read by the MCP middleware, which scopes the call to this project.

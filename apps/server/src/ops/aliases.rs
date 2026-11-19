@@ -134,6 +134,15 @@ macro_rules! written {
     };
 }
 
+/// The old workspace tools named a project as `projectId`; the operations
+/// take the space as `spaceId`.
+fn project_as_space(mut arguments: JsonObject) -> JsonObject {
+    if let Some(project) = arguments.remove("projectId") {
+        arguments.insert("spaceId".to_owned(), project);
+    }
+    arguments
+}
+
 /// `task_link_pull_request` took `expectedVersion`, `pullRequestId` and a
 /// `projectId`; `task_link` finds the space from the task.
 fn link_pull_request_in(arguments: JsonObject) -> JsonObject {
@@ -313,7 +322,12 @@ pub const ALIASES: &[Alias] = &[
     renamed!("conversation_open" => "conversation_get"),
     renamed!("thing_open" => "thing_get"),
     written!("page_write", "pageId" => "page_create", "page_update"),
-    renamed!("page_edit" => "page_update_blocks"),
+    // K2.10: the page tools answered in the envelope.
+    run_renamed!("page_edit" => "page_update_blocks"),
+    run_renamed!("page_blocks" => "page_blocks_get"),
+    run_renamed!("page_comments" => "page_comment_list"),
+    run_renamed!("page_comment" => "page_comment_create"),
+    run_renamed!("page_suggestions" => "page_suggestion_list"),
     written!("sheet_write", "sheetId" => "sheet_create", "sheet_update"),
     written!("collection_write", "collectionId" => "collection_create", "collection_update"),
     written!("view_write", "view" => "view_create", "view_update"),
@@ -431,9 +445,29 @@ pub const ALIASES: &[Alias] = &[
     // operations' refusals carry a message too.
     run_renamed!("reply_progress" => "reply_progress_report"),
     run_renamed!("briefing" => "briefing_get"),
-    renamed!("settings_set" => "setting_update"),
+    // K2.17: the settings tools named the project as projectId.
+    Alias {
+        name: "settings_get",
+        canonical: |_| "setting_list",
+        runs: &["setting_list"],
+        adapt_in: project_as_space,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    Alias {
+        name: "settings_set",
+        canonical: |_| "setting_update",
+        runs: &["setting_update"],
+        adapt_in: project_as_space,
+        adapt_out: enveloped,
+        sunset: None,
+    },
     renamed!("project_member_set" => "member_update"),
-    renamed!("project_layout_set" => "layout_update"),
+    // K2.17: the layout tool answered in the envelope.
+    run_renamed!("project_layout_set" => "layout_update"),
+    written!("invitation_write", "invitation" => "invitation_create", "invitation_update"),
+    written!("project_template_write", "template" => "project_template_create", "project_template_update"),
+    written!("layout_preset_write", "preset" => "layout_preset_create", "layout_preset_update"),
     renamed!("ai_summarize" => "conversation_summarize"),
     renamed!("ai_analyze" => "thing_analyze"),
     run_renamed!("run_open" => "run_create"),

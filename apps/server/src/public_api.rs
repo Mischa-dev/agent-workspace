@@ -172,7 +172,7 @@ fn outcome_status(outcome: &str) -> Option<StatusCode> {
 
 /// Groups operations by the noun their tool starts with.
 pub(crate) fn tag_for(tool: &str) -> &'static str {
-    if matches!(tool, "permissions_get" | "agent_limit_set") {
+    if matches!(tool, "permissions_get" | "app_limit_set") {
         return "Roles and access";
     }
     let noun = tool.split('_').next().unwrap_or(tool);

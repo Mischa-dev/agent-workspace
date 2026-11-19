@@ -245,7 +245,7 @@ export const assignRole = async (
 
 export const setAgentLimit = async (organizationId: string, actorId: string, permissions: PermissionKey[] | null) => {
   const set = await callOp(
-    'agent_limit_set',
+    'app_limit_set',
     permissions === null ? { account: actorId, lift: true } : { account: actorId, permissions },
     inWorkspace(organizationId),
   )

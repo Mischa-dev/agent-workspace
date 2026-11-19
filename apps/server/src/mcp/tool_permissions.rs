@@ -16,29 +16,15 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodePublish, CollectionsBuild, CollectionsEdit,
-    MembersInvite, MembersView, PagesComment, PagesSuggest, RunsInterrupt, RunsLaunch,
-    SettingsManage, SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    MembersView, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksEdit,
+    TasksView, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
-    ("workflow_get", Some(TasksView)),
-    ("settings_get", None),
-    ("settings_set", None),
-    ("module_list", None),
-    ("workspace_update", Some(SettingsManage)),
     ("usage_windows", None),
     ("usage_batch", None),
     ("usage_batch_launch", Some(RunsLaunch)),
     ("project_members", Some(MembersView)),
-    ("invitation_list", Some(MembersInvite)),
-    ("invitation_write", Some(MembersInvite)),
-    ("workspace_template_list", None),
-    ("workspace_template_apply", Some(SettingsManage)),
-    ("workspace_template_save", Some(SettingsManage)),
-    ("project_template_list", None),
-    ("project_template_write", None),
-    ("project_layout_set", Some(SettingsManage)),
-    ("layout_preset_write", Some(SettingsManage)),
     ("conversation_list", None),
     ("conversation_open", None),
     ("conversation_read", None),
@@ -71,18 +57,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("sheet_read", None),
     ("sheet_write", Some(SheetsEdit)),
     ("thing_open", None),
-    ("page_list", None),
-    ("page_get", None),
-    ("page_blocks", None),
-    ("skill_list", None),
-    ("skill_get", None),
-    ("page_write", Some(PagesSuggest)),
-    ("page_edit", Some(PagesSuggest)),
-    ("page_comments", None),
-    ("page_suggestions", None),
-    ("page_comment", Some(PagesComment)),
-    ("page_comment_update", Some(PagesComment)),
-    ("page_suggestion_decide", Some(PagesSuggest)),
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
@@ -93,7 +67,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("ai_suggestion_decide", Some(TasksEdit)),
     ("ai_analyze", Some(TasksEdit)),
     ("ai_summarize", Some(TasksView)),
-    ("workflow_update", Some(TasksWorkflow)),
     ("run_start", Some(RunsLaunch)),
     ("task_launch", Some(RunsLaunch)),
     ("run_get", None),
@@ -188,7 +161,7 @@ mod tests {
     #[test]
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
-        for tool in ["workflow_get", "project_export"] {
+        for tool in ["project_export"] {
             let need = super::needs(tool).expect("listed");
             assert!(need.is_none_or(|need| viewer.contains(need)), "{tool}");
         }

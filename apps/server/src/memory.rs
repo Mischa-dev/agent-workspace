@@ -31,6 +31,7 @@ use crate::{
 
 pub mod make;
 pub mod ops;
+pub mod page_ops;
 pub mod templates;
 
 pub const MAX_PAGE_TITLE: usize = 200;

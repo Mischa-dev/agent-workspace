@@ -1,4 +1,5 @@
 import { requestJson } from '../../api/client'
+import { callOp } from '../../api/ops'
 
 // Usage windows, capacity alerts and banked resets (U1, U3, U6), and where
 // notifications reach you (N3, N4). Accounts belong to one person: everything
@@ -275,10 +276,7 @@ export const setMute = (projectId: string, group: NotificationGroup | 'all', mut
 
 /** Quiet hours, time zone and digest are personal settings in the settings registry. */
 export const setPersonalSetting = (organizationId: string, key: string, value: unknown) =>
-  requestJson<unknown>(`/api/v1/settings/values/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    json: { scope: 'user', organizationId, value },
-  })
+  callOp('setting_update', { scope: 'user', key, value }, { workspaceId: organizationId })
 
 // ---------------------------------------------------------------------------
 // Push devices

@@ -1,6 +1,6 @@
 //! Roles and permissions as operations (K2.17): `role_list`, `role_get`,
 //! `role_create`, `role_update`, `role_delete`, `role_assign`,
-//! `agent_limit_set` and `permissions_get`. The Roles and Members pages,
+//! `app_limit_set` and `permissions_get`. The Roles and Members pages,
 //! agents and apps run these; each wraps the domain function in this
 //! module, which decides who may do what, and audits the change with what
 //! it was before and after.
@@ -37,7 +37,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<RoleUpdate>()
         .add::<RoleDelete>()
         .add::<RoleAssign>()
-        .add::<AgentLimitSet>()
+        .add::<AppLimitSet>()
         .add::<PermissionsGet>();
 }
 
@@ -557,10 +557,10 @@ impl Operation for RoleAssign {
 }
 
 // ---------------------------------------------------------------------------
-// agent_limit_set
+// app_limit_set (the personal agent limit)
 
 /// Cap what someone's apps may do.
-pub struct AgentLimitSet;
+pub struct AppLimitSet;
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -592,13 +592,13 @@ pub struct AgentLimitView {
     pub permissions: Option<Vec<&'static str>>,
 }
 
-impl Operation for AgentLimitSet {
-    const NAME: &'static str = "agent_limit_set";
+impl Operation for AppLimitSet {
+    const NAME: &'static str = "app_limit_set";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-    const TITLE: &'static str = "Set agent limit";
+    const TITLE: &'static str = "Set app limit";
     const DESCRIPTION: &'static str = "Cap what apps connected by a person may do, or lift the \
         cap. Your own, or anyone's if you manage members (an owner for an admin's). Through an \
         app you can only narrow the cap it runs under; lifting it takes the web.";

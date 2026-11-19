@@ -23,6 +23,8 @@
 //! keep keys grouped by their first segment). Screens are drawn from the
 //! registry, so a new key needs no web code to be editable.
 
+pub mod ops;
+
 use std::collections::BTreeMap;
 
 use axum::{
@@ -32,6 +34,7 @@ use axum::{
     routing::{get, post, put},
 };
 use chrono::{DateTime, Utc};
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
@@ -48,7 +51,9 @@ use crate::{
 // The registry
 
 /// Where a value is stored.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Workspace,
@@ -76,7 +81,7 @@ impl Scope {
 }
 
 /// Where an effective value came from.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Launch,
@@ -597,18 +602,19 @@ pub struct SettingsContext {
 }
 
 /// One stored value.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Layer {
     pub scope: Scope,
     pub value: Value,
     pub version: i64,
     pub updated_at: DateTime<Utc>,
+    #[schemars(with = "Option<String>")]
     pub updated_by_actor_id: Option<Uuid>,
 }
 
 /// A key's effective value and how it got there.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Resolved {
     pub key: &'static str,
@@ -625,10 +631,12 @@ pub struct Resolved {
 }
 
 /// Every key, resolved.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveSettings {
+    #[schemars(with = "String")]
     pub organization_id: Uuid,
+    #[schemars(with = "Option<String>")]
     pub project_id: Option<Uuid>,
     pub settings: Vec<Resolved>,
 }

@@ -533,10 +533,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "host_agent_unbind",
     "host_enrolment_create",
     "host_unlink",
-    "invitation_write",
+    "invitation_create",
+    "invitation_update",
     "invite_link_create",
     "invite_link_revoke",
-    "layout_preset_write",
+    "layout_preset_create",
+    "layout_preset_update",
     "label_create",
     "label_update",
     "field_create",
@@ -609,15 +611,16 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "directory_source_create",
     "directory_source_remove",
     "workspace_shape_set",
-    "page_comment",
+    "page_comment_create",
     "page_comment_update",
-    "page_edit",
+    "page_create",
     "page_suggestion_decide",
-    "page_write",
+    "page_update",
+    "page_update_blocks",
     "person_create",
     "pin_set",
     "plan_import",
-    "project_layout_set",
+    "layout_update",
     "pull_request_create",
     "pull_request_merge",
     "pull_request_refresh",
@@ -635,7 +638,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "role_create",
     "role_update",
     "role_delete",
-    "agent_limit_set",
+    "app_limit_set",
     "run_activity_report",
     "run_cancel",
     "run_dismiss_failure",
@@ -651,7 +654,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "run_usage_report",
     "scheduled_message_update",
     "session_bind",
-    "settings_set",
+    "setting_update",
     "space_archive",
     "space_create",
     "space_join",
@@ -714,7 +717,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workflow_update",
     "workspace_template_apply",
     "workspace_template_save",
-    "project_template_write",
+    "project_template_create",
+    "project_template_update",
     "workspace_update",
     "workspace_delete",
     "workspace_delete_cancel",
@@ -6276,7 +6280,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"accountId": a.provider_account, "taskIds": [b.task], "clientRequestId": "net-batch-mixed"})]),
         mcp_case(
-            "project_layout_set",
+            "layout_update",
             json!({"projectId": a.project, "preset": "Software team"}),
             vec![json!({"projectId": b.project, "preset": "Software team"})],
         )
@@ -6287,14 +6291,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "workspace": true, "preset": bx.layout_preset}),
         ]),
         mcp_case(
-            "layout_preset_write",
+            "layout_preset_create",
             json!({"projectId": a.project, "name": "Net own", "base": "Software team"}),
             vec![json!({"projectId": b.project, "name": "Net b", "base": "Software team"})],
         )
+        .rejecting(vec![json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset})]),
+        mcp_case(
+            "layout_preset_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "preset": bx.layout_preset, "name": "Mine now"})],
+        )
+        .without_own("layouts.rs changes and removes a workspace's own preset")
         .rejecting(vec![
             json!({"projectId": a.project, "preset": bx.layout_preset, "name": "Mine now"}),
             json!({"projectId": a.project, "preset": bx.layout_preset, "remove": true}),
-            json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset}),
         ]),
         mcp_case("space_join", json!({}), vec![json!({"spaceId": b.project})])
             .without_own("joining needs an open space A's app isn't in; space_ops.rs covers it"),
@@ -6696,24 +6706,32 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
-            "settings_set",
-            json!({"projectId": a.project, "key": "run.model", "value": "net-model"}),
+            "setting_update",
+            json!({"spaceId": a.project, "key": "run.model", "value": "net-model"}),
             vec![
-                json!({"projectId": b.project, "key": "run.model", "value": "net-model"}),
-                json!({"projectId": b.project, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+                json!({"spaceId": b.project, "key": "run.model", "value": "net-model"}),
+                json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "value": "net-model"}),
             ],
         ),
         mcp_case(
-            "invitation_write",
+            "invitation_create",
             json!({"projectId": a.project, "role": "viewer", "expiresInHours": 24}),
             vec![json!({"projectId": b.project, "role": "viewer"})],
         )
         .rejecting(vec![
+            json!({"projectId": a.project, "role": bx.custom_role}),
+            json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
+        ]),
+        mcp_case(
+            "invitation_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "invitation": bx.project_invitation, "revoke": true})],
+        )
+        .without_own("revoking A's invitation would break the cases after it; m7 invitation tests revoke and replace one")
+        .rejecting(vec![
             json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
             json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
-            json!({"projectId": a.project, "role": bx.custom_role}),
             json!({"projectId": a.project, "workspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
-            json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
         ]),
         mcp_case(
             "role_create",
@@ -6746,10 +6764,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "remove": bx.workspace_template})]),
         mcp_case(
-            "project_template_write",
+            "project_template_create",
             json!({"projectId": a.project, "name": "Net mcp setup"}),
             vec![json!({"projectId": b.project, "name": "Net mcp setup b"})],
+        ),
+        mcp_case(
+            "project_template_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "template": bx.project_template, "name": "Net"})],
         )
+        .without_own("awd91_agent_parity.rs renames and archives a template")
         .rejecting(vec![
             json!({"projectId": a.project, "template": bx.project_template, "name": "Net"}),
         ]),
@@ -6763,7 +6787,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"account": "@wren", "role": bx.custom_role}),
         ]),
         mcp_case(
-            "agent_limit_set",
+            "app_limit_set",
             json!({"account": "@wren", "permissions": ["tasks.view"]}),
             vec![json!({"workspace": b.organization, "account": "@wren", "permissions": ["tasks.view"]})],
         )
@@ -7591,12 +7615,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             .last()
         },
         mcp_case(
-            "page_edit",
+            "page_update_blocks",
             json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
             vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
         ),
         mcp_case(
-            "page_comment",
+            "page_comment_create",
             json!({"pageId": a.page, "text": "Net mcp comment"}),
             vec![
                 json!({"pageId": b.page, "text": "Net"}),
@@ -7630,12 +7654,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
         ),
         mcp_case(
-            "page_write",
+            "page_update",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),
-            vec![
-                json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)}),
-                json!({"projectId": b.project, "title": "Net page", "body": "Net"}),
-            ],
+            vec![json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)})],
+        ),
+        mcp_case(
+            "page_create",
+            json!({"projectId": a.project, "title": "Net mcp created page", "body": "Net"}),
+            vec![json!({"projectId": b.project, "title": "Net page", "body": "Net"})],
         )
         .rejecting(vec![json!({
             "projectId": a.project,

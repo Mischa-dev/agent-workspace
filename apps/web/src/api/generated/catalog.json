@@ -126,22 +126,6 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "workspace.member_changed"
-    ],
-    "idempotent": true,
-    "kind": "change",
-    "long": false,
-    "module": "workspace",
-    "name": "agent_limit_set",
-    "permission": null,
-    "preview": false,
-    "proposable": false,
-    "title": "Set agent limit"
-  },
-  {
-    "automation": true,
-    "destructive": false,
-    "emits": [
       "account.managers.changed"
     ],
     "idempotent": true,
@@ -339,6 +323,22 @@
     "preview": false,
     "proposable": false,
     "title": "List usage by agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.member_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "app_limit_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set app limit"
   },
   {
     "automation": true,
@@ -1891,6 +1891,52 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "projects",
+    "name": "invitation_create",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Invite"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "projects",
+    "name": "invitation_list",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "List invitations"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "projects",
+    "name": "invitation_update",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Revoke or replace invitation"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "invite_link.created"
     ],
     "idempotent": true,
@@ -1992,6 +2038,54 @@
     "preview": false,
     "proposable": false,
     "title": "Update label"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "projects",
+    "name": "layout_preset_create",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Save layout preset"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "workspace.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "projects",
+    "name": "layout_preset_update",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Update layout preset"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "projects",
+    "name": "layout_update",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set layout"
   },
   {
     "automation": true,
@@ -2226,6 +2320,20 @@
     "preview": false,
     "proposable": false,
     "title": "Build a module"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "module_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List modules"
   },
   {
     "automation": false,
@@ -2484,6 +2592,110 @@
     "title": "Remove a package"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "pages",
+    "name": "page_blocks_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read page blocks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.commented"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_comment_create",
+    "permission": "pages.comment",
+    "preview": false,
+    "proposable": false,
+    "title": "Comment on page"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "page_comment_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Page comments"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "page.comment_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_comment_update",
+    "permission": "pages.comment",
+    "preview": false,
+    "proposable": false,
+    "title": "Update page comment"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_create",
+    "permission": "pages.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Create page"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "pages",
+    "name": "page_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read page"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "page_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List pages"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -2500,6 +2712,36 @@
     "title": "Make a page from messages or blocks"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_suggestion_decide",
+    "permission": "pages.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Decide suggested edit"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "page_suggestion_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Suggested edits"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2512,6 +2754,38 @@
     "preview": false,
     "proposable": false,
     "title": "List page templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_update",
+    "permission": "pages.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Update page"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_update_blocks",
+    "permission": "pages.suggest",
+    "preview": false,
+    "proposable": false,
+    "title": "Edit page blocks"
   },
   {
     "automation": false,
@@ -2661,6 +2935,52 @@
     "preview": false,
     "proposable": false,
     "title": "List spaces"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "projects",
+    "name": "project_template_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save space template"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "projects",
+    "name": "project_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List space templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "projects",
+    "name": "project_template_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update space template"
   },
   {
     "automation": true,
@@ -3407,6 +3727,36 @@
     "title": "Change scheduled message"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "setting_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List settings"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "setting.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "setting_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update setting"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -3543,6 +3893,34 @@
     "preview": false,
     "proposable": false,
     "title": "Set sidebar section"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "pages",
+    "name": "skill_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Load skill"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "skill_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List skills"
   },
   {
     "automation": true,
@@ -4580,6 +4958,36 @@
     "title": "Draw on whiteboard"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "workflow_get",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Get workflow"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "space.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "workflow_update",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Update workflow"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -4661,6 +5069,52 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "workspace.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_template_apply",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Use workspace template"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List workspace templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_template_save",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Save workspace template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "theme.changed"
     ],
     "idempotent": true,
@@ -4672,5 +5126,21 @@
     "preview": false,
     "proposable": false,
     "title": "Offer theme to the workspace"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_update",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Change workspace"
   }
 ]

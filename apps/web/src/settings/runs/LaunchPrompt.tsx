@@ -47,7 +47,7 @@ export function LaunchPrompt({ target, workspaceHref }: { target: SettingsTarget
       if (value !== null) showToast({ tone: 'success', title: 'Launch prompt saved. The next launch uses it.' })
     },
     onError: async (error) => {
-      if (isApiError(error) && (error.code === 'version_conflict' || error.status === 409)) {
+      if (isApiError(error) && (error.code === 'conflict' || error.code === 'version_conflict' || error.status === 409)) {
         await queryClient.invalidateQueries({ queryKey: settingsKeys.effective(target) })
         setNotice({ tone: 'warning', text: 'Someone else changed the prompt just now. Yours is still in the box; save again to replace theirs.' })
       } else {

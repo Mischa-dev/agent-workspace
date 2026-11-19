@@ -48,6 +48,7 @@ pub mod refs;
 pub mod registry;
 pub mod target;
 pub mod web;
+pub mod wrapped;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
 pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch, may_run};
