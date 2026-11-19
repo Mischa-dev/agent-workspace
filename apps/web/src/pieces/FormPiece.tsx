@@ -14,6 +14,7 @@ export function FormPiece({
   autoFocus = false,
   describeFailure = defaultFailure,
   fields,
+  initialValues,
   label,
   labelledBy,
   onSubmit,
@@ -25,6 +26,8 @@ export function FormPiece({
   /** A failed send in words. */
   describeFailure?: (error: unknown) => string
   fields: readonly FormField[]
+  /** What the fields hold when the form opens, such as a panel's last values. */
+  initialValues?: FormValues
   /** The form's name for screen readers, unless `labelledBy` names a heading. */
   label?: string
   labelledBy?: string
@@ -35,7 +38,7 @@ export function FormPiece({
   /** The name of a field people never see (T1.29); only a script fills it in. */
   trap?: string
 }) {
-  const [values, setValues] = useState<FormValues>({})
+  const [values, setValues] = useState<FormValues>(() => initialValues ?? {})
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
