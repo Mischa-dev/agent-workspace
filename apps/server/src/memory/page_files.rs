@@ -98,6 +98,7 @@ impl Operation for PageFileUpload {
         }
         let page_id = input.page_id.id();
         let uploader = call.account_id();
+        let authorized = call.ctx.space_id;
         let tx = call.tx().await?;
         // The page's row holds it open while the file joins it.
         let found = sqlx::query_as::<_, (Uuid, bool)>(
@@ -110,6 +111,11 @@ impl Operation for PageFileUpload {
         let Some((space_id, open)) = found else {
             return Err(OpError::not_found("That page"));
         };
+        // The call was allowed in the page's space as it was resolved; a move
+        // that landed since then leaves it with no say over the page.
+        if authorized != Some(space_id) {
+            return Err(OpError::not_found("That page"));
+        }
         if !open {
             return Err(OpError::invalid(
                 "pageId",
