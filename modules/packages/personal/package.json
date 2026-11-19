@@ -1,0 +1,96 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "personal",
+  "version": "1.0.0",
+  "name": "Personal",
+  "description": "Your own life: to-dos, notes, goals and lists, with agents to help. Nothing that feels like work software.",
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": [
+          "dashboards",
+          "code",
+          "runs",
+          "automations"
+        ]
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "personal_life",
+        "changes": {},
+        "words": {}
+      }
+    },
+    {
+      "kind": "space",
+      "key": "life",
+      "body": {
+        "name": "Life",
+        "key": "LIFE"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          },
+          {
+            "name": "ideas"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "collection",
+      "key": "reading_list",
+      "body": {
+        "name": "Reading list",
+        "description": "Books and articles to read, and what you made of them.",
+        "titleName": "Title",
+        "fields": [
+          {
+            "name": "Author",
+            "type": "text"
+          },
+          {
+            "name": "Status",
+            "type": "single_choice",
+            "options": [
+              {
+                "name": "To read",
+                "color": "gray"
+              },
+              {
+                "name": "Reading",
+                "color": "blue"
+              },
+              {
+                "name": "Done",
+                "color": "green"
+              }
+            ]
+          },
+          {
+            "name": "Rating",
+            "type": "number"
+          }
+        ],
+        "views": [
+          {
+            "name": "All records",
+            "type": "table"
+          }
+        ]
+      }
+    }
+  ]
+}

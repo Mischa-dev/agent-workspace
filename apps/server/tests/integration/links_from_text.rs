@@ -115,17 +115,22 @@ async fn text_links_count_by_the_registry_and_never_cross_workspaces() {
     let b_task = links_of(&world.app, &b.browser, "task", &b.task.to_string()).await;
     assert!(!b_task.iter().any(|(_, _, id)| *id == a.page), "{b_task:?}");
 
-    // A page comment and a board's text count too, held by the page and
-    // the board.
-    sqlx::query("UPDATE project_page_comments SET body = $2 WHERE id = $1")
-        .bind(a.page_thread)
-        .bind(format!(
-            "See /projects/{}/collections/{}?record={}",
-            a.project, a.collection, a.record
-        ))
-        .execute(pool)
-        .await
-        .expect("comment");
+    // A page comment (a message in a thread under the page's comments)
+    // and a board's text count too, held by the page and the board.
+    let (status, comment) = send(
+        &world.app,
+        a.browser.request(
+            "POST",
+            &format!("/api/v1/pages/{}/comments", a.page),
+            None,
+            serde_json::json!({"body": format!(
+                "See /projects/{}/collections/{}?record={}",
+                a.project, a.collection, a.record
+            )}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{comment}");
     let record = links_of(&world.app, &a.browser, "record", &a.record.to_string()).await;
     assert!(
         record.contains(&(

@@ -28,7 +28,7 @@ pub(super) struct RunPublishArguments {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PullRequestCreateArguments {
+pub(crate) struct PullRequestCreateArguments {
     /// The finished run whose published branch to open it from
     /// (run_publish first).
     pub run_id: String,
@@ -45,14 +45,14 @@ pub(super) struct PullRequestCreateArguments {
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PullRequestRefreshArguments {
+pub(crate) struct PullRequestRefreshArguments {
     /// The pull request (pull_request_list, pull_request_get).
     pub pull_request_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PullRequestMergeArguments {
+pub(crate) struct PullRequestMergeArguments {
     /// The pull request (pull_request_list, pull_request_get, task_open).
     pub pull_request_id: String,
     /// Merge only if its head is still this commit (pull_request_get's
@@ -66,7 +66,7 @@ pub(super) struct PullRequestMergeArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MergedValue {
+pub(crate) struct MergedValue {
     pub pull_request_id: String,
     pub number: i64,
     pub method: String,
@@ -77,7 +77,7 @@ pub(super) struct MergedValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct QueuedValue {
+pub(crate) struct QueuedValue {
     /// true when this call queued it; false when it was already queued or
     /// done, and this is that one.
     pub queued: bool,
@@ -172,7 +172,7 @@ pub(super) async fn run_publish(
     outcome(result, "run_publish")
 }
 
-pub(super) async fn pull_request_create(
+pub(crate) async fn pull_request_create(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PullRequestCreateArguments,
@@ -248,7 +248,7 @@ pub(super) async fn pull_request_create(
     outcome(result, "pull_request_create")
 }
 
-pub(super) async fn pull_request_refresh(
+pub(crate) async fn pull_request_refresh(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PullRequestRefreshArguments,
@@ -302,7 +302,7 @@ pub(super) async fn pull_request_refresh(
     outcome(result, "pull_request_refresh")
 }
 
-pub(super) async fn pull_request_merge(
+pub(crate) async fn pull_request_merge(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PullRequestMergeArguments,

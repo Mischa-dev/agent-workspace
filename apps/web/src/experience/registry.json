@@ -278,6 +278,20 @@
       "default": true
     },
     {
+      "id": "channel.tabs",
+      "group": "talk",
+      "label": "Channel tabs",
+      "description": "Pages shown as tabs on a channel, beside its messages.",
+      "default": true
+    },
+    {
+      "id": "channel.details",
+      "group": "talk",
+      "label": "Channel details",
+      "description": "A panel beside a channel with its topic, members, pins, tasks and files.",
+      "default": true
+    },
+    {
       "id": "talk.sidebar_sections",
       "group": "talk",
       "label": "Sidebar sections",
@@ -397,6 +411,13 @@
       "default": true
     },
     {
+      "id": "workspace.inbox_views",
+      "group": "workspace",
+      "label": "Saved inbox views",
+      "description": "Tabs on the inbox for filters you keep.",
+      "default": true
+    },
+    {
       "id": "workspace.runs",
       "group": "workspace",
       "label": "Runs page",
@@ -456,6 +477,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -465,7 +488,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -494,6 +518,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -503,7 +529,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -548,6 +575,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "workspace.my_work"
@@ -578,6 +607,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -587,7 +618,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -620,6 +652,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -631,6 +665,7 @@
         "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage",
+        "workspace.inbox_views",
         "workspace.runs"
       ],
       "words": {
@@ -658,6 +693,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -667,7 +704,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "assignment", "many": "assignments" },
@@ -701,6 +739,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -710,7 +750,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" }
@@ -737,6 +778,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -746,7 +789,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "post", "many": "posts" },
@@ -780,6 +824,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -790,7 +836,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "ticket", "many": "tickets" }
@@ -830,6 +877,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",
@@ -858,6 +907,8 @@
         "talk.threads",
         "channel.browse",
         "talk.sidebar_sections",
+        "channel.tabs",
+        "channel.details",
         "talk.replies",
         "thing.comments",
         "page.live_editing",

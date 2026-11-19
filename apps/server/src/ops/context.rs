@@ -94,6 +94,10 @@ pub struct OpContext {
     /// Set for every write.
     pub request_id: Option<String>,
     pub op: &'static str,
+    /// The call is a preview (`PREVIEW` operations): the dispatcher rolls
+    /// its transaction back, and a wrapped command that writes on its own
+    /// connection must only preview too.
+    pub preview: bool,
 }
 
 /// One running call: the state, the context, and the transaction the

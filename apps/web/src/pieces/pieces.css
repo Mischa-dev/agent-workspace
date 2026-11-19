@@ -335,3 +335,25 @@
   padding: 0;
   border: 0;
 }
+
+.aw-piece__legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-piece__hint {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+/* T1.29: a field people never see; only a script fills it in. */
+.aw-piece__trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

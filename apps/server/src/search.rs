@@ -702,6 +702,7 @@ const PAGES_SQL: &str = r#"
     WHERE page.search_vector @@ query.q
       AND page.project_id = ANY({projects})
       AND page.archived_at IS NULL
+      AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
       AND $3::uuid[] IS NULL
       AND ($4::uuid[] IS NULL OR page.updated_by_actor_id = ANY($4))
       AND ($5::timestamptz IS NULL OR page.updated_at >= $5)
@@ -889,6 +890,8 @@ const FILES_SQL: &str = r#"
       AND file.project_id = ANY({projects})
       AND file.attached_at IS NOT NULL
       AND file.removed_at IS NULL
+      -- A page's own files are found through the page (C1.28 adds them).
+      AND file.thing_id IS NULL
       AND (file.conversation_id IS NULL OR (
           message.removed_at IS NULL
           AND conversation.archived_at IS NULL

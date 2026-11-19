@@ -131,7 +131,9 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
     )
     .await;
     assert_ne!(commented["outcome"], "applied", "{commented}");
-    let comments = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_comments")
+    let comments = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
+    )
         .fetch_one(&setup.pool)
         .await
         .expect("comments");
@@ -233,7 +235,9 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
     )
     .await;
     assert_ne!(commented["outcome"], "applied", "{commented}");
-    let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_comments")
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
+    )
         .fetch_one(&setup.pool)
         .await
         .expect("comments");

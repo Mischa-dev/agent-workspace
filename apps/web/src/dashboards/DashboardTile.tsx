@@ -7,11 +7,11 @@ import { chartNumber } from '../collections/collectionModel'
 import { Icon, countLabel } from '../ui'
 import { additive, figurePoints, measureWords, tileHref } from './dashboardModel'
 
-/** One tile: a view's chart, count or first records, or a note. */
+/** One tile: a view's chart, count or first records, a sheet block's chart, or a note. */
 export function DashboardTile({ menu, projectId, tile }: { menu: ReactNode; projectId: string; tile: TileEntry }) {
   const figures = tile.figures ?? null
-  const title = tile.title || figures?.viewName || (tile.kind === 'text' ? '' : 'View')
-  const href = tile.kind === 'view' && !tile.unseen ? tileHref(projectId, tile) : null
+  const title = tile.title || figures?.viewName || (tile.kind === 'text' ? '' : tile.kind === 'sheet' ? 'Sheet' : 'View')
+  const href = tile.kind !== 'text' && !tile.unseen ? tileHref(projectId, tile) : null
   return (
     <section aria-label={title || 'Note'} className={`aw-dash__tile aw-dash__tile--w${tile.width} aw-dash__tile--h${tile.height}`}>
       {title || menu ? (
@@ -66,7 +66,7 @@ function body(tile: TileEntry) {
         <span className="aw-dash__number">{overall === null ? '—' : chartNumber(overall)}</span>
         <figcaption>
           {label}
-          {counting ? '' : ` across ${countLabel(figures.total, 'record')}`}
+          {counting ? '' : ` across ${countLabel(figures.total, tile.kind === 'sheet' ? 'row' : 'record')}`}
         </figcaption>
       </figure>
     )

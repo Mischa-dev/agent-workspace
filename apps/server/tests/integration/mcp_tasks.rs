@@ -1134,7 +1134,7 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     assert_eq!(posted["outcome"], "applied", "{posted}");
     let comment_id = id(&posted["activityId"]);
     let mentioned = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM work_item_comment_mentions WHERE comment_id = $1",
+        "SELECT actor_id FROM message_mentions WHERE message_id = $1",
     )
     .bind(comment_id)
     .fetch_all(&setup.pool)
@@ -1142,19 +1142,18 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     .expect("mentions");
     assert_eq!(mentioned, [rook]);
     let referenced = sqlx::query_scalar::<_, Uuid>(
-        "SELECT referenced_work_item_id FROM work_item_comment_references WHERE comment_id = $1",
+        "SELECT work_item_id FROM message_work_item_references WHERE message_id = $1",
     )
     .bind(comment_id)
     .fetch_all(&setup.pool)
     .await
     .expect("references");
     assert_eq!(referenced, [tasks[1]]);
-    let stored =
-        sqlx::query_scalar::<_, String>("SELECT plain_text FROM work_item_comments WHERE id = $1")
-            .bind(comment_id)
-            .fetch_one(&setup.pool)
-            .await
-            .expect("plain text");
+    let stored = sqlx::query_scalar::<_, String>("SELECT plain_text FROM messages WHERE id = $1")
+        .bind(comment_id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("plain text");
     assert!(
         stored.contains("@rook") && stored.contains("WORK-2"),
         "{stored}"
@@ -1163,7 +1162,7 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     drain(&setup).await;
     let unread_mentions = || async {
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND kind = 'comment_mention' AND read_at IS NULL",
+            "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND kind = 'mention' AND read_at IS NULL",
         )
         .bind(rook)
         .fetch_one(&setup.pool)
@@ -1187,7 +1186,7 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     .await;
     assert_eq!(edited["outcome"], "ok", "{edited}");
     let mentioned = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM work_item_comment_mentions WHERE comment_id = $1",
+        "SELECT actor_id FROM message_mentions WHERE message_id = $1",
     )
     .bind(comment_id)
     .fetch_all(&setup.pool)

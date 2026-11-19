@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useProjectConversationSidebar } from '../conversations/hooks'
+import { usePrefetchTimeline } from '../conversations/prefetchTimeline'
 import type { SidebarThread } from '../conversations/types'
 import { toastError } from '../app/toastError'
 import { useProjectExperience } from '../experience/layout'
@@ -47,6 +48,7 @@ export function ProjectSidebar({
   const chat = experience.shows('area.chat')
   const threads = experience.shows('talk.threads')
   const updateNavigation = useUpdateProjectNavigation()
+  const prefetch = usePrefetchTimeline()
   const expandSelected = new URLSearchParams(location.search).get('threads') === 'all'
   // Not asked for where Channels is off, which answers "turned off" there
   // (AWD-97); the project says so before the layout loads.
@@ -126,7 +128,6 @@ export function ProjectSidebar({
       label={`${project.name} navigation`}
       menu={menu}
       mobileOpen={mobileOpen}
-      space={`project:${project.id}`}
       title={project.name}
     >
       <ul className="aw-section__list aw-sidebar__top">
@@ -163,6 +164,7 @@ export function ProjectSidebar({
                 keep={selected || channel.unread}
                 key={channel.id}
                 label={channel.name}
+                onIntent={() => prefetch(project.id, channel.id)}
                 onNavigate={onNavigate}
                 to={`${base}/channels/${encodeURIComponent(channel.id)}`}
                 unread={channel.unread && !channel.muted}

@@ -1633,8 +1633,7 @@ async fn mcp_request(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
-    // Room for the whole tool list, which an agent with every permission
-    // loads in one answer.
+    // An owner's whole tools/list is about a megabyte of schemas now.
     let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");

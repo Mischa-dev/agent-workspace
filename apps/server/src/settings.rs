@@ -1,7 +1,6 @@
 //! S2: settings that inherit.
 //!
-//! Every setting is declared once in [`REGISTRY`] (or, for a module's
-//! switch, generated from its manifest; [`all`] has both) with its type, the scopes
+//! Every setting is declared once in [`REGISTRY`] with its type, the scopes
 //! it may be set at, and its built-in default. A stored value belongs to a
 //! workspace, a project or a person (within a workspace). Reading resolves
 //! each key from, most specific first:
@@ -569,44 +568,16 @@ pub const REGISTRY: &[SettingDef] = &[
     },
 ];
 
-/// Every setting: the declared ones, then (AWD-75) one switch per module
-/// that can be turned off, in module order, generated from the registered
-/// modules. Switches are written through the Modules routes
-/// (crate::modules), which apply presets and audit.
+/// Every setting. Module switches were settings (`modules.<id>`) until
+/// M1.11's contract step; they live in `module_installs`, written through
+/// the Modules routes (crate::modules), which apply presets and audit.
 pub fn all() -> &'static [SettingDef] {
-    static ALL: std::sync::OnceLock<Vec<SettingDef>> = std::sync::OnceLock::new();
-    ALL.get_or_init(|| {
-        let mut all = REGISTRY.to_vec();
-        for module in crate::modules::registry::Registry::global().descriptions() {
-            if module.switchable {
-                // Built once per process, from the compiled-in manifests.
-                let key = crate::modules::state::setting_key(&module.id);
-                all.push(module_switch(
-                    Box::leak(key.into_boxed_str()),
-                    module.name.as_str(),
-                ));
-            }
-        }
-        all
-    })
-}
-
-/// A module's switch: on unless the workspace turns it off.
-const fn module_switch(key: &'static str, label: &'static str) -> SettingDef {
-    SettingDef {
-        key,
-        label,
-        description: "Whether this module is on in the workspace. Off hides it everywhere without deleting anything.",
-        kind: SettingType::Bool,
-        scopes: &[Scope::Workspace],
-        launch_override: false,
-        default: "true",
-    }
+    REGISTRY
 }
 
 /// Settings written only through their own routes, never the generic ones.
 pub(crate) fn has_own_routes(key: &str) -> bool {
-    key.starts_with("layout.") || key.starts_with("modules.")
+    key.starts_with("layout.")
 }
 
 pub fn definition(key: &str) -> Option<&'static SettingDef> {

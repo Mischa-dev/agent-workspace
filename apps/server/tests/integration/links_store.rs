@@ -181,7 +181,9 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     )
     .await;
     let comment = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM work_item_comments WHERE work_item_id = $1::uuid",
+        "SELECT message.id FROM messages message \
+         JOIN conversations comments ON comments.id = message.conversation_id \
+         WHERE comments.kind = 'comments' AND comments.subject_id = $1::uuid",
     )
     .bind(&paint)
     .fetch_one(pool)
@@ -240,10 +242,7 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     .fetch_one(pool)
     .await
     .expect("comment link");
-    assert_eq!(
-        text,
-        ("task_comment".to_owned(), comment.parse().expect("id"))
-    );
+    assert_eq!(text, ("message".to_owned(), comment.parse().expect("id")));
 
     // A fresh copy from the old stores gives the same set. Dependencies and
     // relations between tasks are kept in the store alone (K3.16), so they

@@ -989,6 +989,101 @@ h2.aw-card__title {
   justify-content: space-between;
 }
 
+/* C1.26: a channel's tabs */
+.aw-chtabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-1);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-chtabs__item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.aw-chtabs__tab {
+  max-width: 16rem;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font: var(--t-ui);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aw-chtabs__tab:hover {
+  color: var(--content-fg);
+}
+
+.aw-chtabs__tab[aria-current='page'] {
+  border-bottom-color: var(--accent);
+  color: var(--content-fg);
+}
+
+.aw-chdetails {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+.aw-chdetails__body {
+  min-width: 0;
+}
+
+.aw-chdetails__about h3 {
+  margin: var(--space-3) 0 var(--space-1);
+  font: var(--t-ui-strong);
+}
+
+.aw-chdetails__about h3:first-child {
+  margin-top: 0;
+}
+
+.aw-chdetails__about p {
+  margin: 0 0 var(--space-2);
+  color: var(--content-fg-muted);
+  white-space: pre-wrap;
+}
+
+.aw-chdetails__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-chdetails__list li {
+  display: grid;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+.aw-chdetails__list a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-chdetails__key {
+  margin-right: var(--space-1);
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-chdetails__meta {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
 .aw-members__list {
   display: grid;
   gap: var(--space-half);
@@ -1498,6 +1593,17 @@ button.aw-reaction:focus-visible {
   padding: var(--space-1) var(--space-4) var(--space-2) calc(var(--space-4) + var(--size-avatar) + var(--space-3));
 }
 
+/* C2.20: what a message was made into */
+.aw-msg__made {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-msg__made > svg {
+  vertical-align: -1px;
+}
+
 /* W21: a forward's quote, read live, and the saved mark */
 .aw-msg__saved {
   color: var(--accent);
@@ -1552,4 +1658,46 @@ a.aw-forward__meta:hover .aw-forward__author {
 .aw-forward__removed {
   color: var(--content-fg-muted);
   font-style: italic;
+}
+
+/* C2.31: a message's actions in a bottom sheet on a phone, held open by a
+   long press: the same actions, in a row of large targets. */
+.aw-msg__sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-4);
+}
+
+.aw-msg__sheet-actions .aw-iconbtn {
+  width: 48px;
+  height: 48px;
+}
+
+@media (pointer: coarse) {
+  .aw-msg {
+    -webkit-touch-callout: none;
+  }
+}
+
+/* C2.31: on a phone the conversation's header folds away while reading
+   back through the timeline, giving the messages the room. */
+@media (max-width: 640px) {
+  .aw-convhead {
+    overflow: hidden;
+    max-height: 120px;
+    transition: max-height var(--duration-fast) var(--ease-out), min-height var(--duration-fast) var(--ease-out);
+  }
+
+  main[data-head-folded='true'] .aw-convhead {
+    min-height: 0;
+    max-height: 0;
+    border-bottom-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-convhead {
+    transition: none;
+  }
 }

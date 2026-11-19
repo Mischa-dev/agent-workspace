@@ -1150,6 +1150,7 @@ fn link_principal(link: &ReportLink, kind: &str) -> McpPrincipal {
         authentication_class: "bug_report_link",
         account_wide: false,
         project_explicit: true,
+        workspace_id: None,
     }
 }
 
@@ -1429,7 +1430,6 @@ async fn pause_for_the_day(
         conversation_id: None,
         message_id: None,
         work_item_id: None,
-        comment_id: None,
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({

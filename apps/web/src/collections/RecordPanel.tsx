@@ -8,6 +8,7 @@ import { FieldEditor } from '../fields/FieldEditor'
 import { FieldValueView } from '../fields/FieldValueView'
 import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
 import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
+import { ThingDetail } from '../pieces/ThingDetail'
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
 import { RecordButton } from './RecordButton'
@@ -46,27 +47,18 @@ export function RecordPanel({
   const viewerId = useAuthenticatedSession().user.actorId
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
   const picked = useRef<string | null>(null)
-  const close = <IconButton icon="x" label="Close" onClick={onClose} size="sm" />
   if (record.isPending) {
     return (
-      <aside aria-busy="true" aria-label="Record" className="aw-recordpanel">
-        <div className="aw-recordpanel__bar">
-          <span className="aw-recordpanel__number">{body.collection.name}</span>
-          {close}
-        </div>
+      <ThingDetail busy eyebrow={body.collection.name} label="Record" onClose={onClose}>
         <DocumentSkeleton />
-      </aside>
+      </ThingDetail>
     )
   }
   if (!record.data) {
     return (
-      <aside aria-label="Record" className="aw-recordpanel">
-        <div className="aw-recordpanel__bar">
-          <span className="aw-recordpanel__number">{body.collection.name}</span>
-          {close}
-        </div>
+      <ThingDetail eyebrow={body.collection.name} label="Record" onClose={onClose}>
         <ErrorState error={record.error} onRetry={() => void record.refetch()} title="The record didn’t load" />
-      </aside>
+      </ThingDetail>
     )
   }
   const { record: current, references, history } = record.data
@@ -111,23 +103,12 @@ export function RecordPanel({
   }
 
   return (
-    <aside
-      aria-label={recordName(current)}
-      className="aw-recordpanel"
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape' || event.defaultPrevented) return
-        if ((event.target as HTMLElement).closest('input, textarea, select, .aw-popover, [role="dialog"][aria-modal="true"]')) return
-        event.preventDefault()
-        onClose()
-      }}
+    <ThingDetail
+      actions={<Menu items={menu} label="Record actions" placement="bottom-end" trigger={<IconButton icon="more" label="Record actions" size="sm" />} />}
+      eyebrow={`${body.collection.name} #${current.number}`}
+      label={recordName(current)}
+      onClose={onClose}
     >
-      <div className="aw-recordpanel__bar">
-        <span className="aw-recordpanel__number">
-          {body.collection.name} #{current.number}
-        </span>
-        <Menu items={menu} label="Record actions" placement="bottom-end" trigger={<IconButton icon="more" label="Record actions" size="sm" />} />
-        {close}
-      </div>
       {current.archived ? (
         <Banner icon="archive" tone="warning">
           This record is archived, so it’s hidden from the table.
@@ -229,7 +210,7 @@ export function RecordPanel({
           value={current.values[editing.field.id]}
         />
       ) : null}
-    </aside>
+    </ThingDetail>
   )
 }
 

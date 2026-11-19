@@ -5,7 +5,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { Button, TextArea, actorKind, formatFullDate, formatRelative } from '../ui'
 import { Markdown } from '../ui/markdown/Markdown'
 import { useReleaseClaim } from './planningHooks'
-import { editErrorMessage } from './taskEdits'
+import { claimErrorMessage } from './taskEdits'
 import { TaskNotice } from './TaskNotice'
 import type { TaskHandoff, WorkItem } from './types'
 
@@ -27,7 +27,7 @@ export function ClaimNotice({ item, projectArchived }: { item: WorkItem; project
   const canRelease = !projectArchived && item.capabilities.edit && (item.capabilities.archive || own)
   const releaseNow = () => {
     setConfirming(false)
-    release.mutate({ projectId: item.projectId, workItemId: item.id, idempotencyKey: crypto.randomUUID() })
+    release.mutate({ projectId: item.projectId, workItemId: item.id, anyone: !own })
   }
   return (
     <TaskNotice
@@ -54,7 +54,7 @@ export function ClaimNotice({ item, projectArchived }: { item: WorkItem; project
       {confirming
         ? `Release the claim? ${claim.actor.displayName} may still be partway through.`
         : `${claim.note ? `${claim.note} · ` : ''}Claimed until ${formatFullDate(claim.expiresAt)}.`}
-      {release.isError ? ` ${editErrorMessage(release.error, 'Releasing it')}` : ''}
+      {release.isError ? ` ${claimErrorMessage(release.error, 'Releasing it')}` : ''}
     </TaskNotice>
   )
 }

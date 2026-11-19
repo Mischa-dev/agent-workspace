@@ -8,5 +8,5 @@ description: Keep what is true now in pages and decisions, so nobody has to rere
 - Pages hold what is true now and keep every version: read with `page_get`,
   write with `page_write`.
 - When a discussion lands, record it with `decision_record`.
-- Read a project's guide page (from `project_open`) before you change
+- Read a project's guide page (from `project_get`) before you change
   things there.

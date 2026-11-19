@@ -4,18 +4,20 @@
 //! `agent_template_list` (M1.9): what installing would do, doing it, what
 //! was installed, and removing it.
 
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use uuid::Uuid;
 
 use super::{
+    apply::{self, Installed, Installer},
     export::{self, Include, Source},
-    format::{ContentKind, Package},
+    format::Package,
     install::{self, AgentTemplateView, InstallView, NewSpace, Place, Plan},
     secrets_check,
+    source::{self, Origin},
 };
 use crate::ops::{
     Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
@@ -29,6 +31,11 @@ pub fn register_ops(registry: &mut Registry) {
     registry.add::<PackageInstall>();
     registry.add::<PackageList>();
     registry.add::<PackageRemove>();
+}
+
+/// The Agents module's share: the agent templates packages brought, which
+/// show only where Agents is on.
+pub fn register_agent_ops(registry: &mut Registry) {
     registry.add::<AgentTemplateList>();
 }
 
@@ -86,6 +93,7 @@ impl Operation for PackageExport {
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::SettingsManage);
     const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const LONG: bool = true;
     const TITLE: &'static str = "Export package";
     const DESCRIPTION: &'static str = "Export a space's setup (roles, channels, collections, \
         forms, automations, skills) or the workspace's (switches, layout, roles) as one package \
@@ -95,6 +103,11 @@ impl Operation for PackageExport {
 
     type Input = PackageExportInput;
     type Output = PackageExportOutput;
+
+    /// K2.21: a space's pages make it big enough to run as a job.
+    fn runs_long(input: &PackageExportInput) -> bool {
+        input.include_pages
+    }
 
     async fn run(
         call: &mut OpCall<'_>,
@@ -204,9 +217,18 @@ pub struct PackagePreview;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackagePreviewInput {
     /// The package in its inline form (agent-workspace-package/1), as
-    /// package_export returns it or an agent drafts it.
-    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
-    pub package: serde_json::Value,
+    /// package_export returns it or an agent drafts it. Or give entry or
+    /// fileId instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub package: Option<serde_json::Value>,
+    /// A package from the directory, as directory_list names it (such as
+    /// "software_team", "studio.game_studio@1.2.0" or "template:<id>").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// An uploaded file (file_upload): a zipped package, or its JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
     #[serde(default)]
     pub target: InstallTarget,
 }
@@ -235,12 +257,18 @@ impl Operation for PackagePreview {
     type Output = Plan;
 
     async fn run(call: &mut OpCall<'_>, input: PackagePreviewInput) -> Result<Plan, OpError> {
-        let package = install::read(&input.package)?;
-        let place = input.target.place(call, &package)?;
+        let origin = source::resolve(
+            call,
+            input.package.as_ref(),
+            input.entry.as_deref(),
+            input.file_id.as_deref(),
+        )
+        .await?;
+        let place = input.target.place(call, &origin.package)?;
         let workspace = call.ctx.workspace_id;
         let reader = crate::modules::built::Reader::of(&call.ctx.caller);
         let tx = call.tx().await?;
-        Ok(install::plan(tx, workspace, reader, &package, &place).await?)
+        Ok(install::plan(tx, workspace, reader, &origin.package, &place).await?)
     }
 }
 
@@ -252,9 +280,19 @@ pub struct PackageInstall;
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageInstallInput {
-    /// The package, as package_preview took it.
-    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
-    pub package: serde_json::Value,
+    /// The package in its inline form (agent-workspace-package/1), as
+    /// package_export returns it or an agent drafts it. Or give entry or
+    /// fileId instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub package: Option<serde_json::Value>,
+    /// A package from the directory, as directory_list names it (such as
+    /// "software_team", "studio.game_studio@1.2.0" or "template:<id>").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// An uploaded file (file_upload): a zipped package, or its JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
     #[serde(default)]
     pub target: InstallTarget,
     /// package_preview's planHash: the install is refused if the plan
@@ -265,49 +303,6 @@ pub struct PackageInstallInput {
 impl Targeted for PackageInstallInput {
     fn target(&self) -> Target {
         self.target.dispatch_target()
-    }
-}
-
-/// An object an install made or reused.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct InstalledObject {
-    pub kind: String,
-    pub key: String,
-    #[schemars(with = "String")]
-    pub id: Uuid,
-    /// created, reused or updated.
-    pub action: String,
-}
-
-#[derive(Clone, Debug, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Installed {
-    #[schemars(with = "String")]
-    pub install_id: Uuid,
-    pub package_id: String,
-    pub version: String,
-    /// The space it went into.
-    #[schemars(with = "Option<String>")]
-    pub space_id: Option<Uuid>,
-    /// What changed, in plain words.
-    pub changes: Vec<String>,
-    pub objects: Vec<InstalledObject>,
-    /// Parts left out, each "kind:key: why".
-    pub skipped: Vec<String>,
-}
-
-fn part_kind_static(kind: &str) -> Option<&'static str> {
-    crate::modules::built::LINKABLE
-        .iter()
-        .copied()
-        .find(|known| *known == kind)
-}
-
-fn invalid_at(field: String, message: String) -> OpError {
-    OpError::Invalid {
-        field: field.into(),
-        message: message.into(),
     }
 }
 
@@ -331,727 +326,154 @@ impl Operation for PackageInstall {
     type Input = PackageInstallInput;
     type Output = Installed;
 
-    #[allow(clippy::too_many_lines)]
     async fn run(call: &mut OpCall<'_>, input: PackageInstallInput) -> Result<Installed, OpError> {
-        use crate::workspace_templates::{self as templates, TemplateDefinition, TemplateProject};
-
-        let package = install::read(&input.package)?;
-        let place = input.target.place(call, &package)?;
-        let ctx = call.ctx;
-        let workspace = ctx.workspace_id;
-        let actor = call.account_id();
-        let reader = crate::modules::built::Reader::of(&ctx.caller);
-        let principal = crate::mcp::messaging::principal_of(ctx);
-        let maker = crate::events::Caller::from(ctx);
-        let writer = crate::memory::Writer {
-            actor_id: actor,
-            actor_kind: ctx.caller.kind,
-            via_grant_id: ctx.caller.via_grant_id,
-            confined_project: ctx.caller.confined_space,
-        };
-        let tx = call.tx().await?;
-
-        // One install at a time per workspace, taken before the plan is read
-        // again: two installs that both planned to create the same thing
-        // can't both record it as theirs. (No key update, so writes that only
-        // point at the workspace aren't held up.)
-        sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
-            .bind(workspace)
-            .execute(&mut **tx)
-            .await
-            .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-        // The plan the preview showed, read again in this transaction.
-        let plan = install::plan(tx, workspace, reader, &package, &place).await?;
-        if plan.plan_hash != input.plan_hash.trim() {
-            return Err(OpError::Conflict {
-                reason: ConflictReason::State {
-                    code: "plan_changed",
-                },
-                message: "The workspace changed since the preview, so installing would do \
-                          something else. Preview again and install that plan."
-                    .into(),
-                current: None,
-            });
-        }
-        let live = |line: &&install::PlanItem| line.action != "skip";
-        // Roles, module switches, the default layout and the other admin
-        // lines change the whole workspace, so they are asked of the
-        // workspace even when the package lands in a space.
-        let located = crate::ops::Located {
-            workspace_id: workspace,
-            space_id: None,
-        };
-        let workspace_target = Target::Workspace(Some(workspace));
-        // A connection held to one space installs only into that space, and
-        // only what stays there: its workspace role came with the account.
-        if ctx.caller.confined_space.is_some()
-            && (ctx.space_id.is_none()
-                || plan
-                    .items
-                    .iter()
-                    .filter(live)
-                    .any(|line| line.kind == "role" || line.needs_admin))
-        {
-            return Err(OpError::Denied {
-                reason: DenyReason::Delegation,
-                message: "This connection is held to one space, so it can only install what \
-                          stays in that space. Reconnect it for your whole account to change \
-                          the workspace."
-                    .into(),
-            });
-        }
-        if plan
-            .items
-            .iter()
-            .filter(live)
-            .any(|line| line.kind == "role")
-        {
-            access_shim::check(
-                tx,
-                &ctx.caller,
-                &workspace_target,
-                &located,
-                Some(Perm::RolesManage),
-                true,
-                "Installing a package that adds or changes a role",
-            )
-            .await?;
-        }
-        if plan
-            .items
-            .iter()
-            .filter(live)
-            .any(|line| line.needs_admin && line.kind != "role")
-        {
-            access_shim::check(
-                tx,
-                &ctx.caller,
-                &workspace_target,
-                &located,
-                Some(Perm::SettingsManage),
-                true,
-                "Installing a package that changes the workspace's settings",
-            )
-            .await?;
-        }
-        let action_of = |kind: &str, key: &str| {
-            plan.items
-                .iter()
-                .find(|line| line.kind == kind && line.key == key)
-                .map(|line| line.action.as_str())
-                .unwrap_or("skip")
-        };
-
-        // The package and the install, first: what it makes points at it.
-        let package_row = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            INSERT INTO packages (
-                id, workspace_id, package_key, version, name, description, document, digest,
-                source, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'upload', $9)
-            ON CONFLICT (workspace_id, package_key, version) DO UPDATE SET
-                name = EXCLUDED.name, description = EXCLUDED.description,
-                document = EXCLUDED.document, digest = EXCLUDED.digest
-            RETURNING id
-            "#,
+        let origin = source::resolve(
+            call,
+            input.package.as_ref(),
+            input.entry.as_deref(),
+            input.file_id.as_deref(),
         )
-        .bind(Uuid::now_v7())
-        .bind(workspace)
-        .bind(&package.id)
-        .bind(&package.version)
-        .bind(package.name.trim())
-        .bind(&package.description)
-        .bind(&input.package)
-        .bind(&plan.digest)
-        .bind(actor)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-        let install_id = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO package_installs (
-                id, workspace_id, space_id, package_id, state, plan, plan_hash,
-                installed_by_actor_id
-            ) VALUES ($1, $2, $3, $4, 'installing', $5, $6, $7)
-            "#,
-        )
-        .bind(install_id)
-        .bind(workspace)
-        .bind(match place {
-            Place::Space(id) => Some(id),
-            _ => None,
-        })
-        .bind(package_row)
-        .bind(serde_json::to_value(&plan.items).unwrap_or_default())
-        .bind(&plan.plan_hash)
-        .bind(actor)
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-
-        // Switches, layout, roles and the starter space: the template path.
-        let mut definition = TemplateDefinition::default();
-        let mut starter = TemplateProject::default();
-        for part in &package.contents {
-            let body = part.body.clone().unwrap_or_default();
-            if action_of(part.kind.key(), &part.key) == "skip"
-                && !matches!(part.kind, ContentKind::Channels | ContentKind::Space)
-            {
-                continue;
-            }
-            match part.kind {
-                ContentKind::Switches => {
-                    let off = body["off"].as_array().cloned().unwrap_or_default();
-                    definition.modules = Some(
-                        crate::modules::manifest::core()
-                            .iter()
-                            .filter(|module| module.switchable)
-                            .filter(|module| !off.iter().any(|id| *id == module.id.as_str()))
-                            .map(|module| module.id.clone())
-                            .collect(),
-                    );
-                }
-                ContentKind::Layout => {
-                    definition.layout = body["preset"].as_str().map(str::to_owned);
-                    definition.layout_changes =
-                        serde_json::from_value(body["changes"].clone()).unwrap_or_default();
-                    definition.layout_words =
-                        serde_json::from_value(body["words"].clone()).unwrap_or_default();
-                }
-                ContentKind::Role => {
-                    let (role, default) = install::template_role(&body).map_err(|message| {
-                        invalid_at(format!("package.role:{}", part.key), message)
-                    })?;
-                    if default {
-                        definition.default_role = Some(role.name.clone());
-                    }
-                    definition.roles.push(role);
-                }
-                ContentKind::Channels => {
-                    for channel in body["channels"].as_array().cloned().unwrap_or_default() {
-                        if let Some(name) = channel["name"].as_str()
-                            && action_of("channel", name) != "skip"
-                        {
-                            starter.channels.push(name.to_owned());
-                        }
-                    }
-                }
-                // A collection the preview showed as reused is left as it
-                // is: applying its definition would change a live schema
-                // the preview never showed.
-                ContentKind::Collection if action_of("collection", &part.key) != "create" => {}
-                ContentKind::Collection => {
-                    let collection = serde_json::from_value(body).map_err(|error| {
-                        invalid_at(
-                            format!("package.collection:{}", part.key),
-                            format!("This collection can't be read: {error}"),
-                        )
-                    })?;
-                    starter.collections.push(collection);
-                }
-                _ => {}
-            }
-        }
-        if let Place::New(space) = &place {
-            definition.project = Some(TemplateProject {
-                name: space.name.clone(),
-                key: space.key.clone(),
-                ..starter.clone()
-            });
-        }
-        let standing = crate::roles::standing(tx, workspace, actor).await?;
-        let view = templates::TemplateView {
-            id: package.id.clone(),
-            name: package.name.clone(),
-            description: package.description.clone(),
-            built_in: false,
-            what_it_does: Vec::new(),
-            definition,
-            saved_by: None,
-            saved_at: None,
-        };
-        let applied = templates::apply(
-            tx,
-            &crate::roles::Auditor::App(&principal),
-            standing,
-            workspace,
-            &view,
-        )
-        .await
-        .map_err(apply_error)?;
-        let mut changes = applied.changes;
-        let space = match &place {
-            Place::Space(id) => {
-                if !starter.channels.is_empty() || !starter.collections.is_empty() {
-                    let project_key = sqlx::query_scalar::<_, String>(
-                        "SELECT project_key FROM projects WHERE id = $1",
-                    )
-                    .bind(id)
-                    .fetch_one(&mut **tx)
-                    .await
-                    .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-                    changes.extend(
-                        templates::starter_contents(
-                            tx,
-                            actor,
-                            templates::StarterProject {
-                                organization_id: workspace,
-                                id: *id,
-                                new: false,
-                            },
-                            &project_key,
-                            &starter,
-                        )
-                        .await
-                        .map_err(apply_error)?,
-                    );
-                }
-                Some(*id)
-            }
-            Place::New(_) => applied.project_id,
-            Place::Workspace => None,
-        };
-
-        // What the template path made, by key.
-        let mut objects: Vec<InstalledObject> = Vec::new();
-        let mut hashes: HashMap<(String, String), String> = HashMap::new();
-        let mut skipped = Vec::new();
-        let record = |objects: &mut Vec<InstalledObject>, kind: &str, key: &str, id: Uuid| {
-            let action = match action_of(kind, key) {
-                "create" => "created",
-                "update" => "updated",
-                _ => "reused",
-            };
-            objects.push(InstalledObject {
-                kind: kind.to_owned(),
-                key: key.to_owned(),
-                id,
-                action: action.to_owned(),
-            });
-        };
-        let mut collections: HashMap<String, Uuid> = HashMap::new();
-        let mut channels: HashMap<String, Uuid> = HashMap::new();
-        if let Some(space) = space {
-            let rows = sqlx::query_as::<_, (Uuid, String)>(
-                "SELECT id, lower(name) FROM conversations WHERE project_id = $1 \
-                 AND kind = 'channel' AND archived_at IS NULL \
-                 AND conversation_visible_to(id, $2)",
-            )
-            .bind(space)
-            .bind(actor)
-            .fetch_all(&mut **tx)
-            .await
-            .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-            channels.extend(rows.into_iter().map(|(id, name)| (name, id)));
-        }
-        for part in &package.contents {
-            let body = part.body.clone().unwrap_or_default();
-            hashes.insert(
-                (part.kind.key().to_owned(), part.key.clone()),
-                install::part_hash(part),
-            );
-            match part.kind {
-                ContentKind::Role if action_of("role", &part.key) != "skip" => {
-                    let name = body["name"].as_str().unwrap_or("").trim();
-                    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-                        "SELECT id FROM workspace_roles WHERE organization_id = $1 \
-                         AND lower(name) = lower($2)",
-                    )
-                    .bind(workspace)
-                    .bind(name)
-                    .fetch_optional(&mut **tx)
-                    .await
-                    .map_err(|error| OpError::logged(Self::NAME, &error.into()))?
-                    {
-                        record(&mut objects, "role", &part.key, id);
-                    }
-                }
-                ContentKind::Space => {
-                    if let Some(space) = space {
-                        record(&mut objects, "space", &part.key, space);
-                    }
-                }
-                ContentKind::Channels => {
-                    for channel in body["channels"].as_array().cloned().unwrap_or_default() {
-                        let name = channel["name"].as_str().unwrap_or("").trim().to_owned();
-                        if let Some(id) = channels.get(&name.to_lowercase()) {
-                            hashes.insert(
-                                ("channel".to_owned(), name.clone()),
-                                install::part_hash(part),
-                            );
-                            record(&mut objects, "channel", &name, *id);
-                        }
-                    }
-                }
-                ContentKind::Collection => {
-                    let name = body["name"].as_str().unwrap_or("").trim();
-                    if let Some(space) = space
-                        && let Some(id) = sqlx::query_scalar::<_, Uuid>(
-                            "SELECT id FROM collections WHERE project_id = $1 \
-                             AND archived_at IS NULL AND lower(name) = lower($2)",
-                        )
-                        .bind(space)
-                        .bind(name)
-                        .fetch_optional(&mut **tx)
-                        .await
-                        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?
-                    {
-                        collections.insert(part.key.clone(), id);
-                        record(&mut objects, "collection", &part.key, id);
-                    }
-                }
-                _ => {}
-            }
-        }
-        let fresh = objects
-            .iter()
-            .filter(|object| object.kind == "collection" && object.action == "created")
-            .map(|object| object.id)
-            .collect::<Vec<_>>();
-
-        // Forms, automations, pages, skills, agent templates and modules.
-        for part in &package.contents {
-            let kind = part.kind.key();
-            let key = part.key.as_str();
-            let line = plan
-                .items
-                .iter()
-                .find(|line| line.kind == kind && line.key == key);
-            let Some(line) = line else { continue };
-            if line.action == "skip" {
-                if !matches!(part.kind, ContentKind::Channels) {
-                    skipped.push(format!(
-                        "{kind}:{key}: {}",
-                        line.reason.as_deref().unwrap_or("left out")
-                    ));
-                }
-                continue;
-            }
-            if let Some(id) = line.existing_id
-                && matches!(
-                    part.kind,
-                    ContentKind::Form
-                        | ContentKind::Automation
-                        | ContentKind::Page
-                        | ContentKind::Skill
-                        | ContentKind::Agent
-                        | ContentKind::Module
-                )
-            {
-                record(&mut objects, kind, key, id);
-                continue;
-            }
-            let field = |what: &str| format!("package.{kind}:{key}{what}");
-            // Only forms, automations and modules point at other parts;
-            // a page's or skill's text stays exactly as it was written.
-            let body = part.body.clone().unwrap_or_default();
-            let body = if matches!(
-                part.kind,
-                ContentKind::Form | ContentKind::Automation | ContentKind::Module
-            ) {
-                install::resolve_refs(body, &collections, &channels)
-                    .map_err(|message| invalid_at(field(""), message))?
-            } else {
-                body
-            };
-            let made = match part.kind {
-                ContentKind::Form => {
-                    let space = space.ok_or(OpError::Unavailable)?;
-                    let name =
-                        crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
-                            .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
-                    let collection_id = body["collection"]
-                        .as_str()
-                        .and_then(|id| Uuid::parse_str(id).ok())
-                        .ok_or_else(|| {
-                            invalid_at(
-                                field(".collection"),
-                                "A form names its collection as @<key>.".to_owned(),
-                            )
-                        })?;
-                    let definitions =
-                        crate::collections::field_definitions(tx, space, collection_id, false)
-                            .await?;
-                    let mut questions = Vec::new();
-                    for asked in body["fields"].as_array().cloned().unwrap_or_default() {
-                        let wanted = asked["field"].as_str().unwrap_or("").trim();
-                        let found = definitions
-                            .iter()
-                            .find(|definition| definition.name.eq_ignore_ascii_case(wanted))
-                            .ok_or_else(|| {
-                                invalid_at(
-                                    field(".fields"),
-                                    format!("The collection has no field \"{wanted}\"."),
-                                )
-                            })?;
-                        questions.push(crate::collection_forms::FormField {
-                            field: found.id,
-                            required: asked["required"].as_bool().unwrap_or(false),
-                        });
-                    }
-                    let form = crate::collection_forms::FormConfig {
-                        intro: body["intro"].as_str().unwrap_or("").to_owned(),
-                        fields: questions,
-                        thanks: body["thanks"].as_str().unwrap_or("").to_owned(),
-                        daily_limit: None,
-                    };
-                    let form = crate::bug_reports::checked_form_in(tx, space, collection_id, &form)
-                        .await?
-                        .map_err(|message| invalid_at(field(".fields"), message))?;
-                    // The link's token is never returned: the form's
-                    // settings make one to share.
-                    let (id, _token) = crate::bug_reports::insert_link(
-                        tx,
-                        &maker,
-                        space,
-                        &name,
-                        Some((collection_id, form)),
-                    )
-                    .await?;
-                    id
-                }
-                ContentKind::Automation => {
-                    let space = space.ok_or(OpError::Unavailable)?;
-                    let rule = json!({
-                        "name": body["name"],
-                        "trigger": body["trigger"],
-                        "conditions": body.get("conditions").cloned().unwrap_or_else(|| json!({})),
-                        "actions": body.get("actions").cloned().unwrap_or_else(|| json!([])),
-                        "enabled": body.get("enabled").cloned().unwrap_or(Value::Bool(true)),
-                    });
-                    let rule = serde_json::from_value::<crate::automations::CreateRule>(rule)
-                        .map_err(|error| {
-                            invalid_at(
-                                field(""),
-                                error
-                                    .to_string()
-                                    .split(" at line ")
-                                    .next()
-                                    .unwrap_or("This rule can't be read.")
-                                    .to_owned(),
-                            )
-                        })?;
-                    let prepared =
-                        crate::automations::prepare_in(tx, &maker, space, rule, &fresh).await?;
-                    crate::automations::insert(tx, &maker, workspace, space, &prepared).await?
-                }
-                ContentKind::Page | ContentKind::Skill => {
-                    let space = space.ok_or(OpError::Unavailable)?;
-                    let page = if part.kind == ContentKind::Skill {
-                        crate::memory::PageInput {
-                            title: body["name"].as_str().map(str::to_owned),
-                            body: body["instructions"].as_str().map(str::to_owned),
-                            skill_description: body["description"].as_str().map(str::to_owned),
-                            ..crate::memory::PageInput::default()
-                        }
-                    } else {
-                        crate::memory::PageInput {
-                            title: body["title"].as_str().map(str::to_owned),
-                            body: body["markdown"].as_str().map(str::to_owned),
-                            is_guide: body["guide"].as_bool(),
-                            ..crate::memory::PageInput::default()
-                        }
-                    };
-                    crate::memory::create_page(tx, writer, space, &page).await?
-                }
-                ContentKind::Agent => {
-                    let name = body["name"].as_str().unwrap_or("").trim().to_owned();
-                    if name.is_empty() || name.chars().count() > 80 {
-                        return Err(invalid_at(
-                            field(".name"),
-                            "Name the agent template in 1 to 80 characters.".to_owned(),
-                        ));
-                    }
-                    let purpose = body["purpose"].as_str().unwrap_or("").trim().to_owned();
-                    let id = Uuid::now_v7();
-                    sqlx::query(
-                        r#"
-                        INSERT INTO agent_templates (
-                            id, workspace_id, space_id, install_id, template_key, name, purpose,
-                            definition, created_by_actor_id
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                        "#,
-                    )
-                    .bind(id)
-                    .bind(workspace)
-                    .bind(space)
-                    .bind(install_id)
-                    .bind(key)
-                    .bind(&name)
-                    .bind(purpose.chars().take(500).collect::<String>())
-                    .bind(&body)
-                    .bind(actor)
-                    .execute(&mut **tx)
-                    .await
-                    .map_err(|_| {
-                        invalid_at(
-                            field(""),
-                            "This agent template can't be stored: keep it under 64 KB.".to_owned(),
-                        )
-                    })?;
-                    id
-                }
-                ContentKind::Module => {
-                    let module_key = crate::modules::built::full_key(key).ok_or_else(|| {
-                        invalid_at(field(""), "A module's key is lower snake case.".to_owned())
-                    })?;
-                    let name = body["name"].as_str().unwrap_or("").trim().to_owned();
-                    let id = crate::modules::built::insert(
-                        tx,
-                        workspace,
-                        space,
-                        &module_key,
-                        &name,
-                        body["description"].as_str().unwrap_or(""),
-                        body["icon"].as_str(),
-                        actor,
-                    )
-                    .await
-                    .map_err(|_| {
-                        invalid_at(
-                            field(""),
-                            "This module can't be made: check its name (1 to 60 characters) \
-                             and icon."
-                                .to_owned(),
-                        )
-                    })?;
-                    sqlx::query("UPDATE modules SET package_install_id = $2 WHERE id = $1")
-                        .bind(id)
-                        .bind(install_id)
-                        .execute(&mut **tx)
-                        .await
-                        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-                    let module = crate::modules::built::get(tx, workspace, id)
-                        .await?
-                        .ok_or(OpError::Unavailable)?;
-                    for wanted in body["parts"].as_array().cloned().unwrap_or_default() {
-                        let part_kind = wanted["kind"].as_str().and_then(part_kind_static);
-                        let part_key = wanted["key"].as_str().unwrap_or("");
-                        let object = objects.iter().find(|object| {
-                            Some(object.kind.as_str()) == part_kind && object.key == part_key
-                        });
-                        let (Some(part_kind), Some(object)) = (part_kind, object) else {
-                            return Err(invalid_at(
-                                field(".parts"),
-                                format!(
-                                    "A module's parts are collections, forms, automations or \
-                                     pages listed before it in the package; {part_key} isn't."
-                                ),
-                            ));
-                        };
-                        crate::modules::built::link_part(
-                            tx,
-                            &module,
-                            part_kind,
-                            object.id,
-                            actor,
-                            ctx.caller.confined_space,
-                        )
-                        .await?;
-                    }
-                    for entry in body["nav"].as_array().cloned().unwrap_or_default() {
-                        let label = entry["label"].as_str().unwrap_or("").trim();
-                        crate::modules::built::add_nav(
-                            tx,
-                            &module,
-                            label,
-                            entry["icon"].as_str(),
-                            &entry["target"],
-                        )
-                        .await?;
-                    }
-                    id
-                }
-                _ => continue,
-            };
-            record(&mut objects, kind, key, made);
-        }
-
-        // What it made, for removal and upgrades.
-        for object in &objects {
-            sqlx::query(
-                r#"
-                INSERT INTO package_objects (
-                    install_id, workspace_id, package_key, object_kind, object_id, action,
-                    installed_hash
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT DO NOTHING
-                "#,
-            )
-            .bind(install_id)
-            .bind(workspace)
-            .bind(&object.key)
-            .bind(&object.kind)
-            .bind(object.id)
-            .bind(&object.action)
-            .bind(
-                hashes
-                    .get(&(object.kind.clone(), object.key.clone()))
-                    .cloned()
-                    .unwrap_or_default(),
-            )
-            .execute(&mut **tx)
-            .await
-            .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-        }
-        for object in objects.iter().filter(|object| object.action == "created") {
-            if object.kind == "collection"
-                && let Some(space) = space
-            {
-                crate::outbox::enqueue_collection_updated(tx, space, object.id, &[]).await?;
-            }
-        }
-        let made = objects
-            .iter()
-            .filter(|object| object.action == "created")
-            .count();
-        if made > 0 {
-            changes.push(format!(
-                "Installed {} ({made} new parts).",
-                package.name.trim()
-            ));
-        }
-        sqlx::query(
-            "UPDATE package_installs SET state = 'installed', space_id = $2, summary = $3, \
-             finished_at = now() WHERE id = $1",
-        )
-        .bind(install_id)
-        .bind(space)
-        .bind(&changes)
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-        call.audit_target(
-            "package_install",
-            install_id,
-            json!({
-                "package": package.id,
-                "version": package.version,
-                "created": made,
-                "objects": objects.len(),
-            }),
-        );
-        Ok(Installed {
-            install_id,
-            package_id: package.id.clone(),
-            version: package.version.clone(),
-            space_id: space,
-            changes,
-            objects,
-            skipped,
-        })
+        .await?;
+        let place = input.target.place(call, &origin.package)?;
+        install_planned(call, origin, place, Some(&input.plan_hash)).await
     }
 }
 
-fn apply_error(error: crate::workspace_templates::ApplyError) -> OpError {
-    match error {
-        crate::workspace_templates::ApplyError::Problem(problem) => OpError::Invalid {
-            field: Cow::Owned(format!("package.{}", problem.field)),
-            message: Cow::Owned(problem.message),
-        },
-        crate::workspace_templates::ApplyError::App(error) => error.into(),
+/// Installs `origin` at `place` in the call's transaction: the plan read
+/// again (refused when `plan_hash` is given and differs), the rights its
+/// parts need checked, then made.
+pub(super) async fn install_planned(
+    call: &mut OpCall<'_>,
+    origin: Origin,
+    place: Place,
+    plan_hash: Option<&str>,
+) -> Result<Installed, OpError> {
+    let ctx = call.ctx;
+    let workspace = ctx.workspace_id;
+    let actor = call.account_id();
+    let principal = crate::mcp::messaging::principal_of(ctx);
+    let maker = crate::events::Caller::from(ctx);
+    let writer = crate::memory::Writer::from(ctx);
+    let reader = crate::modules::built::Reader::of(&ctx.caller);
+    let tx = call.tx().await?;
+
+    // One install at a time per workspace, taken before the plan is read
+    // again: two installs that both planned to create the same thing can't
+    // both record it as theirs. (No key update, so writes that only point at
+    // the workspace aren't held up.)
+    sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(workspace)
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged(PackageInstall::NAME, &error.into()))?;
+    // The plan the preview showed, read again in this transaction.
+    let package = &origin.package;
+    let plan = install::plan(tx, workspace, reader, package, &place).await?;
+    if plan_hash.is_some_and(|hash| plan.plan_hash != hash.trim()) {
+        return Err(OpError::Conflict {
+            reason: ConflictReason::State {
+                code: "plan_changed",
+            },
+            message: "The workspace changed since the preview, so installing would do \
+                      something else. Preview again and install that plan."
+                .into(),
+            current: None,
+        });
     }
+    let live = |line: &&install::PlanItem| line.action != "skip";
+    // Roles, module switches, the default layout and the other admin lines
+    // change the whole workspace, so they are asked of the workspace even
+    // when the package lands in a space.
+    let located = crate::ops::Located {
+        workspace_id: workspace,
+        space_id: None,
+    };
+    let workspace_target = Target::Workspace(Some(workspace));
+    // A connection held to one space installs only into that space, and only
+    // what stays there: its workspace role came with the account.
+    if ctx.caller.confined_space.is_some()
+        && (ctx.space_id.is_none()
+            || plan
+                .items
+                .iter()
+                .filter(live)
+                .any(|line| line.kind == "role" || line.needs_admin))
+    {
+        return Err(OpError::Denied {
+            reason: DenyReason::Delegation,
+            message: "This connection is held to one space, so it can only install what stays \
+                      in that space. Reconnect it for your whole account to change the \
+                      workspace."
+                .into(),
+        });
+    }
+    if plan
+        .items
+        .iter()
+        .filter(live)
+        .any(|line| line.kind == "role")
+    {
+        access_shim::check(
+            tx,
+            &ctx.caller,
+            &workspace_target,
+            &located,
+            Some(Perm::RolesManage),
+            true,
+            "Installing a package that adds or changes a role",
+        )
+        .await?;
+    }
+    if plan
+        .items
+        .iter()
+        .filter(live)
+        .any(|line| line.needs_admin && line.kind != "role")
+    {
+        access_shim::check(
+            tx,
+            &ctx.caller,
+            &workspace_target,
+            &located,
+            Some(Perm::SettingsManage),
+            true,
+            "Installing a package that changes the workspace's settings",
+        )
+        .await?;
+    }
+    let standing = crate::roles::standing(tx, workspace, actor).await?;
+    let auditor = crate::roles::Auditor::App(&principal);
+    let who = Installer {
+        workspace,
+        actor,
+        standing,
+        auditor: &auditor,
+        maker,
+        writer,
+        template: origin.template.clone(),
+        source: origin.source,
+        source_ref: origin.source_ref.clone(),
+        confined: ctx.caller.confined_space,
+    };
+    let installed = apply::install(tx, &who, package, &origin.document, &place, &plan)
+        .await
+        .map_err(apply::InstallError::into_op)?;
+    let made = installed
+        .objects
+        .iter()
+        .filter(|object| object.action == "created")
+        .count();
+    call.audit_target(
+        "package_install",
+        installed.install_id,
+        json!({
+            "package": package.id,
+            "version": package.version,
+            "created": made,
+            "objects": installed.objects.len(),
+        }),
+    );
+    Ok(installed)
 }
 
 // ---------------------------------------------------- package_list (M1.9)
@@ -1254,10 +676,15 @@ impl Operation for PackageRemove {
                     }
                 }
             }
+            // What the install made, of any kind: only those stay in the
+            // modules it archives; anything it reused is detached first, so
+            // it stays as it was.
+            let made_ids = made.values().flatten().copied().collect::<Vec<Uuid>>();
             for id in made.get("module").cloned().unwrap_or_default() {
                 if let Some(module) = crate::modules::built::get(tx, workspace, id).await?
                     && module.archived_at.is_none()
                 {
+                    crate::modules::built::detach_all_but(tx, &module, &made_ids).await?;
                     crate::modules::built::archive(tx, &module, false).await?;
                     archived += 1;
                 }
@@ -1313,7 +740,7 @@ pub struct AgentTemplateListOutput {
 impl Operation for AgentTemplateList {
     const NAME: &'static str = "agent_template_list";
     const KIND: OpKind = OpKind::Query;
-    const MODULE: &'static str = "workspace";
+    const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List agent templates";

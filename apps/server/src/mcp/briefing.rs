@@ -28,9 +28,9 @@ const GUIDE_CHARACTERS: usize = 20_000;
 /// The most label names project_open lists.
 const PROJECT_LABELS: i64 = 100;
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct BriefingArguments {
+pub(crate) struct BriefingArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// Only this project. Leave it out for everything.
@@ -39,7 +39,7 @@ pub(super) struct BriefingArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Briefing {
+pub(crate) struct Briefing {
     pub you: You,
     /// Agents only: messages people asked you to answer. Claim one with
     /// reply_claim.
@@ -65,7 +65,7 @@ pub(super) struct Briefing {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct You {
+pub(crate) struct You {
     pub actor_id: String,
     pub name: String,
     pub handle: String,
@@ -79,7 +79,7 @@ pub(super) struct You {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Mention {
+pub(crate) struct Mention {
     pub conversation_id: String,
     pub conversation: String,
     pub project: String,
@@ -92,7 +92,7 @@ pub(super) struct Mention {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskLine {
+pub(crate) struct TaskLine {
     pub id: String,
     pub key: String,
     pub title: String,
@@ -106,7 +106,7 @@ pub(super) struct TaskLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThreadUpdate {
+pub(crate) struct ThreadUpdate {
     pub thread_id: String,
     pub name: String,
     pub status: String,
@@ -118,7 +118,7 @@ pub(super) struct ThreadUpdate {
 
 const NEXT_STEPS: &str = "Open anything here with conversation_open or task_open. Answer reply requests with reply_claim then reply_send. When a discussion settles, set the thread's status and outcome with thread_update or record a decision with decision_record, so nobody has to reread it. Claim a task with task_claim before working on it.";
 
-pub(super) async fn briefing(
+pub(crate) async fn briefing(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: BriefingArguments,
@@ -273,12 +273,12 @@ pub(super) async fn briefing(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "briefing"))
 }
 
-pub(super) enum TaskFilter {
+pub(crate) enum TaskFilter {
     Assigned,
     Claimed,
 }
 
-pub(super) async fn task_lines(
+pub(crate) async fn task_lines(
     state: &AppState,
     projects: &[Uuid],
     actor_id: Uuid,
@@ -320,7 +320,7 @@ pub(super) async fn task_lines(
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectLine {
+pub(crate) struct ProjectLine {
     pub id: String,
     pub key: String,
     pub name: String,
@@ -339,18 +339,18 @@ pub(super) struct ProjectLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectsValue {
+pub(crate) struct ProjectsValue {
     pub projects: Vec<ProjectLine>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectsListArguments {
+pub(crate) struct ProjectsListArguments {
     /// Also list archived projects you belong to.
     pub include_archived: Option<bool>,
 }
 
-pub(super) async fn projects_list(
+pub(crate) async fn projects_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectsListArguments,
@@ -440,16 +440,16 @@ pub(super) async fn projects_list(
 // ---------------------------------------------------------------------------
 // project_open
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectOpenArguments {
+pub(crate) struct ProjectOpenArguments {
     /// The project's ID, link or key (such as "AWD"). projects_list shows them.
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectOverview {
+pub(crate) struct ProjectOverview {
     pub project: ProjectHeader,
     /// The project's guide page: how this project works. Read it first.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,7 +494,7 @@ pub(super) struct ProjectOverview {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LayoutLine {
+pub(crate) struct LayoutLine {
     /// The preset's name, such as "Personal life" or "Software team".
     pub preset: String,
     /// How to write for people in this project.
@@ -510,7 +510,7 @@ pub(super) struct LayoutLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WordLine {
+pub(crate) struct WordLine {
     /// The app's own noun, such as "task".
     pub noun: String,
     pub one: String,
@@ -538,7 +538,7 @@ impl From<crate::layouts::ProjectTone> for LayoutLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectHeader {
+pub(crate) struct ProjectHeader {
     pub id: String,
     pub key: String,
     pub name: String,
@@ -548,7 +548,7 @@ pub(super) struct ProjectHeader {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GuidePage {
+pub(crate) struct GuidePage {
     pub page_id: String,
     pub title: String,
     pub body: String,
@@ -560,7 +560,7 @@ pub(super) struct GuidePage {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageLine {
+pub(crate) struct PageLine {
     pub id: String,
     pub title: String,
     pub updated_at: String,
@@ -569,7 +569,7 @@ pub(super) struct PageLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DecisionLine {
+pub(crate) struct DecisionLine {
     pub id: String,
     pub title: String,
     pub decided_by: String,
@@ -578,7 +578,7 @@ pub(super) struct DecisionLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskOverview {
+pub(crate) struct TaskOverview {
     /// Counts by status.
     pub by_status: Vec<StatusCount>,
     /// The first open tasks in board order: what's next.
@@ -592,7 +592,7 @@ pub(super) struct TaskOverview {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct StatusCount {
+pub(crate) struct StatusCount {
     pub status: String,
     pub category: String,
     pub count: i64,
@@ -600,13 +600,13 @@ pub(super) struct StatusCount {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepositoryLine {
+pub(crate) struct RepositoryLine {
     pub id: String,
     pub name: String,
     pub default_branch: String,
 }
 
-pub(super) async fn project_open(
+pub(crate) async fn project_open(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectOpenArguments,

@@ -3,13 +3,9 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { requestJson } from '../api/client'
 import type { ConversationTimelineEntry, MessageContentV1 } from '../conversations/types'
 import { normalizeTimelineEntry } from '../conversations/api'
+import { laterKeys } from './keys'
 
-export const laterKeys = {
-  root: ['later'] as const,
-  list: (view: LaterView) => ['later', 'list', view] as const,
-  scheduled: (conversationId: string | null) => ['later', 'scheduled', conversationId ?? 'all'] as const,
-  level: (conversationId: string) => ['later', 'level', conversationId] as const,
-}
+export { laterKeys } from './keys'
 
 /** Saved items, scheduled messages and levels all change together often enough to refresh as one. */
 export function invalidateLater(queryClient: QueryClient) {

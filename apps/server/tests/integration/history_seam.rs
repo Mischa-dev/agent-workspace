@@ -186,7 +186,8 @@ async fn pages_and_boards_restore_through_one_seam() {
     .expect("event");
     assert_eq!(heard, 1);
 
-    // A sheet keeps changes, not versions: restore says so, with why.
+    // A sheet restores through the same seam (C1.13; its own test is in
+    // awd54_sheets.rs).
     let sheet = ok(
         call(
             "sheet_write",
@@ -204,22 +205,30 @@ async fn pages_and_boards_restore_through_one_seam() {
         call("history_list", json!({"thing": sheet})).await,
         "history_list",
     );
-    assert_eq!(listed["value"]["caps"]["restore"], false);
-    assert!(
-        !listed["value"]["entries"]
-            .as_array()
-            .expect("entries")
-            .is_empty()
+    assert_eq!(listed["value"]["caps"]["restore"], true);
+
+    // A task keeps changes, not versions: restore says so, with why.
+    let task = ok(
+        call(
+            "task_create",
+            json!({"projectId": "WORK", "title": "Paint the hall", "clientRequestId": "k3-19-task"}),
+        )
+        .await,
+        "task_create",
     );
+    let task = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let refused = call(
         "history_restore",
-        json!({"thing": sheet, "version": 1, "expectedVersion": 1}),
+        json!({"thing": task, "version": 1, "expectedVersion": 1}),
     )
     .await;
     assert_eq!(refused["outcome"], "conflict", "{refused}");
     let said = refused.to_string();
     assert!(
-        said.contains("not_supported") && said.contains("snapshots"),
+        said.contains("not_supported") && said.contains("comes later"),
         "{refused}"
     );
 

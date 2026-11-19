@@ -19,7 +19,8 @@ impl CoreModule for Module {
         // Forms are bug report links too: these work where Collections is on.
         module.filter(ModuleFilter::AlsoServes(&[
             "bug_report_link_list",
-            "bug_report_link_write",
+            "bug_report_link_create",
+            "bug_report_link_update",
         ]));
         module.export(ExportPart {
             name: "collections",

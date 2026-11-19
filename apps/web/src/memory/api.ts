@@ -99,7 +99,7 @@ export function workspacePagesSpace(organizationId: string) {
 }
 
 export function listPages(projectId: string) {
-  return requestJson<{ pages: PageSummary[]; canEdit: boolean }>(`${project(projectId)}/pages`)
+  return requestJson<{ pages: PageSummary[]; canEdit: boolean; canSuggest?: boolean }>(`${project(projectId)}/pages`)
 }
 
 export function createPage(projectId: string, input: PageInput) {
@@ -136,8 +136,11 @@ export function getPageVersion(pageId: string, version: number) {
   )
 }
 
+/** A save as it landed; `suggestionId` when your role only suggests, so the text waits for someone who edits. */
+export type SavedPage = Page & { suggestionId?: string }
+
 export function updatePage(pageId: string, input: PageInput) {
-  return requestJson<Page>(`/api/v1/pages/${encodeURIComponent(pageId)}`, { method: 'PATCH', json: input })
+  return requestJson<SavedPage>(`/api/v1/pages/${encodeURIComponent(pageId)}`, { method: 'PATCH', json: input })
 }
 
 export function listDecisions(projectId: string, includeSuperseded = false) {
@@ -148,7 +151,7 @@ export function listDecisions(projectId: string, includeSuperseded = false) {
 /** Records a decision through its operation (K2.5); a retry of the same call is answered once. */
 export function recordDecision(
   projectId: string,
-  input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string },
+  input: { title: string; detail?: string; sourceMessageId?: string; sourceConversationId?: string; supersedes?: string; saySo?: boolean },
   requestId: string = newRequestId(),
 ) {
   return callOp('decision_record', { spaceId: projectId, ...input }, { requestId }).then((decision) => decision as Decision)

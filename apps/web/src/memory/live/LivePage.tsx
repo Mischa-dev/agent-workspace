@@ -4,6 +4,8 @@ import {
   Bold,
   Blocks,
   Code,
+  FilePlus,
+  Paperclip,
   Heading1,
   Heading2,
   Heading3,
@@ -43,8 +45,13 @@ import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
 import { useOptionalRealtime } from '../../realtime/realtimeContext'
 import { Banner, Button, Menu, TextField, Tooltip, describeError, showToast, type MenuEntry } from '../../ui'
 import { formatShortcut } from '../../ui/shortcut'
+import { toastError } from '../../app/mutations'
+import { uploadFile } from '../../files/api'
 import { PageEmbed } from '../embeds/PageEmbed'
-import { canInsertTable, currentLink, inTasks, insertEmbed, insertTable, removeLink, setLink, toggleTasks } from './commands'
+import { fileEmbed } from '../embeds/embedModel'
+import { LazyMakePageDialog } from '../LazyMakePageDialog'
+import type { PageSource } from '../MakePageDialog'
+import { canInsertTable, currentLink, inTasks, insertEmbed, insertTable, removeLink, selectedBlockIds, setLink, toggleTasks } from './commands'
 import { fromBase64, getPageDocument, sendPageUpdate, syncPageDocument, type PageDocument } from './documentApi'
 import { EmbedSlots } from './embeds'
 import { DiscussionMarks, discussionKey, selectionAnchor, type MarkedThread, type Marks } from './highlights'
@@ -163,6 +170,7 @@ export default function LivePage({ collections, discussion = null, fallback, pag
       key={current.attempt}
       onReload={reload}
       onUnshowable={() => setUnshowable(true)}
+      projectId={projectId}
       snapshot={current.snapshot}
       title={title}
     />
@@ -214,6 +222,7 @@ function LiveEditor({
   doc,
   onReload,
   onUnshowable,
+  projectId,
   sheets,
   snapshot,
   title,
@@ -224,6 +233,8 @@ function LiveEditor({
   doc: Y.Doc
   onReload: () => void
   onUnshowable: () => void
+  /** The space the page is in. */
+  projectId: string
   /** The project whose sheets the toolbar offers, if it does. */
   sheets: string | null
   snapshot: PageDocument
@@ -240,6 +251,8 @@ function LiveEditor({
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [failure, setFailure] = useState<SaveFailure | null>(null)
   const [linking, setLinking] = useState(false)
+  // The blocks a new page is being made from.
+  const [making, setMaking] = useState<Extract<PageSource, { kind: 'blocks' }> | null>(null)
   // Embedding by address, a collection view, or a sheet's range.
   const [embedding, setEmbedding] = useState<'address' | 'collection' | 'sheet' | null>(null)
   // Each embed's live view, drawn into the element the editor keeps for it.
@@ -254,6 +267,29 @@ function LiveEditor({
   const unshowable = useEffectEvent(() => onUnshowable())
   const label = useEffectEvent(() => title)
   const openThread = useEffectEvent((id: string) => discussion?.onOpenThread(id))
+  // Files pasted, dropped or picked become files of the page (C1.33), each
+  // shown where it was put, in the order given.
+  const [uploading, setUploading] = useState(0)
+  const addFiles = (editor: Editor, files: File[]) => {
+    if (!snapshot.canEdit || files.length === 0) return false
+    const upload = uploadFile({ kind: 'thing', thingKind: 'page', thingId: snapshot.pageId })
+    const picked = files.slice(0, 10)
+    setUploading((count) => count + picked.length)
+    void (async () => {
+      for (const file of picked) {
+        try {
+          const stored = await upload(file, () => undefined, new AbortController().signal)
+          insertEmbed(editor, fileEmbed(stored))
+        } catch (reason) {
+          toastError(`${file.name || 'The file'} wasn’t added`, reason)
+        } finally {
+          setUploading((count) => count - 1)
+        }
+      }
+    })()
+    return true
+  }
+  const attach = useEffectEvent((editor: Editor, files: File[]) => addFiles(editor, files))
   const comment = useEffectEvent((editor: Editor) => {
     if (!discussion) return false
     commentOnSelection(editor, discussion)
@@ -295,6 +331,20 @@ function LiveEditor({
       injectCSS: false,
       editorProps: {
         attributes: { id: editorId, class: 'aw-md aw-doc aw-live__doc', 'aria-label': label() },
+        handlePaste: (_view, event) => {
+          const files = Array.from(event.clipboardData?.files ?? [])
+          if (!files.length) return false
+          event.preventDefault()
+          return attach(instance, files)
+        },
+        handleDrop: (view, event) => {
+          const files = Array.from(event.dataTransfer?.files ?? [])
+          if (!files.length) return false
+          event.preventDefault()
+          const at = view.posAtCoords({ left: event.clientX, top: event.clientY })
+          if (at) instance.commands.setTextSelection(at.pos)
+          return attach(instance, files)
+        },
       },
       onContentError: () => unshowable(),
       onCreate: ({ editor: created }) => setEditor(created),
@@ -349,7 +399,7 @@ function LiveEditor({
     return () => window.clearInterval(timer)
   }, [live])
 
-  const status = snapshot.canEdit ? saveLabel(saveState) : 'View only'
+  const status = !snapshot.canEdit ? 'View only' : uploading > 0 ? 'Adding files…' : saveLabel(saveState)
   return (
     <div className="aw-live">
       {failure ? (
@@ -385,6 +435,13 @@ function LiveEditor({
                 onLink={() => {
                   setEmbedding(null)
                   setLinking(true)
+                }}
+                onFiles={(files) => addFiles(editor, files)}
+                onMakePage={() => {
+                  const blocks = selectedBlockIds(editor.state)
+                  if (blocks === 'empty') showToast({ title: 'Select the blocks to make a page from.' })
+                  else if (blocks === 'unsaved') showToast({ title: 'That part is still saving.', description: 'Try again in a moment.' })
+                  else setMaking({ kind: 'blocks', pageId: snapshot.pageId, blockIds: blocks })
                 }}
               />
             ) : (
@@ -443,6 +500,7 @@ function LiveEditor({
           </Suspense>
         ) : null}
       </div>
+      {making ? <LazyMakePageDialog onClose={() => setMaking(null)} projectId={projectId} source={making} /> : null}
       <div className="aw-live__page" ref={mount} />
       {embeds.map((slot) => createPortal(<PageEmbed framed={false} href={slot.href} label={slot.label} />, slot.element, slot.key))}
     </div>
@@ -603,6 +661,25 @@ const TOOLS: Tool[][] = [
     },
   ],
   [
+    // Picks files to add to the page: see Toolbar.
+    {
+      key: 'file',
+      label: 'Add a picture or file',
+      icon: Paperclip,
+      run: () => undefined,
+    },
+  ],
+  [
+    // Copies or moves the selected blocks to a new page: see Toolbar.
+    {
+      key: 'page',
+      label: 'Make a page from these blocks',
+      icon: FilePlus,
+      run: () => undefined,
+      enabled: (editor) => !editor.state.selection.empty,
+    },
+  ],
+  [
     {
       key: 'undo',
       label: 'Undo',
@@ -645,13 +722,18 @@ function Toolbar({
   onComment,
   onEmbed,
   onLink,
+  onFiles,
+  onMakePage,
 }: {
   controls: string
   editor: Editor
   onComment: (() => void) | null
   onEmbed: (() => void) | null
   onLink: () => void
+  onFiles: (files: File[]) => void
+  onMakePage: () => void
 }) {
+  const picker = useRef<HTMLInputElement>(null)
   const [, redraw] = useReducer((count: number) => count + 1, 0)
   useEffect(() => {
     editor.on('transaction', redraw)
@@ -681,7 +763,11 @@ function Toolbar({
                       ? onEmbed
                       : tool.key === 'comment' && onComment
                         ? onComment
-                        : () => tool.run(editor)
+                        : tool.key === 'page'
+                          ? onMakePage
+                          : tool.key === 'file'
+                            ? () => picker.current?.click()
+                            : () => tool.run(editor)
                 }
                 // Keep the page's selection when a button is pressed.
                 onMouseDown={(event) => event.preventDefault()}
@@ -701,6 +787,17 @@ function Toolbar({
           })}
         </div>
       ))}
+      <input
+        hidden
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ''
+          if (files.length) onFiles(files)
+        }}
+        ref={picker}
+        type="file"
+      />
     </div>
   )
 }

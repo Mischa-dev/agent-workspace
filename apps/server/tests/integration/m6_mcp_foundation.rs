@@ -372,8 +372,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let project_tool = tools
         .pointer("/result/tools")
         .and_then(Value::as_array)
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_open"))
-        .expect("project_open tool");
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_get"))
+        .expect("project_get tool");
     // No exact tool count, so branches that each add a tool merge in either
     // order. Every tool must instead describe itself and carry valid schemas.
     // See docs/plans/mcp-tools.md for the tool list.
@@ -468,7 +468,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             8,
             "repository_get",
             json!({"repositoryId":seed.repository_id.to_string()}),
-            "found",
+            "ok",
         ),
         (
             9,
@@ -910,8 +910,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .fetch_one(&pool)
     .await
     .expect("MCP audit count");
+    // Ten writes, and the first comment opening the task's comments
+    // conversation (C1.4).
     assert_eq!(
-        mcp_audits, 10,
+        mcp_audits, 11,
         "exact replay and conflicts create no success audit"
     );
     let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(&format!(
@@ -1834,6 +1836,7 @@ async fn call_tool(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
+    // tools/list lists every operation's schema; it passed 1 MB with K2.14.
     let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");

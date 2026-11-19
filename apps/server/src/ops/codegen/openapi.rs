@@ -69,7 +69,7 @@ pub fn document(registry: &Registry) -> Result<Value, String> {
         }
         let answer = json!({
             "application/json": {
-                "schema": component(envelope::schema(super::bare((meta.output_schema)()))),
+                "schema": component(envelope::schema(super::bare((meta.output_schema)()), false)),
             },
         });
         let description = match meta.permission {

@@ -1,0 +1,6 @@
+{
+  "about": "Two tasks moved on the board: My work refetches once, the task's history, card and planning go stale; chat and documents are left alone.",
+  "fetched": { "my work": 1 },
+  "stale": ["task A history", "task A card", "planning"],
+  "untouched": ["channel timeline", "page list", "sheet list", "sidebar"]
+}

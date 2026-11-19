@@ -148,6 +148,8 @@ pub(crate) fn status_for(result: &Value) -> StatusCode {
 fn outcome_status(outcome: &str) -> Option<StatusCode> {
     Some(match outcome {
         "ok" | "applied" | "found" | "events" | "requested" => StatusCode::OK,
+        // K2.21: a long call kept and run by a job.
+        "started" => StatusCode::ACCEPTED,
         "not_found" => StatusCode::NOT_FOUND,
         "permission_denied" => StatusCode::FORBIDDEN,
         "invalid_request" | "invalid_transition" | "rejected" => StatusCode::UNPROCESSABLE_ENTITY,
@@ -346,24 +348,26 @@ fn merge_identical(components: &mut Map<String, Value>, others: &mut [&mut Map<S
     }
 }
 
-/// An operation's result is the envelope: its `ok` branch and one branch
-/// per refusal, the same for every operation. Each refusal branch is
+/// An operation's result is the envelope: its `ok` branch, the refusal
+/// branch every operation shares (its `outcome` names which refusal), and
+/// for a long operation the `started` branch. Each branch but `ok` is
 /// written once in `components.schemas` and referenced, which keeps the
 /// document small as operations are added.
 fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
-    for branch in branches {
+    for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
             // A paused account's answer (A2.10) is the same for every
             // operation: shared too.
             Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
             Some("ok") => {
-                share_envelope(branch, components);
+                share_ok_envelope(branch, components);
                 continue;
             }
+            Some("started") => "Started".to_owned(),
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
             // all: shared too, under the first name free or already
@@ -384,31 +388,65 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
     }
-}
-
-/// The `ok` branch's envelope (`outcome`, `paused`, `requestId`, ...) is the
-/// same for every operation; only its `value` differs. The envelope is
-/// written once as `Answered` and the branch refers to it beside its own
-/// `value`.
-fn share_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
-    let Some(properties) = branch.get_mut("properties").and_then(Value::as_object_mut) else {
-        return;
-    };
-    let envelope = properties
-        .iter()
-        .filter(|(name, _)| *name != "value")
-        .map(|(name, schema)| (name.clone(), schema.clone()))
-        .collect::<Map<String, Value>>();
-    let shared = json!({ "type": "object", "properties": envelope });
-    if components
-        .entry("Answered".to_owned())
-        .or_insert_with(|| shared.clone())
-        != &shared
-    {
+    // The shared branches together (paused, started, each refusal) are the
+    // same list for most operations: one `oneOf` of them, named once.
+    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+        .drain(..)
+        .partition(|branch| !is_shared_branch(branch));
+    if shared.len() < 2 {
+        branches.extend(kept);
+        branches.extend(shared);
         return;
     }
-    properties.retain(|name, _| name == "value");
-    branch["$ref"] = json!("#/components/schemas/Answered");
+    let others = json!({ "oneOf": shared });
+    let key = (1..)
+        .map(|index| match index {
+            1 => "NotOk".to_owned(),
+            index => format!("NotOk{index}"),
+        })
+        .find(|key| components.get(key).is_none_or(|known| *known == others))
+        .unwrap_or_default();
+    components.entry(key.clone()).or_insert(others);
+    branches.extend(kept);
+    branches.push(json!({ "$ref": format!("#/components/schemas/{key}") }));
+}
+
+/// A branch that is only a reference to a shared one (not the `ok` branch,
+/// which carries the operation's own value beside its reference).
+fn is_shared_branch(branch: &Value) -> bool {
+    branch
+        .as_object()
+        .is_some_and(|object| object.len() == 1 && object.contains_key("$ref"))
+}
+
+/// The `ok` branch's envelope (everything but its `value`) is the same for
+/// every operation: written once as `Ok` and referenced beside the
+/// operation's own `value`, which keeps the document small as operations
+/// are added.
+fn share_ok_envelope(branch: &mut Value, components: &mut Map<String, Value>) {
+    let Some(object) = branch.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Object(properties)) = object.get("properties") else {
+        return;
+    };
+    let Some(value) = properties.get("value").cloned() else {
+        return;
+    };
+    let mut envelope = object.clone();
+    if let Some(Value::Object(properties)) = envelope.get_mut("properties") {
+        properties.remove("value");
+    }
+    let envelope = Value::Object(envelope);
+    let shared = components
+        .entry("Ok".to_owned())
+        .or_insert_with(|| envelope.clone());
+    if *shared == envelope {
+        *branch = json!({
+            "$ref": "#/components/schemas/Ok",
+            "properties": { "value": value },
+        });
+    }
 }
 
 fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
@@ -479,6 +517,65 @@ working wherever you lose access.\n\n\
 Projects and tasks can be named by key (`AWD`, `AWD-12`) wherever an ID is asked for. \
 Operations that change things take a `clientRequestId` so a retry never applies twice, and \
 changes to a task take the `expectedVersion` you last read.";
+
+/// Drops what a schema says twice, to keep the document small: a schema's
+/// `title` (the operation's id or the component's name says it), what JSON
+/// Schema assumes without being told (`default: null`,
+/// `additionalProperties: true`), and the
+/// unsigned integer formats the schema generator adds, which aren't
+/// OpenAPI's (`minimum: 0` already says it, and the type's own maximum
+/// adds nothing).
+fn slim(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get("title").is_some_and(Value::is_string) {
+                map.remove("title");
+            }
+            // What JSON Schema assumes anyway: a null default on an optional
+            // value, and properties beyond the listed ones allowed.
+            if map.get("default").is_some_and(Value::is_null) {
+                map.remove("default");
+            }
+            if map.get("additionalProperties") == Some(&Value::Bool(true)) {
+                map.remove("additionalProperties");
+            }
+            if map
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(|format| format.starts_with("uint"))
+            {
+                map.remove("format");
+                if map
+                    .get("maximum")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|maximum| {
+                        [
+                            u64::from(u8::MAX),
+                            u64::from(u16::MAX),
+                            u64::from(u32::MAX),
+                            u64::MAX,
+                        ]
+                        .contains(&maximum)
+                    })
+                {
+                    map.remove("maximum");
+                }
+            }
+            for (key, child) in map.iter_mut() {
+                // Property names are names, not keywords.
+                if key == "properties"
+                    && let Value::Object(properties) = child
+                {
+                    properties.values_mut().for_each(slim);
+                } else {
+                    slim(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(slim),
+        _ => {}
+    }
+}
 
 /// The OpenAPI 3.1 document for every operation.
 pub(crate) fn document() -> Value {
@@ -551,10 +648,9 @@ pub(crate) fn document() -> Value {
             })
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
         // The result, and a refusal (the same result with its `outcome`),
-        // are one response that 200 and the refusing statuses point at,
-        // shared by every operation with that result, so the document stays
-        // small as tools are added. The introduction says what each status
-        // means.
+        // are one response, shared by every operation with that result, so
+        // the document stays small as tools are added. The introduction says
+        // what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
                 "description": "See `outcome`.",
@@ -562,10 +658,10 @@ pub(crate) fn document() -> Value {
             })
         });
         let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({ "$ref": format!("#/components/responses/{result}") }),
-        );
+        // 200 and the refusing statuses (403, 404, 409, 422, 503) share it
+        // as the `default` response (every status not named), which is
+        // written once rather than again under 200; the statuses every
+        // operation answers the same way are named, which takes precedence.
         for (status, _) in ERROR_STATUSES {
             if !refuses(status) {
                 // The same for every operation, so referenced rather than
@@ -576,29 +672,33 @@ pub(crate) fn document() -> Value {
                 );
             }
         }
-        for range in ["4XX", "5XX"] {
-            responses.insert(
-                range.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{result}") }),
-            );
-        }
-        paths.insert(
-            format!("/{name}"),
-            json!({
-                "post": {
-                    "operationId": name,
-                    "summary": title,
-                    "description": tool.description.as_deref().unwrap_or_default(),
-                    "tags": [tag],
-                    "x-read-only": read_only,
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": input } },
-                    },
-                    "responses": responses,
-                }
-            }),
+        responses.insert(
+            "default".to_owned(),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
         );
+        let mut post = json!({
+            "operationId": name,
+            "summary": title,
+            "description": tool.description.as_deref().unwrap_or_default(),
+            "tags": [tag],
+            "requestBody": {
+                "required": true,
+                "content": { "application/json": { "schema": input } },
+            },
+            "responses": responses,
+        });
+        // Only reads say so: a missing mark is a write, which keeps the
+        // document small as operations are added.
+        if read_only {
+            post["x-read-only"] = true.into();
+        }
+        paths.insert(format!("/{name}"), json!({ "post": post }));
+    }
+    for path in paths.values_mut() {
+        slim(path);
+    }
+    for schema in components.values_mut() {
+        slim(schema);
     }
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     let mut document = json!({
@@ -735,6 +835,9 @@ mod tests {
         // Raised from 768 KiB with AWD-62's question tools; past this, serve
         // it compressed or slim the result schemas rather than raise it again.
         let size = serde_json::to_vec(&document).expect("serialize").len();
+        if std::env::var_os("SHOW_PUBLIC_API_SIZE").is_some() {
+            eprintln!("the public API document is {size} bytes");
+        }
         assert!(size < 896 * 1024, "the document is {size} bytes");
         let mut references = Vec::new();
         collect_refs(&document, &mut references);

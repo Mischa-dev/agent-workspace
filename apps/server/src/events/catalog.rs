@@ -226,6 +226,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     None,
     "Someone's saved searches changed",
 );
+pub static INBOX_VIEWS_CHANGED: EventType = signal(
+    "inbox_views.changed",
+    "inbox",
+    None,
+    "Someone's saved inbox views changed",
+);
 pub static DM_RULES_CHANGED: EventType = signal(
     "dm_rules.changed",
     "messages",
@@ -420,6 +426,30 @@ pub static SHEET_UPDATED: EventType = fact(
 )
 .legacy(&["sheet.updated"])
 .automatable();
+pub static SHEET_VERSION_RESTORED: EventType = fact(
+    "sheet.version_restored",
+    "sheets",
+    Some("sheet"),
+    "An earlier revision of a sheet was put back",
+);
+pub static SHEET_VIEWS_CHANGED: EventType = fact(
+    "sheet.views_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's filter views were added, changed or removed",
+);
+pub static SHEET_RANGES_CHANGED: EventType = fact(
+    "sheet.ranges_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's named ranges were added, changed or removed",
+);
+pub static SHEET_PROPOSALS_CHANGED: EventType = fact(
+    "sheet.proposals_changed",
+    "sheets",
+    Some("sheet"),
+    "A change to a sheet was proposed, or a proposal on it decided",
+);
 
 // --- dashboards ------------------------------------------------------------
 pub static DASHBOARD_UPDATED: EventType = fact(
@@ -453,6 +483,12 @@ pub static WHITEBOARD_VERSION_RESTORED: EventType = fact(
     "whiteboards",
     Some("whiteboard"),
     "An earlier version of a whiteboard was put back",
+);
+pub static WHITEBOARD_PROPOSALS_CHANGED: EventType = fact(
+    "whiteboard.proposals_changed",
+    "whiteboards",
+    Some("whiteboard"),
+    "A change to a whiteboard was proposed, or a proposal on it decided",
 );
 
 // --- collections -----------------------------------------------------------
@@ -563,7 +599,7 @@ pub static FILE_ATTACHED: EventType = fact(
     "file.attached",
     "workspace",
     Some("file"),
-    "A file was attached to a message or task",
+    "A file was attached to a message, a task or a page",
 );
 pub static FILE_REMOVED: EventType = fact(
     "file.removed",
@@ -693,6 +729,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &INBOX_VIEWS_CHANGED,
         &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
@@ -724,10 +761,15 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
+        &SHEET_VERSION_RESTORED,
+        &SHEET_VIEWS_CHANGED,
+        &SHEET_RANGES_CHANGED,
+        &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
+        &WHITEBOARD_PROPOSALS_CHANGED,
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
         &RECORD_UPDATED,

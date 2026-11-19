@@ -82,6 +82,9 @@ With an object store, clients can also upload straight to it (`file_upload_start
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |
 | `AGENT_WORKSPACE_PUSH_CONTACT` | the public origin when https, else a mailto at its host | Who push services contact about this server's web push: a `mailto:` or `https:` URL. |
+| `AGENT_WORKSPACE_DIRECTORY_DIR` | none | An absolute path to a folder of packages (`.json`, `.zip`, or folders holding a `package.json`) every workspace on this server can install from Settings › Modules › Available. Read again every hour. |
+| `AGENT_WORKSPACE_DIRECTORY_URLS` | none | Package lists (`agent-workspace-directory/1` JSON over https), comma or space separated, every workspace can install from. Read again every hour. |
+| `AGENT_WORKSPACE_DIRECTORY_WORKSPACE_SOURCES` | `true` (`false` in the hosted profile) | Whether a workspace may add its own package lists. |
 | `AGENT_WORKSPACE_METRICS_TOKEN_PATH` | none (no `/metrics`) | An owner-only file holding the bearer token `/metrics` requires. |
 | `AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE` | `3000` | MCP and public API calls one workspace's agents and apps may make together each minute, beside each credential's own 600. See `docs/operations/abuse-controls.md`. |
 | `AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS` | `1024` | Apps that registered but never finished connecting, kept before new registrations are refused. |

@@ -2,7 +2,7 @@ import type { ComponentType } from 'react'
 
 import { CheckboxFieldEditor, ChoiceFieldEditor, DateFieldEditor, LinkFieldEditor, PersonFieldEditor, TypedFieldEditor, type EditorProps } from './editors'
 import { FIELD_TYPE_INFO, FIELD_TYPE_LIST, type FieldType, type FieldTypeInfo } from './fieldTypes'
-import { CheckRenderer, ChipsRenderer, EmailRenderer, FormulaRenderer, LongTextRenderer, PhoneRenderer, TextRenderer, UrlRenderer, type RendererProps } from './renderers'
+import { CheckRenderer, ChipsRenderer, EmailRenderer, FormulaRenderer, LinkRenderer, LongTextRenderer, PhoneRenderer, TextRenderer, UrlRenderer, type RendererProps } from './renderers'
 
 /**
  * The field registry (T1.13a, moved from W1.16 by R17): one entry per field
@@ -41,7 +41,7 @@ const DRAWINGS: Record<FieldType, Drawing> = {
   email: { Renderer: EmailRenderer, Editor: TypedFieldEditor },
   phone: { Renderer: PhoneRenderer, Editor: TypedFieldEditor },
   checkbox: { Renderer: CheckRenderer, Editor: CheckboxFieldEditor },
-  link: { Renderer: TextRenderer, Editor: LinkFieldEditor },
+  link: { Renderer: LinkRenderer, Editor: LinkFieldEditor },
   // Worked out by the server; nobody fills it in.
   formula: { Renderer: FormulaRenderer, Editor: null },
   // No value to show: collections draw it as a button that runs its steps.

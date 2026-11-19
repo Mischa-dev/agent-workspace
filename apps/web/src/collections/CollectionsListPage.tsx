@@ -2,10 +2,9 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, countLabel, describeError, formatRelative, showToast } from '../ui'
 import { collectionKeys, updateCollection, useCollections, type CollectionSummary } from './api'
 import { CollectionDetailsDialog } from './CollectionDialogs'
@@ -18,7 +17,6 @@ type Shown = 'open' | 'archived'
  * build collections make new ones here and restore archived ones.
  */
 export function CollectionsListPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const collections = useCollections(projectId, true)
@@ -26,19 +24,16 @@ export function CollectionsListPage() {
   const navigate = useNavigate()
   const [shown, setShown] = useState<Shown>('open')
   const [creating, setCreating] = useState(false)
+  useShellPage({ project: project.data })
 
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading collections" />
-      </AppShell>
+      <ProjectPageLoading label="Loading collections" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -63,7 +58,7 @@ export function CollectionsListPage() {
   ) : null
 
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-collections">
         <PageHeader actions={newCollection} icon="table" title="Collections" />
         {/* It stays while Archived is chosen, so restoring the last one leaves a way back. */}
@@ -116,6 +111,6 @@ export function CollectionsListPage() {
       {creating ? (
         <CollectionDetailsDialog collection={null} onClose={() => setCreating(false)} onSaved={(body) => void navigate(href(body.collection))} projectId={projectId} />
       ) : null}
-    </AppShell>
+    </>
   )
 }
