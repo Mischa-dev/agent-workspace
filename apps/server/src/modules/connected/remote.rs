@@ -550,7 +550,7 @@ mod tests {
         let long = "x".repeat(1000);
         let body = json!({ "error": { "message": long } }).to_string();
         assert_eq!(
-            message_of(body.as_bytes()).unwrap().len(),
+            message_of(body.as_bytes()).expect("a message").len(),
             MAX_MESSAGE_CHARS
         );
         assert_eq!(

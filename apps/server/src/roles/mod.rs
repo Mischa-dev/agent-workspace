@@ -949,7 +949,7 @@ impl Auditor<'_> {
             }
             Self::Op(ctx) => {
                 crate::ops::dispatch::audit_row_as(
-                    &mut **transaction,
+                    transaction,
                     ctx,
                     action,
                     target_kind,

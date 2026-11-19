@@ -377,7 +377,7 @@ impl Operation for SettingUpdate {
                 metadata["version"] = version.into();
             }
             crate::ops::dispatch::audit_row_as(
-                &mut **tx,
+                tx,
                 ctx,
                 if done == "changed" {
                     "setting.changed"
