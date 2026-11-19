@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { normalizeConversationActor } from '../conversations/sidebarApi'
 import type { ConversationActor } from '../conversations/types'
@@ -128,20 +129,11 @@ export async function createGroup(input: {
 }
 
 export async function addGroupMember(conversationId: string, actorId: string) {
-  await requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(conversationId)}/members`,
-    { method: 'POST', json: { actorId } },
-  )
+  await callOp('conversation_members_update', { conversationId, add: [actorId] })
 }
 
-export async function removeGroupMember(
-  conversationId: string,
-  actorId: string,
-) {
-  await requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(actorId)}/remove`,
-    { method: 'POST' },
-  )
+export async function removeGroupMember(conversationId: string, actorId: string) {
+  await callOp('conversation_members_update', { conversationId, remove: [actorId] })
 }
 
 export function useDirectOverview() {
