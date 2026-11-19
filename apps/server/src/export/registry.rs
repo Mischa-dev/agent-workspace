@@ -733,6 +733,19 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "conversation_app_consents",
+                table: "conversation_app_consents",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("app_account_id", "actors"),
+                    ("granted_by_account_id", "actors"),
+                    ("revoked_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "conversation_notification_levels",
                 table: "conversation_notification_levels",
                 references: &[

@@ -112,7 +112,7 @@ pub struct ScopeAccount {
 
 impl Operation for AgentScopeGet {
     const NAME: &'static str = "agent_scope_get";
-    const KIND: OpKind = OpKind::Query;
+    const KIND: OpKind = OpKind::Describe;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;

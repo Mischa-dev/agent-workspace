@@ -579,7 +579,12 @@ async fn open_with(
 
     // A2.14: a run isn't started once its account's budget on what runs
     // cost is used up.
-    crate::budgets::admit_run(transaction, input.space_id, account_id).await?;
+    Box::pin(crate::budgets::admit_run(
+        transaction,
+        input.space_id,
+        account_id,
+    ))
+    .await?;
 
     let run_id = Uuid::now_v7();
     let working = input.initial == RunState::Working;
@@ -1354,7 +1359,7 @@ pub async fn record_usage(
         ));
     }
     // A2.14: counted against the account's budgets on what runs cost.
-    crate::budgets::record_run_usage(
+    Box::pin(crate::budgets::record_run_usage(
         transaction,
         crate::budgets::RunUsage {
             workspace: workspace_id,
@@ -1368,7 +1373,7 @@ pub async fn record_usage(
             tokens: input.input_tokens.saturating_add(input.output_tokens),
             cost: input.cost,
         },
-    )
+    ))
     .await?;
     if let Some(run) = run {
         super::usage::add_reported(transaction, &run, &model, &input, currency.as_deref()).await?;

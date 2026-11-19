@@ -80,6 +80,15 @@ pub async fn admit_call(
     request_id: Option<&str>,
 ) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
+    // The space first: a write holding it makes this wait, as the call
+    // itself would, but holding nothing yet (recording the use locks its
+    // account, which a removal waiting on nothing but this would need).
+    if let Some(space) = space {
+        sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR KEY SHARE")
+            .bind(space)
+            .execute(&mut *transaction)
+            .await?;
+    }
     let call = request_id.map_or_else(
         || Uuid::now_v7().to_string(),
         |key| format!("{account}:{}", key.chars().take(120).collect::<String>()),

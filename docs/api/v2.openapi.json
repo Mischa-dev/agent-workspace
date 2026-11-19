@@ -18665,7 +18665,7 @@
         "tags": [
           "agents"
         ],
-        "x-operation-kind": "query"
+        "x-operation-kind": "describe"
       }
     },
     "/api/v2/w/{workspace}/ops/agent_template_list": {

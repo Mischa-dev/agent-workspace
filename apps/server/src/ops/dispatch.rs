@@ -91,7 +91,9 @@ pub async fn dispatch(
     let Some(call) = registry().get(name).map(|entry| entry.call) else {
         return Answer::error(&OpError::not_found("That operation"));
     };
-    let (request, input) = match asked_for(state, request, input).await {
+    // Boxed, as below: an operation's future is already deep (automations
+    // call operations from inside operations).
+    let (request, input) = match Box::pin(asked_for(state, request, input)).await {
         Ok(asked) => asked,
         Err(error) => return Answer::error(&error),
     };
@@ -614,16 +616,20 @@ async fn pipeline<O: Operation>(
     };
     // A2.14: a call through the API or an agent tool spends its caller's
     // budgets (the app's own pages are bounded by people's hands). Before
-    // the call's transaction opens: see `budgets::admit_call`.
-    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) && !request.preview {
-        crate::budgets::admit_call(
+    // the call's transaction opens: see `budgets::admit_call`. A read that
+    // spans workspaces is in none, so no workspace's budget counts it.
+    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. })
+        && !request.preview
+        && !ctx.workspace_id.is_nil()
+    {
+        Box::pin(crate::budgets::admit_call(
             &state.pool,
             ctx.workspace_id,
             ctx.space_id,
             ctx.caller.account_id,
             writes,
             ctx.request_id.as_deref(),
-        )
+        ))
         .await?;
     }
     let mut reservation = None;

@@ -107,14 +107,9 @@ async fn of_event(
     caller: Uuid,
     event: Uuid,
 ) -> Result<Option<Option<Uuid>>, AppError> {
-    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT e.actor_account_id FROM events e WHERE e.id = $1 AND delivery_visible($2, e)",
-    )
-    .bind(event)
-    .bind(caller)
-    .fetch_optional(&mut *connection)
-    .await?
-    .map(|actor| actor.filter(|actor| *actor != caller)))
+    Ok(crate::events::heard_actor(connection, caller, event)
+        .await?
+        .map(|actor| actor.filter(|actor| *actor != caller)))
 }
 
 /// What answering reply request `request_id` acts as: the current call,

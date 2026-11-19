@@ -315,7 +315,7 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
-    "kind": "query",
+    "kind": "describe",
     "long": false,
     "module": "agents",
     "name": "agent_scope_get",

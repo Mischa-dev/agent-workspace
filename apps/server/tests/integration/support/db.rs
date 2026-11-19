@@ -460,3 +460,22 @@ pub(crate) async fn row_rules_role(pool: &PgPool, schema: &str) -> Option<&'stat
     }
     Some(ROLE)
 }
+
+/// Lifts the default message rate (A2.14: 60 a minute per account) in the
+/// workspace `conversation` lives in, the way a workspace's own budget
+/// does, for a test that sends more than a person could.
+pub(crate) async fn lift_message_rate(pool: &PgPool, conversation: &str) {
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
+                                   period, hard_limit, set_by_actor_id) \
+         SELECT $1, conversation.workspace_id, 'workspace', conversation.workspace_id, true, \
+                'messages', 'minute', 100000, \
+                (SELECT id FROM actors ORDER BY created_at, id LIMIT 1) \
+         FROM conversations conversation WHERE conversation.id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(conversation)
+    .execute(pool)
+    .await
+    .expect("lift the message rate");
+}
