@@ -3400,16 +3400,15 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            fingerprints =
-                refresh_digest(
-                    pool,
-                    &a_list,
-                    READ_TOUCHES,
-                    &tables,
-                    &fingerprints,
-                    &mut a_rows,
-                )
-                .await;
+            fingerprints = refresh_digest(
+                pool,
+                &a_list,
+                READ_TOUCHES,
+                &tables,
+                &fingerprints,
+                &mut a_rows,
+            )
+            .await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
