@@ -720,6 +720,7 @@ async fn serve_socket(
                     // The replay sent it already.
                     continue;
                 }
+                let access_may_change = refreshes(&subscription, &event);
                 match refresh_if_changed(&state, &original_principal, &mut subscription, &event).await {
                     Ok(Some(access)) if protocol == 2 => {
                         if socket.send(Message::Text(access.into())).await.is_err() {
@@ -735,6 +736,12 @@ async fn serve_socket(
                         close_socket(&mut socket).await;
                         break;
                     }
+                }
+                // The documents it watches are checked again too: a
+                // document's updates are routed by the watch alone.
+                if access_may_change && live.recheck(&state, account).await.is_err() {
+                    close_socket(&mut socket).await;
+                    break;
                 }
                 let heard = match hears(&state, &original_principal, &subscription, &event)
                     .await
@@ -794,6 +801,10 @@ async fn serve_socket(
                 }
             }
             _ = backstop.tick() => {
+                if live.recheck(&state, account).await.is_err() {
+                    close_socket(&mut socket).await;
+                    break;
+                }
                 match subscribe(&state, &original_principal).await {
                     Ok(fresh) => {
                         let access = wire::access(&subscription, &fresh);
@@ -840,6 +851,21 @@ async fn serve_socket(
 pub(super) struct LiveState {
     watched: std::collections::BTreeSet<super::documents::DocumentRef>,
     last_typing: Option<tokio::time::Instant>,
+}
+
+impl LiveState {
+    /// Drops the documents `account` can no longer open, so their updates
+    /// stop reaching it.
+    async fn recheck(&mut self, state: &AppState, account: Uuid) -> Result<(), AppError> {
+        let mut kept = std::collections::BTreeSet::new();
+        for document in std::mem::take(&mut self.watched) {
+            if super::documents::can_view(&state.pool, account, document).await? {
+                kept.insert(document);
+            }
+        }
+        self.watched = kept;
+        Ok(())
+    }
 }
 
 /// Tells the account's workspaces it came online or went offline.
@@ -1273,18 +1299,22 @@ async fn refresh_if_changed(
     subscription: &mut SubscriptionSet,
     event: &RealtimeDelivery,
 ) -> Result<Option<String>, AppError> {
-    let changed = match event {
-        RealtimeDelivery::Durable { route, .. } => subscription.changed_by(route),
-        RealtimeDelivery::AccessChanged(account) => *account == subscription.account,
-        _ => false,
-    };
-    if !changed {
+    if !refreshes(subscription, event) {
         return Ok(None);
     }
     let fresh = subscribe(state, principal).await?;
     let access = wire::access(subscription, &fresh);
     *subscription = fresh;
     Ok(access)
+}
+
+/// Whether `event` may change what the connection's account can reach.
+fn refreshes(subscription: &SubscriptionSet, event: &RealtimeDelivery) -> bool {
+    match event {
+        RealtimeDelivery::Durable { route, .. } => subscription.changed_by(route),
+        RealtimeDelivery::AccessChanged(account) => *account == subscription.account,
+        _ => false,
+    }
 }
 
 async fn hears(

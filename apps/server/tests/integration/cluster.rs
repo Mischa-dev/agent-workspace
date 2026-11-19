@@ -1787,7 +1787,7 @@ async fn document_update_reaches_watchers_only() {
     };
     let owner = cluster.instance(0).login("owner").await;
     let (project, _) = work_channel(&cluster, &owner).await;
-    let (_, mara) = add_person(&cluster, project, "mara").await;
+    let (mara_id, mara) = add_person(&cluster, project, "mara").await;
     let (_, rook) = add_person(&cluster, project, "rook").await;
     let (side, _) = side_channel(&cluster, &owner, &[]).await;
     let mut pages = Vec::new();
@@ -1855,6 +1855,47 @@ async fn document_update_reaches_watchers_only() {
             "only watchers who may see the page hear it"
         );
     }
+    // Mara leaves the project: the page she watched stops reaching her.
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(mara_id)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("version");
+    let (status, body) = cluster
+        .instance(0)
+        .send(owner.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{mara_id}"),
+            Some("k5-10-leave"),
+            json!({"expectedVersion": version, "enabled": false}),
+        ))
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    frame_of(&mut watcher, "access", Duration::from_secs(5))
+        .await
+        .expect("Mara's access changed");
+    publish(
+        cluster.instance(0).state(),
+        EphemeralFrame::DocumentUpdate {
+            document: DocumentRef {
+                kind: DocumentKind::Page,
+                id: plan,
+            },
+            generation: Uuid::now_v7(),
+            version: 3,
+            update: "QUZURVI=".to_owned(),
+        },
+    )
+    .await;
+    assert!(
+        ephemeral_of(&mut watcher, "document.update", Duration::from_millis(800))
+            .await
+            .is_none(),
+        "a watcher who left the project still hears its page"
+    );
     cluster.finish().await;
 }
 

@@ -919,10 +919,10 @@ fn share_repeated_properties(document: &mut Value) {
     for (component, (_, schema)) in &added {
         let count = uses.get(component.as_str()).copied().unwrap_or(0);
         let reference = format!(r##"{{"$ref":"#/components/schemas/{component}"}}"##).len();
-        if count * schema.len() <= count * reference + schema.len() + component.len() + 4 {
-            if let Some(value) = schemas.remove(component.as_str()) {
-                inline.insert(format!("#/components/schemas/{component}"), value);
-            }
+        if count * schema.len() <= count * reference + schema.len() + component.len() + 4
+            && let Some(value) = schemas.remove(component.as_str())
+        {
+            inline.insert(format!("#/components/schemas/{component}"), value);
         }
     }
     if !inline.is_empty() {
