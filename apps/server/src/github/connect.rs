@@ -614,9 +614,11 @@ async fn record_claims(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The person who started this must still be allowed to manage the
     // project's GitHub connection when they come back.
-    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
-        r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id)
+    let (role, role_permissions, groups) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>)>(
+            r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id),
+               space_group_permissions($2, project.id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -631,17 +633,18 @@ async fn record_claims(
           AND project.archived_at IS NULL
         FOR SHARE OF project, membership, organization_membership
         "#,
-    )
-    .bind(attempt.project_id)
-    .bind(attempt.actor_id)
-    .bind(attempt.organization_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::Forbidden)?;
+        )
+        .bind(attempt.project_id)
+        .bind(attempt.actor_id)
+        .bind(attempt.organization_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     if !crate::access::membership_allows(
         attempt.actor_id,
         attempt.project_id,
-        crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?,
+        crate::policy::RoleGrant::stored(&role, role_permissions.as_deref())?
+            .with_groups(crate::access::group_permissions(groups.as_deref())),
         true,
         Action::GithubIntegrationManage.permission(),
     ) {

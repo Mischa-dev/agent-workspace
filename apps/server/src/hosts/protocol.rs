@@ -311,12 +311,13 @@ pub async fn enrol(state: &crate::AppState, request: EnrolRequest) -> Result<Enr
     let Some((enrolment_id, owner_account, owner_workspace, created_by)) = enrolment else {
         return Err(HostError::CodeRefused);
     };
-    let account_id = Uuid::now_v7();
+    let owner = match (owner_account, owner_workspace) {
+        (Some(account), _) => crate::accounts::Owner::Account(account),
+        (None, Some(workspace)) => crate::accounts::Owner::Workspace(workspace),
+        (None, None) => crate::accounts::Owner::Account(created_by),
+    };
+    let account_id = crate::accounts::create_app(&mut transaction, owner, Some(created_by)).await?;
     let host_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(account_id)
-        .execute(&mut *transaction)
-        .await?;
     let (token, prefix, token_digest) = new_token();
     let host = sqlx::query_as::<_, HostRow>(&format!(
         r#"

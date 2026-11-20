@@ -621,6 +621,16 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            KindDecl {
+                kind: "themes",
+                table: "themes",
+                references: &[
+                    ("owner_account_id", "actors"),
+                    ("offered_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
         ],
         not_exported: &[(
             "project_invitations",

@@ -527,32 +527,9 @@
   color: var(--content-fg);
 }
 
-.aw-slots {
-  display: grid;
-}
-
-.aw-slots__title {
-  margin: var(--space-3) 0 var(--space-1);
-  font: var(--t-label);
-  color: var(--content-fg-muted);
-}
-
-.aw-slot {
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto auto 28px;
-  align-items: center;
-  gap: var(--space-2-5);
-  height: 38px;
-  padding: 0 var(--space-half) 0 var(--space-1);
-  border-radius: var(--radius-sm);
-}
-
-.aw-slot:hover {
-  background: var(--content-hover);
-}
-
 .aw-slot__swatch {
   position: relative;
+  flex: none;
   width: 24px;
   height: 24px;
   border-radius: var(--radius-xs);
@@ -575,50 +552,132 @@
   outline-offset: var(--focus-offset);
 }
 
-.aw-slot__name {
-  overflow: hidden;
-  color: var(--content-fg);
-  font: var(--t-ui);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-slot.is-set .aw-slot__name {
-  font-weight: var(--weight-bold);
-}
-
-.aw-slot__warn {
-  color: var(--warning);
-}
-
-.aw-slot__hex {
-  color: var(--content-fg-muted);
-  font: var(--t-code-sm);
-  text-transform: uppercase;
-}
-
 .aw-slot__spacer {
   width: 28px;
 }
 
-.aw-share {
+/* A swatch is a color picker: big enough to tap. */
+@media (pointer: coarse) {
+  .aw-slot__swatch {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* A theme of your own, or one the workspace offers: pick it, or open its menu. */
+.aw-preset--custom {
+  position: relative;
+  padding: 0;
+}
+
+.aw-preset--custom:has(.aw-preset__pick[aria-checked="true"]) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.aw-preset__pick {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-1-5) var(--space-2);
+  text-align: left;
+}
+
+.aw-preset--custom > .aw-iconbtn,
+.aw-preset--custom > [aria-haspopup] {
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+}
+
+/* The theme editor. */
+.aw-theme-editor {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-token-group {
+  border-top: 1px solid var(--content-border);
+  padding-top: var(--space-2);
+}
+
+.aw-token-group > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--t-label);
+  color: var(--content-fg);
+  cursor: pointer;
+}
+
+.aw-token-group__count {
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+.aw-token-group__rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.25fr) auto;
+  gap: var(--space-1) var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* One token per line: its name, a swatch for colors, the value, and reset. */
+.aw-token {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.aw-token__name {
+  display: grid;
+  min-width: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-token__name code {
+  overflow: hidden;
+  font: var(--t-code-sm);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-token.is-set .aw-token__name span {
+  color: var(--content-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-token > .aw-field .aw-field__note {
+  grid-column: 1 / -1;
+}
+
+.aw-theme-editor__css textarea {
+  font: var(--t-code-sm);
+  tab-size: 2;
+}
+
+.aw-theme-parts {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+}
+
+.aw-theme-parts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
   gap: var(--space-2);
 }
 
-.aw-share .aw-field__control {
-  min-height: var(--size-control);
+.aw-theme-parts dd {
+  margin: 0;
+  color: var(--content-fg-muted);
 }
 
-.aw-share .aw-field__control input {
-  height: calc(var(--size-control) - 2px);
-}
-
-.aw-share .aw-field.is-invalid ~ .aw-btn {
-  align-self: start;
-  margin-top: 26px;
+.aw-theme-editor__actions {
+  display: flex;
+  gap: var(--space-2);
 }
 
 .aw-preview {

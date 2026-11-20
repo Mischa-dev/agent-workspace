@@ -87,15 +87,18 @@ pub struct ProjectMembership {
     pub role: String,
     /// The custom role's permissions, when they hold one.
     pub role_permissions: Option<Vec<String>>,
+    /// What their groups are given in the project (K1.27).
+    pub group_permissions: Option<Vec<String>>,
     pub enabled: bool,
 }
 
 impl ProjectMembership {
     pub fn grant(&self) -> Result<RoleGrant, AppError> {
-        Ok(RoleGrant::stored(
-            &self.role,
-            self.role_permissions.as_deref(),
-        )?)
+        Ok(
+            RoleGrant::stored(&self.role, self.role_permissions.as_deref())?.with_groups(
+                crate::access::group_permissions(self.group_permissions.as_deref()),
+            ),
+        )
     }
 }
 
@@ -363,6 +366,7 @@ macro_rules! membership_select {
                project.archived_at::text AS project_archived_at,
                membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions(membership.actor_id, project.id) AS group_permissions,
                membership.enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id

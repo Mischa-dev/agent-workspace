@@ -197,12 +197,12 @@ pub async fn link(
     token: Option<&str>,
 ) -> Result<HostRow, AppError> {
     super::may_link(transaction, caller, caller_kind, owner).await?;
-    let account_id = Uuid::now_v7();
+    let account_owner = match owner {
+        Owner::Account(account) => crate::accounts::Owner::Account(account),
+        Owner::Workspace(workspace) => crate::accounts::Owner::Workspace(workspace),
+    };
+    let account_id = crate::accounts::create_app(transaction, account_owner, Some(caller)).await?;
     let host_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(account_id)
-        .execute(&mut **transaction)
-        .await?;
     let token_id = match token.map(str::trim).filter(|token| !token.is_empty()) {
         None => None,
         Some(token) => {

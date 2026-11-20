@@ -41,12 +41,15 @@ async fn expire_due_here(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppErro
     let mut looked = 0;
     for _ in 0..limit {
         let mut tx = crate::db::scoped_tx(pool).await?;
+        // An owner's membership lasts (it can't be given a time, and taking
+        // ownership clears one), so owners are never picked.
         // A space membership first: the space alone.
         let space = sqlx::query_as::<_, (Uuid, Uuid)>(
             "SELECT project_id, actor_id FROM project_memberships \
-             WHERE enabled AND NOT via_group AND expires_at <= now() \
+             WHERE enabled AND NOT via_group AND expires_at <= now() AND role <> $1 \
              ORDER BY expires_at LIMIT 1 FOR UPDATE SKIP LOCKED",
         )
+        .bind(crate::policy::MembershipRole::Owner.key())
         .fetch_optional(&mut *tx)
         .await?;
         if let Some((space, account)) = space {
@@ -57,9 +60,10 @@ async fn expire_due_here(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppErro
         }
         let workspace = sqlx::query_as::<_, (Uuid, Uuid)>(
             "SELECT organization_id, actor_id FROM organization_memberships \
-             WHERE enabled AND expires_at <= now() \
+             WHERE enabled AND expires_at <= now() AND role <> $1 \
              ORDER BY expires_at LIMIT 1 FOR UPDATE SKIP LOCKED",
         )
+        .bind(crate::policy::MembershipRole::Owner.key())
         .fetch_optional(&mut *tx)
         .await?;
         let Some((workspace, account)) = workspace else {

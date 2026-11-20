@@ -409,6 +409,27 @@ pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's theme changed (made, changed, offered or deleted). Their id
+/// and the theme's only, delivered to them alone; their other devices read
+/// the theme again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeChangedPayload {
+    pub actor_id: Uuid,
+    pub theme_id: Uuid,
+}
+
+/// A theme a workspace offers changed, or one started or stopped being
+/// offered. Ids only, delivered in the workspace's own space; open theme
+/// lists read again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceThemesChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub theme_id: Uuid,
+}
+
 /// Someone's sidebar sections changed (C2.9). Their id only, delivered to
 /// them alone; their other tabs read their sidebar again over HTTP.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -494,6 +515,8 @@ pub enum OutboxEventPayload {
     GuardsChanged(GuardsChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    ThemeChanged(ThemeChangedPayload),
+    WorkspaceThemesChanged(WorkspaceThemesChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
     FollowsChanged(FollowsChangedPayload),
@@ -534,6 +557,8 @@ impl OutboxEventPayload {
             Self::GuardsChanged(_) => "guards.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::ThemeChanged(_) => "theme.changed",
+            Self::WorkspaceThemesChanged(_) => "workspace_themes.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
             Self::FollowsChanged(_) => "follows.changed",
@@ -577,6 +602,8 @@ impl OutboxEventPayload {
             | Self::GuardsChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_)
+            | Self::WorkspaceThemesChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
             | Self::FollowsChanged(_)
@@ -597,6 +624,7 @@ impl OutboxEventPayload {
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
+            Self::ThemeChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
             Self::FollowsChanged(payload) => Some(payload.actor_id),
@@ -624,6 +652,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
             Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
             Self::SavedSearchesChanged(_)
             | Self::InboxViewsChanged(_)
@@ -640,6 +669,7 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
             Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
+            | Self::WorkspaceThemesChanged(_)
             | Self::GuardsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
@@ -680,6 +710,8 @@ impl OutboxEventPayload {
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::ThemeChanged(payload) => payload.actor_id,
+            Self::WorkspaceThemesChanged(payload) => payload.project_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
             Self::FollowsChanged(payload) => payload.actor_id,
@@ -827,6 +859,8 @@ impl OutboxEventPayload {
             Self::GuardsChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::ThemeChanged(payload) => serde_json::to_value(payload),
+            Self::WorkspaceThemesChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
             Self::FollowsChanged(payload) => serde_json::to_value(payload),
@@ -927,6 +961,12 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notification_keywords.changed" => Self::NotificationKeywordsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "theme.changed" => Self::ThemeChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "workspace_themes.changed" => Self::WorkspaceThemesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sidebar.changed" => Self::SidebarChanged(

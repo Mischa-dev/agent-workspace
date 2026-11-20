@@ -36,14 +36,15 @@ explains how themes and overrides resolve.
 
 ## Theme
 
-The default follows the device: "Match system" shows Daylight (light
-everywhere, with a quiet grey sidebar so the conversation leads) in light mode
-and Midnight (dark everywhere) in dark mode. Five presets ship, Daylight,
-Midnight, Indigo (the earlier default: a deep navy rail and sidebar beside a
-light reading surface), Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
-Solarized and others) loaded only for people who pick one. Every color token is
-a theme slot a person can override on the Appearance page; see
-`docs/frontend/theme-and-tokens.md`.
+Quiet is the default: "Match system" shows Quiet in light mode and Quiet dark
+in dark mode. The other built-in themes are Paper, Frame, Indigo, Midnight,
+Daylight, Evergreen and Graphite, plus classic editor themes (Nord, Dracula,
+Solarized and others) loaded only for people who pick one. Anyone can make a
+theme of their own on the Appearance page. A theme sets any token for light
+and dark, and can add CSS on the published part names. `docs/theming.md` is
+the contract, and `docs/frontend/theme-and-tokens.md` explains how a theme
+resolves. A new shared piece gets its part name in `src/theme/contract.json`,
+and `src/theme/contract.test.ts` fails without it.
 
 ## Color
 

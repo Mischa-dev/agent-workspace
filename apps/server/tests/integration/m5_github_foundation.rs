@@ -140,11 +140,15 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .expect("set viewer role");
 
     let integration_actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(integration_actor_id)
-        .execute(&pool)
-        .await
-        .expect("insert GitHub Integration Actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+         SELECT $1, 'integration', 'active', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(integration_actor_id)
+    .bind(seed.project_id)
+    .execute(&pool)
+    .await
+    .expect("insert GitHub Integration Actor");
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration')",
     )

@@ -4127,6 +4127,82 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "theme.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "theme_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make theme"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "theme.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "theme_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Delete theme"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "theme_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read theme"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "theme_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List themes"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "theme.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "theme_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change theme"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "link.created"
     ],
     "idempotent": true,
@@ -4596,6 +4672,22 @@
     "preview": false,
     "proposable": false,
     "title": "Use the workspace's own file bucket"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "theme.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_theme_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Offer theme to the workspace"
   },
   {
     "automation": false,

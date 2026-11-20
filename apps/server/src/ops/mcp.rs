@@ -52,6 +52,11 @@ async fn limits_of(
         .map_err(|error| OpError::logged("authenticate", &error))
 }
 
+/// The end of a write's tool description (R52). The v2 reference leaves it
+/// out, since its introduction says it once for every operation.
+pub const RETRY_NOTE: &str = " Send a clientRequestId to make a retry safe; without one the \
+     change runs once and is not retry-safe (replaySafe: false).";
+
 /// What a tool's description ends with: the permission it needs, and for a
 /// write, what makes a retry safe (R52).
 fn needs(meta: &OpMeta) -> String {
@@ -70,10 +75,7 @@ fn needs(meta: &OpMeta) -> String {
         );
     }
     if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
-        text.push_str(
-            " Send a clientRequestId to make a retry safe; without one the change runs once \
-             and is not retry-safe (replaySafe: false).",
-        );
+        text.push_str(RETRY_NOTE);
     }
     text
 }

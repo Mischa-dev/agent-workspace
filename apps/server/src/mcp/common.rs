@@ -10,7 +10,11 @@ use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::McpPrincipal;
-use crate::{AppState, error::AppError, policy::ActorKind};
+use crate::{
+    AppState,
+    error::AppError,
+    policy::{ActorKind, RoleGrant},
+};
 
 /// Longest message or document excerpt returned in lists.
 pub(super) const SNIPPET_CHARACTERS: usize = 280;
@@ -296,6 +300,9 @@ pub(crate) async fn anchored_in_workspace(
 pub(super) struct StoredRole {
     pub role: String,
     pub role_permissions: Option<Vec<String>>,
+    /// What the account's groups are given in the space (K1.27).
+    #[sqlx(default)]
+    pub group_permissions: Option<Vec<String>>,
 }
 
 impl StoredRole {
@@ -303,7 +310,14 @@ impl StoredRole {
         Self {
             role: role.to_owned(),
             role_permissions: role_permissions.map(<[String]>::to_vec),
+            group_permissions: None,
         }
+    }
+
+    /// With what the account's groups are given in the space.
+    pub fn with_groups(mut self, group_permissions: Option<Vec<String>>) -> Self {
+        self.group_permissions = group_permissions;
+        self
     }
 }
 
@@ -316,7 +330,8 @@ pub(super) async fn project_role(
     Ok(sqlx::query_as::<_, StoredRole>(
         r#"
         SELECT membership.role,
-               workspace_role_permissions(membership.role_id) AS role_permissions
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($1, $2) AS group_permissions
         FROM project_memberships membership
         WHERE membership.project_id = $2 AND membership.actor_id = $1 AND membership.enabled
           AND actor_can_access_project($1, $3, $2)
@@ -336,13 +351,17 @@ pub(super) fn role_allows(
     role: &StoredRole,
     action: crate::policy::Action,
 ) -> bool {
-    super::mcp_policy_allows(
-        principal.actor_id,
-        project_id,
-        &role.role,
-        role.role_permissions.as_deref(),
-        action,
-    )
+    RoleGrant::stored(&role.role, role.role_permissions.as_deref()).is_ok_and(|grant| {
+        crate::access::membership_allows(
+            principal.actor_id,
+            project_id,
+            grant.with_groups(crate::access::group_permissions(
+                role.group_permissions.as_deref(),
+            )),
+            true,
+            action.permission(),
+        )
+    })
 }
 
 /// Record in this transaction which connected app a person is acting
