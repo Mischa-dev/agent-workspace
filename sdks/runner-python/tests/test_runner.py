@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -115,10 +117,21 @@ class PushTests(unittest.TestCase):
         now = int(standard["headers"]["webhook-timestamp"])
         event = aw.verify_push(standard["secret"], standard["headers"], standard["body"], now=now)
         self.assertEqual(event["type"], "message.mentioned")
-        typed = json.loads(fixture("webhook-typed_v1.json"))
-        legacy = aw.verify_push(typed["secret"], typed["headers"], typed["body"], now=now)
-        self.assertEqual(legacy["type"], "reply.requested")
-        self.assertEqual(aw.reply_request_id(legacy), "01a2b3c4-0000-7000-8000-0000000000f1")
+
+    def test_a_server_secret_in_the_url_safe_alphabet_verifies(self):
+        # The server makes secrets as unpadded URL-safe base64.
+        secret = "whsec_" + base64.urlsafe_b64encode(bytes(range(250, 256)) * 5 + b"\xfb\xff").decode().rstrip("=")
+        body = json.dumps({"type": "ping", "id": "evt_1"})
+        timestamp = str(int(time.time()))
+        headers = {
+            "webhook-id": "evt_1",
+            "webhook-timestamp": timestamp,
+            "webhook-signature": aw.sign_standard(secret, "evt_1", timestamp, body),
+        }
+        self.assertEqual(aw.verify_push(secret, headers, body)["type"], "ping")
+        key = bytes(range(250, 256)) * 5 + b"\xfb\xff"
+        digest = hmac.new(key, f"evt_1.{timestamp}.{body}".encode(), hashlib.sha256).digest()
+        self.assertEqual(headers["webhook-signature"], "v1," + base64.b64encode(digest).decode())
 
     def test_events_are_handled_once(self):
         deduper = aw.Deduper(limit=2)

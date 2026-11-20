@@ -2030,8 +2030,8 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .await
             .expect("delivery connection");
         sqlx::query(
-            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
-             webhook_format = 'standard' WHERE id = $1",
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net' \
+             WHERE id = $1",
         )
         .bind(made.id)
         .execute(&mut *database)

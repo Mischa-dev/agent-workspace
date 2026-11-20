@@ -16,16 +16,14 @@
 //! A sweep every 30 seconds queues what a running job may have missed and
 //! the retries that came due, and retires signing secrets a rotation left.
 //!
-//! Formats: `standard` posts the envelope with Standard Webhooks headers
-//! and the older `x-workspace-*` headers as aliases. `typed_v1` and
-//! `inbox_v1` post the older reply wakeup bodies, for reply events only,
-//! with the older headers only.
+//! Every push posts the envelope with Standard Webhooks headers
+//! (`webhook-id`, `webhook-timestamp`, `webhook-signature`).
 
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -408,10 +406,7 @@ struct Post {
     position: i64,
     attempts: i32,
     message_id: String,
-    event_type: String,
     body: String,
-    /// The Standard Webhooks headers, or only the older ones.
-    standard: bool,
 }
 
 struct Claimed {
@@ -429,8 +424,6 @@ struct DueRow {
     attempts: i32,
     reason: String,
     deliverable: bool,
-    session_ref: Option<String>,
-    session_harness: Option<String>,
 }
 
 /// Claims up to four due deliveries: what is no longer visible or true is
@@ -448,16 +441,9 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
     let due = sqlx::query_as::<_, DueRow>(&format!(
         r#"
         SELECT {columns}, d.attempts, d.reason,
-               (delivery_visible($2, e) AND delivery_still_relevant($2, e)) AS deliverable,
-               session.external_ref AS session_ref, session.harness AS session_harness
+               (delivery_visible($2, e) AND delivery_still_relevant($2, e)) AS deliverable
         FROM deliveries d
         JOIN events e ON e.position = d.event_position
-        LEFT JOIN reply_requests reply
-          ON e.type LIKE 'reply.%' AND reply.id = e.thing_id
-        LEFT JOIN agent_sessions session
-          ON session.agent_actor_id = $2
-         AND session.conversation_id = COALESCE(reply.thread_id, reply.conversation_id)
-         AND session.state IN ('active', 'idle')
         WHERE d.connection_id = $1 AND d.state = 'pending' AND d.next_attempt_at <= now()
         ORDER BY d.event_position
         LIMIT $3
@@ -485,12 +471,7 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
                     .as_ref()
                     .is_some_and(|limits| read::within_limits(limits, &row.event));
         }
-        let body = if row.deliverable {
-            legacy_body(&delivery, &row)
-        } else {
-            None
-        };
-        let skip = !row.deliverable || (delivery.webhook_format != "standard" && body.is_none());
+        let skip = !row.deliverable;
         // A2.14: over a hard budget on deliveries, a push waits for the
         // next period instead of failing (counted once, so a retry after a
         // failed post doesn't count again).
@@ -532,23 +513,13 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
             continue;
         }
         let reason = Reason::parse(&row.reason).unwrap_or(Reason::Visible);
-        match body {
-            Some(body) => posts.push(Post {
-                position: row.event.position,
-                attempts: row.attempts,
-                message_id: row.event.id.to_string(),
-                event_type: body["event"].as_str().unwrap_or_default().to_owned(),
-                body: body.to_string(),
-                standard: false,
-            }),
-            None => items.push((
-                row.attempts,
-                Delivered {
-                    event: row.event,
-                    reason,
-                },
-            )),
-        }
+        items.push((
+            row.attempts,
+            Delivered {
+                event: row.event,
+                reason,
+            },
+        ));
     }
     if !items.is_empty() {
         let delivered = items
@@ -561,9 +532,7 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
                 position: item.event.position,
                 attempts,
                 message_id: envelope::event_id(item.event.id),
-                event_type: item.event.event_type.clone(),
                 body: envelope::envelope(&item, &delivery, &lookups, None).to_string(),
-                standard: true,
             });
         }
         posts.sort_by_key(|post| post.position);
@@ -580,45 +549,6 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
         secrets,
         posts,
     })
-}
-
-/// The older reply wakeup bodies, for `typed_v1` and `inbox_v1`
-/// connections; `None` for a standard one, and for what those formats
-/// never carried (skipped).
-fn legacy_body(delivery: &Connection, row: &DueRow) -> Option<Value> {
-    let event = &row.event;
-    let payload = &event.payload;
-    match delivery.webhook_format.as_str() {
-        "inbox_v1"
-            if matches!(
-                event.event_type.as_str(),
-                "reply.requested" | "reply.followup"
-            ) =>
-        {
-            Some(json!({
-                "event": "inbox.available",
-                "deliveryId": event.id,
-                "agentId": delivery.account_id,
-                "replyRequestId": event.thing_id,
-            }))
-        }
-        "typed_v1" if event.event_type.starts_with("reply.") => Some(json!({
-            "event": event.event_type,
-            "deliveryId": event.id,
-            "agentId": delivery.account_id,
-            "projectId": event.space_id,
-            "replyRequestId": event.thing_id,
-            "conversationId": payload.get("conversationId"),
-            "threadId": payload.get("threadId"),
-            "messageId": payload.get("messageId"),
-            "generation": payload.get("generation"),
-            "followsRequestId": payload.get("followsRequestId"),
-            // The agent's own session in the conversation, to resume.
-            "sessionRef": row.session_ref,
-            "sessionHarness": row.session_harness,
-        })),
-        _ => None,
-    }
 }
 
 /// The connection's live signing secrets, the active one first.
@@ -668,29 +598,19 @@ async fn send(post: &Post, url: &str, secrets: &[String], trusted: &[String]) ->
             .await
             .map_err(|error| (None, error))?;
         let timestamp = sign::unix_timestamp();
-        let legacy = sign::legacy(active, &timestamp, &post.body)
+        sign::standard(active, &post.message_id, &timestamp, &post.body)
             .ok_or((None, "could not sign the webhook"))?;
-        let mut request = client
+        let signatures = secrets
+            .iter()
+            .filter_map(|secret| sign::standard(secret, &post.message_id, &timestamp, &post.body))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let response = client
             .post(url)
             .header("content-type", "application/json")
-            .header("x-workspace-delivery", &post.message_id)
-            .header("x-workspace-event", &post.event_type)
-            .header("x-workspace-timestamp", &timestamp)
-            .header("x-workspace-signature", format!("sha256={legacy}"));
-        if post.standard {
-            let signatures = secrets
-                .iter()
-                .filter_map(|secret| {
-                    sign::standard(secret, &post.message_id, &timestamp, &post.body)
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            request = request
-                .header("webhook-id", &post.message_id)
-                .header("webhook-timestamp", &timestamp)
-                .header("webhook-signature", signatures);
-        }
-        let response = request
+            .header("webhook-id", &post.message_id)
+            .header("webhook-timestamp", &timestamp)
+            .header("webhook-signature", signatures)
             .body(post.body.clone())
             .send()
             .await
@@ -747,7 +667,6 @@ pub async fn send_test(
     let message_id = super::envelope::event_id(delivery_id);
     let body = json!({
         "type": "ping",
-        "event": "ping",
         "id": message_id,
         "deliveryId": delivery_id,
         "connectionId": connection.id,
@@ -759,10 +678,9 @@ pub async fn send_test(
     let post = Post {
         position: 0,
         attempts: 0,
-        message_id: delivery_id.to_string(),
-        event_type: "ping".to_owned(),
+        // The same id as the body's, as for every push.
+        message_id,
         body,
-        standard: connection.webhook_format == "standard",
     };
     let sent = send(&post, url, secrets, trusted).await;
     let elapsed_ms = u64::try_from(sent.elapsed_ms).unwrap_or_default();

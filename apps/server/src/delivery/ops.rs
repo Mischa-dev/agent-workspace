@@ -167,8 +167,6 @@ pub struct ConnectionView {
     /// Made for an older project credential.
     pub for_credential: bool,
     pub webhook_url: Option<String>,
-    /// standard, typed_v1 or inbox_v1.
-    pub webhook_format: String,
     /// active, push_disabled (pushes stopped after failing; saving the
     /// webhook again turns them back on) or removed.
     pub state: String,
@@ -217,7 +215,6 @@ async fn view(
         is_default: delivery.is_default,
         for_credential: delivery.source_connection_id.is_some(),
         webhook_url: delivery.webhook_url,
-        webhook_format: delivery.webhook_format,
         state: delivery.state,
         disabled_reason: delivery.disabled_reason,
         consecutive_failures: delivery.consecutive_failures,
@@ -373,7 +370,6 @@ struct ConnectionWriteInput {
     name: Option<String>,
     reaches_all: Option<bool>,
     webhook_url: Option<String>,
-    webhook_format: Option<String>,
     subscriptions: Option<Vec<SubscriptionInput>>,
     expected_version: Option<i64>,
 }
@@ -393,9 +389,6 @@ pub struct ConnectionCreateInput {
     /// Where events are pushed (a public https address).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
-    /// standard (default), or typed_v1 / inbox_v1 for older receivers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook_format: Option<String>,
     /// What to hear; left out, what concerns the account (following and
     /// above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -420,8 +413,6 @@ pub struct ConnectionUpdateInput {
     /// A new address, or "" to stop pushes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook_format: Option<String>,
     /// Replaces the connection's subscriptions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscriptions: Option<Vec<SubscriptionInput>>,
@@ -445,7 +436,7 @@ pub struct ConnectionWritten {
 }
 
 const CREATE_DESCRIPTION: &str = "Create a connection to be told through: its name, the \
-    webhook events are pushed to and its format (standard by default), whether it reaches every \
+    webhook events are pushed to (Standard Webhooks), whether it reaches every \
     workspace, and what it subscribes to. For your own account, or an agent or app you manage \
     (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't \
     show it again (rotate it if it was lost).";
@@ -476,7 +467,6 @@ impl Operation for ConnectionCreate {
                 name: input.name,
                 reaches_all: input.reaches_all,
                 webhook_url: input.webhook_url,
-                webhook_format: input.webhook_format.or_else(|| Some("standard".to_owned())),
                 subscriptions: input.subscriptions,
                 expected_version: None,
             },
@@ -494,7 +484,7 @@ impl Operation for ConnectionUpdate {
     const SHOWN_ONCE: &'static [&'static str] = &["webhookSecret"];
     const TITLE: &'static str = "Update connection";
     const DESCRIPTION: &'static str = "Change a connection: its name, the webhook events are \
-        pushed to (\"\" stops pushes) and its format, whether it reaches every workspace, and \
+        pushed to (\"\" stops pushes), whether it reaches every workspace, and \
         what it subscribes to (the list replaces the old one). Yours, or one of an agent or app \
         you manage. A new webhook address gets a signing secret, shown once; saving a webhook \
         whose pushes stopped turns them back on.";
@@ -515,7 +505,6 @@ impl Operation for ConnectionUpdate {
                 name: input.name,
                 reaches_all: input.reaches_all,
                 webhook_url: input.webhook_url,
-                webhook_format: input.webhook_format,
                 subscriptions: input.subscriptions,
                 expected_version: input.expected_version,
             },
@@ -636,41 +625,18 @@ async fn write(
     .map_err(AppError::from)?;
     let webhook_secret = match input.webhook_url.as_deref().map(str::trim) {
         Some("") => {
-            connections::set_webhook(tx, &config, &delivery, None, None).await?;
+            connections::set_webhook(tx, &config, &delivery, None).await?;
             None
         }
-        Some(url) => connections::set_webhook(
-            tx,
-            &config,
-            &delivery,
-            Some(url),
-            input.webhook_format.as_deref(),
-        )
-        .await
-        .map_err(|error| match error {
-            AppError::Validation(_) => OpError::invalid(
-                "webhookUrl",
-                "Use a public https address (webhookFormat: standard, typed_v1 or inbox_v1).",
-            ),
-            other => other.into(),
-        })?,
-        None => {
-            if let Some(format) = input.webhook_format.as_deref() {
-                if !matches!(format, "standard" | "typed_v1" | "inbox_v1") {
-                    return Err(OpError::invalid(
-                        "webhookFormat",
-                        "Use standard, typed_v1 or inbox_v1.",
-                    ));
+        Some(url) => connections::set_webhook(tx, &config, &delivery, Some(url))
+            .await
+            .map_err(|error| match error {
+                AppError::Validation(_) => {
+                    OpError::invalid("webhookUrl", "Use a public https address.")
                 }
-                sqlx::query("UPDATE agent_connections SET webhook_format = $2 WHERE id = $1")
-                    .bind(delivery.id)
-                    .bind(format)
-                    .execute(&mut **tx)
-                    .await
-                    .map_err(AppError::from)?;
-            }
-            None
-        }
+                other => other.into(),
+            })?,
+        None => None,
     };
     if let Some(subscriptions) = subscriptions {
         sqlx::query("DELETE FROM event_subscriptions WHERE connection_id = $1")

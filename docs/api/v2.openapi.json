@@ -1551,10 +1551,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "webhookFormat": {
-            "description": "standard, typed_v1 or inbox_v1.",
-            "type": "string"
-          },
           "webhookUrl": {
             "type": [
               "string",
@@ -1570,7 +1566,6 @@
           "homeWorkspaceId",
           "isDefault",
           "forCredential",
-          "webhookFormat",
           "state",
           "consecutiveFailures",
           "subscriptions",
@@ -31139,7 +31134,7 @@
     },
     "/api/v2/w/{workspace}/ops/connection_create": {
       "post": {
-        "description": "Create a connection to be told through: its name, the webhook events are pushed to and its format (standard by default), whether it reaches every workspace, and what it subscribes to. For your own account, or an agent or app you manage (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't show it again (rotate it if it was lost).",
+        "description": "Create a connection to be told through: its name, the webhook events are pushed to (Standard Webhooks), whether it reaches every workspace, and what it subscribes to. For your own account, or an agent or app you manage (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't show it again (rotate it if it was lost).",
         "operationId": "connection_create",
         "parameters": [
           {
@@ -31197,13 +31192,6 @@
                     },
                     "type": [
                       "array",
-                      "null"
-                    ]
-                  },
-                  "webhookFormat": {
-                    "description": "standard (default), or typed_v1 / inbox_v1 for older receivers.",
-                    "type": [
-                      "string",
                       "null"
                     ]
                   },
@@ -32867,10 +32855,6 @@
                               "format": "int64",
                               "type": "integer"
                             },
-                            "webhookFormat": {
-                              "description": "standard, typed_v1 or inbox_v1.",
-                              "type": "string"
-                            },
                             "webhookUrl": {
                               "type": [
                                 "string",
@@ -32886,7 +32870,6 @@
                             "homeWorkspaceId",
                             "isDefault",
                             "forCredential",
-                            "webhookFormat",
                             "state",
                             "consecutiveFailures",
                             "subscriptions",
@@ -33110,10 +33093,6 @@
                               "format": "int64",
                               "type": "integer"
                             },
-                            "webhookFormat": {
-                              "description": "standard, typed_v1 or inbox_v1.",
-                              "type": "string"
-                            },
                             "webhookUrl": {
                               "type": [
                                 "string",
@@ -33129,7 +33108,6 @@
                             "homeWorkspaceId",
                             "isDefault",
                             "forCredential",
-                            "webhookFormat",
                             "state",
                             "consecutiveFailures",
                             "subscriptions",
@@ -33947,7 +33925,7 @@
     },
     "/api/v2/w/{workspace}/ops/connection_update": {
       "post": {
-        "description": "Change a connection: its name, the webhook events are pushed to (\"\" stops pushes) and its format, whether it reaches every workspace, and what it subscribes to (the list replaces the old one). Yours, or one of an agent or app you manage. A new webhook address gets a signing secret, shown once; saving a webhook whose pushes stopped turns them back on.",
+        "description": "Change a connection: its name, the webhook events are pushed to (\"\" stops pushes), whether it reaches every workspace, and what it subscribes to (the list replaces the old one). Yours, or one of an agent or app you manage. A new webhook address gets a signing secret, shown once; saving a webhook whose pushes stopped turns them back on.",
         "operationId": "connection_update",
         "parameters": [
           {
@@ -34008,12 +33986,6 @@
                     },
                     "type": [
                       "array",
-                      "null"
-                    ]
-                  },
-                  "webhookFormat": {
-                    "type": [
-                      "string",
                       "null"
                     ]
                   },

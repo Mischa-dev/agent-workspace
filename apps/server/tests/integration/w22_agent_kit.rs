@@ -358,20 +358,24 @@ async fn a_test_wakeup_is_signed_like_a_real_one_and_reports_the_answer() {
             .unwrap_or_default()
             .to_owned()
     };
-    assert_eq!(header_value("x-workspace-event"), "ping");
-    assert_eq!(header_value("x-workspace-delivery"), answer["deliveryId"]);
-    let timestamp = header_value("x-workspace-timestamp");
     assert_eq!(
-        header_value("x-workspace-signature"),
-        format!(
-            "sha256={}",
-            agent_workspace_server::delivery::sign::legacy(&secret, &timestamp, &body)
-                .expect("sign")
-        ),
-        "signed with the webhook's own secret, like every wakeup"
+        header_value("webhook-id"),
+        format!("evt_{}", answer["deliveryId"].as_str().expect("delivery id"))
+    );
+    let timestamp = header_value("webhook-timestamp");
+    assert_eq!(
+        header_value("webhook-signature"),
+        agent_workspace_server::delivery::sign::standard(
+            &secret,
+            &header_value("webhook-id"),
+            &timestamp,
+            &body
+        )
+        .expect("sign"),
+        "signed with the webhook's own secret, like every push"
     );
     let ping: Value = serde_json::from_str(&body).expect("JSON");
-    assert_eq!(ping["event"], "ping");
+    assert_eq!(ping["type"], "ping");
     assert!(ping.get("replyRequestId").is_none(), "names no request");
 
     send(

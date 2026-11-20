@@ -1,17 +1,14 @@
 //! Checking a pushed webhook, as a receiver should.
 //!
-//! - **Standard Webhooks** (`standard` connections): `webhook-signature`
-//!   holds one or more space-separated `v1,<base64>` signatures, each an
-//!   HMAC-SHA256 over `"{webhook-id}.{webhook-timestamp}.{body}"` keyed by
-//!   the base64-decoded part of the secret after `whsec_`. More than one
-//!   while a rotated secret is retiring; any one matching is enough.
-//! - **The older header** (every format): `x-workspace-signature` is
-//!   `sha256=<hex>` of an HMAC-SHA256 over `"{x-workspace-timestamp}.{body}"`
-//!   keyed by the whole secret string, `whsec_` and all.
+//! Every push is a Standard Webhooks push: `webhook-signature` holds one or
+//! more space-separated `v1,<base64>` signatures, each an HMAC-SHA256 over
+//! `"{webhook-id}.{webhook-timestamp}.{body}"` keyed by the base64-decoded
+//! part of the secret after `whsec_`. More than one while a rotated secret
+//! is retiring; any one matching is enough.
 //!
 //! Receivers should also refuse a timestamp more than five minutes from
-//! their clock, and treat `webhook-id` (or `x-workspace-delivery`) as the
-//! key that makes a redelivery harmless.
+//! their clock, and treat `webhook-id` as the key that makes a redelivery
+//! harmless.
 
 use base64::{
     Engine as _,
@@ -21,7 +18,7 @@ use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
-use crate::{Report, check_envelope, conforms, fixtures, text_keys};
+use crate::{Report, check_envelope, fixtures};
 
 /// How far a push's timestamp may be from now.
 pub const TOLERANCE_SECONDS: u64 = 300;
@@ -69,52 +66,6 @@ pub fn verify_standard(
     })
 }
 
-/// Whether an `x-workspace-signature` header is the secret's over this
-/// timestamp and body.
-pub fn verify_legacy(secret: &str, timestamp: &str, signature: &str, body: &str) -> bool {
-    let Some(expected) = mac(secret.as_bytes(), &[timestamp, body]) else {
-        return false;
-    };
-    let hex = expected
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    signature
-        .strip_prefix("sha256=")
-        .is_some_and(|given| given.eq_ignore_ascii_case(&hex))
-}
-
-/// A connection's push format.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Format {
-    /// The event envelope, Standard Webhooks headers and the older ones.
-    Standard,
-    /// The older reply wake-up: one body per reply event, older headers.
-    TypedV1,
-    /// The oldest: "something is in your inbox", older headers.
-    InboxV1,
-}
-
-impl Format {
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "standard" => Some(Self::Standard),
-            "typed_v1" => Some(Self::TypedV1),
-            "inbox_v1" => Some(Self::InboxV1),
-            _ => None,
-        }
-    }
-
-    /// The fixture of a push in this format.
-    pub fn fixture(self) -> Value {
-        fixtures::parse(match self {
-            Self::Standard => fixtures::WEBHOOK_STANDARD,
-            Self::TypedV1 => fixtures::WEBHOOK_TYPED_V1,
-            Self::InboxV1 => fixtures::WEBHOOK_INBOX_V1,
-        })
-    }
-}
-
 /// One received push: its headers (names in any case) and its raw body.
 #[derive(Clone, Debug)]
 pub struct Received {
@@ -138,12 +89,12 @@ fn now_seconds() -> u64 {
         .unwrap_or_default()
 }
 
-/// Checks one push in `format`, signed with `secret`, as a receiver would.
-/// `now` is the receiver's clock in seconds (`None`: this machine's), so a
+/// Checks one push, signed with `secret`, as a receiver would. `now` is
+/// the receiver's clock in seconds (`None`: this machine's), so a
 /// fixture's fixed timestamp can be checked too.
-pub fn check_webhook(format: Format, secret: &str, push: &Received, now: Option<u64>) -> Report {
+pub fn check_webhook(secret: &str, push: &Received, now: Option<u64>) -> Report {
     let mut report = Report::default();
-    let fixture = format.fixture();
+    let fixture = fixtures::parse(fixtures::WEBHOOK_STANDARD);
     let missing = fixture["headers"]
         .as_object()
         .map(|headers| {
@@ -161,67 +112,38 @@ pub fn check_webhook(format: Format, secret: &str, push: &Received, now: Option<
     );
     let header = |name: &str| push.header(name).unwrap_or_default();
     report.record(
-        "signs with the older header",
-        verify_legacy(
+        "signs the Standard Webhooks way",
+        verify_standard(
             secret,
-            header("x-workspace-timestamp"),
-            header("x-workspace-signature"),
+            header("webhook-id"),
+            header("webhook-timestamp"),
+            header("webhook-signature"),
             &push.body,
         ),
-        header("x-workspace-signature"),
+        header("webhook-signature"),
     );
-    if format == Format::Standard {
-        report.record(
-            "signs the Standard Webhooks way",
-            verify_standard(
-                secret,
-                header("webhook-id"),
-                header("webhook-timestamp"),
-                header("webhook-signature"),
-                &push.body,
-            ),
-            header("webhook-signature"),
-        );
-    } else {
-        report.skip(
-            "signs the Standard Webhooks way",
-            "older formats carry the older header only",
-        );
-    }
     let now = now.unwrap_or_else(now_seconds);
-    let stamped = header("x-workspace-timestamp").parse::<u64>().ok();
+    let stamped = header("webhook-timestamp").parse::<u64>().ok();
     report.record(
         "stamps the time it was sent",
         stamped.is_some_and(|at| at.abs_diff(now) <= TOLERANCE_SECONDS),
-        header("x-workspace-timestamp"),
+        header("webhook-timestamp"),
     );
     let body = serde_json::from_str::<Value>(&push.body).unwrap_or(Value::Null);
-    let expected = fixtures::parse(fixture["body"].as_str().unwrap_or("null"));
-    let shaped =
-        match format {
-            Format::Standard => check_envelope(&body),
-            Format::TypedV1 | Format::InboxV1 => conforms(&expected, &body, &["event"], &[])
-                .and_then(|()| match text_keys(&body).as_slice() {
-                    [] => Ok(()),
-                    keys => Err(format!("carries text under {}", keys.join(", "))),
-                }),
-        };
-    report.result("sends a body shaped like the fixture", shaped);
-    let event = match format {
-        Format::Standard => body["type"].as_str(),
-        Format::TypedV1 | Format::InboxV1 => body["event"].as_str(),
-    };
+    report.result("sends a body shaped like the fixture", check_envelope(&body));
     report.record(
-        "names the event in x-workspace-event",
-        event.is_some_and(|event| event == header("x-workspace-event")),
-        header("x-workspace-event"),
+        "sends the event's id as webhook-id",
+        body["id"]
+            .as_str()
+            .is_some_and(|id| id == header("webhook-id")),
+        header("webhook-id"),
     );
     report
 }
 
-/// A fixture's push, as [`Received`], with its secret.
-pub fn fixture_push(format: Format) -> (String, Received) {
-    let fixture = format.fixture();
+/// The fixture's push, as [`Received`], with its secret.
+pub fn fixture_push() -> (String, Received) {
+    let fixture = fixtures::parse(fixtures::WEBHOOK_STANDARD);
     let headers = fixture["headers"]
         .as_object()
         .map(|headers| {
@@ -257,33 +179,25 @@ mod tests {
     }
 
     #[test]
-    fn every_webhook_fixture_passes_its_own_check() {
-        for format in [Format::Standard, Format::TypedV1, Format::InboxV1] {
-            let (secret, push) = fixture_push(format);
-            let stamped = push
-                .header("x-workspace-timestamp")
-                .and_then(|at| at.parse().ok());
-            let report = check_webhook(format, &secret, &push, stamped);
-            assert!(report.passed(), "{format:?}\n{report}");
-        }
+    fn the_webhook_fixture_passes_its_own_check() {
+        let (secret, push) = fixture_push();
+        let stamped = push
+            .header("webhook-timestamp")
+            .and_then(|at| at.parse().ok());
+        let report = check_webhook(&secret, &push, stamped);
+        assert!(report.passed(), "{report}");
     }
 
     #[test]
     fn a_tampered_body_or_wrong_secret_fails() {
-        let (secret, mut push) = fixture_push(Format::Standard);
+        let (secret, mut push) = fixture_push();
         let stamped = push
-            .header("x-workspace-timestamp")
+            .header("webhook-timestamp")
             .and_then(|at| at.parse().ok());
-        let wrong = check_webhook(Format::Standard, "whsec_c2VjcmV0", &push, stamped);
-        assert_eq!(
-            wrong.failures(),
-            vec![
-                "signs with the older header",
-                "signs the Standard Webhooks way"
-            ]
-        );
+        let wrong = check_webhook("whsec_c2VjcmV0", &push, stamped);
+        assert_eq!(wrong.failures(), vec!["signs the Standard Webhooks way"]);
         push.body = push.body.replace("mentioned", "assigned");
-        let tampered = check_webhook(Format::Standard, &secret, &push, stamped);
+        let tampered = check_webhook(&secret, &push, stamped);
         assert!(!tampered.passed(), "{tampered}");
     }
 }

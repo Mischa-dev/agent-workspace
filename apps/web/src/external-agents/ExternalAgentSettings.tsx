@@ -762,27 +762,25 @@ function AgentEditForm({
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(projectId) })
 
   const save = useMutation({
-    mutationFn: async (input: { resaveWebhook?: boolean } = {}) => {
+    mutationFn: async () => {
       let secret: string | null = null
-      if (!input.resaveWebhook && (roleChanged || scopesChanged)) {
+      if (roleChanged || scopesChanged) {
         await updateExternalAgent(projectId, connection.id, {
           expectedVersion: connection.version,
           ...(roleChanged ? { role } : {}),
           ...(scopesChanged ? { scopes } : {}),
         })
       }
-      if (input.resaveWebhook || urlChanged) {
-        const result = input.resaveWebhook
-          ? await setExternalAgentWebhook(projectId, connection.id, savedUrl, 'typed')
-          : await setExternalAgentWebhook(projectId, connection.id, url.trim() || null)
+      if (urlChanged) {
+        const result = await setExternalAgentWebhook(projectId, connection.id, url.trim() || null)
         secret = result.webhookSecret
       }
       return secret
     },
-    onSuccess: (secret, input) => {
-      showToast({ tone: 'success', title: input?.resaveWebhook ? 'Switched to typed wakeups' : 'Changes saved' })
+    onSuccess: (secret) => {
+      showToast({ tone: 'success', title: 'Changes saved' })
       if (secret) onSecret(secret)
-      if (!input?.resaveWebhook) onClose()
+      onClose()
     },
     onSettled: refresh,
   })
@@ -819,20 +817,6 @@ function AgentEditForm({
       </SelectField>
       <ScopeFields disabled={busy} onChange={setScopes} role={role} scopes={scopes} />
       <div className="aw-webhook">
-        {connection.webhookUrl && connection.wakeupFormat === 'inbox' ? (
-          <Banner
-            action={
-              <Button busy={busy} onClick={() => save.mutate({ resaveWebhook: true })} size="sm">
-                Switch to typed wakeups
-              </Button>
-            }
-            tone="warning"
-          >
-            This webhook gets the old “check your inbox” wakeups, which stop working in a later release. Switch it to typed
-            wakeups that say what happened (a new request, a follow-up, a stop) once the runner reads them, then give it the
-            new secret. Saving a new address keeps the format it has.
-          </Banner>
-        ) : null}
         <TextField
           disabled={busy}
           hint={

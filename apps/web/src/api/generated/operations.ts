@@ -98,7 +98,7 @@ export type Conditions = { filters?: Record<string, string>; viewId?: string | n
 
 export type ConnectionEntry = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
 
-export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
@@ -830,7 +830,7 @@ export type CommentThreadUpdateInput = { outcome?: string | null; status: string
 
 export type CommentThreadUpdateOutput = { outcome?: string | null; status: string; threadId: string }
 
-export type ConnectionCreateInput = { account?: string | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
+export type ConnectionCreateInput = { account?: string | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookUrl?: string | null }
 
 export type ConnectionCreateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
@@ -848,7 +848,7 @@ export type ConnectionRedeliverOutput = { attempts: number; createdAt: string; d
 
 export type ConnectionRemoveInput = { connectionId: string }
 
-export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookUrl?: string | null }
 
 export type ConnectionSecretRotateInput = { connectionId: string }
 
@@ -858,7 +858,7 @@ export type ConnectionTestInput = { connectionId: string }
 
 export type ConnectionTestOutput = { queued: boolean }
 
-export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: number | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
+export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: number | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookUrl?: string | null }
 
 export type ConnectionUpdateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 

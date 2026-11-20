@@ -99,7 +99,6 @@ struct ConnectionRow {
     webhook_url: Option<String>,
     last_wakeup_at: Option<String>,
     last_wakeup_error: Option<String>,
-    wakeup_format: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,10 +164,6 @@ struct ConnectionView {
     webhook_url: Option<String>,
     last_wakeup_at: Option<String>,
     last_wakeup_error: Option<String>,
-    /// `typed` wakeups say what happened; `inbox` is the old
-    /// `inbox.available` body, kept for webhooks set up before typed
-    /// wakeups until someone switches them (`wakeupFormat: "typed"`).
-    wakeup_format: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -281,8 +276,7 @@ async fn create_connection(
     .await?;
     let webhook_secret = match &webhook_url {
         Some(url) => {
-            // Pushes go through the connection's delivery side (A2), typed
-            // like before so runners set up in this form keep working.
+            // Pushes go through the connection's delivery side (A2).
             let delivery = crate::delivery::connections::for_source(
                 &mut transaction,
                 created.actor_id,
@@ -294,7 +288,6 @@ async fn create_connection(
                 &state.config,
                 &delivery,
                 Some(url),
-                Some("typed_v1"),
             )
             .await?;
             insert_audit(
@@ -542,7 +535,6 @@ pub async fn set_webhook_for_host(
     connection_id: Uuid,
     url: &str,
     trusted_origins: &[String],
-    typed_wakeups: bool,
 ) -> Result<String, AppError> {
     crate::outbound::validate_webhook_url(url, trusted_origins)?;
     let mut transaction = crate::db::scoped_tx(pool).await?;
@@ -563,11 +555,6 @@ pub async fn set_webhook_for_host(
         config,
         &delivery,
         Some(url),
-        Some(if typed_wakeups {
-            "typed_v1"
-        } else {
-            "inbox_v1"
-        }),
     )
     .await?
     .ok_or(AppError::Internal("a new webhook has a secret"))?;
@@ -696,10 +683,6 @@ async fn update_connection(
 struct WebhookRequest {
     /// Where to send wakeups, or null to stop them.
     url: Option<String>,
-    /// `typed` switches an old `inbox` webhook to typed wakeups. Left out,
-    /// the format stays as it is, so saving a runner that only reads
-    /// `inbox.available` doesn't break it.
-    wakeup_format: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -720,12 +703,6 @@ async fn set_webhook(
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let format = match request.wakeup_format.as_deref() {
-        None => None,
-        Some("typed") => Some("typed_v1"),
-        Some("standard") => Some("standard"),
-        Some(_) => return Err(AppError::Validation("wakeupFormat")),
-    };
     let url = validate_webhook_url(request.url, &state.config.webhook_trusted_origins)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_project(&mut transaction, project_id).await?;
@@ -755,8 +732,6 @@ async fn set_webhook(
         &state.config,
         &delivery,
         url.as_deref(),
-        // A new webhook is typed, like the form always made them.
-        format.or_else(|| delivery.webhook_url.is_none().then_some("typed_v1")),
     )
     .await?;
     sqlx::query(
@@ -773,7 +748,7 @@ async fn set_webhook(
         project_id,
         connection_id,
         "external_agent.webhook_updated",
-        serde_json::json!({ "enabled": url.is_some(), "format": format }),
+        serde_json::json!({ "enabled": url.is_some() }),
     )
     .await?;
     let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
@@ -1562,9 +1537,7 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
                c.updated_at::text AS updated_at, d.webhook_url,
-               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error,
-               CASE d.webhook_format WHEN 'inbox_v1' THEN 'inbox'
-                    WHEN 'standard' THEN 'standard' ELSE 'typed' END AS wakeup_format
+               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
@@ -1582,9 +1555,7 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
                c.updated_at::text AS updated_at, d.webhook_url,
-               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error,
-               CASE d.webhook_format WHEN 'inbox_v1' THEN 'inbox'
-                    WHEN 'standard' THEN 'standard' ELSE 'typed' END AS wakeup_format
+               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
@@ -1796,7 +1767,6 @@ impl From<ConnectionRow> for ConnectionView {
             webhook_url: row.webhook_url,
             last_wakeup_at: row.last_wakeup_at,
             last_wakeup_error: row.last_wakeup_error,
-            wakeup_format: row.wakeup_format,
         }
     }
 }
