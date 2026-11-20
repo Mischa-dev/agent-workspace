@@ -717,7 +717,10 @@ async fn pipeline<O: Operation>(
             &ctx.caller,
             &located,
             O::NAME,
-            target.audit(&located),
+            {
+                let (kind, id) = target.audit(&located);
+                (O::GUARD_KIND.unwrap_or(kind), id)
+            },
             &canonical,
         ))
         .await?

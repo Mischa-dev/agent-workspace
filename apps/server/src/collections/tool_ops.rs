@@ -12,7 +12,7 @@ use crate::{
     ops::{
         OpError, Registry, Target, Targeted,
         refs::parse_id,
-        wrapped::{names_existing, run_tool, tool_op},
+        wrapped::{keyed, names_existing, run_tool, tool_op},
     },
 };
 
@@ -103,8 +103,9 @@ tool_op!(CollectionCreate {
     module: "collections",
     kind: Create,
     permission: Some(crate::ops::Perm::CollectionsBuild),
-    idempotency: Dispatcher,
+    idempotency: Command,
     audited: true,
+    guard_kind: "collection",
     title: "Create collection",
     description: concat!(
         "Make a collection with its fields and views in one call (name, fields: [{name, type, \
@@ -116,7 +117,7 @@ tool_op!(CollectionCreate {
     output: collection_tools::CollectionWriteValue,
     run: |call, input| {
         names_existing(input.collection.is_some(), true, "collection")?;
-        run_tool!(call, collection_tools::collection_write, input)
+        keyed!(call, collection_tools::collection_write, input)
     }
 });
 
@@ -125,8 +126,9 @@ tool_op!(CollectionUpdate {
     module: "collections",
     kind: Change,
     permission: Some(crate::ops::Perm::CollectionsBuild),
-    idempotency: Dispatcher,
+    idempotency: Command,
     audited: true,
+    guard_kind: "collection",
     title: "Update collection",
     description: concat!(
         "Change a collection (by name or ID). Fields and views are matched by name, so the same \
@@ -140,7 +142,7 @@ tool_op!(CollectionUpdate {
     output: collection_tools::CollectionWriteValue,
     run: |call, input| {
         names_existing(input.collection.is_some(), false, "collection")?;
-        run_tool!(call, collection_tools::collection_write, input)
+        keyed!(call, collection_tools::collection_write, input)
     }
 });
 
@@ -177,7 +179,8 @@ tool_op!(RecordCreateMany {
     module: "collections",
     kind: Create,
     permission: Some(crate::ops::Perm::CollectionsEdit),
-    idempotency: Dispatcher,
+    idempotency: Command,
+    guard_kind: "record",
     title: "Add records",
     description: concat!(
         "Add up to 100 records to a collection, all or nothing (leave record out of each). ",
@@ -193,7 +196,7 @@ tool_op!(RecordCreateMany {
                 "This adds records: leave record out of each, or use record_update_many.",
             ));
         }
-        run_tool!(call, collection_tools::record_write, input)
+        keyed!(call, collection_tools::record_write, input)
     }
 });
 
@@ -202,7 +205,8 @@ tool_op!(RecordUpdateMany {
     module: "collections",
     kind: Change,
     permission: Some(crate::ops::Perm::CollectionsEdit),
-    idempotency: Dispatcher,
+    idempotency: Command,
+    guard_kind: "record",
     title: "Update records",
     description: concat!(
         "Change up to 100 of a collection's records, all or nothing: name each by number (#12) \
@@ -220,6 +224,6 @@ tool_op!(RecordUpdateMany {
                 "Name the records to change (number or ID), or use record_create_many.",
             ));
         }
-        run_tool!(call, collection_tools::record_write, input)
+        keyed!(call, collection_tools::record_write, input)
     }
 });

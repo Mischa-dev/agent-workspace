@@ -1403,6 +1403,21 @@ async fn receive_answer(
         };
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
+    // A call set aside is still `ok` but kept nothing: the maker's account
+    // is paused, or a guard holds record writes for review (and only the
+    // same call made again once it's allowed goes through, which a form's
+    // sender won't make). Neither is an answer received.
+    let set_aside = ["paused", "pendingReview"]
+        .iter()
+        .any(|key| result.get(*key).and_then(Value::as_bool) == Some(true));
+    if set_aside || result.pointer("/value/records").is_none() {
+        give_back_todays_answer(&state.pool, link.id).await?;
+        tracing::warn!(set_aside, "form answer not kept by record_create_many");
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers right now.",
+        ));
+    }
     // The operation's envelope says a retry was answered from the first call.
     let duplicate = result
         .get("replayed")

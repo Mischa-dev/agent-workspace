@@ -589,6 +589,23 @@ pub(crate) async fn file_upload(
             staged,
         )
         .await?;
+        // A task's own file is news to its space, with the file (K2.11).
+        if let Destination::Task {
+            project_id,
+            for_comment: false,
+            ..
+        } = destination
+            && let Err(error) = task_file_event(
+                &mut transaction,
+                &crate::events::catalog::FILE_ATTACHED,
+                project_id,
+                row.id,
+            )
+            .await
+        {
+            files::discard_stored(state, &row).await;
+            return Err(error);
+        }
         let kept = complete_create(&mut transaction, reservation.as_ref(), row.id).await;
         let committed = match kept {
             Ok(()) => transaction.commit().await.map_err(AppError::from),
@@ -637,6 +654,35 @@ pub(crate) async fn file_upload(
         ),
         Err(error) => ToolResult::from_error(error, "file_upload"),
     }
+}
+
+/// Tells a task's space one of the task's own files came or went, in the
+/// transaction that stores or removes it: ids only.
+async fn task_file_event(
+    connection: &mut sqlx::PgConnection,
+    ty: &'static crate::events::EventType,
+    space: Uuid,
+    file: Uuid,
+) -> Result<(), AppError> {
+    crate::events::emit(
+        connection,
+        crate::events::NewEvent {
+            id: Uuid::now_v7(),
+            ty,
+            workspace_id: None,
+            space_id: Some(space),
+            thing: Some((file, "file")),
+            access_thing: None,
+            version: None,
+            changes: &[],
+            audience: crate::events::Audience::Space,
+            payload: serde_json::json!({}),
+            actor: None,
+            legacy_type: None,
+        },
+    )
+    .await
+    .map(drop)
 }
 
 /// Remove a file, as the web's remove button does: an upload of your own
@@ -689,6 +735,15 @@ pub(crate) async fn file_delete(
                 ));
             }
             Err(error) => return Err(error),
+        }
+        if task.is_some() {
+            task_file_event(
+                &mut transaction,
+                &crate::events::catalog::FILE_REMOVED,
+                row.project_id,
+                row.id,
+            )
+            .await?;
         }
         transaction.commit().await?;
         if let Some(work_item_id) = task {

@@ -391,7 +391,7 @@ pub const ALIASES: &[Alias] = &[
     Alias {
         name: "sheet_write",
         canonical: |arguments| {
-            if arguments.contains_key("sheet") {
+            if arguments.get("sheet").is_some_and(|named| !named.is_null()) {
                 "sheet_update"
             } else {
                 "sheet_create"
@@ -406,7 +406,10 @@ pub const ALIASES: &[Alias] = &[
     Alias {
         name: "collection_write",
         canonical: |arguments| {
-            if arguments.contains_key("collection") {
+            if arguments
+                .get("collection")
+                .is_some_and(|named| !named.is_null())
+            {
                 "collection_update"
             } else {
                 "collection_create"

@@ -5,14 +5,12 @@
 //! checked. `file_read` stays a hand-written tool: it answers an image as
 //! an image, which an operation's value can't carry yet.
 
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    events::{Audience, NewEvent, catalog},
     mcp::{file_tools, task_commands::command_request_id},
     ops::{
-        OpCall, OpError, Registry, Target, Targeted,
+        Registry, Target, Targeted,
         refs::{parse_id, parse_message_id},
         wrapped::{run_tool, tool_op},
     },
@@ -77,37 +75,6 @@ impl Targeted for file_tools::FileDeleteArguments {
     }
 }
 
-/// Tells the file's space a task's own file came or went: ids only.
-async fn file_event(
-    call: &mut OpCall<'_>,
-    ty: &'static crate::events::EventType,
-    space: Uuid,
-    file: Uuid,
-) -> Result<(), OpError> {
-    let workspace = call.ctx.workspace_id;
-    let tx = call.tx().await?;
-    crate::events::emit(
-        tx,
-        NewEvent {
-            id: Uuid::now_v7(),
-            ty,
-            workspace_id: Some(workspace),
-            space_id: Some(space),
-            thing: Some((file, "file")),
-            access_thing: None,
-            version: None,
-            changes: &[],
-            audience: Audience::Space,
-            payload: json!({}),
-            actor: None,
-            legacy_type: None,
-        },
-    )
-    .await
-    .map(drop)
-    .map_err(OpError::from)
-}
-
 tool_op!(FileList {
     name: "file_list",
     module: "workspace",
@@ -144,17 +111,10 @@ tool_op!(FileUpload {
         if call.ctx.request_id.is_some() {
             call.key_honoured();
         }
-        let on_task = input.task_id.is_some() && input.for_comment != Some(true);
         let mut file = run_tool!(call, as_tool, file_tools::file_upload, input)?;
         // The envelope says it was a retry; the value is the first answer's.
-        call.mark_replayed(file.idempotent_replay);
-        let replay = std::mem::take(&mut file.idempotent_replay);
-        if on_task
-            && !replay
-            && let (Some(space), Some(id)) = (call.ctx.space_id, parse_id(&file.file_id))
-        {
-            file_event(call, &catalog::FILE_ATTACHED, space, id).await?;
-        }
+        // The command stages file.attached with a task's own file.
+        call.mark_replayed(std::mem::take(&mut file.idempotent_replay));
         Ok(file)
     }
 });
@@ -174,29 +134,7 @@ tool_op!(FileDelete {
     input: file_tools::FileDeleteArguments,
     output: file_tools::DeletedFile,
     run: |call, input| {
-        let file_id = parse_id(&input.file_id);
-        // Only a task's own file is news to its space; an unsent upload
-        // was only ever its uploader's.
-        let task_space = match file_id {
-            Some(id) => {
-                let tx = call.tx().await?;
-                sqlx::query_scalar::<_, Uuid>(
-                    "SELECT project_id FROM files \
-                     WHERE id = $1 AND work_item_id IS NOT NULL AND attached_at IS NOT NULL",
-                )
-                .bind(id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(|error| OpError::logged("file_delete", &error.into()))?
-            }
-            None => None,
-        };
-        let removed = run_tool!(call, as_tool, file_tools::file_delete, input)?;
-        if removed.removed
-            && let (Some(space), Some(id)) = (task_space, file_id)
-        {
-            file_event(call, &catalog::FILE_REMOVED, space, id).await?;
-        }
-        Ok(removed)
+        // The command stages file.removed with a task's own file.
+        run_tool!(call, as_tool, file_tools::file_delete, input)
     }
 });

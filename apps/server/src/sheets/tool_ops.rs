@@ -9,7 +9,7 @@ use crate::{
     ops::{
         Registry, Target, Targeted,
         refs::parse_id,
-        wrapped::{names_existing, run_tool, tool_op},
+        wrapped::{keyed, names_existing, run_tool, tool_op},
     },
 };
 
@@ -84,8 +84,9 @@ tool_op!(SheetCreate {
     module: "sheets",
     kind: Create,
     permission: Some(crate::ops::Perm::SheetsEdit),
-    idempotency: Dispatcher,
+    idempotency: Command,
     audited: true,
+    guard_kind: "sheet",
     title: "Create sheet",
     description: "Make a sheet: a name, and optionally its tabs, cells (as you'd type them, \
         formulas starting with \"=\"), rows by header, formats, conditional formats and \
@@ -96,7 +97,7 @@ tool_op!(SheetCreate {
     output: sheet_tools::SheetWriteValue,
     run: |call, input| {
         names_existing(input.sheet.is_some(), true, "sheet")?;
-        run_tool!(call, sheet_tools::sheet_write, input)
+        keyed!(call, sheet_tools::sheet_write, input)
     }
 });
 
@@ -107,8 +108,9 @@ tool_op!(SheetUpdate {
     // sheets.edit, or sheets.suggest for cells only, which the command
     // keeps as a proposal: it checks which.
     permission: None,
-    idempotency: Dispatcher,
+    idempotency: Command,
     audited: true,
+    guard_kind: "sheet",
     title: "Update sheet",
     description: "Change a sheet (by name or ID): rename, describe, archive or restore it; add, \
         rename, move or remove tabs, insert or delete rows and columns, freeze rows and set \
@@ -121,6 +123,6 @@ tool_op!(SheetUpdate {
     output: sheet_tools::SheetWriteValue,
     run: |call, input| {
         names_existing(input.sheet.is_some(), false, "sheet")?;
-        run_tool!(call, sheet_tools::sheet_write, input)
+        keyed!(call, sheet_tools::sheet_write, input)
     }
 });
