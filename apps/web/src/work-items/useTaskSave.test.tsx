@@ -90,6 +90,26 @@ describe('useTaskSave', () => {
     await waitFor(() => expect(result.current.pending('title')).toBeNull())
   })
 
+  it('keeps the task as the baseline for a draft opened while a suggestion is on its way', async () => {
+    let answer: (value: unknown) => void = () => {}
+    vi.mocked(callOp)
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)
+      .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p2', idempotentReplay: false, proposalId: 'p2' })
+    const { result } = setup(vi.fn(), true)
+
+    act(() => result.current.save('description', { description: 'First idea' }))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
+    // The description editor opens now and records its baseline.
+    const base = result.current.baseFor('description')
+    expect(base).toBe(task.description)
+    answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
+    await waitFor(() => expect(result.current.pending('description')).toBeNull())
+
+    act(() => result.current.save('description', { description: 'Second idea' }, base))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(result.current.pending('description')).toBeNull())
+  })
+
   it('stops a queued suggestion when someone else changed the field meanwhile', async () => {
     let answer: (value: unknown) => void = () => {}
     vi.mocked(callOp).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)

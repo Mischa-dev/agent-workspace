@@ -343,14 +343,18 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     void inOrder(`task:${taskId}`, () => attempt(id).catch(() => change(id, { state: 'failed', message: 'That didn’t save. Try again.' })))
   }
 
-  /** What the person sees for a field right now: their own change on its way, or the task's value. */
+  /**
+   * What the person sees for a field right now: their own change on its way,
+   * or the task's value. A suggestion never changes the task, so when
+   * suggesting the task's value is always the baseline.
+   */
   const baseFor = useCallback(
     (field: TaskField) => {
       const entry = entries.current.get(field)
-      if (entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving')) return entry.mine
+      if (!suggest && entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving')) return entry.mine
       return fieldValue(current(), field)
     },
-    [current],
+    [current, suggest],
   )
 
   /**
