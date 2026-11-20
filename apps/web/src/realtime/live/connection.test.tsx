@@ -1,5 +1,5 @@
 import { act, cleanup, render } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -41,6 +41,7 @@ class StubSocket extends EventTarget {
 
 const CONVERSATION = '0193a0aa-0000-7000-8000-000000000003'
 const ACCOUNT = '0192a0aa-0000-7000-8000-000000000005'
+const SPACE = '0193a0aa-0000-7000-8000-000000000009'
 const PAGE = { kind: 'page', id: '0193a1f0-0000-7000-8000-000000000007' } as const
 const latest = () => StubSocket.all[StubSocket.all.length - 1]
 const seen: { controls: LiveControls | null; typing: Record<string, number> } = { controls: null, typing: {} }
@@ -184,5 +185,26 @@ describe('the live connection on protocol 2', () => {
       }),
     )
     expect(queryClient.getQueryData(['project', 'space', 'conversation', CONVERSATION, 'timeline', false])).toBeUndefined()
+  })
+
+  it('makes a page still showing a space the person left lose it and ask again', async () => {
+    const queryClient = start()
+    const key = ['project', SPACE, 'work-items', 'detail', 'task-1']
+    const asked = vi.fn(() => Promise.reject(new Error('Not found')))
+    queryClient.setQueryData(key, { title: 'Private plan' })
+    const observer = new QueryObserver(queryClient, { queryKey: key, queryFn: asked, retry: false, staleTime: Infinity })
+    const seen: unknown[] = []
+    const stop = observer.subscribe((result) => seen.push(result.data))
+    act(() =>
+      latest().receive({
+        type: 'access',
+        added: { workspaces: [], spaces: [], conversations: [] },
+        removed: { workspaces: [], spaces: [SPACE], conversations: [] },
+      }),
+    )
+    await vi.waitFor(() => expect(asked).toHaveBeenCalled())
+    expect(observer.getCurrentResult().data).toBeUndefined()
+    expect(queryClient.getQueryData(key)).toBeUndefined()
+    stop()
   })
 })
