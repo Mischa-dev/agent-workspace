@@ -83,8 +83,20 @@ pub enum Publish {
         )]
         position: Option<i64>,
     },
-    /// A signed-out session: its connections close.
-    Revoke { session: Uuid },
+    /// A signed-out session: its connections close. A durable one (from
+    /// the log, with its position) is kept in the window, so a connection
+    /// that opens later with a ticket cut before it is refused on any
+    /// instance; one that opens on an instance whose window starts after
+    /// its ticket resumes through `api`, which checks the session.
+    Revoke {
+        session: Uuid,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "optional_position"
+        )]
+        position: Option<i64>,
+    },
 }
 
 mod optional_position {
@@ -139,16 +151,7 @@ pub struct LiveRouter {
     /// `AGENT_WORKSPACE_LIVE_URL`), not by this instance's own tail.
     external: bool,
     draining: Arc<AtomicBool>,
-    /// Sessions signed out lately, with when (unix seconds), so a
-    /// connection that opens later with one of their tickets is refused
-    /// (a revoke reaches only the connections open when it arrives).
-    revoked: Arc<Mutex<VecDeque<(Uuid, i64)>>>,
 }
-
-/// How long a signed-out session is remembered: past any ticket's life.
-const REVOKED_FOR_SECONDS: i64 = 15 * 60;
-/// The most signed-out sessions remembered; the oldest go first.
-const REVOKED_KEPT: usize = 10_000;
 
 impl LiveRouter {
     pub fn new(capacity: usize, external: bool) -> Self {
@@ -159,32 +162,7 @@ impl LiveRouter {
             start: Arc::new(AtomicI64::new(i64::MAX)),
             external,
             draining: Arc::new(AtomicBool::new(false)),
-            revoked: Arc::new(Mutex::new(VecDeque::new())),
         }
-    }
-
-    /// Whether `session` was signed out within a ticket's life.
-    fn is_revoked(&self, session: Uuid, now: i64) -> bool {
-        self.revoked
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .any(|(revoked, at)| *revoked == session && now - at <= REVOKED_FOR_SECONDS)
-    }
-
-    fn remember_revoked(&self, session: Uuid, now: i64) {
-        let mut revoked = self
-            .revoked
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while revoked
-            .front()
-            .is_some_and(|(_, at)| now - at > REVOKED_FOR_SECONDS)
-            || revoked.len() >= REVOKED_KEPT
-        {
-            revoked.pop_front();
-        }
-        revoked.push_back((session, now));
     }
 
     /// This instance's feed starts after `position` (its tail's start).
@@ -201,15 +179,16 @@ impl LiveRouter {
 
     /// Route one item to this instance's connections.
     pub fn publish(&self, item: Publish) {
-        if let Publish::Revoke { session } = &item {
-            self.remember_revoked(*session, chrono::Utc::now().timestamp());
-        }
         let item = Arc::new(item);
         if let Publish::Frame {
             position: Some(position),
             ..
         }
         | Publish::Stale {
+            position: Some(position),
+            ..
+        }
+        | Publish::Revoke {
             position: Some(position),
             ..
         } = item.as_ref()
@@ -352,10 +331,7 @@ async fn serve(
         Ok(Some(Ok(Message::Text(text)))) => ticket_in(&text, "hello"),
         _ => None,
     };
-    let Some(mut ticket) = hello
-        .and_then(|token| ticket::verify(&token, keys, now()))
-        .filter(|ticket| !router.is_revoked(ticket.session, now()))
-    else {
+    let Some(mut ticket) = hello.and_then(|token| ticket::verify(&token, keys, now())) else {
         let _ = send(
             &mut socket,
             json!({"type": "error", "reason": "ticket"}).to_string(),
@@ -379,6 +355,14 @@ async fn serve(
         close(&mut socket, CLOSE_RESTART, "resume_through_api").await;
         return;
     };
+    // Signed out after the ticket was cut: nothing more, not even what came
+    // before.
+    if missed.iter().any(|item| {
+        matches!(item.as_ref(), Publish::Revoke { session, .. } if *session == ticket.session)
+    }) {
+        close(&mut socket, CLOSE_TICKET, "signed_out").await;
+        return;
+    }
     for item in missed {
         if let Publish::Stale {
             audiences,
@@ -509,7 +493,7 @@ async fn serve(
                             }
                         }
                     }
-                    Publish::Revoke { session } => {
+                    Publish::Revoke { session, .. } => {
                         if *session == ticket.session {
                             close(&mut socket, CLOSE_TICKET, "signed_out").await;
                             return;
@@ -621,14 +605,26 @@ mod tests {
     }
 
     #[test]
-    fn a_signed_out_session_is_remembered_for_a_tickets_life() {
+    fn a_signed_out_session_stays_in_the_window_only_from_the_log() {
         let router = LiveRouter::new(16, false);
         let session = Uuid::now_v7();
-        router.publish(Publish::Revoke { session });
-        let now = chrono::Utc::now().timestamp();
-        assert!(router.is_revoked(session, now));
-        assert!(!router.is_revoked(Uuid::now_v7(), now));
-        assert!(!router.is_revoked(session, now + REVOKED_FOR_SECONDS + 1));
+        // The bus's revoke closes open connections and is not kept.
+        router.publish(Publish::Revoke {
+            session,
+            position: None,
+        });
+        router.publish(frame(7));
+        // The log's is kept, so a later connection with an older ticket
+        // finds it.
+        let logged = Publish::Revoke {
+            session,
+            position: Some(8),
+        };
+        router.publish(logged.clone());
+        let kept = router.after(6).expect("window");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1].as_ref(), &logged);
+        assert!(router.after(8).expect("window").is_empty());
     }
 
     #[test]
@@ -641,6 +637,11 @@ mod tests {
             },
             Publish::Revoke {
                 session: Uuid::now_v7(),
+                position: None,
+            },
+            Publish::Revoke {
+                session: Uuid::now_v7(),
+                position: Some(9_007_199_254_740_995),
             },
         ];
         let text = serde_json::to_string(&PublishBody {

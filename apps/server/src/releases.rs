@@ -74,7 +74,7 @@ async fn check(state: &crate::AppState) -> Result<(), AppError> {
     )
     .await
     .map_err(|_| AppError::Internal("the release feed's address was refused"))?;
-    let response = client
+    let mut response = client
         .get(url)
         .send()
         .await
@@ -82,12 +82,25 @@ async fn check(state: &crate::AppState) -> Result<(), AppError> {
     if !response.status().is_success() {
         return Err(AppError::Internal("the release feed refused"));
     }
-    let bytes = response
-        .bytes()
+    // Read up to the limit and no further: a feed that sends more is
+    // refused before it is held.
+    let too_large = AppError::Internal("the release feed is too large");
+    if response
+        .content_length()
+        .is_some_and(|length| length > FEED_BYTES as u64)
+    {
+        return Err(too_large);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|_| AppError::Internal("the release feed didn't answer"))?;
-    if bytes.len() > FEED_BYTES {
-        return Err(AppError::Internal("the release feed is too large"));
+        .map_err(|_| AppError::Internal("the release feed didn't answer"))?
+    {
+        if bytes.len() + chunk.len() > FEED_BYTES {
+            return Err(too_large);
+        }
+        bytes.extend_from_slice(&chunk);
     }
     let feed = serde_json::from_slice::<Feed>(&bytes)
         .map_err(|_| AppError::Internal("the release feed isn't one"))?;

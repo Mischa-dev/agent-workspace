@@ -240,6 +240,20 @@ async fn claim(
     Ok((claimed.rows_affected() == 1).then_some(token))
 }
 
+/// Keeps holding the file for a full lease; true when this lease still
+/// held it.
+async fn renew(pool: &PgPool, file: Uuid, token: Uuid) -> Result<bool, AppError> {
+    let renewed = sqlx::query(&format!(
+        "UPDATE files SET move_lease_until = now() + interval '{LEASE}' \
+         WHERE id = $1 AND move_lease = $2"
+    ))
+    .bind(file)
+    .bind(token)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(renewed.rows_affected() == 1)
+}
+
 /// Lets the file go; true when this lease still held it.
 async fn release(pool: &PgPool, file: Uuid, token: Uuid) -> Result<bool, AppError> {
     let released = sqlx::query(
@@ -265,12 +279,15 @@ async fn copy(state: &AppState, target: &FileStore, file: &ToMove) -> Result<boo
     match write_copy(state, target, file).await {
         Ok(()) => {}
         Err(error) => {
-            // Held, and the row still names the source: nothing names
-            // what was written in the target.
-            if release(&state.pool, file.id, token).await? {
+            // Still held, and the row still names the source: nothing names
+            // what was written in the target. The lease is kept until the
+            // copy is gone, so another move can't switch the row to bytes
+            // this one is deleting.
+            if renew(&state.pool, file.id, token).await? {
                 for key in &keys {
                     let _ = target.delete(key).await;
                 }
+                release(&state.pool, file.id, token).await?;
             }
             return Err(error);
         }

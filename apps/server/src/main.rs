@@ -42,7 +42,12 @@ async fn main() -> anyhow::Result<()> {
     // Before anything that changes the database: the release script runs this
     // with a new build to see whether it can take over.
     if std::env::args().nth(1).as_deref() == Some("preflight") {
-        let report = agent_workspace_server::preflight::run(&config, &pool).await?;
+        // Host-only, across every workspace (its mail transports and more).
+        let report = agent_workspace_server::tenancy::system(
+            "server.operator",
+            Box::pin(agent_workspace_server::preflight::run(&config, &pool)),
+        )
+        .await?;
         report.print();
         if report.failed() {
             bail!("preflight found problems; the release was not switched");
@@ -314,11 +319,12 @@ async fn main() -> anyhow::Result<()> {
                 .map(|value| uuid::Uuid::parse_str(value))
                 .transpose()
                 .context("--workspace-id is a workspace's id")?;
-            let queued = agent_workspace_server::files::migrate::start(
-                &pool,
-                &config,
-                required_option(&options, "to")?,
-                workspace,
+            let to = required_option(&options, "to")?;
+            let queued = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::files::migrate::start(
+                    &pool, &config, to, workspace,
+                )),
             )
             .await
             .context("start moving files")?;
@@ -445,19 +451,31 @@ async fn main() -> anyhow::Result<()> {
                 ],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
-            let (project_id, owner_actor_id) =
-                agent_workspace_server::spaces::workspace::home_for_login(
+            // Host-only: the owner's workspace is found by their login, so
+            // the command acts server-wide.
+            let owner_login = required_option(&options, "owner-login")?;
+            let (project_id, owner_actor_id) = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::spaces::workspace::home_for_login(
                     &pool,
-                    required_option(&options, "owner-login")?,
-                )
-                .await
-                .context("find the owner's workspace space")?;
-            let agent = agent_workspace_server::external_agents::provision(
-                &pool,
-                project_id,
-                owner_actor_id,
+                    owner_login,
+                )),
+            )
+            .await
+            .context("find the owner's workspace space")?;
+            let (name, handle) = (
                 required_option(&options, "name")?,
                 required_option(&options, "handle")?,
+            );
+            let agent = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::external_agents::provision(
+                    &pool,
+                    project_id,
+                    owner_actor_id,
+                    name,
+                    handle,
+                )),
             )
             .await
             .context("create agent")?;
@@ -471,13 +489,18 @@ async fn main() -> anyhow::Result<()> {
                     Some("inbox") => false,
                     Some(_) => anyhow::bail!("--wakeup-format is typed or inbox"),
                 };
-                let secret = agent_workspace_server::external_agents::set_webhook_for_host(
-                    &pool,
-                    &config,
-                    agent.connection_id,
-                    url,
-                    &config.webhook_trusted_origins,
-                    typed,
+                let secret = agent_workspace_server::tenancy::system(
+                    "server.operator",
+                    Box::pin(
+                        agent_workspace_server::external_agents::set_webhook_for_host(
+                            &pool,
+                            &config,
+                            agent.connection_id,
+                            url,
+                            &config.webhook_trusted_origins,
+                            typed,
+                        ),
+                    ),
                 )
                 .await
                 .context("set wakeup webhook")?;
