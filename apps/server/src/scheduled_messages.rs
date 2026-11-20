@@ -294,7 +294,7 @@ async fn check(
                     "title": title,
                     "statusCategory": status_category,
                     "archivedAt": archived_at,
-                    "href": Target::task(conversation.place(), *id).legacy_path(),
+                    "href": Target::task(conversation.place(), *id).href(),
                 })
             })
             .collect(),

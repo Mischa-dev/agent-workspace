@@ -94,6 +94,11 @@
           "const": "agent",
           "description": "An agent template (never an account).",
           "type": "string"
+        },
+        {
+          "const": "theme",
+          "description": "A theme, offered to the workspace: `{\"name\", \"document\"}`, where the\ndocument is the theme file Appearance exports.",
+          "type": "string"
         }
       ]
     },

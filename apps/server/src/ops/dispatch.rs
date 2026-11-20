@@ -419,7 +419,10 @@ async fn admit<O: Operation>(
             [only] => *workspace = Some(*only),
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
-            several => return Err(name_the_workspace(&mut connection, several).await),
+            several => match home_workspace::<O>(&mut connection, caller, several).await? {
+                Some(home) => *workspace = Some(home),
+                None => return Err(name_the_workspace(&mut connection, several).await),
+            },
         }
     }
     if spans {
@@ -818,6 +821,32 @@ fn runs_while_paused(name: &str) -> bool {
     ) || name.starts_with("connection_")
 }
 
+/// The workspace the caller's credential was made in, among `reach`, for
+/// an operation that defaults to it.
+async fn home_workspace<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    reach: &[Uuid],
+) -> Result<Option<Uuid>, OpError> {
+    let Some(credential) = caller
+        .credential_id
+        .filter(|_| O::HOME_WORKSPACE_BY_DEFAULT)
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT space.organization_id FROM projects space \
+             WHERE space.id = ({}) AND space.organization_id = ANY($3)",
+        super::wrapped::CREDENTIAL_ANCHOR_SQL
+    ))
+    .bind(credential)
+    .bind(caller.account_id)
+    .bind(reach)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error.into()))
+}
+
 /// A caller reaching several workspaces, calling an operation whose target
 /// doesn't say which, must name one; the refusal lists them.
 async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid]) -> OpError {
@@ -1015,8 +1044,24 @@ async fn audit_row(
     ctx: &OpContext,
     target_kind: &str,
     target_id: Uuid,
-    mut metadata: Value,
+    metadata: Value,
 ) -> Result<(), OpError> {
+    audit_row_as(tx, ctx, ctx.op, target_kind, target_id, metadata)
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))
+}
+
+/// The audit row of a command that names its own action (such as
+/// `role.created`), with the columns of the edge the call came by. The
+/// operation then says `audited_by_command`.
+pub(crate) async fn audit_row_as(
+    connection: &mut sqlx::PgConnection,
+    ctx: &OpContext,
+    action: &str,
+    target_kind: &str,
+    target_id: Uuid,
+    mut metadata: Value,
+) -> Result<(), sqlx::Error> {
     struct Columns<'a> {
         session_id: Option<Uuid>,
         authentication_class: &'a str,
@@ -1135,7 +1180,7 @@ async fn audit_row(
     .bind(ctx.workspace_id)
     .bind(columns.session_id)
     .bind(columns.authentication_class)
-    .bind(ctx.op)
+    .bind(action)
     .bind(target_kind)
     .bind(target_id)
     .bind(ctx.request_id.as_deref())
@@ -1153,9 +1198,8 @@ async fn audit_row(
     .bind(ctx.caller.credential_id)
     .bind(ctx.caller.requested_by)
     .bind(ctx.caller.run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+    .execute(connection)
+    .await?;
     Ok(())
 }
 

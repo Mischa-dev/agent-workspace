@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 
 /** Where a value came from: set on this launch, the project, you, the workspace, or the built-in default. */
 export type SettingSource = 'launch' | 'project' | 'user' | 'workspace' | 'default'
@@ -235,7 +236,7 @@ export function listAgentSessions(conversationId: string) {
   return requestJson<{ sessions: AgentSession[] }>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/agent-sessions`)
 }
 
-export function getProjectSettings(projectId: string) {
-  return requestJson<EffectiveSettings>(`/api/v1/settings/effective?projectId=${encodeURIComponent(projectId)}`)
+export async function getProjectSettings(projectId: string) {
+  return (await callOp('setting_list', { spaceId: projectId })) as unknown as EffectiveSettings
 }
 

@@ -39,16 +39,16 @@ const ADMIN_ONLY: &str = "Your role here doesn't allow that. Ask someone who man
 // ---------------------------------------------------------------------------
 // workflow_get
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkflowArguments {
+pub(crate) struct WorkflowArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkflowType {
+pub(crate) struct WorkflowType {
     pub id: String,
     pub name: String,
     pub is_default: bool,
@@ -56,7 +56,7 @@ pub(super) struct WorkflowType {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkflowStatus {
+pub(crate) struct WorkflowStatus {
     pub id: String,
     pub name: String,
     /// backlog, unstarted, started, review, verification, completed, or
@@ -67,14 +67,14 @@ pub(super) struct WorkflowStatus {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkflowTransition {
+pub(crate) struct WorkflowTransition {
     pub from: String,
     pub to: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkflowValue {
+pub(crate) struct WorkflowValue {
     pub types: Vec<WorkflowType>,
     /// In board order, left to right.
     pub statuses: Vec<WorkflowStatus>,
@@ -140,7 +140,7 @@ async fn workflow_value(
     })
 }
 
-pub(super) async fn workflow_get(
+pub(crate) async fn workflow_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkflowArguments,
@@ -171,9 +171,9 @@ pub(super) async fn workflow_get(
 // ---------------------------------------------------------------------------
 // workflow_update
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkflowUpdateArguments {
+pub(crate) struct WorkflowUpdateArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The version from workflow_get. If someone changed the workflow since,
@@ -199,9 +199,9 @@ pub(super) struct WorkflowUpdateArguments {
     pub replacements: Option<BTreeMap<String, String>>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkflowStatusDraft {
+pub(crate) struct WorkflowStatusDraft {
     /// An existing status's id. Leave it out for a new status.
     pub id: Option<String>,
     /// A short name for a new status, for transitions and replacements to
@@ -216,9 +216,9 @@ pub(super) struct WorkflowStatusDraft {
     pub is_default: Option<bool>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkflowTypeDraft {
+pub(crate) struct WorkflowTypeDraft {
     /// An existing type's id. Leave it out for a new type.
     pub id: Option<String>,
     pub key: Option<String>,
@@ -226,16 +226,16 @@ pub(super) struct WorkflowTypeDraft {
     pub is_default: Option<bool>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkflowTransitionDraft {
+pub(crate) struct WorkflowTransitionDraft {
     pub from: String,
     pub to: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkflowUpdateValue {
+pub(crate) struct WorkflowUpdateValue {
     pub statuses_added: u32,
     pub statuses_retired: u32,
     pub types_added: u32,
@@ -250,7 +250,7 @@ fn count(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-pub(super) async fn workflow_update(
+pub(crate) async fn workflow_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkflowUpdateArguments,
@@ -451,9 +451,9 @@ pub(super) async fn workflow_update(
 // ---------------------------------------------------------------------------
 // project_members
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MembersArguments {
+pub(crate) struct MembersArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Include people and agents who were removed.
@@ -465,7 +465,7 @@ pub(super) struct MembersArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MemberLine {
+pub(crate) struct MemberLine {
     pub actor_id: String,
     pub name: String,
     pub handle: String,
@@ -482,7 +482,7 @@ pub(super) struct MemberLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MembersValue {
+pub(crate) struct MembersValue {
     pub members: Vec<MemberLine>,
     /// Set when there are more members: pass it as offset to read them.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -492,7 +492,7 @@ pub(super) struct MembersValue {
 /// Members per page of project_members.
 const MEMBERS_PAGE: u32 = 500;
 
-pub(super) async fn project_members(
+pub(crate) async fn project_members(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: MembersArguments,
@@ -613,9 +613,9 @@ async fn admin_row(
 // ---------------------------------------------------------------------------
 // project_layout_set
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectLayoutSetArguments {
+pub(crate) struct ProjectLayoutSetArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The preset, by name: a built-in one such as "Personal life", "Bug
@@ -628,7 +628,7 @@ pub(super) struct ProjectLayoutSetArguments {
     pub expected_version: Option<i64>,
     /// Set the workspace's default layout (with preset, or without it for
     /// none) instead of this project's: the workspace's owners and admins.
-    #[serde(default)]
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
     /// Instead of the project's layout, set which preset each role or
     /// person here gets: every rule the project should have (others are
@@ -637,9 +637,9 @@ pub(super) struct ProjectLayoutSetArguments {
     pub rules: Option<Vec<LayoutRuleArgument>>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LayoutRuleArgument {
+pub(crate) struct LayoutRuleArgument {
     /// A role: admin (owners too), member, viewer, or one of the
     /// workspace's custom roles by name (role_list). Give role or person.
     #[serde(default)]
@@ -653,7 +653,7 @@ pub(super) struct LayoutRuleArgument {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectLayoutValue {
+pub(crate) struct ProjectLayoutValue {
     pub project_id: String,
     /// The layout the project now uses, its own or the workspace's
     /// default. Missing when nothing is chosen: everything shows.
@@ -667,7 +667,7 @@ pub(super) struct ProjectLayoutValue {
     pub rules: Option<usize>,
 }
 
-pub(super) async fn project_layout_set(
+pub(crate) async fn project_layout_set(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectLayoutSetArguments,

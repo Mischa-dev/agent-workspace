@@ -47,7 +47,7 @@ use crate::{
 const MESSAGES_SPACE_MESSAGE: &str =
     "The Messages space has no sheets. Pick a project with projects_list.";
 const EDIT_MESSAGE: &str =
-    "Your role here can't edit sheets (sheets.edit). my_permissions says what it can do.";
+    "Your role here can't edit sheets (sheets.edit). permissions_get says what it can do.";
 /// Cells one read returns at most.
 const MAX_READ_CELLS: i64 = 2_000;
 /// Rows one read returns at most, as objects.
@@ -312,6 +312,10 @@ pub(super) struct TabLine {
     /// Its conditional formats, in order (the first that applies wins).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<sheets::conditional::ConditionalRule>,
+    /// Its validation rules, as sheet_write's validations takes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "Vec<serde_json::Value>")]
+    pub validations: Vec<sheets::validation::ValidationRule>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -401,6 +405,7 @@ fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
         },
         frozen_rows: tab.frozen_rows,
         conditional_formats: tab.rules(),
+        validations: tab.validation_rules(),
     }
 }
 
@@ -791,6 +796,13 @@ pub(super) struct SortWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ValidationsWrite {
+    pub tab: Option<String>,
+    pub rules: Vec<sheets::validation::ValidationRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ConditionalFormatsWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
@@ -888,6 +900,10 @@ pub(super) struct SheetWriteArguments {
     /// "style": {"color": "#C62828"}}. An empty list removes a tab's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<ConditionalFormatsWrite>,
+    /// Replace tabs' validation rules, such as {"range": "C2:C99", "allow":
+    /// "list", "choices": ["Yes", "No"]}; strict ones refuse other input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validations: Vec<ValidationsWrite>,
     /// Fill a new sheet from a file instead of tabs, cells and rows: its
     /// tabs and what was typed in them, formulas included.
     pub import: Option<SheetImport>,
@@ -1182,6 +1198,15 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
             rules: entry.rules.clone(),
         });
     }
+    for (index, entry) in arguments.validations.iter().enumerate() {
+        if let Err(message) = sheets::validation::checked(entry.rules.clone()) {
+            return Err((format!("validations[{index}].rules"), message));
+        }
+        changes.push(Change::Validations {
+            tab: entry.tab.clone(),
+            rules: entry.rules.clone(),
+        });
+    }
     Ok(changes)
 }
 
@@ -1197,6 +1222,7 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
                     | Change::Sort { .. }
                     | Change::Format { .. }
                     | Change::ConditionalFormats { .. }
+                    | Change::Validations { .. }
             )
         })
         .unwrap_or(changes.len());
@@ -1223,13 +1249,28 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
             "formats[{}]",
             at - arguments.cells.len() - arguments.rows.len() - arguments.sorts.len()
         )
-    } else {
+    } else if at
+        < arguments.cells.len()
+            + arguments.rows.len()
+            + arguments.sorts.len()
+            + arguments.formats.len()
+            + arguments.conditional_formats.len()
+    {
         format!(
             "conditionalFormats[{}]",
             at - arguments.cells.len()
                 - arguments.rows.len()
                 - arguments.sorts.len()
                 - arguments.formats.len()
+        )
+    } else {
+        format!(
+            "validations[{}]",
+            at - arguments.cells.len()
+                - arguments.rows.len()
+                - arguments.sorts.len()
+                - arguments.formats.len()
+                - arguments.conditional_formats.len()
         )
     }
 }

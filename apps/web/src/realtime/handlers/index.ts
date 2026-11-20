@@ -22,6 +22,7 @@ export const SELF_HANDLED: ReadonlySet<string> = new Set([
   'dashboard.updated',
   'sheet.updated',
   'sheet.ranges_changed',
+  'sheet.charts_changed',
   'project.modules.updated',
 ])
 

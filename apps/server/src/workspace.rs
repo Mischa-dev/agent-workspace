@@ -29,6 +29,7 @@ use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+pub mod admin_ops;
 pub mod lifecycle;
 pub mod ops;
 pub mod reads;

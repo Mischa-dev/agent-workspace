@@ -12,16 +12,19 @@
 //! Every read checks `whiteboard_visible_to` (migration 20261017070000) and,
 //! for agents, `actor_can_access_project` on the board's project.
 
+pub mod ask;
 pub mod edit;
 pub mod elements;
 pub mod fractional;
 mod http;
 pub mod ops;
+pub mod outline;
 pub mod proposals;
 pub mod render;
 pub mod scene;
 pub mod store;
 pub mod templates;
+pub mod to_tasks;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -500,17 +503,7 @@ async fn copy_into(
     .bind(caller.actor_id)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
-        SELECT $2, file_id, mime_type, data, $3 FROM whiteboard_files WHERE whiteboard_id = $1
-        "#,
-    )
-    .bind(whiteboard_id)
-    .bind(id)
-    .bind(caller.actor_id)
-    .execute(&mut **transaction)
-    .await?;
+    store::copy_files(transaction, whiteboard_id, id, caller.actor_id).await?;
     sqlx::query(
         r#"
         UPDATE whiteboards copy
@@ -633,6 +626,13 @@ pub async fn change(
             new_project,
         )
         .await?;
+        crate::memory::page_move::follow_space(
+            transaction,
+            "whiteboard",
+            whiteboard_id,
+            new_project,
+        )
+        .await?;
     }
     let action = match (deleted, new_deleted) {
         (false, true) => "whiteboard.deleted",
@@ -683,6 +683,7 @@ pub async fn purge(
         whiteboard_id,
     )
     .await?;
+    store::remove_files(transaction, whiteboard_id, caller.actor_id).await?;
     sqlx::query("DELETE FROM whiteboards WHERE id = $1")
         .bind(whiteboard_id)
         .execute(&mut **transaction)
@@ -941,11 +942,7 @@ pub async fn links(
                END AS title,
                CASE WHEN link.target_kind = 'work_item' AND item.id IS NOT NULL
                  THEN project.project_key || '-' || item.number::text END AS key,
-               CASE link.target_kind
-                 WHEN 'project' THEN '/projects/' || project.id::text
-                 WHEN 'work_item' THEN '/projects/' || project.id::text || '/work-items/' || link.target_id::text
-                 ELSE '/projects/' || project.id::text || '/pages/' || link.target_id::text
-               END AS url
+               '' AS url
         FROM whiteboard_links link
         JOIN projects project ON project.id = link.target_project_id AND project.archived_at IS NULL
         LEFT JOIN task_rows item ON link.target_kind = 'work_item' AND item.id = link.target_id
@@ -962,6 +959,15 @@ pub async fn links(
     .bind(caller.confined_project)
     .fetch_all(crate::db::scoped(pool))
     .await?;
+    for link in &mut links {
+        use crate::addresses::{Place, Target};
+        let place = match link.target_kind.as_str() {
+            "project" => Place::Home,
+            "work_item" => Place::Task(link.target_id),
+            _ => Place::Page(link.target_id),
+        };
+        link.url = Target::space(link.project_id, place).href();
+    }
     // A linked task's title is its current one: shown only with "see tasks"
     // in its project (role, and an app's agent limit), as task_open would;
     // otherwise the link keeps its key.

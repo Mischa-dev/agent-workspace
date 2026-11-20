@@ -746,7 +746,7 @@ pub async fn references<'a>(
 pub fn exported_page(project_id: Uuid, page_id: Uuid, title: &str) -> String {
     format!(
         "{title} ({})",
-        crate::addresses::Target::page(project_id, page_id).legacy_path()
+        crate::addresses::Target::page(project_id, page_id).href()
     )
 }
 

@@ -30,6 +30,8 @@
 //!
 //! Every change is audited with what it was before and after.
 
+pub mod ops;
+
 use std::collections::BTreeSet;
 
 use axum::{
@@ -39,6 +41,7 @@ use axum::{
     routing::{get, patch, put},
 };
 use chrono::{DateTime, Utc};
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
@@ -251,7 +254,7 @@ impl Standing {
         self.permissions.contains(permission)
     }
 
-    fn is_owner(self) -> bool {
+    pub(crate) fn is_owner(self) -> bool {
         crate::access::tier::owner(self.role)
     }
 }
@@ -313,7 +316,7 @@ pub(crate) async fn standing(
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.organization_id = $1 AND membership.actor_id = $2
               AND membership.enabled AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers act through their own paths)
+              AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers act through their own paths)
             "#,
         )
         .bind(organization_id)
@@ -390,9 +393,9 @@ pub(crate) fn role_allows_sql(actor: &str, project: &str, permission: &str) -> S
 // ---------------------------------------------------------------------------
 // Roles: reading
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct RoleDefaults {
+pub struct RoleDefaults {
     /// A built-in preset's id or a saved preset's ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_preset: Option<String>,
@@ -460,9 +463,10 @@ impl RoleRow {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RoleView {
+pub struct RoleView {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub key: String,
     pub built_in: bool,
@@ -490,9 +494,9 @@ pub(crate) struct RoleView {
     pub capabilities: RoleCapabilities,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RoleCapabilities {
+pub struct RoleCapabilities {
     /// Change its name, description, defaults and agent limit.
     pub edit: bool,
     pub edit_permissions: bool,
@@ -667,9 +671,9 @@ pub(crate) async fn read(
 // ---------------------------------------------------------------------------
 // The permission catalogue and starting points
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionEntry {
+pub struct PermissionEntry {
     pub key: &'static str,
     pub module: &'static str,
     pub label: &'static str,
@@ -687,9 +691,9 @@ pub(crate) struct PermissionEntry {
     pub required: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ModuleEntry {
+pub struct ModuleEntry {
     pub key: &'static str,
     pub name: &'static str,
 }
@@ -721,9 +725,9 @@ pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
 }
 
 /// A ready-made custom role to start from.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct StartingPoint {
+pub struct StartingPoint {
     pub key: &'static str,
     pub name: &'static str,
     pub description: &'static str,
@@ -918,6 +922,10 @@ pub(crate) enum Auditor<'a> {
         principal: &'a AuthenticatedActor,
     },
     App(&'a McpPrincipal),
+    /// An operation (K2.17): the row names the role action, with the
+    /// columns of the edge the call came by; the operation then says it
+    /// wrote its own audit row.
+    Op(&'a crate::ops::OpContext),
 }
 
 impl Auditor<'_> {
@@ -943,6 +951,18 @@ impl Auditor<'_> {
                     metadata,
                 )
                 .await
+            }
+            Self::Op(ctx) => {
+                crate::ops::dispatch::audit_row_as(
+                    transaction,
+                    ctx,
+                    action,
+                    target_kind,
+                    target_id,
+                    metadata,
+                )
+                .await?;
+                Ok(())
             }
             Self::App(principal) => {
                 sqlx::query(
@@ -1123,7 +1143,8 @@ pub(crate) async fn create(
     let defaults = checked_defaults(transaction, organization_id, input.defaults).await?;
     lock_roles(transaction, organization_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM workspace_roles WHERE organization_id = $1 AND NOT built_in",
+        "SELECT count(*) FROM workspace_roles role WHERE organization_id = $1 AND NOT built_in \
+         AND NOT EXISTS (SELECT 1 FROM module_apps app WHERE app.role_id = role.id)",
     )
     .bind(organization_id)
     .fetch_one(&mut **transaction)
@@ -1185,6 +1206,171 @@ pub(crate) async fn create(
         )
         .await?;
     Ok(view)
+}
+
+/// A connected module's role (M1.12) holds exactly what an admin approved
+/// for the app: it changes only through the module's approval, and goes
+/// with it.
+async fn refuse_app_role(connection: &mut PgConnection, role_id: Uuid) -> Result<(), AppError> {
+    let held = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM module_apps WHERE role_id = $1)",
+    )
+    .bind(role_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if held {
+        return Err(AppError::Refused {
+            field: "role",
+            message: "This role belongs to a connected module: change what the app may do by \
+                      approving its scopes on the module.",
+        });
+    }
+    Ok(())
+}
+
+/// The base a connected module's role takes: the lowest built-in role that
+/// holds every approved permission. None when only an owner holds them.
+pub(crate) fn app_role_base(permissions: PermissionSet) -> Option<MembershipRole> {
+    [
+        MembershipRole::Viewer,
+        MembershipRole::Member,
+        MembershipRole::Admin,
+    ]
+    .into_iter()
+    .find(|base| permissions.is_subset_of(PermissionSet::built_in(*base)))
+}
+
+/// What `caller` may approve for an app: what they hold themselves, and an
+/// admin-based role only from an owner (as any role).
+pub(crate) fn may_grant_app(
+    caller: Standing,
+    permissions: PermissionSet,
+) -> Result<MembershipRole, AppError> {
+    let base = app_role_base(permissions).ok_or(AppError::Refused {
+        field: "scopes",
+        message: "An app can't be given what only owners hold.",
+    })?;
+    may_define(caller, base)?;
+    if !permissions.is_subset_of(caller.permissions) {
+        return Err(AppError::Refused {
+            field: "scopes",
+            message: "You can only approve permissions you hold yourself.",
+        });
+    }
+    Ok(base)
+}
+
+/// Makes the role a connected module's app account holds (M1.12): exactly
+/// `permissions` (with the ones every role holds), named after the app. It
+/// counts against no limit on custom roles and is changed only through
+/// [`set_app_role`].
+pub(crate) async fn insert_app_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    name: &str,
+    base: MembershipRole,
+    permissions: PermissionSet,
+    actor_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let permissions = permissions.union(PermissionSet::required()).implied();
+    lock_roles(transaction, organization_id).await?;
+    let taken = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, lower(name) FROM workspace_roles WHERE organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let stem: String = name.chars().take(50).collect();
+    let stem = format!("{} (app)", stem.trim());
+    let name = std::iter::once(stem.clone())
+        .chain((2..100).map(|n| format!("{stem} {n}")))
+        .find(|candidate| {
+            !taken
+                .iter()
+                .any(|(_, used)| *used == candidate.to_lowercase())
+        })
+        .unwrap_or_else(|| format!("{stem} {}", Uuid::now_v7().simple()));
+    let base_key = slug(&name);
+    let key = std::iter::once(base_key.clone())
+        .chain((2..).map(|n| format!("{base_key}-{n}")))
+        .find(|candidate| {
+            !taken.iter().any(|(used, _)| used == candidate)
+                && !crate::access::tier::reserved(candidate)
+        })
+        .unwrap_or_else(|| format!("role-{}", Uuid::now_v7().simple()));
+    let id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO workspace_roles (
+            id, organization_id, key, built_in, base_role, name, description, permissions,
+            created_by_actor_id, updated_by_actor_id
+        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $8)
+        "#,
+    )
+    .bind(id)
+    .bind(organization_id)
+    .bind(&key)
+    .bind(base.key())
+    .bind(&name)
+    .bind("What a connected module's app may do, as approved.")
+    .bind(permissions.keys())
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(name_taken)?;
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
+    Ok(id)
+}
+
+/// Sets what a connected module's role holds, after an approval or a
+/// narrowed manifest, and the tier its holders' memberships carry.
+pub(crate) async fn set_app_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    role_id: Uuid,
+    base: MembershipRole,
+    permissions: PermissionSet,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let permissions = permissions.union(PermissionSet::required()).implied();
+    lock_roles(transaction, organization_id).await?;
+    sqlx::query(
+        r#"
+        UPDATE workspace_roles
+        SET base_role = $3, permissions = $4, updated_by_actor_id = $5,
+            version = version + 1, updated_at = now()
+        WHERE organization_id = $1 AND id = $2
+        "#,
+    )
+    .bind(organization_id)
+    .bind(role_id)
+    .bind(base.key())
+    .bind(permissions.keys())
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    // A space membership takes admin from an admin-based role and member
+    // otherwise, as `workspace_space_add_member` gives it.
+    let space_role = if base == MembershipRole::Admin {
+        MembershipRole::Admin
+    } else {
+        MembershipRole::Member
+    };
+    for (table, role) in [
+        ("organization_memberships", base),
+        ("project_memberships", space_role),
+    ] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET role = $2, version = version + 1, updated_at = now() \
+             WHERE role_id = $1 AND role <> $2"
+        ))
+        .bind(role_id)
+        .bind(role.key())
+        .execute(&mut **transaction)
+        .await?;
+    }
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
+    Ok(())
 }
 
 async fn clear_default(
@@ -1251,6 +1437,7 @@ pub(crate) async fn change(
     let base = row.base()?;
     let row_editable = row.permissions_editable();
     may_define(caller, base)?;
+    refuse_app_role(transaction, role_id).await?;
     if let Some(expected) = change.expected_version
         && expected != row.version
     {
@@ -1387,6 +1574,7 @@ pub(crate) async fn remove(
     if row.built_in {
         return Err(AppError::Conflict("role", "built_in"));
     }
+    refuse_app_role(transaction, role_id).await?;
     if row.is_default {
         return Err(AppError::Conflict("role", "default_role"));
     }
@@ -1475,11 +1663,13 @@ async fn lock_target(
     .ok_or(AppError::NotFound("workspace member"))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Assignment {
+pub struct Assignment {
+    #[schemars(with = "String")]
     pub actor_id: Uuid,
     pub role: String,
+    #[schemars(with = "Option<String>")]
     pub role_id: Option<Uuid>,
     pub role_name: String,
     /// Projects whose role changed with it.
@@ -1492,9 +1682,10 @@ pub(crate) struct Assignment {
 }
 
 /// A project "apply to their projects" left as it was.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SkippedProject {
+pub struct SkippedProject {
+    #[schemars(with = "String")]
     pub project_id: Uuid,
     pub reason: &'static str,
 }
@@ -1902,10 +2093,11 @@ pub(crate) async fn apply_arrival_defaults(
 // ---------------------------------------------------------------------------
 // Effective permissions
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ScopePermissions {
+pub struct ScopePermissions {
     pub role: String,
+    #[schemars(with = "Option<String>")]
     pub role_id: Option<Uuid>,
     pub role_name: String,
     /// What they may do themselves.
@@ -1914,9 +2106,10 @@ pub(crate) struct ScopePermissions {
     pub for_apps: Vec<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PermissionsView {
+pub struct PermissionsView {
+    #[schemars(with = "String")]
     pub actor_id: Uuid,
     pub workspace: ScopePermissions,
     pub project: Option<ScopePermissions>,
@@ -2440,7 +2633,7 @@ mod tests {
 
     #[test]
     fn the_web_app_knows_every_permission() {
-        let web = include_str!("../../web/src/settings/workspace/roles.ts");
+        let web = include_str!("../../../web/src/settings/workspace/roles.ts");
         for info in PERMISSIONS {
             assert!(
                 web.contains(&format!("'{}'", info.key)),

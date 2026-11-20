@@ -39,8 +39,8 @@
     "ops/dispatch.rs": 1,
     "password_reset.rs": 2,
     "projects.rs": 1,
-    "roles.rs": 1,
-    "settings.rs": 1,
+    "roles/mod.rs": 1,
+    "settings/mod.rs": 1,
     "spaces/invite_links.rs": 1,
     "whiteboards.rs": 1,
     "work_item_commands.rs": 6,
@@ -93,7 +93,6 @@
     "mcp.rs": 2,
     "page_docs/parity.rs": 1,
     "page_docs/testing.rs": 1,
-    "whiteboards.rs": 1,
     "work_items.rs": 2
   },
   "log_readers": {
@@ -173,7 +172,7 @@
     "error.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,
-    "settings.rs": 1
+    "settings/mod.rs": 1
   },
   "workspace_role_enum": {}
 }

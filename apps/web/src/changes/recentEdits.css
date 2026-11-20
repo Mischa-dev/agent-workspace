@@ -1,0 +1,25 @@
+/* Recent-edit outlines (C1.10): what someone just changed, in the editors. */
+.aw-recent-edits {
+  align-items: center;
+  background: var(--surface-raised);
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  color: var(--content-fg);
+  display: inline-flex;
+  flex-wrap: wrap;
+  font-size: var(--t-small);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+
+.aw-recent-edits__swatch {
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  height: 12px;
+  width: 12px;
+}
+
+.aw-recent-edits__note {
+  color: var(--content-fg-muted);
+  flex-basis: 100%;
+}

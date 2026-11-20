@@ -395,7 +395,8 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
         text.push_str(&format!(
             "\n…and {} more in your inbox: {origin}{}\n",
             total - DIGEST_ITEMS,
-            crate::addresses::Target::Inbox.legacy_path()
+            crate::addresses::Addresses::of(state)
+                .in_workspace(candidate.organization_id, &crate::addresses::Target::Inbox)
         ));
     }
     text.push_str(&footer(&origin));

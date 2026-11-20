@@ -88,7 +88,9 @@ describe('SettingField', () => {
   })
 
   it('overrides at the project starting from the inherited value, with the version it was based on', async () => {
-    const fetchMock = vi.fn(() => jsonResponse({ setting: { ...overridden, value: 'fast', layers: [layer('project', 'fast', 1), layer('workspace', 'fast', 3)] } }))
+    const fetchMock = vi.fn(() =>
+      jsonResponse({ outcome: 'ok', value: { done: 'changed', setting: { ...overridden, value: 'fast', layers: [layer('project', 'fast', 1), layer('workspace', 'fast', 3)] } } }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     renderField(inherited)
 
@@ -96,19 +98,19 @@ describe('SettingField', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(path).toBe('/api/v1/settings/values/run.speed')
-    expect(init.method).toBe('PUT')
+    expect(path).toBe(`/api/v2/w/${organizationId}/ops/setting_update`)
+    expect(init.method).toBe('POST')
     expect(bodyOf(fetchMock.mock.calls[0])).toEqual({
+      spaceId: projectId,
       scope: 'project',
-      organizationId,
-      projectId,
+      key: 'run.speed',
       value: 'fast',
       expectedVersion: 0,
     })
   })
 
   it('resets an override with its own version and says where the value will come from', async () => {
-    const fetchMock = vi.fn(() => jsonResponse({ setting: inherited }))
+    const fetchMock = vi.fn(() => jsonResponse({ outcome: 'ok', value: { done: 'reset', setting: inherited } }))
     vi.stubGlobal('fetch', fetchMock)
     renderField(overridden)
 
@@ -117,22 +119,25 @@ describe('SettingField', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(path).toBe('/api/v1/settings/values/run.speed/reset')
+    expect(path).toBe(`/api/v2/w/${organizationId}/ops/setting_update`)
     expect(init.method).toBe('POST')
-    expect(bodyOf(fetchMock.mock.calls[0])).toEqual({ scope: 'project', organizationId, projectId, expectedVersion: 2 })
+    expect(bodyOf(fetchMock.mock.calls[0])).toEqual({ spaceId: projectId, scope: 'project', key: 'run.speed', reset: true, expectedVersion: 2 })
   })
 
   it('refetches and says so when someone else changed the setting first', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      if (String(input).startsWith('/api/v1/settings/effective')) {
+      if (String(input).endsWith('/ops/setting_list')) {
         return jsonResponse({
-          organizationId,
-          projectId,
-          settings: [overridden],
-          capabilities: { manageWorkspace: false, manageProject: true, manageOwn: true },
+          outcome: 'ok',
+          value: {
+            organizationId,
+            projectId,
+            settings: [overridden],
+            capabilities: { manageWorkspace: false, manageProject: true, manageOwn: true },
+          },
         })
       }
-      return jsonResponse({ error: { code: 'version_conflict', message: 'Changed.', details: { currentVersion: 3 } } }, 409)
+      return jsonResponse({ outcome: 'conflict', code: 'version', message: 'Changed.', details: { currentVersion: 3 } })
     })
     vi.stubGlobal('fetch', fetchMock)
     const queryClient = renderField(overridden)

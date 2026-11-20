@@ -197,6 +197,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("package_id", "packages"),
                     ("installed_by_actor_id", "actors"),
                     ("via_app_actor_id", "actors"),
+                    ("upgraded_from", "package_installs"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -294,6 +295,26 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             ),
             (
                 "invite_tokens",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
+                "module_apps",
+                "a connected module's app account and secrets; connect it again after import",
+            ),
+            (
+                "module_kinds",
+                "read from a connected module's manifest; made again when it is connected again",
+            ),
+            (
+                "module_things",
+                "which connected module owns a thing; set again when it is connected again",
+            ),
+            (
+                "module_event_receipts",
+                "runtime state of this server (signed events already taken, so replays are refused)",
+            ),
+            (
+                "module_frame_launches",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
@@ -1227,6 +1248,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "project_pages",
                 references: &[
                     ("project_id", "projects"),
+                    ("parent_page_id", "project_pages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                 ],
@@ -1421,6 +1443,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "sheet_cleared_cells",
                 table: "sheet_cleared_cells",
                 references: &[("tab_id", "sheet_tabs")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "sheet_charts",
+                table: "sheet_charts",
+                references: &[
+                    ("space_id", "projects"),
+                    ("sheet_id", "sheets"),
+                    ("created_by_actor_id", "actors"),
+                ],
                 text_references: &[],
                 exclude: &[],
             },

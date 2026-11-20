@@ -65,6 +65,11 @@ pub enum MutationAction {
     /// next turn, only for the built-in assistant's runs, within the
     /// workspace's budget.
     HostCredential,
+    /// A connected module's own call, before or beside its account (M1.12,
+    /// M1.13): trading the one-time install code sent to its manifest's
+    /// install address, or sending in an event signed with its install's
+    /// inbound secret. Each only reaches that one install.
+    ConnectedModuleSignature,
     /// The generated operation route (K2): the operation it names checks
     /// its own permission, module and target through `ops::dispatch`, the
     /// same as its MCP tool.
@@ -1365,6 +1370,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         AgentCredentialExchange
     ),
     boundary_route!("hosts/routes", Post, "/api/v1/hosts/enrol", HostCredential),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/connected-modules/token",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/modules/{module_id}/events",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/modules/{module_id}/frames/redeem",
+        ConnectedModuleSignature
+    ),
     boundary_route!(
         "hosts/routes",
         Post,

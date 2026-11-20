@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { FolderInput } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
@@ -10,6 +11,7 @@ import { useCollections } from '../collections/api'
 import { collectionHref } from '../projects/locations'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
+import { projectLocationHref } from '../projects/locations'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project, ProjectLocation } from '../projects/types'
 import { useWorkspaceId } from '../app/workspace'
@@ -60,17 +62,22 @@ import {
   type Decision,
   type Page,
   type PageRevision,
-  type PageSummary,
   type SavedPage,
   workspacePagesSpace,
 } from './api'
 import { discussionKey, getDiscussion, type CommentAnchor } from './discussion/api'
 import { PageEmbed } from './embeds/PageEmbed'
 import { PageDownloadMenu, PageImportButton } from './PageTransfer'
+import { pageTree, parentChoices, type TreePage } from './pageTree'
 import type { LiveDiscussion } from './live/LivePage'
+import { useAuthenticatedSession } from '../auth/session'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { outlineTitle, useRecentEdits } from '../changes/useRecentEdits'
 import './memory.css'
 import '../styles/pages.css'
 import { here, spaceHref } from '../app/href'
+
+const MovePageDialog = lazy(() => import('./MovePageDialog').then((module) => ({ default: module.MovePageDialog })))
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
 const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />
@@ -166,7 +173,7 @@ const PAGE_LIST: Piece = { type: 'list', thing: 'page', fields: ['tags', 'update
 const DECISION_THING = pagesManifest.things.find((thing) => thing.kind === 'decision') as ThingDecl
 const DECISION_LIST: Piece = { type: 'list', thing: 'decision', fields: ['status', 'decidedAt', 'decidedBy', 'source', 'detail'] }
 
-function pageThing(page: PageSummary, base: string): Thing {
+function pageThing(page: TreePage, base: string): Thing {
   const tags = [page.isGuide && 'Guide', page.skillDescription && 'Skill', page.stale && 'Not updated in months'].filter(
     (tag): tag is string => Boolean(tag),
   )
@@ -174,7 +181,8 @@ function pageThing(page: PageSummary, base: string): Thing {
     id: page.id,
     kind: 'page',
     module: 'pages',
-    title: page.title,
+    // A page inside others shows the way down to it: "Handbook / Onboarding".
+    title: [...page.path, page.title].join(' / '),
     href: `${base}/${encodeURIComponent(page.id)}`,
     owner: page.updatedBy ? { id: page.updatedBy, name: page.updatedBy } : undefined,
     fields: { tags, updatedAt: page.updatedAt, excerpt: excerptText(page.excerpt) },
@@ -237,7 +245,7 @@ function PagesList({ projectId, space }: { projectId: string; space?: boolean })
       ) : null}
       {pages.data && pages.data.pages.length > 0 ? (
         // AWD-98: drawn by the list piece every module uses.
-        <PieceView decl={PAGE_THING} label="Pages" piece={PAGE_LIST} things={pages.data.pages.map((page) => pageThing(page, base))} />
+        <PieceView decl={PAGE_THING} label="Pages" piece={PAGE_LIST} things={pageTree(pages.data.pages).map((page) => pageThing(page, base))} />
       ) : null}
       {creating ? <NewPageDialog hasGuide={hasGuide || Boolean(space)} initialTitle={creating.title} onClose={() => setCreating(null)} projectId={projectId} space={space} /> : null}
     </>
@@ -255,19 +263,22 @@ function NewPageDialog({
   hasGuide,
   initialTitle,
   onClose,
+  parent,
   projectId,
   space,
 }: {
   hasGuide: boolean
   initialTitle: string
   onClose: () => void
+  /** Make the page inside this one. */
+  parent?: { id: string; title: string }
   projectId: string
   space?: boolean
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [title, setTitle] = useState(initialTitle)
-  const [guide, setGuide] = useState(!hasGuide)
+  const [guide, setGuide] = useState(!hasGuide && !parent)
   const [template, setTemplate] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -279,9 +290,10 @@ function NewPageDialog({
     if (!ready || busy) return
     setBusy(true)
     setError(null)
+    const inside = parent ? { parentPageId: parent.id } : {}
     const input = template
-      ? { title: title.trim() || undefined, fromTemplateId: template, isGuide: guide }
-      : { title: title.trim(), body: '', isGuide: guide }
+      ? { title: title.trim() || undefined, fromTemplateId: template, isGuide: guide, ...inside }
+      : { title: title.trim(), body: '', isGuide: guide, ...inside }
     void createPage(projectId, input)
       .then(async (page) => {
         await queryClient.invalidateQueries({ queryKey: memoryKeys.pages(projectId) })
@@ -309,7 +321,7 @@ function NewPageDialog({
       onClose={onClose}
       onSubmit={submit}
       open
-      title="New page"
+      title={parent ? `New page inside “${parent.title}”` : 'New page'}
     >
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {templates.data && templates.data.templates.length > 0 ? (
@@ -334,7 +346,7 @@ function NewPageDialog({
         placeholder={template ? 'The template’s title' : hasGuide ? 'Theming, How we deploy…' : 'Project guide'}
         value={title}
       />
-      {space ? null : (
+      {space || parent ? null : (
         <Checkbox
           checked={guide}
           description={hasGuide ? 'It takes over from the current guide.' : 'The guide is what people and agents read first in this project.'}
@@ -347,7 +359,13 @@ function NewPageDialog({
 }
 
 export function PageDetailPage() {
-  const { pageId = '' } = useParams()
+  const { pageId = '', projectId = '' } = useParams()
+  // A moved page's old link leads to where it is now (C1.37), even for a
+  // reader who can't open the space it left: the page is read by its id.
+  const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
+  if (page.data && page.data.projectId !== projectId) {
+    return <Navigate replace to={projectLocationHref(page.data.projectId, { kind: 'page', pageId })} />
+  }
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
@@ -379,6 +397,8 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
   const [viewing, setViewing] = useState<Viewing | null>(null)
   const [loadingVersion, setLoadingVersion] = useState<number | null>(null)
   const [restoring, setRestoring] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const [makingChild, setMakingChild] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const canEdit = Boolean(pages.data?.canEdit)
   // A role that only suggests writes in the same editor; the save waits as a suggestion.
@@ -390,6 +410,14 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
     queryFn: () => getDiscussion(pageId),
     enabled: showsDiscussion,
   })
+  // Recent edits (C1.10): blocks others just changed are outlined with who
+  // and when; the toggle shows the last day's.
+  const viewerId = useAuthenticatedSession().user.actorId
+  const [allEdits, setAllEdits] = useState(false)
+  const showsRecent = experience.shows('page.recent_edits')
+  const showsMove = experience.shows('page.move')
+  const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits, enabled: showsRecent })
+  const editedBlocks = useMemo(() => [...recent.shown].map(([blockId, outline]) => ({ blockId, title: outlineTitle(outline) })), [recent.shown])
   const [draft, setDraft] = useState<CommentAnchor | null>(null)
   const [activeThread, setActiveThread] = useState<string | null>(null)
   const startComment = useCallback((anchor: CommentAnchor) => {
@@ -432,6 +460,8 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
   }
   if (page.isError) return <ErrorState error={page.error} onRetry={() => void page.refetch()} title="This page didn’t load" />
   const current = page.data
+  // A page moved to another space opens there, so old links keep working.
+  if (current.projectId !== projectId) return <Navigate replace to={projectLocationHref(current.projectId, { kind: 'page', pageId })} />
   const open = (version: number) => {
     setLoadingVersion(version)
     void getPageVersion(pageId, version)
@@ -466,11 +496,22 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
   return (
     <>
       {inChannel ? null : <RememberPlace location={{ kind: 'page', pageId }} project={project} />}
+      {moving && showsMove ? (
+        <Suspense fallback={null}>
+          <MovePageDialog onClose={() => setMoving(false)} page={current} projectId={projectId} />
+        </Suspense>
+      ) : null}
       <PageHeader
         actions={
           editing ? null : (
             <>
+              {live && showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
+              {showsMove && canEdit && !current.archived && !current.isGuide ? (
+                <Button icon={FolderInput} onClick={() => setMoving(true)}>
+                  Move
+                </Button>
+              ) : null}
               {canEdit ? (
                 live ? (
                   <Button icon="settings" onClick={() => setEditing(true)}>
@@ -493,6 +534,12 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
         title={current.title}
       >
         <Link to={pagesHref(projectId)}>All pages</Link>
+        {current.ancestors.map((ancestor) => (
+          <span key={ancestor.id}>
+            {' / '}
+            <Link to={projectLocationHref(projectId, { kind: 'page', pageId: ancestor.id })}>{ancestor.title}</Link>
+          </span>
+        ))}
         {' · '}Version {current.version} · edited <When at={current.updatedAt} />
         {current.updatedBy ? ` by ${current.updatedBy}` : ''}
       </PageHeader>
@@ -547,13 +594,13 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
         </div>
       ) : live ? (
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
+          {showsRecent ? <RecentEditsBar canUndo={canEdit} change={recent.newest} kind="page" onUndone={() => void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })} /> : null}
           <LivePage
-            collections={experience.shows('area.collections')}
             discussion={liveDiscussion}
+            edited={editedBlocks}
             fallback={read}
             pageId={pageId}
             projectId={projectId}
-            sheets={experience.shows('area.sheets')}
             title={current.title}
           />
         </Suspense>
@@ -572,6 +619,35 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
             projectId={projectId}
           />
         </Suspense>
+      ) : null}
+      {experience.shows('page.nesting') && (current.children.length || (canEdit && !current.archived)) ? (
+        <Section
+          actions={
+            canEdit && !current.archived ? (
+              <Button icon="plus" onClick={() => setMakingChild(true)} size="sm">
+                New page inside
+              </Button>
+            ) : undefined
+          }
+          title="Pages inside"
+        >
+          {current.children.length ? (
+            <RowList label="Pages inside">
+              {current.children.map((child) => (
+                <Row key={child.id} title={<Link to={projectLocationHref(projectId, { kind: 'page', pageId: child.id })}>{child.title}</Link>} />
+              ))}
+            </RowList>
+          ) : null}
+        </Section>
+      ) : null}
+      {makingChild ? (
+        <NewPageDialog
+          hasGuide
+          initialTitle=""
+          onClose={() => setMakingChild(false)}
+          parent={{ id: current.id, title: current.title }}
+          projectId={projectId}
+        />
       ) : null}
       <Suspense fallback={null}>
         <LinkedWhiteboards canEdit={canEdit && !current.archived} projectId={projectId} targetId={current.id} targetKind="page" />
@@ -644,6 +720,7 @@ function PageEditor({
 }) {
   // The version this edit started from, kept even when the page refetches
   // underneath, so a save can't quietly replace someone else's newer one.
+  const showsNesting = useProjectExperience(projectId).shows('page.nesting')
   const [restored] = useState(() => {
     const draft = readLocal<PageDraft>(draftKey(page.id))
     return draft && (draft.title !== page.title || draft.body !== page.body || draft.note) ? draft : null
@@ -657,6 +734,8 @@ function PageEditor({
   const [isTemplate, setIsTemplate] = useState(page.isTemplate)
   const [skill, setSkill] = useState(page.skillDescription !== null)
   const [skillDescription, setSkillDescription] = useState(page.skillDescription ?? '')
+  const [parent, setParent] = useState(page.parentPageId ?? '')
+  const siblings = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId), enabled: !suggesting })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [discarding, setDiscarding] = useState(false)
@@ -694,6 +773,7 @@ function PageEditor({
       isGuide: guide,
       isTemplate,
       skillDescription: skill ? skillDescription.trim() : '',
+      ...(parent !== (page.parentPageId ?? '') ? { parentPageId: parent || null } : {}),
       expectedVersion: expected,
       note: note.trim() || undefined,
     })
@@ -761,6 +841,16 @@ function PageEditor({
       )}
       {suggesting ? null : (
         <>
+          {showsNesting ? (
+            <SelectField label="Inside page" onChange={(event) => setParent(event.target.value)} value={parent}>
+              <option value="">None: it sits at the top</option>
+              {parentChoices(siblings.data?.pages ?? [], page.id).map((choice) => (
+                <option key={choice.id} value={choice.id}>
+                  {[...choice.path, choice.title].join(' / ')}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
           <Checkbox
             checked={isTemplate}
             description="New pages can start from a copy of it, with {{date}}, {{author}} and {{project}} filled in."

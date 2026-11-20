@@ -142,7 +142,7 @@ async fn criteria_change_all_together_and_retry_safely() {
         value["url"]
             .as_str()
             .expect("url")
-            .ends_with(&format!("/projects/{work}/work-items/{task}")),
+            .ends_with(&format!("/w/-/s/{work}/tasks/{task}")),
         "{value}"
     );
     assert_eq!(

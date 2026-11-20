@@ -352,8 +352,9 @@ impl Operation for MemoryPageWrite {
             }
             MemoryFor::Space => "Memory".to_owned(),
         };
-        let existing = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM project_pages \
+        // The page's own space: the memory stays where it was made.
+        let existing = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT id, project_id FROM project_pages \
              WHERE memory_for_kind = $1 AND memory_for_id = $2 AND archived_at IS NULL \
              FOR UPDATE",
         )
@@ -363,10 +364,11 @@ impl Operation for MemoryPageWrite {
         .await
         .map_err(AppError::from)?;
         let page_id = match existing {
-            Some(page_id) => {
+            Some((page_id, page_space)) => {
                 super::update_page(
                     tx,
                     writer,
+                    page_space,
                     page_id,
                     &PageInput {
                         body: Some(input.body),

@@ -497,10 +497,10 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
     for (kind, path) in [
         ("milestones", "/milestones"),
         ("timeline", "/timeline"),
-        ("planning", "/next"),
+        ("planning", "/planning/next"),
         ("pages", "/pages"),
         ("decisions", "/decisions"),
-        ("runs", "/launches"),
+        ("runs", "/runs"),
     ] {
         let (_, current) = get(&setup, &setup.browser, &navigation).await;
         let (status, saved) = send(
@@ -509,7 +509,7 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{kind}: {saved}");
-        assert_eq!(saved["href"], format!("/projects/{project}{path}"));
+        assert_eq!(saved["href"], format!("/w/-/s/{project}{path}"));
     }
 
     // A page in another project, or no page at all, isn't a place here.
@@ -537,7 +537,7 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["location"]["pageId"], page.as_str());
-    assert_eq!(saved["href"], format!("/projects/{project}/pages/{page}"));
+    assert_eq!(saved["href"], format!("/w/-/s/{project}/pages/{page}"));
     let (_, listed) = get(&setup, &setup.browser, "/api/v1/projects").await;
     let listed = listed["projects"]
         .as_array()
@@ -548,7 +548,7 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
         .clone();
     assert_eq!(
         listed["navigation"]["href"],
-        format!("/projects/{project}/pages/{page}")
+        format!("/w/-/s/{project}/pages/{page}")
     );
 
     // Once the page is archived, the project opens on its pages instead.
@@ -565,7 +565,7 @@ async fn a_project_remembers_each_tab_and_page_but_not_an_archived_or_foreign_pa
     assert_eq!(status, StatusCode::OK, "{archived}");
     let (_, current) = get(&setup, &setup.browser, &navigation).await;
     assert_eq!(current["location"], json!({"kind": "pages"}));
-    assert_eq!(current["href"], format!("/projects/{project}/pages"));
+    assert_eq!(current["href"], format!("/w/-/s/{project}/pages"));
     let (status, _) = send(
         &setup.app,
         remember(json!({"kind": "page", "pageId": page}), &current["version"]),

@@ -1,4 +1,4 @@
-import { requestJson } from '../../api/client'
+import { callOp } from '../../api/ops'
 
 /**
  * Every permission a role can hold (AWD-74). The server's catalogue
@@ -179,31 +179,48 @@ export type PermissionsView = {
   personalAgentLimit: PermissionKey[] | null
 }
 
-const base = (organizationId: string) => `/api/v1/organizations/${encodeURIComponent(organizationId)}`
-
 export const roleKeys = {
   roles: (organizationId: string) => ['organization', organizationId, 'roles'] as const,
   permissions: (organizationId: string, actorId: string | null) =>
     ['organization', organizationId, 'permissions', actorId ?? 'me'] as const,
 }
 
-export const listRoles = (organizationId: string) => requestJson<RolesResponse>(`${base(organizationId)}/roles`)
+// The operations (K2.17) answer with these shapes; the generated types say
+// `string` where these name the keys.
+const inWorkspace = (organizationId: string) => ({ workspaceId: organizationId })
 
-export const createRole = (organizationId: string, input: RoleInput) =>
-  requestJson<WorkspaceRoleView>(`${base(organizationId)}/roles`, { method: 'POST', json: input })
+export const listRoles = async (organizationId: string) =>
+  (await callOp('role_list', {}, inWorkspace(organizationId))) as unknown as RolesResponse
 
-export const changeRole = (
+export const createRole = async (organizationId: string, input: RoleInput) =>
+  (await callOp(
+    'role_create',
+    { ...input, agentLimit: input.agentLimit ?? undefined },
+    inWorkspace(organizationId),
+  )) as unknown as WorkspaceRoleView
+
+export const changeRole = async (
   organizationId: string,
   role: WorkspaceRoleView,
   change: Partial<Omit<RoleInput, 'baseRole'>>,
-) =>
-  requestJson<WorkspaceRoleView>(`${base(organizationId)}/roles/${encodeURIComponent(role.id)}`, {
-    method: 'PATCH',
-    json: { expectedVersion: role.version, ...change },
-  })
+) => {
+  const { agentLimit, ...rest } = change
+  return (await callOp(
+    'role_update',
+    {
+      ...rest,
+      role: role.id,
+      expectedVersion: role.version,
+      // null takes the limit away; left out, it stays.
+      ...(agentLimit === null ? { clearAgentLimit: true } : agentLimit ? { agentLimit } : {}),
+    },
+    inWorkspace(organizationId),
+  )) as unknown as WorkspaceRoleView
+}
 
-export const removeRole = (organizationId: string, role: WorkspaceRoleView) =>
-  requestJson<void>(`${base(organizationId)}/roles/${encodeURIComponent(role.id)}`, { method: 'DELETE' })
+export const removeRole = async (organizationId: string, role: WorkspaceRoleView) => {
+  await callOp('role_delete', { role: role.id }, inWorkspace(organizationId))
+}
 
 export type Assignment = {
   actorId: string
@@ -216,29 +233,32 @@ export type Assignment = {
   skippedProjects: { projectId: string; reason: string }[]
 }
 
-export const assignRole = (
+export const assignRole = async (
   organizationId: string,
   actorId: string,
   input: { roleId: string; applyToProjects: boolean; expectedVersion: number },
 ) =>
-  requestJson<Assignment>(`${base(organizationId)}/members/${encodeURIComponent(actorId)}/role`, {
-    method: 'PUT',
-    json: input,
-  })
+  (await callOp(
+    'role_assign',
+    { account: actorId, role: input.roleId, applyToProjects: input.applyToProjects, expectedVersion: input.expectedVersion },
+    inWorkspace(organizationId),
+  )) as unknown as Assignment
 
-export const setAgentLimit = (organizationId: string, actorId: string, permissions: PermissionKey[] | null) =>
-  requestJson<{ permissions: PermissionKey[] | null }>(
-    `${base(organizationId)}/members/${encodeURIComponent(actorId)}/agent-limit`,
-    { method: 'PUT', json: { permissions } },
+export const setAgentLimit = async (organizationId: string, actorId: string, permissions: PermissionKey[] | null) => {
+  const set = await callOp(
+    'app_limit_set',
+    permissions === null ? { account: actorId, lift: true } : { account: actorId, permissions },
+    inWorkspace(organizationId),
   )
-
-export function getPermissions(organizationId: string, options: { actorId?: string; projectId?: string } = {}) {
-  const query = new URLSearchParams()
-  if (options.actorId) query.set('actorId', options.actorId)
-  if (options.projectId) query.set('projectId', options.projectId)
-  const suffix = query.toString() ? `?${query.toString()}` : ''
-  return requestJson<PermissionsView>(`${base(organizationId)}/permissions${suffix}`)
+  return { permissions: (set.permissions ?? null) as PermissionKey[] | null }
 }
+
+export const getPermissions = async (organizationId: string, options: { actorId?: string; projectId?: string } = {}) =>
+  (await callOp(
+    'permissions_get',
+    { account: options.actorId, spaceId: options.projectId },
+    inWorkspace(organizationId),
+  )) as unknown as PermissionsView
 
 /** The roles someone can be given in the workspace: no owner (that's Transfer ownership) and no plain viewer. */
 export function workspaceAssignable(roles: WorkspaceRoleView[]) {

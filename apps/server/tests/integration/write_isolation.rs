@@ -521,6 +521,22 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ("POST /api/v1/workspace-invitations/accept-new", CAPABILITY),
     ("POST /api/v1/workspace-invitations/resolve", CAPABILITY),
     (
+        "POST /api/v1/connected-modules/token",
+        "a connected app trades the one-time install code it was sent for its credentials; \
+         no session, and the code names its one install; covered in connected_modules",
+    ),
+    (
+        "POST /api/v1/modules/{module_id}/events",
+        "a connected app sends in an event signed with its install's inbound secret; no \
+         session, and the signature reaches only that install; covered in connected_modules",
+    ),
+    (
+        "POST /api/v1/modules/{module_id}/frames/redeem",
+        "a connected app redeems a framed panel's launch token, signed with its install's \
+         inbound secret; no session, and only that install's launches; covered in \
+         connected_modules",
+    ),
+    (
         "POST /oauth/register",
         "OAuth client registration: makes a public client that belongs to no workspace",
     ),
@@ -545,7 +561,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_register_decide",
     "agent_pause",
     "agent_resume",
-    "agent_profile_write",
+    "agent_profile_set",
     "agent_ref_set",
     "agent_ref_decide",
     "agent_ref_remove",
@@ -598,6 +614,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "data_query_update",
     "decision_record",
     "page_make",
+    "page_file_upload",
+    "page_move",
     "environment_archive",
     "environment_check",
     "environment_create",
@@ -612,9 +630,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "host_agent_unbind",
     "host_enrolment_create",
     "host_unlink",
-    "invitation_write",
+    "invitation_create",
+    "invitation_update",
     "invite_link_create",
     "invite_link_revoke",
+    "layout_preset_create",
+    "layout_preset_update",
     "incoming_hook_create",
     "incoming_hook_delete",
     "thing_link",
@@ -624,7 +645,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_store_set",
     "workspace_store_revoke",
     "workspace_export_start",
-    "layout_preset_write",
     "label_create",
     "label_update",
     "field_create",
@@ -659,6 +679,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_view_update",
     "sheet_view_delete",
     "sheet_range_set",
+    "sheet_chart_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -692,29 +713,39 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "project_status_set",
     "project_update_create",
     "module_archive",
+    "connected_module_approve",
+    "connected_module_install",
+    "connected_module_refresh",
+    "connected_module_revoke",
+    "connected_module_run",
+    "connected_module_test",
+    "module_panel_press",
+    "module_frame_check",
     "module_create",
     "module_part_link",
     "module_part_unlink",
     "module_restore",
     "module_set",
     "module_update",
-    "model_catalog_write",
+    "model_catalog_set",
     "notification_keyword_set",
     "notification_update",
     "package_install",
+    "package_upgrade",
     "package_remove",
     "directory_source_create",
     "directory_source_remove",
     "workspace_shape_set",
-    "page_comment",
+    "page_comment_create",
     "page_comment_update",
-    "page_edit",
+    "page_create",
     "page_suggestion_decide",
-    "page_write",
+    "page_update",
+    "page_update_blocks",
     "person_create",
     "pin_set",
     "plan_import",
-    "project_layout_set",
+    "layout_update",
     "pull_request_create",
     "pull_request_merge",
     "pull_request_refresh",
@@ -729,10 +760,13 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_create",
     "repository_prepare",
     "role_assign",
-    "role_write",
+    "role_create",
+    "role_update",
+    "role_delete",
+    "app_limit_set",
     "run_activity_report",
     "run_cancel",
-    "run_dismiss_failure",
+    "run_failure_hide",
     "run_mark_not_started",
     "run_create",
     "run_publish",
@@ -745,7 +779,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "run_usage_report",
     "scheduled_message_update",
     "session_bind",
-    "settings_set",
+    "setting_update",
     "space_archive",
     "space_create",
     "space_join",
@@ -760,6 +794,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thing_link_create",
     "thing_share_add",
     "thing_share_remove",
+    "thing_upsert",
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
@@ -800,6 +835,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "view_update",
     "whiteboard_create",
     "whiteboard_duplicate",
+    "whiteboard_to_tasks",
+    "whiteboard_ask",
+    "sheet_row_add",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -812,7 +850,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "initiative_create",
     "workspace_template_apply",
     "workspace_template_save",
-    "project_template_write",
+    "project_template_create",
+    "project_template_update",
     "workspace_update",
     "workspace_delete",
     "workspace_delete_cancel",
@@ -6416,7 +6455,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"accountId": a.provider_account, "taskIds": [b.task], "clientRequestId": "net-batch-mixed"})]),
         mcp_case(
-            "project_layout_set",
+            "layout_update",
             json!({"projectId": a.project, "preset": "Software team"}),
             vec![json!({"projectId": b.project, "preset": "Software team"})],
         )
@@ -6424,17 +6463,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "preset": bx.layout_preset}),
             json!({"projectId": a.project, "rules": [{"role": "member", "preset": bx.layout_preset}]}),
             json!({"projectId": a.project, "rules": [{"person": bx.wren, "preset": "Minimal"}]}),
-            json!({"projectId": a.project, "workspace": true, "preset": bx.layout_preset}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "preset": bx.layout_preset}),
         ]),
         mcp_case(
-            "layout_preset_write",
+            "layout_preset_create",
             json!({"projectId": a.project, "name": "Net own", "base": "Software team"}),
             vec![json!({"projectId": b.project, "name": "Net b", "base": "Software team"})],
         )
+        .rejecting(vec![json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset})]),
+        mcp_case(
+            "layout_preset_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "preset": bx.layout_preset, "name": "Mine now"})],
+        )
+        .without_own("layouts.rs changes and removes a workspace's own preset")
         .rejecting(vec![
             json!({"projectId": a.project, "preset": bx.layout_preset, "name": "Mine now"}),
             json!({"projectId": a.project, "preset": bx.layout_preset, "remove": true}),
-            json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset}),
         ]),
         mcp_case("space_join", json!({}), vec![json!({"spaceId": b.project})])
             .without_own("joining needs an open space A's app isn't in; space_ops.rs covers it"),
@@ -6851,7 +6896,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
-            "agent_profile_write",
+            "agent_profile_set",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
             vec![json!({"projectId": b.project, "template": "reviewer", "name": "Net mcp reviewer"})],
         )
@@ -6890,7 +6935,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
         mcp_case(
-            "model_catalog_write",
+            "model_catalog_set",
             json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
             vec![
                 json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
@@ -6906,31 +6951,51 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
-            "settings_set",
-            json!({"projectId": a.project, "key": "run.model", "value": "net-model"}),
+            "setting_update",
+            json!({"spaceId": a.project, "key": "run.model", "value": "net-model"}),
             vec![
-                json!({"projectId": b.project, "key": "run.model", "value": "net-model"}),
-                json!({"projectId": b.project, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+                json!({"spaceId": b.project, "key": "run.model", "value": "net-model"}),
+                json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "value": "net-model"}),
             ],
         ),
         mcp_case(
-            "invitation_write",
+            "invitation_create",
             json!({"projectId": a.project, "role": "viewer", "expiresInHours": 24}),
             vec![json!({"projectId": b.project, "role": "viewer"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
-            json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
             json!({"projectId": a.project, "role": bx.custom_role}),
-            json!({"projectId": a.project, "workspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
-            json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "role": bx.custom_role}),
         ]),
         mcp_case(
-            "role_write",
-            json!({"projectId": a.project, "name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"]}),
-            vec![json!({"projectId": b.project, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"]})],
+            "invitation_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "invitation": bx.project_invitation, "revoke": true})],
         )
-        .rejecting(vec![json!({"projectId": a.project, "role": bx.custom_role, "description": "Net"})]),
+        .without_own("revoking A's invitation would break the cases after it; m7 invitation tests revoke and replace one")
+        .rejecting(vec![
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
+        ]),
+        mcp_case(
+            "role_create",
+            json!({"name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role"}),
+            vec![json!({"workspace": b.organization, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role-b"})],
+        ),
+        mcp_case(
+            "role_update",
+            json!({"role": ax.custom_role, "expectedVersion": version("workspace_roles", ax.custom_role), "description": "Net"}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})],
+        )
+        .rejecting(vec![json!({"role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})]),
+        mcp_case(
+            "role_delete",
+            json!({"role": ax.custom_role}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role})],
+        )
+        .rejecting(vec![json!({"role": bx.custom_role})])
+        .without_own("A's role is held and the cases after it use it; roles_and_access removes one"),
         mcp_case(
             "workspace_template_apply",
             json!({"projectId": a.project, "template": "everything"}),
@@ -6944,26 +7009,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "remove": bx.workspace_template})]),
         mcp_case(
-            "project_template_write",
+            "project_template_create",
             json!({"projectId": a.project, "name": "Net mcp setup"}),
             vec![json!({"projectId": b.project, "name": "Net mcp setup b"})],
+        ),
+        mcp_case(
+            "project_template_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "template": bx.project_template, "name": "Net"})],
         )
+        .without_own("awd91_agent_parity.rs renames and archives a template")
         .rejecting(vec![
             json!({"projectId": a.project, "template": bx.project_template, "name": "Net"}),
         ]),
         mcp_case(
             "role_assign",
-            json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
-            vec![
-                json!({"projectId": b.project, "person": "@wren", "role": "member"}),
-                json!({"projectId": b.project, "person": "@wren", "agentLimit": ["tasks.view"]}),
-            ],
+            json!({"account": "@wren", "role": ax.custom_role}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "role": "member"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
-            json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
-            json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
+            json!({"account": bx.wren, "role": "member"}),
+            json!({"account": "@wren", "role": bx.custom_role}),
         ]),
+        mcp_case(
+            "app_limit_set",
+            json!({"account": "@wren", "permissions": ["tasks.view"]}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "permissions": ["tasks.view"]})],
+        )
+        .rejecting(vec![json!({"account": bx.wren, "lift": true})]),
         // K4.7: spaces. B's spaces, B's workspace and B's project
         // templates aren't A's.
         mcp_case(
@@ -7619,6 +7692,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "template": b.record_template,
                    "clientRequestId": "net-from-template-cross"}),
         ]),
+        // C2.22: a sheet row from a message, only into a sheet here and
+        // only from a message here.
+        mcp_case(
+            "sheet_row_add",
+            json!({"sheetId": a.sheet, "fromMessageId": a.message}),
+            vec![json!({"sheetId": b.sheet, "values": {"Item": "Net"}})],
+        )
+        .rejecting(vec![
+            json!({"sheetId": a.sheet, "fromMessageId": b.message}),
+        ]),
         // T1.41: a record changed (or a change proposed) only here.
         mcp_case(
             "record_update",
@@ -7723,6 +7806,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sheet_range_set",
             json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
             vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
+        // C1.18: B's sheet can't be given a chart from A.
+        mcp_case(
+            "sheet_chart_set",
+            json!({"sheetId": a.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart"}),
+            vec![json!({"sheetId": b.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart-b"})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
@@ -7906,12 +7995,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             .last()
         },
         mcp_case(
-            "page_edit",
+            "page_update_blocks",
             json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
             vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
         ),
         mcp_case(
-            "page_comment",
+            "page_comment_create",
             json!({"pageId": a.page, "text": "Net mcp comment"}),
             vec![
                 json!({"pageId": b.page, "text": "Net"}),
@@ -7945,12 +8034,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
         ),
         mcp_case(
-            "page_write",
+            "page_update",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),
-            vec![
-                json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)}),
-                json!({"projectId": b.project, "title": "Net page", "body": "Net"}),
-            ],
+            vec![json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)})],
+        ),
+        mcp_case(
+            "page_create",
+            json!({"projectId": a.project, "title": "Net mcp created page", "body": "Net"}),
+            vec![json!({"projectId": b.project, "title": "Net page", "body": "Net"})],
         )
         .rejecting(vec![json!({
             "projectId": a.project,
@@ -7976,7 +8067,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
-        ),
+        )
+        // C2.22: a sticky is made only from a message here.
+        .rejecting(vec![json!({"whiteboardId": a.whiteboard, "fromMessageId": b.message,
+            "operations": [{"op": "add", "type": "rectangle", "id": "netmsg", "text": "Net"}]})]),
         // C1.11: a proposal goes only on a board the caller can see.
         mcp_case(
             "whiteboard_propose",
@@ -8005,6 +8099,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "title": "Net mcp copy"}),
             vec![json!({"whiteboardId": b.whiteboard, "title": "Net mcp copy"})],
         ),
+        // C1.32: B's board's notes don't become tasks in A, nor A's in B.
+        mcp_case(
+            "whiteboard_to_tasks",
+            json!({"whiteboardId": a.whiteboard, "clientRequestId": "net-board-tasks"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "clientRequestId": "net-board-tasks-b"}),
+                json!({"whiteboardId": b.whiteboard, "spaceId": a.project, "clientRequestId": "net-board-tasks-c"}),
+                json!({"whiteboardId": a.whiteboard, "spaceId": b.project, "clientRequestId": "net-board-tasks-d"}),
+            ],
+        )
+        .without_own("A's board has no notes; notes into tasks are checked in w16_whiteboards"),
+        // C1.31: nobody asks about B's board from A, or asks B's account
+        // about A's board.
+        mcp_case(
+            "whiteboard_ask",
+            json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": ax.wren,
+                   "question": "Net?"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+                json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+            ],
+        )
+        .without_own("A's board has no elements; asking is checked in discussion and privacy_inside_workspace"),
         mcp_case(
             "whiteboard_link",
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": a.subtask}),
@@ -8023,6 +8142,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
         )
         .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        // M1.10: another workspace's install is never upgraded.
+        mcp_case(
+            "package_upgrade",
+            json!({}),
+            vec![json!({"installId": b.package_install, "package": tiny_package(), "planHash": "sha256:0", "clientRequestId": "net-package-upgrade-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_upgrade.rs covers upgrading"),
         mcp_case(
             "package_remove",
             json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
@@ -8091,6 +8217,70 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
             vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
         ),
+        // Connected modules (M1.12): B's module never opens from A, and an
+        // install never lands in B. Installing needs an app serving its
+        // manifest, which connected_modules runs end to end.
+        mcp_case(
+            "connected_module_install",
+            json!({"url": "https://example.invalid/manifest.json"}),
+            vec![json!({"workspace": b.organization, "url": "https://example.invalid/manifest.json"})],
+        )
+        .without_own("needs an app serving its manifest; connected_modules runs it"),
+        mcp_case(
+            "connected_module_refresh",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_approve",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-approve-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_revoke",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-revoke-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        // M1.13: a declared operation runs only where its install is, and
+        // a connected thing is written only in the caller's workspace.
+        mcp_case(
+            "connected_module_run",
+            json!({"operation": "acme_build_rerun", "input": {"build": "1"}}),
+            vec![json!({"workspace": b.organization, "operation": "acme_build_rerun",
+                        "input": {"build": "1"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
+        mcp_case(
+            "connected_module_test",
+            json!({"moduleId": a.organization}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization})],
+        )
+        .without_own("needs an installed file source answering it; connected_modules runs it"),
+        mcp_case(
+            "thing_upsert",
+            json!({"kind": "acme.build", "title": "Build 1"}),
+            vec![json!({"workspace": b.organization, "kind": "acme.build", "title": "Build 1",
+                        "clientRequestId": "net-thing-upsert-b"})],
+        )
+        .without_own("only a connected module's own account writes its kinds; connected_modules runs it"),
+        mcp_case(
+            "module_panel_press",
+            json!({"moduleId": a.organization, "panel": "builds", "action": {"id": "rerun"}}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization, "panel": "builds",
+                        "action": {"id": "rerun"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
+        // M1.15: a framed panel's launch is finished only by the account it
+        // was opened for, in its own workspace.
+        mcp_case(
+            "module_frame_check",
+            json!({"launchId": a.organization, "ref": "saved-1"}),
+            vec![json!({"workspace": b.organization, "launchId": a.organization, "ref": "saved-1"})],
+        )
+        .without_own("needs a launch opened in a browser; connected_modules runs it"),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",
@@ -8189,7 +8379,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
             json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
+            // C1.32: nor from B's board.
+            json!({"whiteboardId": b.whiteboard, "projectId": a.project, "clientRequestId": "net-page-make-e"}),
         ]),
+        // C1.33: a file kept on B's page can't come from A.
+        mcp_case(
+            "page_file_upload",
+            json!({"pageId": a.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file"}),
+            vec![json!({"pageId": b.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file-b"})],
+        ),
+        // C1.37: B's page can't be moved, and A's page can't be moved into B.
+        mcp_case(
+            "page_move",
+            json!({"pageId": a.page, "toSpaceId": a.project, "expectedVersion": 1}),
+            vec![
+                json!({"pageId": b.page, "toSpaceId": a.project, "expectedVersion": version("project_pages", &b.page)}),
+                json!({"pageId": a.page, "toSpaceId": b.project, "expectedVersion": version("project_pages", &a.page)}),
+            ],
+        )
+        .without_own("moving A's page away would leave the cases after it without it; moves are checked in w20_files"),
         mcp_case(
             "task_link_many",
             json!({"links": [{"taskId": a.subtask, "blockedBy": [sp.task]}]}),
@@ -8651,7 +8859,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
         ),
         mcp_case(
-            "run_dismiss_failure",
+            "run_failure_hide",
             json!({"runId": ax.failed_run}),
             vec![json!({"runId": bx.failed_run})],
         ),

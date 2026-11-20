@@ -27,7 +27,7 @@ use crate::{
 /// A project template, as a picker shows it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectTemplateLine {
+pub(crate) struct ProjectTemplateLine {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -103,9 +103,9 @@ async fn workspace_of(
 // ---------------------------------------------------------------------------
 // project_template_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectTemplateListArguments {
+pub(crate) struct ProjectTemplateListArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
     /// Include archived templates too.
@@ -114,11 +114,11 @@ pub(super) struct ProjectTemplateListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectTemplateListValue {
+pub(crate) struct ProjectTemplateListValue {
     pub templates: Vec<ProjectTemplateLine>,
 }
 
-pub(super) async fn project_template_list(
+pub(crate) async fn project_template_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectTemplateListArguments,
@@ -150,9 +150,9 @@ pub(super) async fn project_template_list(
 // ---------------------------------------------------------------------------
 // project_template_write
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectTemplateWriteArguments {
+pub(crate) struct ProjectTemplateWriteArguments {
     /// Without template: the project to save as a template (you must manage
     /// it). With template: any project in the workspace.
     pub project_id: String,
@@ -171,13 +171,13 @@ pub(super) struct ProjectTemplateWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectTemplateWriteValue {
+pub(crate) struct ProjectTemplateWriteValue {
     /// "saved" or "changed".
     pub done: String,
     pub template: ProjectTemplateLine,
 }
 
-pub(super) async fn project_template_write(
+pub(crate) async fn project_template_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectTemplateWriteArguments,
@@ -313,7 +313,7 @@ pub(super) async fn project_template_write(
 
 /// A template of the workspace by ID, else by name: an active one first,
 /// then a single archived one. Two with the same name are ambiguous.
-pub(super) async fn find_template(
+pub(crate) async fn find_template(
     executor: &mut sqlx::PgConnection,
     organization_id: Uuid,
     wanted: &str,

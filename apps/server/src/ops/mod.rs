@@ -48,6 +48,7 @@ pub mod refs;
 pub mod registry;
 pub mod target;
 pub mod web;
+pub mod wrapped;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
 pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch, may_run};
@@ -108,6 +109,18 @@ pub enum Idempotency {
     None,
 }
 
+/// Where a describe operation's thing reads as an MCP resource (K2.20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceAddress {
+    /// Under the server's scheme, naming the one input field in braces:
+    /// `pages/{pageId}`.
+    pub path: &'static str,
+    pub mime_type: &'static str,
+    /// Where the value keeps the text served (a JSON pointer); without one
+    /// the whole value is served as JSON.
+    pub text_at: Option<&'static str>,
+}
+
 /// One operation. A unit struct implements it; `registry::entry::<O>()`
 /// erases it into the registry.
 pub trait Operation: Send + Sync + 'static {
@@ -139,6 +152,13 @@ pub trait Operation: Send + Sync + 'static {
     /// lists across all of them (each filtered by the caller's access
     /// there) instead of asking which. Only reads may span.
     const SPANS_WORKSPACES: bool = false;
+    /// A call that names no workspace, from a caller who reaches several,
+    /// acts in the one its credential was made in (as the hand-written tool
+    /// it replaced did), when it was made in one of them.
+    const HOME_WORKSPACE_BY_DEFAULT: bool = false;
+    /// Reads as an MCP resource at this address (a describe operation
+    /// whose input is one id).
+    const RESOURCE: Option<ResourceAddress> = None;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.

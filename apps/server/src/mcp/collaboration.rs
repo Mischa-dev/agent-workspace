@@ -247,7 +247,7 @@ fn project(event: &Value, position: i64) -> ExternalEventProjection {
         summary: entry.map_or("", |entry| entry.summary).to_owned(),
         resource_kind: thing_kind.to_owned(),
         resource_id: thing.map(|id| id.to_string()).unwrap_or_default(),
-        canonical_path: target.legacy_path(),
+        canonical_path: target.href(),
         expires_at: created_at.clone(),
         created_at,
     }
@@ -268,6 +268,6 @@ fn invalid() -> ExternalEventPollResult {
 fn expired() -> ExternalEventPollResult {
     ExternalEventPollResult::CursorExpired {
         retry_category: "resynchronize".to_owned(),
-        resync_path: Target::Home.legacy_path(),
+        resync_path: Target::Home.href(),
     }
 }

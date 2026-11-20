@@ -6,6 +6,9 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { opPrefix, opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
+import { HistoryPanel } from '../pieces/HistoryPanel'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { outlineTitle, useRecentEdits } from '../changes/useRecentEdits'
 import { useProjectExperience } from '../experience/layout'
 import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -37,7 +40,9 @@ import { SheetGrid, type GridEdit, type GridShown } from './SheetGrid'
 import { SheetProposalsDialog } from './SheetProposals'
 import { SheetRangesDialog } from './SheetRanges'
 import { proposedOn, useSheetProposals } from './sheetProposals'
+import { SheetChartsDialog } from './SheetCharts'
 import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
+import { SheetValidationDialog } from './SheetValidationDialog'
 import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
 import { bounds, cards, cellKey, cellMap, cellName, columnName, columnNumber, extent, patched, viewRows, type Selection } from './sheetModel'
@@ -121,12 +126,15 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
   // The open discussion: by its thread's id once it has one, since rows and
   // columns moving around it move its anchor.
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string; threadId?: string } | null>(null)
   // Find and replace, and the filter view on screen (C1.16).
   const [finding, setFinding] = useState(false)
   const [viewId, setViewId] = useState<string | null>(null)
   const [viewDialog, setViewDialog] = useState<{ view: SheetView | null } | null>(null)
   const [editingRules, setEditingRules] = useState(false)
+  const [editingValidation, setEditingValidation] = useState(false)
+  const [charting, setCharting] = useState(false)
   const [naming, setNaming] = useState(false)
   const views = useSheetViews(sheetId, body?.tab, !phone)
   // Proposals (C1.11): a role that only suggests edits a draft, sent as one
@@ -135,6 +143,11 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const [sendingDraft, setSendingDraft] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const proposals = useSheetProposals(sheetId, Boolean(body?.canEdit || body?.canSuggest))
+  // Recent edits (C1.10): cells others just changed are outlined with who
+  // and when; the toggle shows the last day's.
+  const [allEdits, setAllEdits] = useState(false)
+  const showsRecent = experience.shows('page.recent_edits')
+  const recent = useRecentEdits('sheet', sheetId, body?.sheet.revision, { viewerId: user.actorId, all: allEdits, enabled: showsRecent })
   const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
   const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
   const frozenRows = shownTab?.frozenRows ?? 0
@@ -212,6 +225,9 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
   for (const [at, change] of draft) if (at.startsWith(prefix) && change.type === 'cell') tabPending.set(at.slice(prefix.length), change.input)
   const proposedHere = tab && body.canEdit ? proposedOn(proposals, tab.id) : undefined
+  const editedHere = new Map(
+    [...recent.shown].filter(([at]) => at.startsWith(prefix)).map(([at, outline]) => [at.slice(prefix.length), outlineTitle(outline)]),
+  )
   const scope = sheetKeys.one(projectId, sheetId)
   const key = sheetKeys.tab(projectId, sheetId, tabParam)
 
@@ -296,18 +312,31 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
   /** A suggest-only edit: kept in the draft until it's sent as a proposal. */
   const suggestEdit = (edits: GridEdit[]) => {
     if (!tab || !edits.length) return
+    // Each keeps the revision its edit opened at, so a cell changed since is refused rather than overwritten.
+    const revision = body.sheet.revision
     setDraft((current) => {
       const next = new Map(current)
-      for (const entry of edits) next.set(`${tab.id}:${cellKey(entry.row, entry.column)}`, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input })
+      for (const entry of edits) {
+        const at = `${tab.id}:${cellKey(entry.row, entry.column)}`
+        const kept = current.get(at)
+        const ifRevision = kept?.type === 'cell' && kept.ifRevision !== undefined ? kept.ifRevision : (entry.revision ?? revision)
+        next.set(at, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input, ifRevision })
+      }
       return next
     })
   }
 
   const sendDraft = async () => {
     setSendingDraft(true)
+    const sending = new Map(draft)
     try {
-      const sent = await proposeCells(projectId, sheetId, [...draft.values()])
-      setDraft(new Map())
+      const sent = await proposeCells(projectId, sheetId, [...sending.values()])
+      // Edits made while it was on its way stay in the draft.
+      setDraft((current) => {
+        const next = new Map(current)
+        for (const [at, change] of sending) if (next.get(at) === change) next.delete(at)
+        return next
+      })
       void client.invalidateQueries({ queryKey: opPrefix('proposal_list') })
       showToast(
         sent.proposalId
@@ -520,6 +549,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
         })),
         { separator: true },
         { label: 'Conditional formatting', onSelect: () => setEditingRules(true) },
+        ...(experience.shows('sheet.validation') ? [{ label: 'Data validation', onSelect: () => setEditingValidation(true) }] : []),
         { label: 'Clear formatting', onSelect: () => look({ clear: true }) },
       ]
     : []
@@ -563,6 +593,8 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
     { label: 'Download as Excel (.xlsx)', icon: Download, onSelect: () => download('xlsx') },
     { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
     { label: body.ranges.length ? `Named ranges and links (${body.ranges.length})` : 'Named ranges and links', onSelect: () => setNaming(true) },
+    ...(experience.shows('sheet.charts') ? [{ label: body.charts.length ? `Charts (${body.charts.length})` : 'Charts', onSelect: () => setCharting(true) }] : []),
+    { label: 'History', icon: 'clock', onSelect: () => setHistoryOpen(true) },
     ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
       ? [
@@ -679,6 +711,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
             ) : null}
           </div>
         ) : null}
+        {showsRecent ? <RecentEditsBar canUndo={editable && !body.sheet.archived} change={recent.newest} kind="sheet" onUndone={() => void refresh()} /> : null}
         {phone ? (
           <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
@@ -696,6 +729,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
               <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
                 Find
               </Button>
+              {showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {proposals.length ? (
                 <Button onClick={() => setReviewing(true)} size="sm" variant="ghost">
                   {`Proposals (${proposals.length})`}
@@ -760,6 +794,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
               <SheetGrid
                 cells={cells}
                 commented={marks}
+                edited={editedHere}
                 editable={writable || suggesting}
                 key={tab.id}
                 onEdits={suggesting ? suggestEdit : edit}
@@ -805,6 +840,16 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
           />
         </SidePanel>
       ) : null}
+      {historyOpen ? (
+        <SidePanel onClose={() => setHistoryOpen(false)} title="History">
+          <HistoryPanel
+            emptyText="A version is kept as soon as the sheet changes."
+            label="Versions"
+            restore={editable && !body.sheet.archived ? { expectedVersion: body.sheet.revision, onRestored: () => void refresh() } : undefined}
+            thing={sheetId}
+          />
+        </SidePanel>
+      ) : null}
       {reviewing ? (
         <SheetProposalsDialog
           canDecide={body.canEdit && !body.sheet.archived}
@@ -824,6 +869,28 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
           }}
           selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
           tab={tab}
+        />
+      ) : null}
+      {editingValidation && tab && experience.shows('sheet.validation') ? (
+        <SheetValidationDialog
+          onClose={() => setEditingValidation(false)}
+          onSave={async (rules) => {
+            const saved = await send([{ type: 'validations', tab: tab.id, rules }])
+            if (saved) void refresh()
+            return saved
+          }}
+          selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          tab={tab}
+        />
+      ) : null}
+      {charting && tab && experience.shows('sheet.charts') ? (
+        <SheetChartsDialog
+          canEdit={editable && !body.sheet.archived}
+          charts={body.charts}
+          onChanged={() => void refresh()}
+          onClose={() => setCharting(false)}
+          selection={`${/^[A-Za-z0-9_]+$/.test(tab.name) ? tab.name : `'${tab.name.replace(/'/g, "''")}'`}!${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          sheetId={sheetId}
         />
       ) : null}
       {naming && tab ? (
