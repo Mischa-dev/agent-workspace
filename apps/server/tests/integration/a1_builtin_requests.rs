@@ -245,7 +245,7 @@ fn the_harness_hears_what_was_answered() {
 
 /// A1.17: a built-in run's tokens go through the host protocol like any
 /// host's, so they count against budgets, and the workspace's catalog
-/// prices every report, even one with its own cost. A retry adds nothing.
+/// prices what a report doesn't, adding what one brought. A retry adds nothing.
 #[tokio::test]
 async fn built_in_tokens_are_reported_priced_and_counted_once() {
     let Some((setup, seed, _temporary)) = seeded("a1_builtin_tokens").await else {
@@ -287,8 +287,9 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .usage("turn-1", &tokens)
         .await
         .expect("reported again");
-    // A later report that brings its own cost is priced too, so the
-    // estimate the totals show covers every token of the model.
+    // A later report that brings its own cost adds that cost, and one with
+    // only a cost adds it too, so the estimate the totals show covers every
+    // report of the model.
     let with_cost = agent_workspace_builtin_host::runtime::report::Usage {
         cost_usd: Some(0.5),
         ..tokens
@@ -297,6 +298,17 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .usage("turn-2", &with_cost)
         .await
         .expect("reported with a cost");
+    let cost_only = agent_workspace_builtin_host::runtime::report::Usage {
+        model: "priced-model",
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        cost_usd: Some(0.25),
+    };
+    reports
+        .usage("turn-3", &cost_only)
+        .await
+        .expect("reported with only a cost");
 
     let (input, output, estimated, currency) =
         sqlx::query_as::<_, (i64, i64, Option<f64>, Option<String>)>(
@@ -307,9 +319,10 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .await
         .expect("the run's usage");
     assert_eq!((input, output), (2_000_000, 200_000));
-    // Twice 1M input at 2.00 and 100k output at 10.00 a million.
+    // 1M input at 2.00 and 100k output at 10.00 a million (3.00), then the
+    // 0.50 and 0.25 the later reports brought.
     assert!(
-        estimated.is_some_and(|cost| (cost - 6.0).abs() < 1e-9),
+        estimated.is_some_and(|cost| (cost - 3.75).abs() < 1e-9),
         "{estimated:?}"
     );
     assert_eq!(currency.as_deref(), Some("USD"));

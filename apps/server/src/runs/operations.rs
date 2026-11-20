@@ -869,10 +869,12 @@ impl Operation for RunUsageReport {
         }
         let reporter = reporter(call);
         // A built-in run's harness rarely knows its cost: the workspace's
-        // catalog prices it, as the catalog page shows them. Every report is
-        // priced, even one that brought its own cost, so the estimate covers
-        // all of a model's tokens (totals prefer it over a reported cost).
-        let estimate = match run_id {
+        // catalog prices it, as the catalog page shows them. Each report adds
+        // its own share to the estimate the totals show: the cost it brought
+        // when it brought one in the catalog's currency, the catalog price of
+        // its tokens otherwise. So a model's estimate covers every report,
+        // whether it came with a cost, with tokens, or with both.
+        let catalog = match run_id {
             Some(run_id) => crate::run_log::builtin_estimate(
                 call.state,
                 run_id,
@@ -887,6 +889,7 @@ impl Operation for RunUsageReport {
             .map_err(|error| OpError::logged("run_usage_report", &error))?,
             _ => None,
         };
+        let estimate = report_share(catalog, input.cost, input.currency.as_deref());
         let tx = call.tx().await?;
         let recorded = ops::record_usage(
             tx,
@@ -919,6 +922,28 @@ impl Operation for RunUsageReport {
             duplicate: recorded.duplicate,
             run_id: recorded.run_id.map(|id| id.to_string()),
         })
+    }
+}
+
+/// One usage report's share of a built-in run's estimate: the cost it
+/// brought, when it brought one in the catalog's currency (USD unless
+/// named); the catalog price of its tokens otherwise. `None` when the
+/// catalog has no price for the model.
+fn report_share(
+    catalog: Option<(f64, String)>,
+    cost: Option<f64>,
+    currency: Option<&str>,
+) -> Option<(f64, String)> {
+    let (priced, catalog_currency) = catalog?;
+    match cost {
+        Some(cost)
+            if currency
+                .unwrap_or("USD")
+                .eq_ignore_ascii_case(&catalog_currency) =>
+        {
+            Some((cost, catalog_currency))
+        }
+        _ => Some((priced, catalog_currency)),
     }
 }
 
@@ -1146,5 +1171,23 @@ impl Operation for RunMarkNotStarted {
         let run = ops::mark_not_started(tx, input.run_id.id()).await?;
         call.audit_target("run", run.id, json!({}));
         Ok(RunRecordValue::of(&run))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_share;
+
+    #[test]
+    fn a_report_adds_the_cost_it_brought_or_its_catalog_price() {
+        let catalog = || Some((3.0, "USD".to_owned()));
+        assert_eq!(report_share(catalog(), None, None), catalog());
+        assert_eq!(
+            report_share(catalog(), Some(0.5), None),
+            Some((0.5, "USD".to_owned()))
+        );
+        // A cost in another currency can't be added: the catalog prices it.
+        assert_eq!(report_share(catalog(), Some(0.5), Some("EUR")), catalog());
+        assert_eq!(report_share(None, Some(0.5), None), None);
     }
 }
