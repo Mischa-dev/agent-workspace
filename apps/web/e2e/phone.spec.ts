@@ -71,9 +71,23 @@ test('every bottom-bar destination opens', async ({ page }) => {
   expect(names[0]).toBe('Home')
   expect(names.length).toBeGreaterThan(1)
   for (const name of names) {
-    await bar.getByRole('link', { name: new RegExp(`^${name}`) }).click()
-    await expect(bar.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveAttribute('aria-current', 'page')
+    const tab = bar.getByRole('link', { name: new RegExp(`^${name}`) })
+    const to = new URL((await tab.getAttribute('href')) ?? '/', page.url()).pathname
+    await tab.click()
+    await expect(page).toHaveURL((url) => url.pathname === to)
     await expect(page.locator('#main-workspace')).toBeVisible()
+    // A chat (a new message, a DM) gives the bottom of the screen to its box,
+    // with no bar; everywhere else the bar marks where you are.
+    await expect
+      .poll(async () =>
+        (await page.locator('html').getAttribute('data-chrome')) === 'conversation'
+          ? (await bar.isVisible())
+            ? 'chat with a bar'
+            : 'chat'
+          : await tab.getAttribute('aria-current'),
+      )
+      .toMatch(/^(chat|page)$/)
+    if (!(await bar.isVisible())) await page.goto('/home')
   }
 })
 

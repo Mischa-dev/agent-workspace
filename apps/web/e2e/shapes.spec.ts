@@ -36,10 +36,11 @@ const MODULE_WORDS: Record<string, string[]> = {
 
 /**
  * Settings pages that list every module on purpose: where they're switched
- * on (Modules, Templates, Layout), what roles may do in each (Roles), and the
- * server's and the audit log's records.
+ * on (Modules, Templates, Layout), what roles may do in each (Roles), the
+ * server's and the audit log's records, and the whole workspace's export and
+ * metered usage (an export carries everything; usage reports every meter).
  */
-const CONFIGURATION = /\/settings\/(?:spaces\/[^/]+\/)?(modules|templates|project-templates|layout|roles|server|audit-log|harnesses|hosts|github)$/
+const CONFIGURATION = /\/settings\/(?:spaces\/[^/]+\/)?(modules|templates|project-templates|layout|roles|server|audit-log|harnesses|hosts|github|export|usage)$/
 
 function shapeOff(shape: string): string[] {
   const file = path.join(repoRoot, 'modules/packages/shapes', shape, 'package.json')
