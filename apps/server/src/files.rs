@@ -1202,7 +1202,11 @@ pub(crate) async fn require_room(
         crate::metering::Ask::new(organization_id, "storage_bytes", incoming_i64),
     )
     .await?;
+    // The watermark is the server's, so it counts every workspace's files:
+    // this one read is widened server-wide in the transaction in hand (a
+    // second connection could wait on a pool this caller already holds).
     // Link preview pictures live in the file store too, so they count.
+    let own_scope = crate::tenancy::widen_to_system(&mut *connection, "files.quota").await?;
     let all_bytes = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COALESCE(sum(bytes), 0)::bigint FROM (
@@ -1215,6 +1219,7 @@ pub(crate) async fn require_room(
     )
     .fetch_one(&mut *connection)
     .await?;
+    crate::tenancy::restore(&mut *connection, &own_scope).await?;
     let config = &state.config;
     // A fresh install may not have made its data folder yet.
     tokio::fs::create_dir_all(&config.data_root)

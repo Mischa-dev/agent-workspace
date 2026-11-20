@@ -171,6 +171,10 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
         "files.sweep",
         &["files.rs", "files/upload.rs", "link_previews.rs"],
     ),
+    // The server's own disk watermark: the bytes every workspace's files
+    // hold together (a sum, never a row), in the caller's own transaction
+    // (`widen_to_system`).
+    ("files.quota", &["files.rs"]),
     // A link someone was given (an invitation, an account claim, a setup
     // link, a public form or report link, a password reset or email
     // check): its token names the one row it opens, and the handler acts
