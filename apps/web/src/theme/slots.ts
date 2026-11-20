@@ -1,38 +1,46 @@
 /** Theme presets and the color slots a person can change. Mirrors the design system's tokens. */
 
 /**
- * The workspace's own presets live in styles/tokens.css. Classic ones (group
- * dark or light) live in public/themes/classic.css, which loads only when one
- * is in use; public/theme-boot.js keeps the same ids.
+ * The workspace's own presets live in styles/tokens.css, Quiet (the default)
+ * among them. The rest live in a sheet under public/themes/ (`sheet`;
+ * classic.css for the classic ones), which loads only when one is in use;
+ * public/theme-boot.js keeps the same ids, and theme/contract.json lists them
+ * all as the built-in themes a custom theme can start from.
  */
 export const THEME_PRESETS = [
-  { id: 'indigo', name: 'Indigo', group: 'workspace' },
-  { id: 'midnight', name: 'Midnight', group: 'workspace' },
-  { id: 'daylight', name: 'Daylight', group: 'workspace' },
-  { id: 'evergreen', name: 'Evergreen', group: 'workspace' },
-  { id: 'graphite', name: 'Graphite', group: 'workspace' },
-  { id: 'nord', name: 'Nord', group: 'dark' },
-  { id: 'dracula', name: 'Dracula', group: 'dark' },
-  { id: 'gruvbox-dark', name: 'Gruvbox Dark', group: 'dark' },
-  { id: 'solarized-dark', name: 'Solarized Dark', group: 'dark' },
-  { id: 'catppuccin-frappe', name: 'Catppuccin Frappé', group: 'dark' },
-  { id: 'catppuccin-macchiato', name: 'Catppuccin Macchiato', group: 'dark' },
-  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', group: 'dark' },
-  { id: 'tokyo-night', name: 'Tokyo Night', group: 'dark' },
-  { id: 'one-dark', name: 'One Dark', group: 'dark' },
-  { id: 'rose-pine', name: 'Rosé Pine', group: 'dark' },
-  { id: 'github-dark', name: 'GitHub Dark', group: 'dark' },
-  { id: 'monokai', name: 'Monokai', group: 'dark' },
-  { id: 'everforest-dark', name: 'Everforest Dark', group: 'dark' },
-  { id: 'kanagawa', name: 'Kanagawa', group: 'dark' },
-  { id: 'gruvbox-light', name: 'Gruvbox Light', group: 'light' },
-  { id: 'solarized-light', name: 'Solarized Light', group: 'light' },
-  { id: 'catppuccin-latte', name: 'Catppuccin Latte', group: 'light' },
-  { id: 'rose-pine-dawn', name: 'Rosé Pine Dawn', group: 'light' },
-  { id: 'github-light', name: 'GitHub Light', group: 'light' },
-  { id: 'everforest-light', name: 'Everforest Light', group: 'light' },
-  { id: 'one-light', name: 'One Light', group: 'light' },
-] as const satisfies readonly { id: string; name: string; group: 'workspace' | 'dark' | 'light' }[]
+  { id: 'quiet', name: 'Quiet', group: 'workspace', scheme: 'light' },
+  { id: 'quiet-dark', name: 'Quiet dark', group: 'workspace', scheme: 'dark' },
+  { id: 'paper', name: 'Paper', group: 'workspace', scheme: 'light', sheet: 'paper-frame' },
+  { id: 'paper-dark', name: 'Paper dark', group: 'workspace', scheme: 'dark', sheet: 'paper-frame' },
+  { id: 'frame', name: 'Frame', group: 'workspace', scheme: 'light', sheet: 'paper-frame' },
+  { id: 'frame-dark', name: 'Frame dark', group: 'workspace', scheme: 'dark', sheet: 'paper-frame' },
+  { id: 'indigo', name: 'Indigo', group: 'workspace', scheme: 'light' },
+  { id: 'midnight', name: 'Midnight', group: 'workspace', scheme: 'dark' },
+  { id: 'daylight', name: 'Daylight', group: 'workspace', scheme: 'light' },
+  { id: 'evergreen', name: 'Evergreen', group: 'workspace', scheme: 'light' },
+  { id: 'graphite', name: 'Graphite', group: 'workspace', scheme: 'light' },
+  { id: 'nord', name: 'Nord', group: 'dark', scheme: 'dark' },
+  { id: 'dracula', name: 'Dracula', group: 'dark', scheme: 'dark' },
+  { id: 'gruvbox-dark', name: 'Gruvbox Dark', group: 'dark', scheme: 'dark' },
+  { id: 'solarized-dark', name: 'Solarized Dark', group: 'dark', scheme: 'dark' },
+  { id: 'catppuccin-frappe', name: 'Catppuccin Frappé', group: 'dark', scheme: 'dark' },
+  { id: 'catppuccin-macchiato', name: 'Catppuccin Macchiato', group: 'dark', scheme: 'dark' },
+  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', group: 'dark', scheme: 'dark' },
+  { id: 'tokyo-night', name: 'Tokyo Night', group: 'dark', scheme: 'dark' },
+  { id: 'one-dark', name: 'One Dark', group: 'dark', scheme: 'dark' },
+  { id: 'rose-pine', name: 'Rosé Pine', group: 'dark', scheme: 'dark' },
+  { id: 'github-dark', name: 'GitHub Dark', group: 'dark', scheme: 'dark' },
+  { id: 'monokai', name: 'Monokai', group: 'dark', scheme: 'dark' },
+  { id: 'everforest-dark', name: 'Everforest Dark', group: 'dark', scheme: 'dark' },
+  { id: 'kanagawa', name: 'Kanagawa', group: 'dark', scheme: 'dark' },
+  { id: 'gruvbox-light', name: 'Gruvbox Light', group: 'light', scheme: 'light' },
+  { id: 'solarized-light', name: 'Solarized Light', group: 'light', scheme: 'light' },
+  { id: 'catppuccin-latte', name: 'Catppuccin Latte', group: 'light', scheme: 'light' },
+  { id: 'rose-pine-dawn', name: 'Rosé Pine Dawn', group: 'light', scheme: 'light' },
+  { id: 'github-light', name: 'GitHub Light', group: 'light', scheme: 'light' },
+  { id: 'everforest-light', name: 'Everforest Light', group: 'light', scheme: 'light' },
+  { id: 'one-light', name: 'One Light', group: 'light', scheme: 'light' },
+] as const satisfies readonly { id: string; name: string; group: 'workspace' | 'dark' | 'light'; scheme: 'light' | 'dark'; sheet?: 'paper-frame' }[]
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['id']
 
@@ -40,22 +48,35 @@ export function isThemePreset(value: unknown): value is ThemePreset {
   return THEME_PRESETS.some((preset) => preset.id === value)
 }
 
-/** Where the classic presets' stylesheet is served; public/theme-boot.js uses the same path. */
-export const CLASSIC_THEMES_HREF = '/themes/classic.css'
+/** The sheets under public/themes/ that built-in themes live in; public/theme-boot.js uses the same paths. */
+export const THEME_SHEETS = ['classic', 'paper-frame'] as const
+export type ThemeSheet = (typeof THEME_SHEETS)[number]
 
-export function isClassicPreset(preset: ThemePreset) {
-  return THEME_PRESETS.some((entry) => entry.id === preset && entry.group !== 'workspace')
+/** The sheet a preset's tokens live in, or null for one in tokens.css. */
+export function presetSheet(preset: ThemePreset): ThemeSheet | null {
+  const entry = THEME_PRESETS.find((candidate) => candidate.id === preset)
+  if (!entry) return null
+  if ('sheet' in entry) return entry.sheet
+  return entry.group === 'workspace' ? null : 'classic'
 }
 
-/** Load the classic presets' stylesheet once; theme-boot.js already has when a classic preset was saved. */
-export function loadClassicThemes(onLoad?: () => void) {
-  if (typeof document === 'undefined' || document.querySelector('link[data-classic-themes]')) return
-  const link = document.createElement('link')
-  link.rel = 'stylesheet'
-  link.href = CLASSIC_THEMES_HREF
-  link.dataset.classicThemes = ''
-  if (onLoad) link.addEventListener('load', onLoad, { once: true })
-  document.head.appendChild(link)
+/** Whether a preset is a dark one. */
+export function isDarkScheme(preset: ThemePreset) {
+  return THEME_PRESETS.some((entry) => entry.id === preset && entry.scheme === 'dark')
+}
+
+/** Load a theme sheet once (all of them without one); theme-boot.js already has for a saved preset. */
+export function loadThemeSheets(sheet?: ThemeSheet | null, onLoad?: () => void) {
+  if (typeof document === 'undefined' || sheet === null) return
+  for (const name of sheet ? [sheet] : THEME_SHEETS) {
+    if (document.querySelector(`link[data-theme-sheet="${name}"]`)) continue
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = `/themes/${name}.css`
+    link.dataset.themeSheet = name
+    if (onLoad) link.addEventListener('load', onLoad, { once: true })
+    document.head.appendChild(link)
+  }
 }
 
 /**

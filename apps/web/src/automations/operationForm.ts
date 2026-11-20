@@ -1,4 +1,4 @@
-import catalog from '../api/generated/catalog.json'
+import automations from '../api/generated/automations.json'
 import type { FormField, FormValue, FormValues } from '../pieces/formFields'
 import type { OpenApiDocument, OpenApiSchema } from './api'
 
@@ -8,11 +8,14 @@ import type { OpenApiDocument, OpenApiSchema } from './api'
 // which becomes the form piece's fields. A module that registers an
 // operation shows up here with no web change.
 
-export type CatalogueEntry = { name: string; title: string; module: string; kind: string; automation?: boolean }
+export type CatalogueEntry = { name: string; title: string; module: string; kind: string }
 
-/** The operations a rule may run, by module, then title. */
-export const AUTOMATION_OPERATIONS: readonly CatalogueEntry[] = (catalog as CatalogueEntry[])
-  .filter((entry) => entry.automation && entry.kind !== 'query' && entry.kind !== 'describe' && !entry.name.startsWith('automation_'))
+/**
+ * The operations a rule may run, by module, then title. The generated slice
+ * holds only these (marked for automations, not reads, not automations' own),
+ * so the builder's chunk doesn't carry the whole catalogue.
+ */
+export const AUTOMATION_OPERATIONS: readonly CatalogueEntry[] = [...(automations as CatalogueEntry[])]
   .sort((a, b) => a.module.localeCompare(b.module) || a.title.localeCompare(b.title))
 
 /** Filled in by the rule itself, never asked for: where it acts and how a retry is told apart. */

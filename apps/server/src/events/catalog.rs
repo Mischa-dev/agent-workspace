@@ -681,6 +681,18 @@ pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     None,
     "A workspace's custom emoji changed",
 );
+pub static THEME_CHANGED: EventType = signal(
+    "theme.changed",
+    "workspace",
+    None,
+    "Someone's theme was made, changed, offered or deleted",
+);
+pub static WORKSPACE_THEMES_CHANGED: EventType = signal(
+    "workspace_themes.changed",
+    "workspace",
+    None,
+    "A theme the workspace offers changed",
+);
 pub static GUARDS_CHANGED: EventType = signal(
     "guards.changed",
     "agents",
@@ -858,6 +870,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
+        &THEME_CHANGED,
+        &WORKSPACE_THEMES_CHANGED,
         &GUARDS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
