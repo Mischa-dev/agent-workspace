@@ -11,15 +11,18 @@ const listsConversations = (key: QueryKey) => key[0] === 'project' && typeof key
 /**
  * What a connection may hear changed (protocol 2's `access` frame): someone
  * joined or left a space, a private conversation or a workspace. What was
- * lost leaves the cache at once, so nothing it said stays on screen; the
+ * lost leaves the cache at once, so nothing it said stays on screen (an open
+ * page asks again and is told no); the
  * rail and the lists that name spaces and conversations refetch. Nothing
  * else does: the events that follow say what changed.
  */
 export function accessChanged(queryClient: QueryClient, change: { added: AccessSets; removed: AccessSets }) {
   const { added, removed } = change
-  for (const spaceId of removed.spaces) queryClient.removeQueries({ predicate: (query) => inSpace(query.queryKey, spaceId) })
+  // Reset, not removed: a page showing it still holds its query, so it must
+  // lose the data and ask again (and be told no), not keep what it had.
+  for (const spaceId of removed.spaces) void queryClient.resetQueries({ predicate: (query) => inSpace(query.queryKey, spaceId) })
   for (const conversationId of removed.conversations) {
-    queryClient.removeQueries({ predicate: (query) => query.queryKey.includes(conversationId) })
+    void queryClient.resetQueries({ predicate: (query) => query.queryKey.includes(conversationId) })
   }
   const any = (sets: AccessSets) => sets.workspaces.length + sets.spaces.length + sets.conversations.length > 0
   if (!any(added) && !any(removed)) return
