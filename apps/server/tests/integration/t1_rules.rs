@@ -174,6 +174,45 @@ async fn field_rules_hold_on_every_way_in() {
     assert!(!status.is_success(), "{status} {refused}");
     assert!(refused.to_string().contains("Price"), "{refused}");
 
+    // A two-way relation whose other side only builders set: setting this
+    // side would set that one, so rita is refused here too.
+    let suppliers = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Suppliers",
+               "fields": [{"name": "Supplies", "type": "relation", "target": "record:Parts",
+                           "twoWay": true, "pairName": "Supplied by"}]}),
+    )
+    .await;
+    assert_eq!(suppliers["outcome"], "ok", "{suppliers}");
+    let guarded = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Parts",
+               "fields": [{"field": "Supplied by", "rules": {"buildersOnly": true}}]}),
+    )
+    .await;
+    assert_eq!(guarded["outcome"], "ok", "{guarded}");
+    let suppliers =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM collections WHERE name = 'Suppliers'")
+            .fetch_one(pool)
+            .await
+            .expect("suppliers");
+    let (_, refused) = op(json!({"collection": suppliers, "title": "Acme",
+                                  "fields": {"Supplies": ["Hex bolt M8"]}}))
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(refused.to_string().contains("Supplied by"), "{refused}");
+    let (_, made) = op(json!({"collection": suppliers, "title": "Acme"})).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let paired = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM collection_records WHERE collection_id = $1 \
+         AND field_values ? (SELECT id::text FROM field_definitions WHERE name = 'Supplied by')",
+    )
+    .bind(parts)
+    .fetch_one(pool)
+    .await
+    .expect("paired");
+    assert_eq!(paired, 0, "no part was paired");
+
     // Making a field unique while two records share a value is refused.
     let shared = write(json!([
         {"title": "A", "fields": {"Code": "AAA-1", "Kind": "Bolt"}},
