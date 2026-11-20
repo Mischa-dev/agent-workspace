@@ -52,6 +52,22 @@ export type SidebarRow = {
   rank: number
 }
 
+/**
+ * A destination on a phone's bottom bar (W1.29): a Home page (`home`), or a
+ * page of the space you're in, else the one you opened last (`project`).
+ */
+export type PhoneTab = {
+  id: string
+  space: 'project' | 'home'
+  part?: PartId
+  icon: IconName
+  label: RowLabel
+  path: string
+  badge?: 'inbox'
+  /** The bar's order, Home first. */
+  rank: number
+}
+
 /** A palette entry that opens a page. `rank` keeps today's order within its group. */
 export type PaletteEntry = {
   id: string
@@ -208,8 +224,8 @@ export type WebModule = {
   publicRoutes?: ModuleRoute[]
   sidebar?: SidebarRow[]
   palette?: PaletteEntry[]
-  /** Shown on a phone's bottom bar (W1.13). */
-  phone?: boolean
+  /** Its place on a phone's bottom bar (W1.29). */
+  phone?: PhoneTab
   /** G-then-a-letter keys to its pages (W1.13). */
   shortcuts?: ShortcutRegistration[]
   /** The kinds of thing it opens, as the shell shows them (W1.13). */

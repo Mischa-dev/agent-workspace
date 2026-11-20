@@ -42,6 +42,7 @@ import { RecordPanel } from './RecordPanel'
 import { CollectionTableView } from './CollectionTableView'
 import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
+import { spaceHref } from '../app/href'
 import { focusViewField, pressViewButton, ViewCommands } from '../views/useViewCommands'
 import type { PageCommand } from '../shell/commandStore'
 
@@ -153,7 +154,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
         {gone ? (
           <ErrorState
             action={
-              <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/collections`} variant="primary">
+              <ButtonLink to={spaceHref(projectId, `/collections`)} variant="primary">
                 See the collections
               </ButtonLink>
             }
@@ -180,7 +181,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   const builtin = tasks || pages
   const opensElsewhere = taskLike || pages
   const elsewhere = (id: string) =>
-    pages ? projectLocationHref(projectId, { kind: 'page', pageId: id }) : `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+    pages ? projectLocationHref(projectId, { kind: 'page', pageId: id }) : spaceHref(projectId, `/work-items/${encodeURIComponent(id)}`)
   // A link to such a record (an embed, an old link) opens its task or page.
   if (opensElsewhere && recordId) return <Navigate replace to={elsewhere(recordId)} />
   const body = { ...collection.data, canBuild: collection.data.canChangeFields }

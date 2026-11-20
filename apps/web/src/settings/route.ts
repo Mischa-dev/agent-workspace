@@ -75,3 +75,14 @@ export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
   }
   return { kind: 'redirect', to: ACCOUNT_HOME }
 }
+
+/**
+ * A workspace's settings address (`/w/:ws/settings/<splat>`) in the area's
+ * own words: `members` is `workspace/members`, `spaces/<id>/general` is
+ * `projects/<id>/general`.
+ */
+export function workspaceSettingsSplat(splat: string): string {
+  const trimmed = splat.replace(/^\/+|\/+$/g, '')
+  if (trimmed === 'spaces' || trimmed.startsWith('spaces/')) return `projects${trimmed.slice('spaces'.length)}`
+  return trimmed ? `workspace/${trimmed}` : 'workspace'
+}

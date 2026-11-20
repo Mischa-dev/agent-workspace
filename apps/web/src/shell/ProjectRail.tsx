@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { legacyPathOf, workspaceHref } from '../app/href'
+import { legacyPathOf, spaceHref, spaceIdOf, workspaceHref } from '../app/href'
 import { toastError } from '../app/toastError'
 import { useWorkspace, useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession, type OrganizationSummary, type SessionUser } from '../auth/session'
@@ -228,7 +228,7 @@ export function ProjectRail({
     onSpaceSelected()
     if (project.id === currentProjectId) {
       // The project's own tile leads to its overview; on a phone the drawer already shows its sidebar.
-      const overview = `/projects/${encodeURIComponent(project.id)}`
+      const overview = spaceHref(project.id)
       if (!isMobileWidth() && location.pathname !== overview) navigate(overview)
       return
     }
@@ -258,8 +258,8 @@ export function ProjectRail({
   const myStatus = shownStatus(statuses.data ?? [], user.actorId)
   const [statusOpen, setStatusOpen] = useState(false)
   // Settings open on the project you were in.
-  const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
-  const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
+  const fromProjectId = spaceIdOf(location.pathname)
+  const settingsState = fromProjectId ? { fromProjectId } : undefined
 
   return (
     <>
@@ -291,42 +291,45 @@ export function ProjectRail({
           />
         ) : null}
         <span className="aw-rail__divider" role="separator" />
-        <div
-          aria-label="Pinned and recent projects"
-          className="aw-rail__projects project-list"
-          data-dragging={drag ? 'true' : undefined}
-          onDragLeave={(event) => {
-            if (drag?.over && !event.currentTarget.contains(event.relatedTarget as Node | null)) setDrag({ ...drag, over: null })
-          }}
-          onDragOver={dragOver}
-          onDrop={drop}
-          role="group"
-        >
-          {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
-          {visibleProjects.map((project) => {
-            const active = project.id === currentProjectId
-            const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
-            return (
-              <Tooltip key={project.id} label={project.name} side="right">
-                <a
-                  aria-current={active ? 'page' : undefined}
-                  aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
-                  className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}${drag?.id === project.id ? ' is-dragging' : ''}${dropMark}`}
-                  data-rail-project={project.id}
-                  href={projectHref(project)}
-                  onClick={(event) => selectProject(project, event)}
-                  onDragEnd={() => setDrag(null)}
-                  onDragStart={(event) => startDrag(event, project)}
-                >
-                  <TileFace swatch={swatchFor(project.id)}>{project.icon || project.key.slice(0, 2)}</TileFace>
-                  {project.attentionCount > 0 ? (
-                    <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
-                  ) : null}
-                </a>
-              </Tooltip>
-            )
-          })}
-        </div>
+        {/* Where Projects is off and no space shows, there's nothing to list (W1.39). */}
+        {experience.moduleOn('projects') || visibleProjects.length > 0 ? (
+          <div
+            aria-label={experience.moduleOn('projects') ? 'Pinned and recent projects' : 'Pinned and recent spaces'}
+            className="aw-rail__projects project-list"
+            data-dragging={drag ? 'true' : undefined}
+            onDragLeave={(event) => {
+              if (drag?.over && !event.currentTarget.contains(event.relatedTarget as Node | null)) setDrag({ ...drag, over: null })
+            }}
+            onDragOver={dragOver}
+            onDrop={drop}
+            role="group"
+          >
+            {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
+            {visibleProjects.map((project) => {
+              const active = project.id === currentProjectId
+              const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
+              return (
+                <Tooltip key={project.id} label={project.name} side="right">
+                  <a
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} unread` : ''}`}
+                    className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}${drag?.id === project.id ? ' is-dragging' : ''}${dropMark}`}
+                    data-rail-project={project.id}
+                    href={projectHref(project)}
+                    onClick={(event) => selectProject(project, event)}
+                    onDragEnd={() => setDrag(null)}
+                    onDragStart={(event) => startDrag(event, project)}
+                  >
+                    <TileFace swatch={swatchFor(project.id)}>{project.icon || project.key.slice(0, 2)}</TileFace>
+                    {project.attentionCount > 0 ? (
+                      <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
+                    ) : null}
+                  </a>
+                </Tooltip>
+              )
+            })}
+          </div>
+        ) : null}
         {user.capabilities.createProject && experience.moduleOn('projects') ? (
           <UtilityTile icon="plus" label="New project" onClick={onNavigate} to={href('/projects/new')} />
         ) : null}

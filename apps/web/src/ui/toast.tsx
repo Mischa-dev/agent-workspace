@@ -68,6 +68,11 @@ function ToastItem({ toast }: { toast: Toast }) {
             {toast.action.label}
           </button>
         ) : null}
+        {toast.link ? (
+          <a className="aw-toast__action" href={toast.link.href} onClick={() => dismissToast(toast.id)} rel="noreferrer" target="_blank">
+            {toast.link.label}
+          </a>
+        ) : null}
         <button aria-label="Dismiss" className="aw-toast__close" onClick={() => dismissToast(toast.id)} type="button">
           <Icon name="x" size={14} />
         </button>

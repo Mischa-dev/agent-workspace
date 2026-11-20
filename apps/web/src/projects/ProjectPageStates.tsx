@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { isApiError } from '../api/errors'
 import { ButtonLink, ErrorState, PageSkeleton } from '../ui'
 
@@ -23,7 +24,7 @@ export function ProjectPageError({ error, onRetry }: { error?: unknown; onRetry:
       {gone ? (
         <ErrorState
           action={
-            <ButtonLink to="/home" variant="primary">
+            <ButtonLink to={here('/home')} variant="primary">
               Go to Home
             </ButtonLink>
           }

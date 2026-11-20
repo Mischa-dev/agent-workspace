@@ -13,6 +13,8 @@ export type ToastInput = {
   tone?: ToastTone
   /** A follow-up, such as "Open PR". The toast closes when it's chosen. */
   action?: { label: string; onSelect: () => void }
+  /** A page elsewhere, such as a pull request; opens in a new tab. */
+  link?: { label: string; href: string }
   /** Shows Undo. The toast closes when it's chosen. */
   onUndo?: () => void | Promise<unknown>
   /** Milliseconds before it closes on its own; 0 keeps it until dismissed. */
@@ -51,7 +53,7 @@ function snapshot() {
 export function showToast(input: ToastInput): string {
   sequence += 1
   const id = input.id ?? `toast-${sequence}`
-  const interactive = Boolean(input.onUndo || input.action)
+  const interactive = Boolean(input.onUndo || input.action || input.link)
   const toast: Toast = {
     ...input,
     id,

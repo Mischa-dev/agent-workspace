@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useNavigate } from 'react-router-dom'
 
 import { can } from '../auth/can'
@@ -29,7 +30,7 @@ export function TurnedOffPage({ module }: { module: string }) {
             <Button onClick={() => navigate(href('/home'))} variant="primary">
               Go to Home
             </Button>
-            {manages ? <ButtonLink to="/settings/workspace/modules">Turn modules on or off</ButtonLink> : null}
+            {manages ? <ButtonLink to={here('/settings/workspace/modules')}>Turn modules on or off</ButtonLink> : null}
           </>
         }
         icon="info"

@@ -5,6 +5,7 @@ import { sheetEmbed } from '../memory/embeds/embedModel'
 import { Button, SelectField, TextField, describeError } from '../ui'
 import { useSheet, useSheets } from './api'
 import { parseRange, rangeName } from './sheetModel'
+import { spaceHref } from '../app/href'
 
 /**
  * Picks a sheet, one of its tabs and, if wanted, a range such as `A1:D9` or
@@ -69,7 +70,7 @@ export default function SheetEmbedPicker({
         </p>
       ) : sheets.data && open.length === 0 ? (
         <p className="aw-live__note">
-          This project has no sheets yet. <Link to={`/projects/${encodeURIComponent(projectId)}/sheets`}>Make one in Sheets</Link>.
+          This project has no sheets yet. <Link to={spaceHref(projectId, `/sheets`)}>Make one in Sheets</Link>.
         </p>
       ) : (
         <>

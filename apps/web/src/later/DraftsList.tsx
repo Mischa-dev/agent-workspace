@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -29,7 +30,7 @@ export function DraftsList() {
         const text = typeof (draft.draft as { text?: unknown }).text === 'string' ? (draft.draft as { text: string }).text : ''
         const href =
           draft.conversationKind === 'dm' || draft.conversationKind === 'group'
-            ? `/messages/${encodeURIComponent(draft.conversationId)}`
+            ? here(`/messages/${encodeURIComponent(draft.conversationId)}`)
             : projectLocationHref(draft.spaceId, {
                 kind: draft.conversationKind === 'thread' ? 'thread' : 'channel',
                 conversationId: draft.conversationId,

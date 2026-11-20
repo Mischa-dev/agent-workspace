@@ -17,7 +17,7 @@ describe('dashboard tiles', () => {
     ])
     const query: TileEntry = { id: 't4', kind: 'query', title: '', text: '', range: '', query: 'q1', style: null, width: 12, height: 2 }
     expect(tileInputs([query])).toEqual([{ id: 't4', kind: 'query', title: null, view: null, text: null, sheet: null, range: null, query: 'q1', style: null, width: 12, height: 2 }])
-    expect(tileHref('p1', query)).toBe('/projects/p1/dashboards/data?query=q1')
+    expect(tileHref('p1', query)).toBe('/w/-/s/p1/dashboards/data?query=q1')
   })
 
   it('moves a tile within the ends', () => {
@@ -36,9 +36,9 @@ describe('dashboard tiles', () => {
   })
 
   it('leads a view tile to its collection, opened on its view', () => {
-    expect(tileHref('p1', view)).toBe('/projects/p1/collections/c1?view=v1')
+    expect(tileHref('p1', view)).toBe('/w/-/s/p1/collections/c1?view=v1')
     expect(tileHref('p1', { collection: null, view: null })).toBeNull()
-    expect(tileHref('p1', sheet)).toBe('/projects/p1/sheets/s1')
+    expect(tileHref('p1', sheet)).toBe('/w/-/s/p1/sheets/s1')
   })
 
   it('reads a chart’s figures as points, counting or measuring', () => {

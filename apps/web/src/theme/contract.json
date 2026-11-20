@@ -609,6 +609,10 @@
       "label": "The date picker"
     },
     {
+      "class": "aw-request",
+      "label": "A request to answer"
+    },
+    {
       "class": "aw-row",
       "label": "A list row"
     },

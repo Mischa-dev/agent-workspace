@@ -1,6 +1,9 @@
+import { legacyPathOf, spaceHref } from '../../app/href'
+
 /**
- * What an embed in a page shows, from its path. A file of the page (C1.33),
- * such as a pasted picture, is `/files/{fileId}`. Modules read their own
+ * What an embed in a page shows, from its path (either address shape). A
+ * file of the page (C1.33), such as a pasted picture, is `/files/{fileId}`.
+ * Modules read their own
  * paths through their embed registrations (M1.5: a collection's view, a
  * sheet's range); any other path in the app shows as a link to it. The
  * paths a collection's or sheet's picker keeps are built here.
@@ -17,8 +20,10 @@ export function embedTarget(href: string): EmbedTarget {
     return { kind: 'link' }
   }
   if (url.origin !== 'https://app.invalid') return { kind: 'link' }
+  // Either shape of address: /w/<ws>/s/<space>/... or the old /projects/<space>/...
+  const path = legacyPathOf(url.pathname)
   try {
-    const file = FILE.exec(url.pathname)
+    const file = FILE.exec(path)
     if (file) return { kind: 'file', fileId: file[1].toLowerCase() }
   } catch {
     return { kind: 'link' }
@@ -28,7 +33,7 @@ export function embedTarget(href: string): EmbedTarget {
 
 /** The path an embed of a collection's view keeps, and the label it starts with. */
 export function collectionEmbed(projectId: string, collection: { id: string; name: string }, view: { id: string; name: string } | null, views: number) {
-  const path = `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection.id)}`
+  const path = spaceHref(projectId, `/collections/${encodeURIComponent(collection.id)}`)
   return {
     href: view ? `${path}?view=${encodeURIComponent(view.id)}` : path,
     label: view && views > 1 ? `${collection.name} · ${view.name}` : collection.name,
@@ -41,7 +46,7 @@ export function collectionEmbed(projectId: string, collection: { id: string; nam
  * when it moves.
  */
 export function sheetEmbed(projectId: string, sheet: { id: string; name: string }, tab: { id: string; name: string } | null, tabs: number, range: string | null, name: string | null = null) {
-  const path = `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheet.id)}`
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
   const query = new URLSearchParams()
   if (name) query.set('name', name)
   else {

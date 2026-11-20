@@ -1,3 +1,4 @@
+import { spaceHref } from '../app/href'
 import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -55,7 +56,7 @@ export function ProjectSidebar({
   const sidebar = useProjectConversationSidebar(project.modulesOff?.includes('channels') ? '' : project.id, selectedChannelId, {
     expandedChannelId: expandSelected && selectedChannelId ? selectedChannelId : undefined,
   })
-  const base = `/projects/${encodeURIComponent(project.id)}`
+  const base = spaceHref(project.id)
   const canCreate = chat && Boolean(sidebar.data?.capabilities.createChannel)
   const go = (to: string) => {
     onNavigate()
@@ -94,7 +95,7 @@ export function ProjectSidebar({
           order ? [{ label, icon, onSelect: () => setRailOrder.mutate(order, { onError: (reason) => toastError('The rail’s order wasn’t saved', reason) }) }] : [],
         )
       : []),
-    ...(chat ? [{ label: 'Archived conversations', icon: 'archive' as const, onSelect: () => go(`${base}/conversations/archived`) }] : []),
+    ...(chat ? [{ label: 'Archived conversations', icon: 'archive' as const, onSelect: () => go(`${base}/chat/archived`) }] : []),
     { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
   const section = projectSection(location.pathname, base)
@@ -110,7 +111,7 @@ export function ProjectSidebar({
         key={`${row.module}:${row.id}`}
         label={rowLabel(row, experience)}
         onNavigate={onNavigate}
-        to={`${base}${row.path}`}
+        to={spaceHref(project.id, row.path)}
       />
     ))
 
@@ -166,7 +167,7 @@ export function ProjectSidebar({
                 label={channel.name}
                 onIntent={() => prefetch(project.id, channel.id)}
                 onNavigate={onNavigate}
-                to={`${base}/channels/${encodeURIComponent(channel.id)}`}
+                to={`${base}/chat/${encodeURIComponent(channel.id)}`}
                 unread={channel.unread && !channel.muted}
               />,
               ...(threads ? channel.threads : []).map((channelThread) => (
@@ -191,7 +192,7 @@ export function ProjectSidebar({
                   label="All threads"
                   nested
                   onNavigate={onNavigate}
-                  to={`${base}/channels/${encodeURIComponent(channel.id)}?threads=all`}
+                  to={`${base}/chat/${encodeURIComponent(channel.id)}?threads=all`}
                 />,
               )
             }
@@ -213,7 +214,7 @@ export function ProjectSidebar({
               key="browse-channels"
               label={`Browse ${experience.label('channel', 'many').toLowerCase()}`}
               onNavigate={onNavigate}
-              to={`${base}/conversations/channels`}
+              to={`${base}/chat/channels`}
             />
           ) : null}
         </SidebarSection>

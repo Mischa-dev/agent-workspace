@@ -1,0 +1,85 @@
+/* The phone's bottom bar (W1.29). Only at phone widths; the frame draws it there. */
+
+.aw-phonetabs {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .aw-phonetabs {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: calc(var(--layer-sticky) + 1);
+    display: flex;
+    padding-bottom: var(--inset-bottom, 0px);
+    border-top: 1px solid var(--sidebar-border);
+    background: var(--sidebar-bg);
+  }
+
+  .aw-shell:has(> .aw-phonetabs) > .aw-main {
+    padding-bottom: calc(var(--size-phonetabs) + var(--inset-bottom, 0px));
+  }
+
+  :root {
+    /* A 44px touch target with room for the label under the icon. */
+    --size-phonetabs: calc(var(--space-12) + var(--space-2));
+  }
+
+  .aw-phonetabs__tab {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-half);
+    min-width: 0;
+    min-height: var(--size-phonetabs);
+    color: var(--sidebar-fg-muted);
+    font: var(--t-small);
+    text-decoration: none;
+    --r-focus: var(--sidebar-fg-strong);
+  }
+
+  .aw-phonetabs__tab > span:not(.aw-badge) {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .aw-phonetabs__tab[aria-current='page'] {
+    color: var(--sidebar-active-fg);
+  }
+
+  /* The current tab's icon sits on a pill, so where you are reads without colour alone. */
+  .aw-phonetabs__tab[aria-current='page'] > svg:first-child {
+    border-radius: var(--radius-full);
+    background: var(--sidebar-active-bg);
+    box-shadow: 0 0 0 var(--space-1) var(--sidebar-active-bg);
+  }
+
+  .aw-phonetabs__badge {
+    position: absolute;
+    top: var(--space-1);
+    left: calc(50% + var(--space-2));
+  }
+}
+
+/* Toasts sit above the bar rather than over it. */
+@media (max-width: 860px) {
+  :root:has(.aw-phonetabs) {
+    --toast-offset: var(--size-phonetabs);
+  }
+}
+
+/* An open drawer or sheet covers the bar. */
+.aw-shell[data-drawer] > .aw-phonetabs {
+  display: none;
+}
+
+/* On a phone (640px, the phone breakpoint) a detail (a thread, a task) opens as a full-screen sheet; back closes it. */
+@media (max-width: 640px) {
+  .aw-shell > .aw-panel {
+    width: 100vw;
+  }
+}

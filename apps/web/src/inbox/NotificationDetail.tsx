@@ -1,10 +1,10 @@
+import { here } from '../app/href'
 import { useState, type FormEvent } from 'react'
 
 import { callOp } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { atPhrase } from '../later/when'
 import {
-  Banner,
   Button,
   ButtonLink,
   Menu,
@@ -16,100 +16,10 @@ import {
   plainPreview,
   showToast,
 } from '../ui'
+import { RequestCard } from '../pieces/RequestCard'
 import { BatchLaunch } from './BatchLaunch'
-import { isExternalHref, snoozeMenu, type InboxNotification, type InboxRequest, type InboxView, type SnoozeTarget } from './api'
+import { isExternalHref, snoozeMenu, type InboxNotification, type InboxView, type SnoozeTarget } from './api'
 import { KIND_ICON } from './kinds'
-
-/** What became of a question or approval someone already answered. */
-/** What was answered, in one line. */
-function answerText(answer: NonNullable<InboxRequest['answer']>) {
-  return [answer.label, answer.text].filter(Boolean).join(' · ')
-}
-
-/** What became of a request that is no longer open. */
-function settledText(request: InboxRequest) {
-  if (request.status === 'answered' && request.answer) return `Answered: ${answerText(request.answer)}`
-  if (request.status === 'expired') return 'Nobody answered in time.'
-  if (request.status === 'superseded') return 'A newer request replaced this one.'
-  return 'This request was withdrawn.'
-}
-
-/**
- * A request for you (a question, approval or proposal): pick one of its
- * answers or type your own. Once settled it shows what became of it; an
- * answer is final.
- */
-function RequestCard({ onSend, request }: { onSend: (answer: { optionId?: string; text?: string }) => Promise<void>; request: InboxRequest }) {
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState<string | null>(null)
-  if (request.status !== 'open') {
-    return (
-      <>
-        <blockquote className="aw-inbox__quote aw-inbox__question">{request.title}</blockquote>
-        <Banner tone={request.status === 'answered' ? 'success' : 'info'}>{settledText(request)}</Banner>
-      </>
-    )
-  }
-  const send = async (key: string, answer: { optionId?: string; text?: string }) => {
-    setBusy(key)
-    try {
-      await onSend(answer)
-      setText('')
-    } finally {
-      setBusy(null)
-    }
-  }
-  const typed = text.trim()
-  return (
-    <form
-      className="aw-inbox__answer"
-      onSubmit={(event) => {
-        event.preventDefault()
-        if (typed) void send('text', { text: typed })
-      }}
-    >
-      <blockquote className="aw-inbox__quote aw-inbox__question">{request.title}</blockquote>
-      {request.options.length ? (
-        <div className="aw-inbox__options" role="group" aria-label="Answers">
-          {request.options.map((option) => (
-            <Button
-              busy={busy === option.id}
-              disabled={busy !== null}
-              key={option.id}
-              onClick={() => void send(option.id, typed ? { optionId: option.id, text: typed } : { optionId: option.id })}
-              variant={option.style === 'deny' ? 'danger' : option.id === request.options[0]?.id ? 'primary' : 'secondary'}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-      {request.allowText || !request.options.length ? (
-        <>
-      <TextArea
-        hint={request.options.length ? 'Typed words go with the answer you pick, or on their own with Send.' : undefined}
-        label={request.options.length ? 'Or answer in your own words' : 'Your answer'}
-        maxLength={4000}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && typed) {
-            event.preventDefault()
-            void send('text', { text: typed })
-          }
-        }}
-        rows={3}
-        value={text}
-      />
-      <div className="aw-inbox__answer-send">
-        <Button busy={busy === 'text'} disabled={busy !== null || !typed} icon="send" type="submit" variant={request.options.length ? 'secondary' : 'primary'}>
-          Send
-        </Button>
-      </div>
-        </>
-      ) : null}
-    </form>
-  )
-}
 
 /** Answers a mention, DM or thread reply where it was said, without leaving the inbox (C2.10). */
 function ReplyInPlace({ conversationId, onSent, to }: { conversationId: string; onSent: () => void; to: string | null }) {
@@ -157,7 +67,7 @@ function ReplyInPlace({ conversationId, onSent, to }: { conversationId: string; 
 /** The preview pane: what happened, and every way to act on it. */
 export function NotificationDetail({
   item,
-  onAnswerRequest,
+  onAnswered,
   onArchive,
   onBack,
   onOpen,
@@ -168,7 +78,8 @@ export function NotificationDetail({
   view,
 }: {
   item: InboxNotification
-  onAnswerRequest: (answer: { optionId?: string; text?: string }) => Promise<void>
+  /** After a request card here was answered. */
+  onAnswered: () => void
   onArchive: () => void
   onBack: () => void
   onOpen: () => void
@@ -181,7 +92,7 @@ export function NotificationDetail({
 }) {
   const external = isExternalHref(item.href)
   const preview = plainPreview(item.preview)
-  const runPage = item.subject.kind === 'agent_run' ? `/runs/${encodeURIComponent(item.subject.id)}` : null
+  const runPage = item.subject.kind === 'agent_run' ? here(`/runs/${encodeURIComponent(item.subject.id)}`) : null
   return (
     <article aria-labelledby="inbox-detail-title" className="aw-inbox__card">
       <Button className="aw-inbox__back" icon="arrow-left" onClick={onBack} variant="ghost">
@@ -206,7 +117,7 @@ export function NotificationDetail({
         ) : null}
       </p>
       {item.request ? (
-        <RequestCard key={item.request.id} onSend={onAnswerRequest} request={item.request} />
+        <RequestCard key={item.request.id} onAnswered={onAnswered} request={item.request} variant="inline" />
       ) : preview ? (
         <blockquote className="aw-inbox__quote">{preview}</blockquote>
       ) : null}

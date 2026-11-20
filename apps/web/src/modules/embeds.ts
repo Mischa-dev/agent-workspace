@@ -1,5 +1,6 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 
+import { legacyPathOf } from '../app/href'
 import type { PartId } from '../experience/parts'
 import type { EmbedParams, EmbedPickerProps, EmbedRegistration, EmbedViewProps, WebModule } from './define'
 import { WEB_MODULES } from './registry'
@@ -24,11 +25,13 @@ export function registeredEmbed(href: string, modules: readonly WebModule[] = WE
     return null
   }
   if (url.origin !== 'https://app.invalid') return null
+  // Registrations read the old shape; a /w/<ws>/s/<space>/... address reads as it.
+  const path = legacyPathOf(url.pathname)
   for (const module of modules) {
     for (const registration of module.embeds ?? []) {
       let params: EmbedParams | null
       try {
-        params = registration.match(url.pathname, url.searchParams)
+        params = registration.match(path, url.searchParams)
       } catch {
         // A path it can't decode isn't one of its.
         params = null

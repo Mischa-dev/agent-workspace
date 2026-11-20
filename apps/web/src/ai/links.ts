@@ -1,11 +1,12 @@
 import { isApiError } from '../api/errors'
 import { describeError } from '../ui'
 import { projectSettingsHref } from '../settings/paths'
+import { spaceHref } from '../app/href'
 
 export type PlanningTab = 'next' | 'suggestions' | 'graph' | 'plan-import'
 
 /** Where each planning page lives. */
-export const planningHref = (projectId: string, tab: PlanningTab) => `/projects/${encodeURIComponent(projectId)}/${tab}`
+export const planningHref = (projectId: string, tab: PlanningTab) => spaceHref(projectId, `/${tab}`)
 
 /** Settings link for a project's suggestions and summaries, part of its Runs and models settings. */
 export const projectAiSettingsHref = (projectId: string) => `${projectSettingsHref(projectId, 'runs')}#suggestions`

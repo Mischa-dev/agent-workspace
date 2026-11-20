@@ -102,6 +102,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
     // What each event makes stale loads with the connection, not the first
     // paint; an event that beats it waits for it.
     const touchTable = loadTouchTable()
+    // A load that fails (or is cut off as the page or a test goes away) is
+    // handled where each event awaits it; this keeps it from going unhandled.
+    touchTable.catch(() => undefined)
 
     // Each touch refetches once per burst (handlers/index.ts).
     const invalidate = (touches: readonly Touch[]) => {
@@ -287,7 +290,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
           } else if (envelope.conversationId && terminalRunId) {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
-          void touchTable.then(({ touchesFor }) => invalidate(touchesFor(envelope, context))).catch(() => undefined)
+          void touchTable
+            .then(({ touchesFor, announceRunFinished }) => {
+              invalidate(touchesFor(envelope, context))
+              announceRunFinished(envelope)
+            })
+            .catch(() => undefined)
           if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }

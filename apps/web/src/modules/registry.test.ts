@@ -6,6 +6,7 @@ import { PART_IDS } from '../experience/parts'
 import { routePaths } from '../app/routes'
 import { MODULE_IDS } from './names'
 import { REGISTERED_FOLDERS, WEB_MODULES, paletteEntries, sidebarRows } from './registry'
+import { phoneTabs } from '../shell/phoneTabsModel'
 
 // M1.4: the web registrations against the manifests (`modules/*.json` at the
 // root of the repository), which name each module's web folder.
@@ -71,5 +72,14 @@ describe('the web module registry', () => {
     expect(sidebarRows('project', everything).map((row) => row.id)).not.toContain('decisions')
     const ids = paletteEntries('project').map((entry) => entry.id)
     expect(ids.indexOf('p:tasks')).toBeLessThan(ids.indexOf('p:pages'))
+  })
+
+  it('draws the phone bar from the modules that are on, in order (W1.29)', () => {
+    const everything = { shows: () => true, moduleOn: () => true }
+    expect(phoneTabs(everything).map((tab) => tab.id)).toEqual(['inbox', 'chat', 'my-work', 'messages'])
+    const chatOnly = { shows: () => true, moduleOn: (module: string) => module !== 'tasks' }
+    expect(phoneTabs(chatOnly).map((tab) => tab.id)).not.toContain('my-work')
+    const noMyWork = { shows: (part: string) => part !== 'workspace.my_work', moduleOn: () => true }
+    expect(phoneTabs(noMyWork).map((tab) => tab.id)).not.toContain('my-work')
   })
 })

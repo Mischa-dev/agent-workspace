@@ -12,6 +12,7 @@ import { Banner, Button, Checkbox, Dialog, SelectField, TextArea, TextField, des
 import { createWorkItem } from '../work-items/api'
 import { forwardMessage } from './api'
 import '../styles/conversation.css'
+import { here, spaceHref } from '../app/href'
 
 type Destination = { id: string; label: string; group: string }
 
@@ -72,8 +73,8 @@ export function ForwardDialog({
       await forwardMessage({ messageId: message.id, conversationId: chosen.id, text: comment, idempotencyKey: key })
       onClose()
       const href = chosen.group === 'Channels'
-        ? `/projects/${encodeURIComponent(project)}/channels/${encodeURIComponent(chosen.id)}`
-        : `/messages/${encodeURIComponent(chosen.id)}`
+        ? spaceHref(project, `/channels/${encodeURIComponent(chosen.id)}`)
+        : here(`/messages/${encodeURIComponent(chosen.id)}`)
       showToast({ tone: 'success', title: `Forwarded to ${chosen.label}`, action: { label: 'Open', onSelect: () => navigate(href) } })
     } catch (reason) {
       setError(describeError(reason).message)
@@ -199,7 +200,7 @@ export function MessageTaskDialog({
       showToast({
         tone: 'success',
         title: experience.shows('tech.task_keys') ? `Created ${item.key}` : `${experience.label('task')} created`,
-        action: { label: 'Open', onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`) },
+        action: { label: 'Open', onSelect: () => navigate(spaceHref(projectId, `/work-items/${encodeURIComponent(item.id)}`)) },
       })
     } catch (reason) {
       setError(describeError(reason).message)

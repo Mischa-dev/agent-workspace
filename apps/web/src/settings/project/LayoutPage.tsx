@@ -6,6 +6,7 @@ import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
 import { createPreset, layoutKeys, refreshLayouts, saveProjectLayout, saveProjectRules, useProjectLayout, type LayoutRule, type ProjectLayoutView, type RuleRole } from '../../experience/api'
 import { LayoutEditor, VisualOnlyNote } from '../../experience/LayoutEditor'
+import { useProjectExperience } from '../../experience/layout'
 import { MyViewSection, OwnRuleNote, YourLayout } from '../../experience/LayoutSections'
 import { REGISTRY, presetName, type Layout, type SavedPreset } from '../../experience/registry'
 import type { Project } from '../../projects/types'
@@ -20,6 +21,7 @@ export default function LayoutPage({ project }: SettingsPageProps) {
 }
 
 function ProjectLayout({ project }: { project: Project }) {
+  const experience = useProjectExperience(project.id)
   const queryClient = useQueryClient()
   const layout = useProjectLayout(project.id)
   const save = useMutation({
@@ -77,6 +79,7 @@ function ProjectLayout({ project }: { project: Project }) {
               layout: view.workspaceLayout,
             }}
             key={view.version}
+            moduleOn={experience.moduleOn}
             onSave={(next) => save.mutateAsync({ next, version: view.version })}
             onSavePreset={savePreset}
             previewName={project.name}

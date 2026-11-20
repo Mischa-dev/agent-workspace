@@ -1,5 +1,6 @@
 import { countLabel, type ChipTone, type IconName } from '../ui'
 import type { Launch, SettingSource } from './api'
+import { spaceHref } from '../app/href'
 
 /** The server takes this many tasks in one launch. */
 export const MAX_TASKS_PER_LAUNCH = 50
@@ -42,11 +43,11 @@ export function launchStatus(launch: Launch): { label: string; tone: ChipTone; i
 }
 
 export function threadHref(projectId: string, conversationId: string) {
-  return `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(conversationId)}`
+  return spaceHref(projectId, `/threads/${encodeURIComponent(conversationId)}`)
 }
 
 export function launchesHref(projectId: string) {
-  return `/projects/${encodeURIComponent(projectId)}/launches`
+  return spaceHref(projectId, `/launches`)
 }
 
 /** What to say after a launch request: started, queued and why, or didn't start and why. Toast titles, so no full stop. */
