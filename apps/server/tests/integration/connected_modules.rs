@@ -441,6 +441,9 @@ async fn a_connected_module_holds_what_was_approved_until_it_is_revoked() {
     assert_eq!(mine.0, StatusCode::OK, "{}", mine.1);
     let listing = as_app(&world, &secret, "connected_module_list", json!({})).await;
     assert!(refused(&listing), "{listing:?}");
+    // The role operations read its standing like anyone's.
+    let roles = as_app(&world, &secret, "role_list", json!({})).await;
+    assert_eq!(roles.0, StatusCode::OK, "{}", roles.1);
     let app_role = tool(&world, "desk", "role_get", json!({"role": "Builds (app)"})).await;
     let role_edit = tool(
         &world,

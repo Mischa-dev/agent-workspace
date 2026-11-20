@@ -316,7 +316,7 @@ pub(crate) async fn standing(
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.organization_id = $1 AND membership.actor_id = $2
               AND membership.enabled AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers act through their own paths)
+              AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers act through their own paths)
             "#,
         )
         .bind(organization_id)
