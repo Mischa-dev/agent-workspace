@@ -71,6 +71,31 @@ async fn field_rules_hold_on_every_way_in() {
     .await;
     assert_ne!(wrong["outcome"], "ok", "{wrong}");
 
+    // The definition (what a workspace template keeps) has the rules, a
+    // choice's default by its option's name.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Parts"}),
+    )
+    .await;
+    let kept = described["value"]["definition"]["fields"]
+        .as_array()
+        .expect("fields")
+        .clone();
+    let rules_of = |name: &str| {
+        kept.iter()
+            .find(|field| field["name"] == name)
+            .map(|field| field["rules"].clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(rules_of("Kind")["default"], json!("Nut"), "{described}");
+    assert_eq!(
+        rules_of("Price")["buildersOnly"],
+        json!(true),
+        "{described}"
+    );
+    assert_eq!(rules_of("Added")["default"], json!("today"), "{described}");
+
     // Defaults fill what's left out; a value given wins.
     let written =
         write(json!([{"title": "Hex bolt", "fields": {"Code": "HEX-1", "Kind": "Bolt"}}])).await;
