@@ -21,3 +21,30 @@ pub const READ_ONLY_MESSAGE: &str = "Pages is the built-in collection of this sp
 /// records.
 pub const RECORDS_MESSAGE: &str = "These records are this space's pages: make, rename and archive \
      pages on Pages (page_write). Here you set their fields.";
+
+/// After a page's title or archiving changed (its record follows by
+/// trigger): the record's worked-out values, the records whose rollups
+/// read it, and the event that names it. A page with no record (a
+/// conversation's memory) has nothing to follow.
+pub async fn page_record_changed(
+    connection: &mut sqlx::PgConnection,
+    project_id: uuid::Uuid,
+    page_id: uuid::Uuid,
+) -> Result<(), crate::error::AppError> {
+    let Some(collection_id) = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT collection_id FROM collection_records WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(page_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(());
+    };
+    let records = [page_id];
+    super::computed::refresh_records(connection, project_id, collection_id, &records).await?;
+    super::computed::mark_dependents(connection, project_id, collection_id, &records, 1).await?;
+    crate::outbox::enqueue_records_changed(connection, project_id, collection_id, &records, "page")
+        .await?;
+    Ok(())
+}
