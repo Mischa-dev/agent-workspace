@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { requestJson } from '../api/client'
 import { collectionKeys } from '../collections/keys'
 import { listPages, memoryKeys } from '../memory/api'
-import { Avatar, Button, TextArea, TextField, actorKind } from '../ui'
+import { fileContentUrl } from '../files/model'
+import { Avatar, Button, Icon, TextArea, TextField, actorKind } from '../ui'
 import { Calendar, ComboboxList, Popover } from '../ui/pickers'
 import { useAssignableActors } from '../work-items/hooks'
 import { useDebouncedValue } from '../work-items/pickerModel'
@@ -29,6 +30,8 @@ export type EditorProps = {
   references: readonly FieldReference[]
   /** The task being edited, which a link field can't point at. */
   taskId?: string
+  /** The record being edited, which a file field uploads to. */
+  recordId?: string
   value: FieldValue | undefined
 }
 
@@ -101,6 +104,119 @@ export function LinkFieldEditor(props: EditorProps) {
         <PageEditor field={field} onClose={onClose} onSet={named} projectId={projectId} value={value} />
       )}
     </EditorPopover>
+  )
+}
+
+/** Records of a relation's collection: several, picked and unpicked in place. */
+export function RelationFieldEditor(props: EditorProps) {
+  return (
+    <EditorPopover anchor={props.anchor} field={props.field} onClose={props.onClose} width={320}>
+      <RecordEditor field={props.field} multiple onClose={props.onClose} onSet={(next) => props.onSet(next)} projectId={props.projectId} value={props.value} />
+    </EditorPopover>
+  )
+}
+
+/** A record's files: each opens, can be taken out of the field, and more are uploaded to the record. */
+export function FileFieldEditor(props: EditorProps) {
+  return (
+    <EditorPopover anchor={props.anchor} field={props.field} onClose={props.onClose} width={320}>
+      <FileEditor field={props.field} onSet={props.onSet} recordId={props.recordId} references={props.references} value={props.value} />
+    </EditorPopover>
+  )
+}
+
+function FileEditor({
+  field,
+  onSet,
+  recordId,
+  references,
+  value,
+}: {
+  field: FieldDefinition
+  onSet: (value: FieldValue | null) => void
+  recordId?: string
+  references: readonly FieldReference[]
+  value: FieldValue | undefined
+}) {
+  const [held, setHeld] = useState<string[]>(Array.isArray(value) ? value : [])
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [progress, setProgress] = useState<string | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const name = (id: string) => names[id] ?? references.find((entry) => entry.id === id && entry.kind === 'file')?.label
+  const shown = held.filter((id) => name(id) !== undefined)
+  const keep = (next: string[]) => {
+    setHeld(next)
+    onSet(next.length ? next : null)
+  }
+  const upload = async (files: File[]) => {
+    if (!recordId || !files.length) return
+    setProblem(null)
+    const { uploadFile } = await import('../files/api')
+    const send = uploadFile({ kind: 'thing', thingKind: 'record', thingId: recordId })
+    const added: string[] = []
+    const addedNames: Record<string, string> = {}
+    try {
+      for (const [index, file] of files.entries()) {
+        setProgress(files.length > 1 ? `Uploading ${index + 1} of ${files.length}…` : `Uploading ${file.name}…`)
+        const uploaded = await send(file, () => undefined, new AbortController().signal)
+        added.push(uploaded.id)
+        addedNames[uploaded.id] = uploaded.name
+      }
+    } catch (error) {
+      setProblem(error instanceof Error && error.message ? error.message : 'The upload didn’t finish. Try again.')
+    } finally {
+      setProgress(null)
+    }
+    if (added.length) {
+      setNames((current) => ({ ...current, ...addedNames }))
+      keep([...held, ...added.filter((id) => !held.includes(id))])
+    }
+  }
+  return (
+    <div className="aw-fileedit">
+      {field.description ? <p className="aw-prop__empty">{field.description}</p> : null}
+      {shown.length ? (
+        <ul aria-label={field.name} className="aw-fileedit__list">
+          {shown.map((id) => (
+            <li className="aw-fileedit__row" key={id}>
+              <a className="aw-fileedit__name" href={fileContentUrl(id)} rel="noreferrer noopener" target="_blank">
+                {name(id)}
+              </a>
+              <Button aria-label={`Take ${name(id)} out of ${field.name}`} onClick={() => keep(held.filter((entry) => entry !== id))} size="sm" variant="ghost">
+                <Icon name="x" size={14} />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="aw-prop__empty">No files yet.</p>
+      )}
+      {recordId ? (
+        <label className="aw-fileedit__add">
+          <input
+            className="aw-sr-only"
+            disabled={progress !== null}
+            multiple
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])]
+              event.target.value = ''
+              void upload(files)
+            }}
+            type="file"
+          />
+          <Icon name={progress ? 'loader' : 'plus'} className={progress ? 'aw-spin' : undefined} size={14} />
+          <span>{progress ?? 'Add files'}</span>
+        </label>
+      ) : (
+        <p className="aw-prop__empty">Add the record first, then its files.</p>
+      )}
+      {problem ? (
+        <p className="aw-prop__error" role="alert">
+          {problem}
+        </p>
+      ) : null}
+      <p className="aw-prop__empty aw-fileedit__note">Taking a file out keeps it with the record, so an earlier version can bring it back.</p>
+    </div>
   )
 }
 
@@ -258,17 +374,21 @@ type RecordHit = { id: string; title: string; number: number }
 /** A record of the collection a record link holds (AWD-110), found by its title. */
 function RecordEditor({
   field,
+  multiple = false,
   onClose,
   onSet,
   projectId,
   value,
 }: {
   field: FieldDefinition
+  /** A relation: several records, each pick adding or taking one away. */
+  multiple?: boolean
   onClose: () => void
   onSet: (value: FieldValue | null, label: string | null) => void
   projectId: string
   value: FieldValue | undefined
 }) {
+  const [chosen, setChosen] = useState<string[]>(Array.isArray(value) ? value : typeof value === 'string' ? [value] : [])
   const [query, setQuery] = useState('')
   const debounced = useDebouncedValue(query, 200)
   const collection = field.collection ?? ''
@@ -294,18 +414,25 @@ function RecordEditor({
       emptyText={records.isError ? 'Records didn’t load. Try again.' : 'No records match'}
       label={field.name}
       loading={records.isFetching}
-      onClose={onClose}
+      multiple={multiple}
+      onClose={multiple ? undefined : onClose}
       onQueryChange={setQuery}
       onSelect={(id) => {
         const record = (records.data ?? []).find((entry) => entry.id === id)
+        if (multiple && id !== '__none') {
+          const next = chosen.includes(id) ? chosen.filter((entry) => entry !== id) : [...chosen, id]
+          setChosen(next)
+          onSet(next.length ? next : null, null)
+          return
+        }
         onSet(id === '__none' ? null : id, record ? label(record) : null)
       }}
       options={[
-        ...(isEmpty(value) || query.trim() ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
+        ...(isEmpty(value) || query.trim() || multiple ? [] : [{ value: '__none', label: `Clear ${field.name}` }]),
         ...(records.data ?? []).map((record) => ({ value: record.id, label: label(record), description: `#${record.number}` })),
       ]}
-      placeholder="Find a record"
-      selected={typeof value === 'string' ? [value] : []}
+      placeholder={multiple ? 'Find records' : 'Find a record'}
+      selected={multiple ? chosen : typeof value === 'string' ? [value] : []}
     />
   )
 }

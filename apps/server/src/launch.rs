@@ -578,6 +578,43 @@ impl LaunchCaller {
         })
     }
 
+    /// The caller as task changes a launch makes name them (`launch`, for
+    /// a queued launch acting later).
+    fn command_actor(
+        &self,
+        project_id: Uuid,
+        launch: Uuid,
+    ) -> crate::work_item_commands::CommandActor {
+        use crate::work_item_commands::AuditAttribution;
+        let audit = match (self.session_id, self.mcp) {
+            (Some(session_id), false) => AuditAttribution::Browser {
+                session_id,
+                request_id: self.request_id.clone(),
+            },
+            (_, true) => AuditAttribution::Mcp {
+                authentication_class: "mcp_bearer",
+                request_id: self
+                    .request_id
+                    .clone()
+                    .unwrap_or_else(|| launch.to_string()),
+                client_name: "launch".to_owned(),
+                mcp_credential_id: None,
+                oauth_grant_id: self.via_grant_id,
+                external_agent_connection_id: None,
+            },
+            (None, false) => AuditAttribution::Job {
+                job_id: launch,
+                source: "launch",
+            },
+        };
+        crate::work_item_commands::CommandActor {
+            actor_id: self.actor_id,
+            actor_kind: self.actor_kind,
+            project_id,
+            audit,
+        }
+    }
+
     /// Who starts a launch's thread, for `threads::create`.
     fn thread_creator(&self) -> crate::conversations::threads::ThreadCreator {
         crate::conversations::threads::ThreadCreator::plain(
@@ -1694,6 +1731,17 @@ pub(crate) async fn launch_tasks(
         .bind(request.agent_account_id)
         .execute(&mut *transaction)
         .await?;
+        // T1.22: the agent a launch names becomes the task's delegate,
+        // unless someone already holds that.
+        if let Some(agent) = request.agent_account_id {
+            crate::work_item_commands::delegate_unless_set(
+                &mut transaction,
+                &caller.command_actor(project_id, id),
+                task.id,
+                agent,
+            )
+            .await?;
+        }
         audit(
             &mut *transaction,
             caller,

@@ -170,7 +170,8 @@ async fn begin_write<T>(
     if !role_allows(
         principal,
         project_id,
-        &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+        &StoredRole::of(&membership.role, membership.role_permissions.as_deref())
+            .with_groups(membership.group_permissions.clone()),
         action,
     ) {
         return Ok(Err(ToolResult::denied(denied)));
@@ -472,8 +473,17 @@ pub(super) struct CollectionWriteArguments {
     /// priority, dates, labels and a key like AWD-12, and is then changed
     /// as a task (record_write, or task_create with collection and
     /// task_update).
-    /// false turns it off again while it has no records.
+    /// false turns it off: its tasks are put away with their keys and
+    /// history, and come back when it is turned on again. Not while one of
+    /// them is claimed or has a run.
     pub acts_like_task: Option<bool>,
+    /// For a collection that acts like a task: the statuses its tasks use,
+    /// by name or ID, from the space's workflow (workflow_get lists them).
+    /// [] uses them all.
+    pub task_statuses: Option<Vec<String>>,
+    /// The status its new tasks start in, one of taskStatuses. "" starts
+    /// them in the space's default (or the first status it uses).
+    pub start_status: Option<String>,
     /// The version from collection_describe: if the collection changed
     /// since, a write that would change anything (fields and views too) is
     /// a conflict. Leave it out to change the current one.
@@ -509,6 +519,49 @@ fn apply_refusal<T>(problem: definition::ApplyProblem) -> ToolResult<T> {
         },
         definition::ProblemKind::Full => ToolResult::conflict(problem.message),
     }
+}
+
+/// taskStatuses and startStatus as a workflow change, the part left out
+/// kept as it is; None when neither is given.
+async fn workflow_change<T>(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    arguments: &CollectionWriteArguments,
+    current: &Collection,
+) -> Result<Result<Option<collections::task_like::Workflow>, ToolResult<T>>, AppError> {
+    if arguments.task_statuses.is_none() && arguments.start_status.is_none() {
+        return Ok(Ok(None));
+    }
+    let statuses = match &arguments.task_statuses {
+        None => current.task_statuses.clone(),
+        Some(names) if names.is_empty() => None,
+        Some(names) => {
+            match collections::task_like::resolve_statuses(connection, project_id, names).await? {
+                Ok(ids) => Some(ids),
+                Err(message) => return Ok(Err(ToolResult::invalid("taskStatuses", message))),
+            }
+        }
+    };
+    let start = match arguments.start_status.as_deref().map(str::trim) {
+        None => current.start_status_id,
+        Some("") => None,
+        Some(name) => {
+            match collections::task_like::resolve_statuses(
+                connection,
+                project_id,
+                &[name.to_owned()],
+            )
+            .await?
+            {
+                Ok(ids) => ids.first().copied(),
+                Err(message) => return Ok(Err(ToolResult::invalid("startStatus", message))),
+            }
+        }
+    };
+    Ok(Ok(Some(collections::task_like::Workflow {
+        statuses,
+        start,
+    })))
 }
 
 pub(super) async fn collection_write(
@@ -671,8 +724,13 @@ pub(super) async fn collection_write(
                         "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
                     ));
                 }
+                let workflow = match workflow_change(&mut transaction, project_id, &arguments, &collection).await? {
+                    Ok(workflow) => workflow,
+                    Err(refusal) => return Ok(refusal),
+                };
                 let collection = if arguments.position.is_some()
                     || arguments.acts_like_task == Some(true)
+                    || workflow.is_some()
                 {
                     match collections::change(
                         &mut transaction,
@@ -682,6 +740,7 @@ pub(super) async fn collection_write(
                         CollectionChange {
                             position: arguments.position,
                             acts_like_task: arguments.acts_like_task,
+                            workflow,
                             ..CollectionChange::default()
                         },
                     )
@@ -709,6 +768,10 @@ pub(super) async fn collection_write(
                         "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
                     ));
                 }
+                let workflow = match workflow_change(&mut transaction, project_id, &arguments, &found).await? {
+                    Ok(workflow) => workflow,
+                    Err(refusal) => return Ok(refusal),
+                };
                 let change = CollectionChange {
                     name,
                     description,
@@ -716,6 +779,7 @@ pub(super) async fn collection_write(
                     position: arguments.position,
                     archived: arguments.archived,
                     acts_like_task: arguments.acts_like_task,
+                    workflow,
                     expected_version: arguments.expected_version,
                 };
                 // Read under the lock, before anything changes: field and
@@ -726,8 +790,10 @@ pub(super) async fn collection_write(
                 // The Tasks collection's name and settings are fixed. Its
                 // fields are the project's task fields, changed by those who
                 // may change the workflow.
-                if locked.is_tasks() && !change.is_empty() {
-                    return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
+                if let Some(message) = locked.read_only_message()
+                    && !change.is_empty()
+                {
+                    return Ok(ToolResult::conflict(message));
                 }
                 if locked.is_tasks()
                     && !field_writes.is_empty()
@@ -1508,6 +1574,8 @@ pub(super) async fn record_write(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("record_write", "Collections"));
         }
+        // Fields only builders change (T1.19).
+        let may_build = can_write_in(state, principal, project_id, Action::CollectionBuild).await?;
         let Writing {
             mut transaction,
             project_key,
@@ -1584,6 +1652,7 @@ pub(super) async fn record_write(
                 project_id,
                 &collection,
                 writer,
+                may_build,
                 &definitions,
                 "fields",
                 &inputs,

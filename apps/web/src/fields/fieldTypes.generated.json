@@ -78,6 +78,24 @@
     "type": "link"
   },
   {
+    "readOnly": false,
+    "stored": true,
+    "system": false,
+    "type": "relation"
+  },
+  {
+    "readOnly": true,
+    "stored": true,
+    "system": false,
+    "type": "rollup"
+  },
+  {
+    "readOnly": false,
+    "stored": true,
+    "system": false,
+    "type": "file"
+  },
+  {
     "readOnly": true,
     "stored": true,
     "system": true,

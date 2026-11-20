@@ -103,12 +103,14 @@ impl ExternalExecutionRequestResult {
 struct ExternalAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
 struct SponsorAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -234,7 +236,9 @@ async fn request_sponsored_execution_inner(
     let external = sqlx::query_as::<_, ExternalAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(membership.actor_id, project.id)
+                 AS membership_group_permissions
         FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
@@ -278,6 +282,7 @@ async fn request_sponsored_execution_inner(
         principal.project_id,
         &external.membership_role,
         external.membership_role_permissions.as_deref(),
+        external.membership_group_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
 
@@ -306,7 +311,9 @@ async fn request_sponsored_execution_inner(
     let sponsor = sqlx::query_as::<_, SponsorAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(membership.actor_id, project.id)
+                 AS membership_group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -332,6 +339,7 @@ async fn request_sponsored_execution_inner(
         principal.project_id,
         &sponsor.membership_role,
         sponsor.membership_role_permissions.as_deref(),
+        sponsor.membership_group_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
     select_run_setup(
@@ -475,9 +483,11 @@ async fn list_sponsored_execution_requests(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<SponsoredExecutionList>, AppError> {
-    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
-        r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id)
+    let (role, role_permissions, groups) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>)>(
+            r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id),
+               space_group_permissions(membership.actor_id, project.id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -487,17 +497,18 @@ async fn list_sponsored_execution_requests(
          AND organization_membership.enabled
         WHERE project.id = $1 AND project.archived_at IS NULL AND membership.enabled
         "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::NotFound("project"))?;
+        )
+        .bind(project_id)
+        .bind(principal.actor_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
     require_policy(
         principal.actor_id,
         project_id,
         &role,
         role_permissions.as_deref(),
+        groups.as_deref(),
         Action::WorkerInvoke,
     )?;
     let requests = sqlx::query_as::<_, SponsoredExecutionProjection>(
@@ -840,9 +851,11 @@ fn require_policy(
     project_id: Uuid,
     role: &str,
     role_permissions: Option<&[String]>,
+    groups: Option<&[String]>,
     action: Action,
 ) -> Result<(), AppError> {
-    let role = parse_role(role, role_permissions)?;
+    let role =
+        parse_role(role, role_permissions)?.with_groups(crate::access::group_permissions(groups));
     if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(())
     } else {

@@ -103,6 +103,14 @@ pub(crate) struct World {
     pub(crate) collection_view: Uuid,
     /// A shared dashboard (T1.32) with a tile over `collection_view`.
     pub(crate) dashboard: Uuid,
+    /// An outside data connection (T1.34) and a saved query on it.
+    pub(crate) data_connection: Uuid,
+    pub(crate) data_query: Uuid,
+    /// An internal form (T1.28) on `collection`.
+    pub(crate) form: Uuid,
+    /// A record template (T1.30) on `collection`, made daily.
+    pub(crate) record_template: Uuid,
+    pub(crate) recurring_record: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -866,6 +874,63 @@ async fn build_workspace(
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
+    let data_connection = call(
+        "data_connection_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Warehouse{m}"),
+            "address": format!("postgresql://reader:secret{m}@db.example.com/warehouse"),
+            "clientRequestId": "data-connection-1",
+        }),
+    )
+    .await;
+    let data_connection =
+        Uuid::parse_str(&string_at(&data_connection, "/value/id")).expect("data connection id");
+    let data_query = call(
+        "data_query_create",
+        json!({
+            "spaceId": project,
+            "connection": data_connection.to_string(),
+            "name": format!("Orders{m}"),
+            "statement": format!("SELECT 'Orders{m}' AS team"),
+            "clientRequestId": "data-query-1",
+        }),
+    )
+    .await;
+    let data_query = Uuid::parse_str(&string_at(&data_query, "/value/id")).expect("data query id");
+    let form = call(
+        "form_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Intake{m}"),
+            "clientRequestId": "form-1",
+        }),
+    )
+    .await;
+    let form = Uuid::parse_str(&string_at(&form, "/value/id")).expect("form id");
+    let record_template = call(
+        "record_template_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Weekly{m}"),
+            "title": format!("Check-in{m} {{date}}"),
+            "clientRequestId": "record-template-1",
+        }),
+    )
+    .await;
+    let record_template =
+        Uuid::parse_str(&string_at(&record_template, "/value/id")).expect("record template id");
+    let recurring_record = call(
+        "recurring_record_create",
+        json!({
+            "template": record_template.to_string(),
+            "frequency": "daily",
+            "clientRequestId": "recurring-record-1",
+        }),
+    )
+    .await;
+    let recurring_record =
+        Uuid::parse_str(&string_at(&recurring_record, "/value/id")).expect("recurring id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -1178,8 +1243,10 @@ async fn build_workspace(
         .await
         .expect("owner");
         let account = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+            "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
         )
+        .bind(organization)
         .fetch_one(pool)
         .await
         .expect("host account");
@@ -1973,6 +2040,11 @@ async fn build_workspace(
         collection_button,
         collection_view,
         dashboard,
+        data_connection,
+        data_query,
+        form,
+        record_template,
+        recurring_record,
         record,
         sheet,
         file,

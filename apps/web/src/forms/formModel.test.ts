@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { answerBody, missing, normalizeForm } from './formModel'
+import { answerBody, missing, normalizeForm, normalizeQuestions, shownFields } from './formModel'
 import { dailyLimitProblem, formFromDraft } from '../collections/formSettings'
 import type { FieldDefinition } from '../fields/fieldModel'
 
@@ -63,5 +63,46 @@ describe('form settings', () => {
     expect(formFromDraft(draft, [])).toEqual({ intro: '', thanks: '', fields: [], dailyLimit: 50 })
     expect(dailyLimitProblem(draft)).toBeNull()
     for (const typed of ['0', '10001', '2.5', '']) expect(dailyLimitProblem({ ...draft, dailyLimit: typed })).not.toBeNull()
+  })
+})
+
+describe('conditions and sections (T1.28)', () => {
+  const asked = normalizeQuestions(
+    [
+      { id: 'kind', name: 'Kind', type: 'single_choice', required: true, options: [{ id: 'bug', name: 'Bug' }, { id: 'idea', name: 'Idea' }] },
+      { id: 'steps', name: 'Steps', type: 'text', required: true, showIf: { field: 'kind', isOneOf: ['Bug'] }, section: { title: 'Details' } },
+      { id: 'more', name: 'More', type: 'text', showIf: { field: 'steps' } },
+      { id: 'who', name: 'Owner', type: 'person' },
+    ],
+    'internal',
+  )
+  const internal = { titleName: 'Name', fields: asked }
+
+  it('keeps people for an internal form, and each question’s condition and heading', () => {
+    expect(asked.map((field) => field.id)).toEqual(['kind', 'steps', 'more', 'who'])
+    expect(asked[1].section?.title).toBe('Details')
+    expect(asked[2].showIf).toEqual({ field: 'steps', isOneOf: [] })
+  })
+
+  it('shows a question when an earlier answer names its option, by id or name', () => {
+    expect(shownFields(asked, { kind: 'idea' }).map((field) => field.id)).toEqual(['kind', 'who'])
+    expect(shownFields(asked, { kind: 'bug' }).map((field) => field.id)).toEqual(['kind', 'steps', 'who'])
+    expect(shownFields(asked, { kind: 'bug', steps: 'Open it' }).map((field) => field.id)).toEqual(['kind', 'steps', 'more', 'who'])
+  })
+
+  it('reads an unticked checkbox as No, as the server does', () => {
+    const ticked = normalizeQuestions([
+      { id: 'agree', name: 'Agree', type: 'checkbox' },
+      { id: 'why', name: 'Why not', type: 'text', showIf: { field: 'agree', isOneOf: ['No'] } },
+    ])
+    expect(shownFields(ticked, {}).map((field) => field.id)).toEqual(['agree'])
+    expect(shownFields(ticked, { agree: true }).map((field) => field.id)).toEqual(['agree'])
+    expect(shownFields(ticked, { agree: false }).map((field) => field.id)).toEqual(['agree', 'why'])
+  })
+
+  it('never asks for a hidden question, and leaves its answer out', () => {
+    expect(missing(internal, { title: 'Dark mode', kind: 'idea' })).toBeNull()
+    expect(missing(internal, { title: 'Crash', kind: 'bug' })).toBe('Fill in Steps.')
+    expect(answerBody(internal, { title: 'Dark mode', kind: 'idea', steps: 'stale', more: 'stale' })).toEqual({ title: 'Dark mode', kind: 'idea' })
   })
 })

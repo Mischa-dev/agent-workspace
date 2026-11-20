@@ -1,35 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react'
 
 import { isMobileWidth } from '../shell/mobileNavigation'
+import { viewKeys } from '../views/viewKeys'
 
-export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
-  { keys: ['↓', '↑'], label: 'Next and previous task, opening each in the side panel' },
-  { keys: ['J', 'K'], label: 'The same, wherever you are on the page' },
-  { keys: ['Home', 'End'], label: 'First and last task' },
-  { keys: ['X'], label: 'Select or unselect' },
-  { keys: ['Shift', 'click'], label: 'Select a range' },
-  { keys: ['S'], label: 'Change status' },
-  { keys: ['A'], label: 'Assign' },
-  { keys: ['L'], label: 'Change labels' },
-  { keys: ['P'], label: 'Change priority' },
-  { keys: ['M'], label: 'Set milestone' },
-  { keys: ['Enter'], label: 'Open in the side panel' },
-  { keys: ['Esc'], label: 'Close the panel, then clear the selection' },
-  { keys: ['?'], label: 'All keyboard shortcuts' },
-]
-
-export const BOARD_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
-  { keys: ['←', '→'], label: 'Next and previous column, opening each card in the side panel' },
-  { keys: ['↓', '↑'], label: 'Next and previous card in a column' },
-  { keys: ['J', 'K'], label: 'Next and previous card, down each column' },
-  { keys: ['Home', 'End'], label: 'First and last card in a column' },
-  { keys: ['X'], label: 'Select or unselect' },
-  { keys: ['Shift', 'click'], label: 'Select a range' },
-  { keys: ['Space'], label: 'Pick up a card, then arrows to move it and Space to drop' },
-  { keys: ['S', 'A', 'L', 'P', 'M'], label: 'Status, assignee, labels, priority, milestone' },
-  { keys: ['Enter'], label: 'Open in the side panel' },
-  { keys: ['Esc'], label: 'Put a picked-up card back, close the panel, then clear the selection' },
-]
+/** The task list's and board's keys, from the one list of view keys (T1.27). */
+export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = viewKeys('list')
+export const BOARD_SHORTCUTS: Array<{ keys: string[]; label: string }> = viewKeys('board')
 
 /** True when a key press belongs to something else: a field, a menu, a dialog or a picker. */
 export function isTypingTarget(target: EventTarget | null) {

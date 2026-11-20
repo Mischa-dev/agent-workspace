@@ -62,7 +62,9 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
+    write_isolation::{
+        base_tables, digest_changes, digest_ignoring, refresh_digest, table_fingerprints,
+    },
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -440,6 +442,9 @@ enum SweptEdge {
     McpApp,
     /// MCP as A's agent.
     McpAgent,
+    /// MCP with an account-wide token issued for A, held by B's owner, who
+    /// belongs to both: the token reaches A only, though its account sees B.
+    McpToken,
     Realtime,
 }
 
@@ -456,6 +461,11 @@ async fn one_workspace_never_sees_another_through_an_app() {
 #[tokio::test]
 async fn one_workspace_never_sees_another_through_an_agent() {
     one_workspace_never_sees_another("workspace_isolation_agent", SweptEdge::McpAgent).await;
+}
+
+#[tokio::test]
+async fn a_token_for_one_workspace_never_sees_another_its_account_is_in() {
+    one_workspace_never_sees_another("workspace_isolation_token", SweptEdge::McpToken).await;
 }
 
 #[tokio::test]
@@ -492,6 +502,7 @@ async fn one_workspace_never_sees_another(name: &str, edge: SweptEdge) {
         SweptEdge::Http => check_http(app, a, b, &b_ids, &mut report).await,
         SweptEdge::McpApp => check_mcp(app, pool, a, b, &b_ids, false, &mut report).await,
         SweptEdge::McpAgent => check_mcp(app, pool, a, b, &b_ids, true, &mut report).await,
+        SweptEdge::McpToken => check_token(app, pool, a, b, &b_ids, &mut report).await,
         SweptEdge::Realtime => check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await,
     }
 
@@ -2150,8 +2161,19 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "comment_list",
     "dashboard_get",
     "dashboard_list",
+    "data_connection_list",
+    "data_query_list",
+    "data_query_get",
     "whiteboard_template_list",
     "milestone_list",
+    "cycle_list",
+    "triage_rule_list",
+    "initiative_list",
+    "project_status_get",
+    "form_list",
+    "form_get",
+    "record_template_list",
+    "recurring_record_list",
     "module_list",
     "module_open",
     "my_permissions",
@@ -2530,6 +2552,37 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("milestone_list"),
+        by_project("cycle_list"),
+        by_project("triage_rule_list"),
+        by_project("project_status_get"),
+        // T1.28: B's forms neither list nor open in A.
+        by_project("form_list"),
+        case(
+            "form_get",
+            vec![json!({"form": a.form})],
+            vec![json!({"form": b.form})],
+            vec![],
+        ),
+        // T1.30: B's templates and schedules never list in A.
+        case(
+            "record_template_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        case(
+            "recurring_record_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        // T1.26: B's initiatives never list in A.
+        case(
+            "initiative_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("task_ready_list"),
         by_project("dependency_graph_get"),
         case(
@@ -2558,6 +2611,25 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "dashboard_get",
             vec![json!({"dashboard": a.dashboard})],
             vec![json!({"dashboard": b.dashboard})],
+            vec![],
+        ),
+        // T1.34: B's connections and queries neither list nor open in A.
+        case(
+            "data_connection_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "data_query_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "data_query_get",
+            vec![json!({"query": a.data_query})],
+            vec![json!({"query": b.data_query})],
             vec![],
         ),
         by_project("automation_list"),
@@ -3353,7 +3425,9 @@ async fn check_mcp(
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
-    let mut fingerprints = table_fingerprints(pool).await;
+    // The schema's tables, read once: they don't change during the sweep.
+    let tables = base_tables(pool).await;
+    let mut fingerprints = table_fingerprints(pool, &tables).await;
     let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -3414,8 +3488,15 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            fingerprints =
-                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+            fingerprints = refresh_digest(
+                pool,
+                &a_list,
+                READ_TOUCHES,
+                &tables,
+                &fingerprints,
+                &mut a_rows,
+            )
+            .await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
@@ -3426,6 +3507,303 @@ async fn check_mcp(
             }
         }
     }
+}
+
+/// B's owner joins A, makes an account-wide secret there and exchanges it
+/// for a token, which is held to A: every case's calls with B's IDs, and its
+/// filtered listings, carry nothing of B's though the account can see it all.
+async fn check_token(
+    app: &axum::Router,
+    pool: &PgPool,
+    a: &World,
+    b: &World,
+    b_ids: &HashSet<String>,
+    report: &mut Report,
+) {
+    let b_owner = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT actor_id FROM organization_memberships \
+         WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(b.organization)
+    .fetch_one(pool)
+    .await
+    .expect("B's owner");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) \
+         VALUES ($1, $2, 'member')",
+    )
+    .bind(a.organization)
+    .bind(b_owner)
+    .execute(pool)
+    .await
+    .expect("B's owner joins A");
+    // Known in A by A's own profile, not the one B gave it.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, 'Visitor', 'visitor') \
+         ON CONFLICT (organization_id, actor_id) \
+         DO UPDATE SET display_name = EXCLUDED.display_name, handle = EXCLUDED.handle",
+    )
+    .bind(a.organization)
+    .bind(b_owner)
+    .execute(pool)
+    .await
+    .expect("B's owner's profile in A");
+    {
+        let space = &a.project;
+        let (status, added) = send_json(
+            app,
+            a.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{space}/members"),
+                None,
+                json!({"actorId": b_owner, "role": "member"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {added}");
+    }
+    // B's DMs and groups are kept in B (ruling R20): B's, not the account's
+    // own personal ones, which a token for any workspace reaches.
+    sqlx::query(
+        "UPDATE conversations SET kept = true, workspace_id = $1 \
+         WHERE project_id IS NULL AND id IN \
+             (SELECT conversation_id FROM conversation_members WHERE actor_id = $2)",
+    )
+    .bind(b.organization)
+    .bind(b_owner)
+    .execute(pool)
+    .await
+    .expect("B keeps its DMs");
+    let (status, made) = send_json(
+        app,
+        b.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/credential_create", a.organization),
+            Some("b-owner-in-a"),
+            json!({"name": "across", "space": a.project, "reach": "account"}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let secret = made["value"]["secret"].as_str().expect("secret");
+    let (status, exchanged) = send_json(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!(
+                "grant_type=client_credentials&client_secret={}",
+                url_encode(secret)
+            )))
+            .expect("token request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exchanged}");
+    let token = exchanged["access_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let session = initialize(app, &token).await.expect("token MCP");
+    // The account itself is B's and A's: its own ID isn't B's data.
+    let mut b_ids = b_ids.clone();
+    b_ids.remove(&b_owner.to_string());
+    b_ids.remove(&b_owner.simple().to_string());
+    for case in mcp_cases(a, b) {
+        for arguments in case.foreign.iter().chain(&case.filtered) {
+            report.mcp_calls += 1;
+            let (_, body) = call_tool(app, &token, &session, case.tool, arguments.clone()).await;
+            report.leak(
+                &format!("A's token (B's owner) {} {arguments}", case.tool),
+                &arguments.to_string(),
+                &body,
+                &b_ids,
+            );
+        }
+    }
+    // Writes too: the account's own saved items and scheduled messages in B
+    // stay out of reach of A's token, and are left as they were.
+    let saved = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM saved_items WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(b.organization)
+    .bind(b_owner)
+    .fetch_all(pool)
+    .await
+    .expect("B's saved items");
+    assert!(!saved.is_empty(), "B's owner saved something in B");
+    let scheduled = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT scheduled.id FROM scheduled_messages scheduled \
+         JOIN projects space ON space.id = scheduled.project_id \
+         WHERE space.organization_id = $1 AND scheduled.author_actor_id = $2",
+    )
+    .bind(b.organization)
+    .bind(b_owner)
+    .fetch_all(pool)
+    .await
+    .expect("B's scheduled messages");
+    assert!(!scheduled.is_empty(), "B's owner scheduled something in B");
+    let writes = saved
+        .iter()
+        .flat_map(|id| {
+            [
+                json!({"id": id, "done": true}),
+                json!({"id": id, "text": "Moved by A"}),
+                json!({"id": id, "remove": true}),
+            ]
+            .map(|arguments| ("later_update", arguments))
+        })
+        .chain(scheduled.iter().flat_map(|id| {
+            [
+                json!({"id": id, "text": "Moved by A"}),
+                json!({"id": id, "cancel": true}),
+            ]
+            .map(|arguments| ("scheduled_message_update", arguments))
+        }));
+    for (tool, arguments) in writes {
+        report.mcp_calls += 1;
+        let (_, body) = call_tool(app, &token, &session, tool, arguments.clone()).await;
+        if succeeded(&structured(&body)["outcome"]) {
+            report.failures.push(format!(
+                "WRITE A's token (B's owner) changed B with {tool} {arguments}: {body}"
+            ));
+        }
+        report.leak(
+            &format!("A's token (B's owner) {tool} {arguments}"),
+            &arguments.to_string(),
+            &body,
+            &b_ids,
+        );
+    }
+    let touched = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM saved_items \
+         WHERE id = ANY($1) AND (done_at IS NOT NULL OR note = 'Moved by A')",
+    )
+    .bind(&saved)
+    .fetch_one(pool)
+    .await
+    .expect("saved items after");
+    let kept = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM saved_items WHERE id = ANY($1)")
+        .bind(&saved)
+        .fetch_one(pool)
+        .await
+        .expect("saved items kept");
+    assert_eq!(
+        (touched, kept),
+        (0, saved.len() as i64),
+        "A's token changed B's saved items"
+    );
+
+    // A message saved and one scheduled in a DM: while the DM is kept in B,
+    // A's token doesn't see them in Later; once it's the account's own
+    // personal DM, it does, and can change them.
+    let dm_message = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM messages WHERE conversation_id = $1::uuid ORDER BY created_at LIMIT 1",
+    )
+    .bind(&b.dm)
+    .fetch_one(pool)
+    .await
+    .expect("a message in B's DM");
+    let (status, saved_dm) = send_json(
+        app,
+        b.browser.request(
+            "POST",
+            "/api/v1/later",
+            None,
+            json!({"messageId": dm_message, "note": "From the DM"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {saved_dm}");
+    let saved_dm = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM saved_items WHERE actor_id = $1 AND message_id = $2",
+    )
+    .bind(b_owner)
+    .bind(dm_message)
+    .fetch_one(pool)
+    .await
+    .expect("the saved DM message");
+    let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let (status, scheduled_dm) = send_json(
+        app,
+        b.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{}/scheduled-messages", b.dm),
+            None,
+            json!({
+                "content": {"version": 1, "nodes": [{"type": "text", "text": "Later in the DM"}]},
+                "sendAt": soon,
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {scheduled_dm}");
+    let scheduled_dm = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM scheduled_messages WHERE author_actor_id = $1 AND conversation_id = $2::uuid",
+    )
+    .bind(b_owner)
+    .bind(&b.dm)
+    .fetch_one(pool)
+    .await
+    .expect("the scheduled DM message");
+    async fn later(app: &axum::Router, token: &str, session: &str, view: &str) -> String {
+        call_tool(app, token, session, "later_list", json!({"view": view}))
+            .await
+            .1
+    }
+    let (open, waiting) = (
+        later(app, &token, &session, "open").await,
+        later(app, &token, &session, "scheduled").await,
+    );
+    if open.contains(&saved_dm.to_string()) || waiting.contains(&scheduled_dm.to_string()) {
+        report.failures.push(format!(
+            "A's token saw Later items from a DM kept in B: {open} {waiting}"
+        ));
+    }
+    sqlx::query(
+        "UPDATE conversations SET kept = false, workspace_id = direct_scope_id() WHERE id = $1::uuid",
+    )
+    .bind(&b.dm)
+    .execute(pool)
+    .await
+    .expect("the DM becomes personal");
+    let (open, waiting) = (
+        later(app, &token, &session, "open").await,
+        later(app, &token, &session, "scheduled").await,
+    );
+    assert!(
+        open.contains(&saved_dm.to_string()),
+        "A's token lists a message saved from a personal DM: {open}"
+    );
+    assert!(
+        waiting.contains(&scheduled_dm.to_string()),
+        "A's token lists a message scheduled in a personal DM: {waiting}"
+    );
+    let (_, done) = call_tool(
+        app,
+        &token,
+        &session,
+        "later_update",
+        json!({"id": saved_dm, "done": true}),
+    )
+    .await;
+    assert!(
+        succeeded(&structured(&done)["outcome"]),
+        "A's token marks a personal DM's saved message done: {done}"
+    );
+}
+
+async fn send_json(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 4_000_000)
+        .await
+        .expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 pub(super) async fn mcp_post(

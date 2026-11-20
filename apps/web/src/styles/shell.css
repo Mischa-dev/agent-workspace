@@ -1221,6 +1221,19 @@ button.aw-sidebar__title[aria-expanded="true"] {
   font-size: calc(12px * var(--text-scale));
 }
 
+/* Facts in a row, apart by a dot, wrapping on a narrow screen. */
+.aw-row__metaline.aw-wrap {
+  flex-wrap: wrap;
+  gap: var(--space-half) 0;
+  font: var(--t-small);
+}
+
+.aw-row__metaline.aw-wrap > * + *::before {
+  content: '·';
+  margin: 0 var(--space-1-5);
+  color: var(--content-fg-muted);
+}
+
 .aw-row__note {
   margin: var(--space-1) 0 0;
   font: var(--t-small);

@@ -113,6 +113,7 @@ pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
 pub(crate) mod task_move;
+pub(crate) mod task_proposals;
 pub(crate) mod tasks;
 mod tool_permissions;
 mod usage_tools;
@@ -988,7 +989,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, long_text, number, date, single_choice, multiple_choice, status (options with a category: backlog, unstarted, started, review, verification, completed, canceled), person, url, email, phone, checkbox, link (target task, page, or record:<collection name> for that collection's records), and the record's own created_time, edited_time, created_by, edited_by and auto_id, which nobody writes. A field's type never changes. Needs collections.build.",
+        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, long_text, number, date, single_choice, multiple_choice, status (options with a category: backlog, unstarted, started, review, verification, completed, canceled), person, url, email, phone, checkbox, link (target task, page, or record:<collection name> for that collection's records), file (the record's own files: file_upload to the record, then name their fileIds), and the record's own created_time, edited_time, created_by, edited_by and auto_id, which nobody writes. A field's type never changes. Needs collections.build.",
         annotations(
             title = "Write collection",
             read_only_hint = false,
@@ -3051,7 +3052,12 @@ async fn alias_workspace(
         .await
         .map_err(|error| crate::ops::OpError::logged("workspace", &error.into()))?;
     let workspace = crate::ops::target::workspace_named(&mut connection, named).await?;
-    let caller = crate::ops::Caller::of_principal(principal, None);
+    // The credential's limit counts: a token for one workspace names no other.
+    let limits = caller_reach(state, principal)
+        .await
+        .map_err(|error| crate::ops::OpError::logged("workspace", &error))?
+        .1;
+    let caller = crate::ops::Caller::of_principal(principal, limits);
     let reach = crate::ops::access_shim::reach(&mut connection, &caller).await?;
     if !reach.contains(&workspace) {
         return Err(crate::ops::OpError::not_found("That workspace"));
@@ -3902,9 +3908,10 @@ async fn validate_issue_command(
     {
         return Err(AppError::Invalid("mcp_scopes"));
     }
-    let role = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+    let role = sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
-        SELECT pm.role, workspace_role_permissions(pm.role_id)
+        SELECT pm.role, workspace_role_permissions(pm.role_id),
+               space_group_permissions(pm.actor_id, pm.project_id)
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
         JOIN organization_memberships om
@@ -3930,32 +3937,22 @@ async fn validate_issue_command(
     // permission beyond seeing): each tool still checks its own action.
     // Reporting one's own runs and raising one's own requests (A1.3) come
     // with every role, a Viewer's too, so they don't count as writing.
-    if !role.is_some_and(|(role, role_permissions)| {
-        mcp_policy_allows(
+    if !role.is_some_and(|(role, role_permissions, groups)| {
+        let Ok(grant) = RoleGrant::stored(&role, role_permissions.as_deref()) else {
+            return false;
+        };
+        let grant = grant.with_groups(crate::access::group_permissions(groups.as_deref()));
+        crate::access::membership_allows(
             command.actor_id,
             command.project_id,
-            &role,
-            role_permissions.as_deref(),
-            Action::McpRead,
-        ) && (!wants_write
-            || RoleGrant::stored(&role, role_permissions.as_deref())
-                .is_ok_and(crate::access::writes))
+            grant,
+            true,
+            Action::McpRead.permission(),
+        ) && (!wants_write || crate::access::writes(grant))
     }) {
         return Err(AppError::NotFound("project_membership"));
     }
     Ok(())
-}
-
-fn mcp_policy_allows(
-    actor_id: Uuid,
-    project_id: Uuid,
-    role: &str,
-    role_permissions: Option<&[String]>,
-    action: Action,
-) -> bool {
-    RoleGrant::stored(role, role_permissions).is_ok_and(|grant| {
-        crate::access::membership_allows(actor_id, project_id, grant, true, action.permission())
-    })
 }
 
 pub(crate) fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
@@ -4715,7 +4712,92 @@ async fn scoped_project(
             return Err(AppError::Forbidden);
         }
     }
+    // K1.24: a credential's limit (a token's workspace and spaces, an app's
+    // delegation) holds the hand-written tools as it holds operations: a
+    // space it doesn't name, or a DM or group kept in a workspace it doesn't
+    // name, isn't reached, whatever else the account belongs to.
+    // Only a person's app or a token can be held to some workspaces: an
+    // agent's own connection is checked by its connection's rules above.
+    let may_be_limited = person || principal.is_access_token();
+    if let Some(target) = target
+        && may_be_limited
+        && let (_, Some(limits)) = caller_reach(state, principal).await?
+    {
+        let reached = if target == crate::spaces::DIRECT {
+            match direct_workspace(state, principal, args).await? {
+                Some(workspace) if workspace != crate::spaces::DIRECT => {
+                    limits.organizations.contains_key(&workspace)
+                }
+                _ => true,
+            }
+        } else {
+            limits.projects.contains_key(&target)
+        };
+        if !reached {
+            return Err(AppError::Forbidden);
+        }
+    }
     Ok(target)
+}
+
+/// The workspace a DM or group named in `args` is kept in (the direct scope
+/// for a personal one), by the first of its keys present.
+async fn direct_workspace(
+    state: &AppState,
+    principal: &McpPrincipal,
+    args: &serde_json::Value,
+) -> Result<Option<Uuid>, AppError> {
+    const KEYS: &[(&str, &str)] = &[
+        (
+            "conversationId",
+            "SELECT conversation.workspace_id FROM conversations conversation \
+             WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+        (
+            "threadId",
+            "SELECT conversation.workspace_id FROM conversations conversation \
+             WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+        (
+            "messageId",
+            "SELECT conversation.workspace_id FROM messages message \
+             JOIN conversations conversation ON conversation.id = message.conversation_id \
+             WHERE message.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+        (
+            "fromMessageId",
+            "SELECT conversation.workspace_id FROM messages message \
+             JOIN conversations conversation ON conversation.id = message.conversation_id \
+             WHERE message.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+        (
+            "fileId",
+            "SELECT conversation.workspace_id FROM files file \
+             JOIN conversations conversation ON conversation.id = file.conversation_id \
+             WHERE file.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+        (
+            "requestId",
+            "SELECT conversation.workspace_id FROM reply_requests request \
+             JOIN conversations conversation ON conversation.id = request.conversation_id \
+             WHERE request.id = $1 AND conversation_visible_to(conversation.id, $2)",
+        ),
+    ];
+    for (key, query) in KEYS {
+        let parse = if matches!(*key, "messageId" | "fromMessageId") {
+            common::parse_message_id
+        } else {
+            common::parse_id
+        };
+        if let Some(id) = args.get(*key).and_then(|v| v.as_str()).and_then(parse) {
+            return Ok(sqlx::query_scalar::<_, Uuid>(query)
+                .bind(id)
+                .bind(principal.actor_id)
+                .fetch_optional(crate::db::scoped(&state.pool))
+                .await?);
+        }
+    }
+    Ok(None)
 }
 
 /// Resolves the project an `identifier` argument names, by the tool that reads

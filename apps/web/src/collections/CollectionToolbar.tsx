@@ -180,7 +180,7 @@ export function CollectionToolbar({
   const groupField = layout === 'gallery' || layout === 'calendar' || layout === 'timeline' ? undefined : active.find((field) => field.id === config.groupBy)
 
   return (
-    <div className="aw-collection__toolbar">
+    <div className="aw-collection__toolbar" data-view-actions="">
       <div className="aw-collection__tools">
         <TextField
           aria-label="Search records"

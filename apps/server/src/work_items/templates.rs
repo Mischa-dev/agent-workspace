@@ -879,7 +879,7 @@ pub(crate) enum Frequency {
 }
 
 impl Frequency {
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "daily" => Some(Self::Daily),
             "weekly" => Some(Self::Weekly),
@@ -888,7 +888,7 @@ impl Frequency {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Daily => "daily",
             Self::Weekly => "weekly",
@@ -997,7 +997,7 @@ async fn valid_timezone(connection: &mut PgConnection, timezone: &str) -> Result
 }
 
 /// `at` as a local time in `timezone`.
-async fn local_time(
+pub(crate) async fn local_time(
     connection: &mut PgConnection,
     at: DateTime<Utc>,
     timezone: &str,
@@ -1027,7 +1027,7 @@ async fn instant(
 }
 
 /// The next run strictly after `after` and after now.
-async fn next_run(
+pub(crate) async fn next_run(
     connection: &mut PgConnection,
     schedule: &Schedule,
     timezone: &str,
@@ -1256,7 +1256,7 @@ pub(super) struct DeleteRecurringRequest {
 }
 
 /// A schedule from a request, checked; the error names the field.
-async fn read_schedule(
+pub(crate) async fn read_schedule(
     connection: &mut PgConnection,
     request: &ScheduleRequest,
 ) -> Result<Result<(Schedule, String), (&'static str, &'static str)>, AppError> {
@@ -1316,7 +1316,7 @@ async fn assignable(
     crate::work_item_commands::validate_assignee(connection, project_id, assignee).await
 }
 
-fn weekdays_column(schedule: &Schedule) -> Vec<i16> {
+pub(crate) fn weekdays_column(schedule: &Schedule) -> Vec<i16> {
     schedule
         .weekdays
         .iter()

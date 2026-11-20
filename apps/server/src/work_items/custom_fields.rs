@@ -159,6 +159,9 @@ pub(super) async fn create_field(
             position: request.position,
             formula: None,
             button: None,
+            rollup: None,
+            pair: None,
+            rules: None,
         },
     )
     .await?;
@@ -290,6 +293,8 @@ pub(super) async fn update_field(
             archived: request.archived,
             formula: None,
             button: None,
+            rollup: None,
+            rules: None,
             expected_version: Some(request.expected_version),
         },
     )
