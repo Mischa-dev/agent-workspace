@@ -12,8 +12,8 @@ use super::{
     McpPrincipal,
     common::{
         MESSAGE_CHARACTERS, SNIPPET_CHARACTERS, ToolResult, content_from_text, conversation_path,
-        insert_audit, mark_via, parse_id, parse_message_id, project_role, public_url,
-        resolve_people, role_allows, scope_projects, snippet, truncate_text,
+        insert_audit, link_url, mark_via, parse_id, parse_message_id, project_role, public_url,
+        resolve_direct_people, role_allows, scope_projects, snippet, truncate_text,
     },
     reactions::{ReactionSummary, reaction_summaries},
 };
@@ -104,6 +104,10 @@ pub(super) struct ConversationStartArguments {
     pub name: Option<String>,
     /// An optional first message. @handles become mentions.
     pub text: Option<String>,
+    /// The workspace to start it in, by id or slug, for one that keeps its
+    /// members' DMs. Without one, an agent starts it in its own workspace
+    /// and an app acting for a person starts a personal DM.
+    pub workspace: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -248,6 +252,9 @@ pub(super) struct ConversationRow {
     project_id: Uuid,
     project_name: String,
     direct: bool,
+    /// The workspace a DM or group is kept in (the direct scope for a
+    /// personal one), for a credential's limit.
+    workspace_id: Uuid,
     parent_id: Option<Uuid>,
     parent_name: Option<String>,
     parent_kind: Option<String>,
@@ -629,8 +636,10 @@ pub(super) async fn list_rows(
     let rows = sqlx::query_as::<_, ConversationRow>(
         r#"
         SELECT conversation.id, conversation.kind, conversation.name,
-               conversation.project_id, project.name AS project_name,
-               project.kind = 'direct' AS direct,
+               COALESCE(conversation.project_id, direct_scope_id()) AS project_id,
+               COALESCE(project.name, 'Messages') AS project_name,
+               conversation.project_id IS NULL AS direct,
+               conversation.workspace_id,
                parent.id AS parent_id, parent.name AS parent_name, parent.kind AS parent_kind,
                conversation.thread_status, conversation.thread_outcome,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
@@ -640,8 +649,8 @@ pub(super) async fn list_rows(
                last_message.removed_at IS NOT NULL AS last_removed,
                members.names AS member_names
         FROM conversations conversation
-        JOIN projects project ON project.id = conversation.project_id
-        JOIN project_memberships me
+        LEFT JOIN projects project ON project.id = conversation.project_id
+        LEFT JOIN project_memberships me
           ON me.project_id = conversation.project_id AND me.actor_id = $1 AND me.enabled
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         LEFT JOIN conversation_read_states read_state
@@ -654,23 +663,20 @@ pub(super) async fn list_rows(
             LIMIT 1
         ) last_entry ON true
         LEFT JOIN messages last_message ON last_message.id = last_entry.message_id
-        LEFT JOIN project_memberships last_author
-          ON last_author.project_id = last_message.project_id
-         AND last_author.actor_id = last_message.author_actor_id
+        LEFT JOIN LATERAL place_profile(last_message.project_id, last_message.author_actor_id) last_author ON true
         LEFT JOIN LATERAL (
             SELECT string_agg(membership.display_name, ', ' ORDER BY lower(membership.display_name))
                        AS names
             FROM conversation_members member
-            JOIN project_memberships membership
-              ON membership.project_id = member.project_id
-             AND membership.actor_id = member.actor_id
+            CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id) membership
             WHERE member.conversation_id = COALESCE(
                     CASE WHEN parent.kind IN ('dm', 'group') THEN parent.id END,
                     conversation.id)
               AND member.actor_id <> $1
         ) members ON conversation.kind IN ('dm', 'group')
                   OR parent.kind IN ('dm', 'group')
-        WHERE conversation.project_id = ANY($2)
+        WHERE COALESCE(conversation.project_id, direct_scope_id()) = ANY($2)
+          AND (conversation.project_id IS NULL OR me.actor_id IS NOT NULL)
           AND conversation.archived_at IS NULL
           AND (parent.id IS NULL OR parent.archived_at IS NULL)
           AND conversation_visible_to(conversation.id, $1)
@@ -711,6 +717,20 @@ pub(super) async fn list_rows(
     .bind(limit)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // A DM or group is in no space, so a credential's limit can't narrow
+    // it by `projects`: a kept one follows its workspace's limit, as
+    // opening it would (`access::direct_grant_allows`).
+    let rows = rows
+        .into_iter()
+        .filter(|row| {
+            !row.direct
+                || !crate::policy::agent_limit_hides_direct(
+                    viewer,
+                    row.workspace_id,
+                    crate::policy::Permission::ProjectsView,
+                )
+        })
+        .collect::<Vec<_>>();
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
     let summary = crate::db::scoped_one(&state.pool, async |connection| {
         crate::read_state::unread_by_conversation(
@@ -788,7 +808,7 @@ pub(super) fn summary(
         },
         url: public_url(
             state,
-            &conversation_path(row.project_id, &row.kind, row.id, direct),
+            &conversation_path(state, row.project_id, &row.kind, row.id, direct),
         ),
         kind: row.kind,
     }
@@ -841,15 +861,8 @@ async fn readable_conversation(
     else {
         return Ok(Err(ToolResult::not_found("That conversation")));
     };
-    if row.project_id != principal.project_id
-        || authorize_conversation_row_for(
-            principal.actor_id,
-            principal.actor_kind,
-            &row,
-            Action::McpRead,
-            false,
-        )
-        .is_err()
+    if row.place() != principal.project_id
+        || authorize_conversation_row_for(principal.actor_id, &row, Action::McpRead, false).is_err()
     {
         return Ok(Err(ToolResult::not_found("That conversation")));
     }
@@ -874,19 +887,15 @@ pub(super) async fn conversation_module_off(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<&'static str>, AppError> {
+    // DMs and groups are in no space; the Messages module is the workspace's.
+    if project_id == crate::spaces::DIRECT {
+        return Ok(None);
+    }
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
-        .bind(project_id)
-        .fetch_one(&mut *connection)
-        .await?;
     let modules = crate::modules::state::for_project(&mut connection, project_id, actor_id)
         .await?
         .unwrap_or_default();
-    let direct = kind == "direct";
-    Ok(
-        (!modules.allows_conversations_in(if direct { "direct" } else { "standard" }))
-            .then_some(if direct { "Messages" } else { "Channels" }),
-    )
+    Ok((!modules.allows_conversations_in("standard")).then_some("Channels"))
 }
 
 fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
@@ -926,7 +935,7 @@ pub(super) async fn conversation_open(
                 Err(result) => return Ok(retype(result)),
             };
         if let Some(module) =
-            conversation_module_off(state, principal.actor_id, conversation.project_id).await?
+            conversation_module_off(state, principal.actor_id, conversation.place()).await?
         {
             return Ok(ToolResult::module_off("conversation_open", module));
         }
@@ -986,7 +995,7 @@ pub(super) async fn conversation_read(
                 Err(result) => return Ok(retype(result)),
             };
         if let Some(module) =
-            conversation_module_off(state, principal.actor_id, conversation.project_id).await?
+            conversation_module_off(state, principal.actor_id, conversation.place()).await?
         {
             return Ok(ToolResult::module_off("conversation_read", module));
         }
@@ -1069,15 +1078,11 @@ pub(super) async fn message_items(
         FROM conversation_entries entry
         LEFT JOIN messages message ON message.id = entry.message_id
         LEFT JOIN actors author ON author.id = message.author_actor_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = message.project_id
-         AND membership.actor_id = message.author_actor_id
+        LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership ON true
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-        LEFT JOIN project_memberships remover
-          ON remover.project_id = message.project_id
-         AND remover.actor_id = message.removed_by_actor_id
+        LEFT JOIN LATERAL place_profile(message.project_id, message.removed_by_actor_id) remover ON true
         {run_events}
         WHERE entry.conversation_id = $1 AND entry.sequence BETWEEN $2 AND $3
         ORDER BY entry.sequence
@@ -1204,6 +1209,7 @@ fn reply_quote(id: Uuid, quote: Option<&crate::forwarding::ForwardedView>) -> Re
 /// "Name (@handle)", with ", agent" for agents.
 pub(super) fn person_label(name: &str, handle: &str, kind: Option<&str>) -> String {
     if kind == Some("external_agent") {
+        // kind-check: mechanical (a display label)
         format!("{name} (@{handle}, agent)")
     } else {
         format!("{name} (@{handle})")
@@ -1278,7 +1284,7 @@ async fn conversation_detail(
     let rows = list_rows(
         state,
         principal.actor_id,
-        &[conversation.project_id],
+        &[conversation.place()],
         ListFilter {
             kinds: None,
             with_person: None,
@@ -1301,9 +1307,7 @@ async fn conversation_detail(
                 r#"
                 SELECT membership.display_name || ' (@' || membership.handle || ')'
                 FROM conversation_members member
-                JOIN project_memberships membership
-                  ON membership.project_id = member.project_id
-                 AND membership.actor_id = member.actor_id
+                CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id) membership
                 WHERE member.conversation_id = $1
                 ORDER BY lower(membership.display_name)
                 "#,
@@ -1453,7 +1457,7 @@ async fn mark(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::read_state::mark_seen(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         conversation.id,
         principal.actor_id,
         up_to,
@@ -1532,14 +1536,8 @@ async fn mark_unread(
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
-    let change = match mark_unread_from(
-        &mut transaction,
-        principal.actor_id,
-        principal.actor_kind,
-        conversation.id,
-        from,
-    )
-    .await
+    let change = match mark_unread_from(&mut transaction, principal.actor_id, conversation.id, from)
+        .await
     {
         Ok(change) => change,
         Err(AppError::NotFound("message")) => {
@@ -1613,6 +1611,7 @@ pub(super) async fn message_send(
             match message_content(
                 state,
                 principal,
+                Some(conversation_id),
                 arguments.text.as_deref(),
                 arguments.content,
                 "message_send",
@@ -1630,7 +1629,7 @@ pub(super) async fn message_send(
     // this says nothing about conversations they can't see.
     match readable_conversation(state, principal, &arguments.conversation_id).await {
         Ok(Ok(row)) => {
-            match conversation_module_off(state, principal.actor_id, row.project_id).await {
+            match conversation_module_off(state, principal.actor_id, row.place()).await {
                 Ok(Some(module)) => return ToolResult::module_off("message_send", module),
                 Ok(None) => {}
                 Err(error) => return ToolResult::from_error(error, "message_send"),
@@ -1722,7 +1721,7 @@ pub(super) async fn message_forward(
         // does; anything else is left to the send command.
         if let Ok(row) = readable_conversation(state, principal, &arguments.conversation_id).await?
             && let Some(module) =
-                conversation_module_off(state, principal.actor_id, row.project_id).await?
+                conversation_module_off(state, principal.actor_id, row.place()).await?
         {
             return Ok(ToolResult::module_off("message_forward", module));
         }
@@ -1771,6 +1770,7 @@ pub(super) async fn message_forward(
 pub(super) async fn message_content<T>(
     state: &AppState,
     principal: &McpPrincipal,
+    conversation: Option<Uuid>,
     text: Option<&str>,
     content: Option<MessageContent>,
     operation: &'static str,
@@ -1784,7 +1784,7 @@ pub(super) async fn message_content<T>(
                     "Send between 1 and 20,000 characters.",
                 ));
             }
-            content_from_text(state, principal.project_id, text)
+            content_from_text(state, principal.project_id, conversation, text)
                 .await
                 .map_err(|error| ToolResult::from_error(error, operation))
         }
@@ -1919,65 +1919,65 @@ pub(super) async fn conversation_start(
     };
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let (space_id, role) = crate::direct::space_for_actor(
-            &mut transaction,
-            principal.actor_id,
-            principal.external_agent_connection_id,
-        )
-        .await?;
-        let subject = crate::policy::Subject::new(
-            principal.actor_id,
-            principal.actor_kind,
-            true,
-            Some(crate::policy::Membership::project(space_id, role, true)),
-            None,
-        );
-        if !matches!(
-            crate::policy::authorize(
-                &subject,
-                Action::ChannelCreate,
-                crate::policy::Resource::Project(crate::policy::ProjectScope::project(space_id)),
-            ),
-            crate::policy::Decision::Allow
-        ) {
+        // DMs and groups are in no space; starting one needs `direct.start`
+        // in a workspace shared with each person (checked as it's made).
+        let space_id = crate::spaces::DIRECT;
+        if !crate::direct::may_start_any(&mut transaction, principal.actor_id).await? {
             return Ok(ToolResult::denied("You can't start conversations."));
         }
-        let people = match resolve_people(state, space_id, &arguments.people).await? {
-            Ok(people) => people
-                .into_iter()
-                .filter(|id| *id != principal.actor_id)
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>(),
-            Err(person) => {
-                return Ok(ToolResult::invalid(
-                    "people",
-                    format!("{person} isn't someone you can message. Try people_search."),
-                ));
-            }
-        };
+        let people =
+            match resolve_direct_people(state, principal.actor_id, &arguments.people).await? {
+                Ok(people) => people
+                    .into_iter()
+                    .filter(|id| *id != principal.actor_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                Err(unresolved) => {
+                    return Ok(ToolResult::invalid(
+                        "people",
+                        unresolved.explain(|person| {
+                            format!("{person} isn't someone you can message. Try people_search.")
+                        }),
+                    ));
+                }
+            };
         if people.is_empty() {
             return Ok(ToolResult::invalid(
                 "people",
                 "Name someone other than yourself.",
             ));
         }
+        // Started in the workspace named, else the connection's own; an app
+        // acting across a person's account names one or starts a personal
+        // DM (K4.6: never the last workspace used).
+        let inside = match arguments.workspace.as_deref() {
+            Some(named) => {
+                match crate::ops::target::workspace_named(&mut transaction, named).await {
+                    Ok(workspace) => Some(workspace),
+                    Err(_) => return Ok(ToolResult::not_found("That workspace")),
+                }
+            }
+            None => {
+                sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                    .bind(principal.project_id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .filter(|_| !principal.account_wide)
+            }
+        };
         let (conversation_id, created, kind) = if people.len() == 1 && name.is_none() {
-            let (id, created) = crate::direct::open_dm_in(
-                &mut transaction,
-                space_id,
-                principal.actor_id,
-                people[0],
-            )
-            .await?;
+            let (id, created) =
+                crate::direct::open_dm_in(&mut transaction, principal.actor_id, people[0], inside)
+                    .await?;
             (id, created, OutboxConversationKind::Dm)
         } else {
             let id = crate::direct::create_group_in(
                 &mut transaction,
-                space_id,
                 principal.actor_id,
                 &people,
                 name.clone(),
+                inside,
             )
             .await?;
             (id, true, OutboxConversationKind::Group)
@@ -2012,7 +2012,8 @@ pub(super) async fn conversation_start(
             .filter(|v| !v.is_empty())
         {
             Some(text) => {
-                let content = content_from_text(state, space_id, text).await?;
+                let content =
+                    content_from_text(state, space_id, Some(conversation_id), text).await?;
                 match send(state, principal, conversation_id, content, &[], None, None).await {
                     ToolResult::Ok { value } => Some(value),
                     failed => return Ok(retype(failed)),
@@ -2080,27 +2081,49 @@ pub(super) async fn people_search(
         let projects = scope_projects(state, principal).await?;
         let rows = sqlx::query_as::<_, PersonRow>(
             r#"
+            WITH known AS (
+                SELECT membership.actor_id, membership.display_name, membership.handle,
+                       project.name AS place
+                FROM project_memberships membership
+                JOIN projects project ON project.id = membership.project_id
+                WHERE membership.project_id = ANY($1) AND membership.enabled
+                UNION ALL
+                -- Where DMs are reached: the people of the caller's workspaces.
+                SELECT theirs.actor_id, profile.display_name, profile.handle, 'Messages'
+                FROM organization_memberships mine
+                JOIN organization_memberships theirs
+                  ON theirs.organization_id = mine.organization_id AND theirs.enabled
+                CROSS JOIN LATERAL account_profile(theirs.actor_id, mine.organization_id) profile
+                WHERE direct_scope_id() = ANY($1) AND mine.actor_id = $4 AND mine.enabled
+                  -- Only the workspaces a credential's limit names (a token
+                  -- for one workspace finds that one's people).
+                  AND ($5::uuid[] IS NULL OR mine.organization_id = ANY($5))
+                  -- The workspace's directory: not for a guest (K1.27).
+                  AND role_allows(mine.role, mine.role_id, 'directory.view')
+            )
             SELECT actor.id,
-                   min(membership.display_name) AS name,
-                   min(membership.handle) AS handle,
-                   CASE WHEN actor.kind = 'external_agent' THEN 'agent' ELSE 'person' END AS kind,
-                   array_agg(DISTINCT CASE WHEN project.kind = 'direct' THEN 'Messages'
-                                           ELSE project.name END) AS projects
-            FROM project_memberships membership
-            JOIN actors actor ON actor.id = membership.actor_id
-            JOIN projects project ON project.id = membership.project_id
-            WHERE membership.project_id = ANY($1) AND membership.enabled
-              AND actor.status = 'active' AND actor.kind IN ('human', 'external_agent')
-              AND ($2 = '' OR membership.display_name ILIKE '%' || $2 || '%'
-                           OR membership.handle ILIKE '%' || $2 || '%')
+                   min(known.display_name) AS name,
+                   min(known.handle) AS handle,
+                   CASE WHEN actor.kind = 'external_agent' THEN 'agent' ELSE 'person' END AS kind, -- // kind-check: mechanical (a display label)
+                   array_agg(DISTINCT known.place) AS projects
+            FROM known
+            JOIN actors actor ON actor.id = known.actor_id
+            WHERE actor.status = 'active' AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that can be messaged, not runs' worker accounts)
+              AND ($2 = '' OR known.display_name ILIKE '%' || $2 || '%'
+                           OR known.handle ILIKE '%' || $2 || '%')
             GROUP BY actor.id, actor.kind
-            ORDER BY (actor.kind = 'external_agent') DESC, lower(min(membership.display_name))
+            ORDER BY (actor.kind = 'external_agent') DESC, lower(min(known.display_name)) -- // kind-check: mechanical (list order)
             LIMIT $3
             "#,
         )
         .bind(&projects)
         .bind(query.trim().trim_start_matches('@'))
         .bind(limit)
+        .bind(principal.actor_id)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            principal.actor_id,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(PeopleValue {
@@ -2201,7 +2224,7 @@ pub(crate) async fn thread_start(
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
-            url: public_url(state, &thread_path(&created.parent, created.id)),
+            url: link_url(state, None, &thread_target(&created.parent, created.id)),
             id: created.id.to_string(),
             name: created.name,
             status: created.status,
@@ -2232,7 +2255,8 @@ async fn post_optional(
         let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
         format!("thread-start.{origin_id}.{}", hex::encode(&digest[..16]))
     });
-    let content = content_from_text(state, principal.project_id, text).await?;
+    let content =
+        content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(
         match send(state, principal, conversation_id, content, &[], key, None).await {
             ToolResult::Ok { value } => Some(value),
@@ -2241,11 +2265,14 @@ async fn post_optional(
     )
 }
 
-fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
+fn thread_target(parent: &ConversationAccessRow, thread_id: Uuid) -> crate::addresses::Target {
     if matches!(parent.kind.as_str(), "dm" | "group") {
-        format!("/messages/{}?thread={thread_id}", parent.id)
+        crate::addresses::Target::Direct {
+            id: parent.id,
+            thread: Some(thread_id),
+        }
     } else {
-        format!("/projects/{}/threads/{thread_id}", parent.project_id)
+        crate::addresses::Target::space(parent.place(), crate::addresses::Place::Thread(thread_id))
     }
 }
 
@@ -2269,30 +2296,23 @@ pub(crate) async fn thread_update(
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
-        let view = match update_thread(
-            &mut transaction,
-            principal.actor_id,
-            principal.actor_kind,
-            thread_id,
-            &patch,
-        )
-        .await
-        {
-            Ok(view) => view,
-            Err(AppError::Validation("thread change")) => {
-                return Ok(ToolResult::invalid(
-                    "status",
-                    "Change at least one of name, status, or outcome.",
-                ));
-            }
-            Err(AppError::Validation(field)) => {
-                return Ok(ToolResult::invalid(
-                    field,
-                    "Statuses are up to 40 characters; outcomes up to 1,000.",
-                ));
-            }
-            Err(error) => return Err(error),
-        };
+        let view =
+            match update_thread(&mut transaction, principal.actor_id, thread_id, &patch).await {
+                Ok(view) => view,
+                Err(AppError::Validation("thread change")) => {
+                    return Ok(ToolResult::invalid(
+                        "status",
+                        "Change at least one of name, status, or outcome.",
+                    ));
+                }
+                Err(AppError::Validation(field)) => {
+                    return Ok(ToolResult::invalid(
+                        field,
+                        "Statuses are up to 40 characters; outcomes up to 1,000.",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
         insert_audit(
             &mut transaction,
             principal,
@@ -2305,11 +2325,21 @@ pub(crate) async fn thread_update(
         .await?;
         transaction.commit().await?;
         let parent_id = view.parent_channel_id.unwrap_or(view.id);
-        let url = if matches!(view.parent_kind.as_deref(), Some("dm" | "group")) {
-            format!("/messages/{parent_id}?thread={}", view.id)
-        } else {
-            format!("/projects/{}/threads/{}", view.project_id, view.id)
-        };
+        let url = crate::addresses::link(
+            state,
+            None,
+            &if matches!(view.parent_kind.as_deref(), Some("dm" | "group")) {
+                crate::addresses::Target::Direct {
+                    id: parent_id,
+                    thread: Some(view.id),
+                }
+            } else {
+                crate::addresses::Target::space(
+                    view.project_id,
+                    crate::addresses::Place::Thread(view.id),
+                )
+            },
+        );
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
             id: view.id.to_string(),
             name: view.name,

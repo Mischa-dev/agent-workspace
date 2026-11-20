@@ -1,8 +1,10 @@
+import { here } from '../app/href'
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { sendConversationMessage } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import type { ComposerSubmission } from '../conversations/composerModel'
@@ -44,6 +46,9 @@ function listNames(names: string[]) {
 export function MessagesPage() {
   const session = useAuthenticatedSession()
   const overview = useDirectOverview()
+  // Where Agents is off, nothing here offers or talks about them (W1.39).
+  const agentsOn = useHomeExperience().moduleOn('agents')
+  const manageAgents = agentsOn && Boolean(overview.data?.capabilities.manageAgents)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -142,8 +147,8 @@ export function MessagesPage() {
     if (!conversationId) {
       try {
         conversationId = isGroup
-          ? await createGroup({ name: groupName, memberIds, idempotencyKey: groupKey.current })
-          : await openDm(memberIds[0])
+          ? await createGroup({ name: groupName, memberIds, idempotencyKey: groupKey.current, workspaceId: overview.data?.organizationId })
+          : await openDm(memberIds[0], overview.data?.organizationId)
       } catch (reason) {
         throw new Error(`The conversation didn’t start. ${describeError(reason).message}`, { cause: reason })
       }
@@ -152,7 +157,7 @@ export function MessagesPage() {
     await sendConversationMessage({ conversationId, kind: isGroup ? 'group' : 'dm', ...submission })
     // `started` stays set until the page goes: a second message sent before then joins the same conversation.
     await queryClient.invalidateQueries({ queryKey: directQueryKey })
-    navigate(`/messages/${encodeURIComponent(conversationId)}`)
+    navigate(here(`/messages/${encodeURIComponent(conversationId)}`))
   }
 
   // Agents from different projects can share a handle; each needs its own @token here (mentions carry the actor's ID).
@@ -251,8 +256,8 @@ export function MessagesPage() {
         {overview.data && people.length === 0 ? (
           <EmptyState
             action={
-              overview.data.capabilities.manageAgents ? (
-                <ButtonLink icon="bot" to="/messages/agents" variant="primary">
+              manageAgents ? (
+                <ButtonLink icon="bot" to={here('/messages/agents')} variant="primary">
                   Add an agent
                 </ButtonLink>
               ) : undefined
@@ -260,9 +265,11 @@ export function MessagesPage() {
             icon="users"
             title="No one to message yet"
           >
-            {overview.data.capabilities.manageAgents
-              ? 'Add an agent to start. Each one gets its own identity and shows up here.'
-              : 'Ask your workspace owner to add an agent. Each one gets its own identity and shows up here.'}
+            {!agentsOn
+              ? 'People in your workspaces show up here once they join.'
+              : manageAgents
+                ? 'Add an agent to start. Each one gets its own identity and shows up here.'
+                : 'Ask your workspace owner to add an agent. Each one gets its own identity and shows up here.'}
           </EmptyState>
         ) : null}
         {overview.data && people.length > 0 ? (
@@ -270,7 +277,7 @@ export function MessagesPage() {
             <ConversationIntro
               actions={
                 existing ? (
-                  <ButtonLink to={`/messages/${encodeURIComponent(existing.id)}`} variant="ghost">
+                  <ButtonLink to={here(`/messages/${encodeURIComponent(existing.id)}`)} variant="ghost">
                     Open the conversation
                   </ButtonLink>
                 ) : undefined
@@ -291,11 +298,11 @@ export function MessagesPage() {
             </ConversationIntro>
           ) : chosen.length > 1 ? (
             <ConversationIntro icon="users" title={`A group with ${listNames(names)}`}>
-              Your first message starts the group. Agents answer when they’re asked or mentioned.
+              Your first message starts the group.{agentsOn ? ' Agents answer when they’re asked or mentioned.' : ''}
             </ConversationIntro>
           ) : (
             <ConversationIntro icon="compose" title="New message">
-              Choose who it’s to above: one person or agent for a direct message, or several for a group.
+              Choose who it’s to above: {agentsOn ? 'one person or agent' : 'one person'} for a direct message, or several for a group.
             </ConversationIntro>
           )
         ) : null}
@@ -346,9 +353,9 @@ export function AgentsPage() {
   const [placeHeld, setPlaceHeld] = useState(false)
   // New agents should appear in the people list as soon as you leave here.
   useEffect(() => () => void queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
-  const spaceId = overview.data?.projectId ?? ''
+  const spaceId = overview.data?.workspaceSpaceId ?? ''
   const places = [
-    { id: spaceId, name: 'Messages only' },
+    { id: spaceId, name: 'The workspace' },
     ...(projects.data?.projects ?? [])
       .filter((project) => project.organizationId === overview.data?.organizationId && !project.archivedAt && project.capabilities.manage)
       .map((project) => ({ id: project.id, name: project.name })),

@@ -10,7 +10,7 @@ import { ALL_SLOTS, THEME_PRESETS, type Rgb } from './slots'
 // Read from disk: vitest hands CSS imports over empty, even with ?raw.
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 const tokensCss = read('../styles/tokens.css')
-const classicCss = read('../../public/themes/classic.css')
+const classicCss = read('../../public/themes/classic.css') + read('../../public/themes/paper-frame.css')
 
 /** Custom properties declared for each [data-theme="…"] selector. */
 function themeBlocks(css: string) {

@@ -22,6 +22,7 @@ impl CoreModule for Module {
         module.operations(crate::search::ops::register_ops);
         module.operations(crate::custom_emoji::ops::register_ops);
         module.routes(crate::custom_emoji::router);
+        module.operations(crate::themes::ops::register_ops);
         module.routes(crate::profiles::router);
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
@@ -34,7 +35,11 @@ impl CoreModule for Module {
         module.routes(crate::export::transfer::router);
         module.operations(crate::accounts::claims::register_ops);
         module.routes(crate::accounts::claims::router);
+        module.operations(crate::accounts::credential_ops::register_ops);
         module.operations(crate::spaces::invite_links::register_ops);
+        module.operations(crate::spaces::ops::register_ops);
+        module.operations(crate::spaces::members::register_ops);
+        module.operations(crate::memberships::expiry::register_ops);
         module.routes(crate::spaces::invite_links::router);
         module.operations(crate::workspace::ops::register_ops);
         module.operations(crate::workspace::reads::register_ops);

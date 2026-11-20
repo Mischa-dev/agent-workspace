@@ -375,8 +375,12 @@ pub fn default_registry() -> JobRegistry {
     crate::hosts::a2a::register_jobs(&mut registry);
     crate::hosts::builtin::assistant::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);
+    crate::collections::record_templates::register_jobs(&mut registry);
     crate::work_items::imports::register_jobs(&mut registry);
+    crate::work_items::triage::register_jobs(&mut registry);
+    crate::work_items::cycles::register_jobs(&mut registry);
     crate::collections::computed::register_jobs(&mut registry);
+    crate::outside_data::run::register_jobs(&mut registry);
     registry.register(PRUNE_KIND, |context| async move {
         prune_finished(&context.state.pool).await?;
         Ok(())
@@ -392,6 +396,7 @@ pub fn default_registry() -> JobRegistry {
     crate::notification_email::register_jobs(&mut registry);
     crate::later::register_jobs(&mut registry);
     crate::statuses::register_jobs(&mut registry);
+    crate::memberships::expiry::register_jobs(&mut registry);
     crate::drafts::register_jobs(&mut registry);
     crate::history::cold::register_jobs(&mut registry);
     crate::export::transfer::register_jobs(&mut registry);

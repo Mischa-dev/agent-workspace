@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
+import { useProjectExperience } from '../experience/layout'
 import { humanize, roleLabel } from '../projects/format'
 import { OneTimeValue } from '../settings/OneTimeValue'
 import { DEFAULT_INVITATION_HOURS, INVITATION_EXPIRY_OPTIONS, PROJECT_INVITATION_MAX_HOURS } from '../settings/invitationExpiry'
@@ -71,25 +72,17 @@ function runReadiness(readiness: string) {
   return `Run account ${humanize(readiness).toLocaleLowerCase()}`
 }
 
-export function TeamSettings({
-  organizationId,
-  organizationRole,
-  projectId,
-}: {
-  organizationId?: string
-  organizationRole: string
-  projectId: string
-}) {
+export function TeamSettings({ organizationId, projectId }: { organizationId?: string; projectId: string }) {
   const queryClient = useQueryClient()
+  const experience = useProjectExperience(projectId)
+  const runsOn = experience.moduleOn('runs')
   const roles = useQuery({
     queryKey: roleKeys.roles(organizationId ?? ''),
     queryFn: () => listRoles(organizationId ?? ''),
     enabled: Boolean(organizationId),
   })
-  // Custom roles you may give: admin-based ones only owners give.
-  const customRoles = (roles.data?.roles ?? []).filter(
-    (role) => !role.builtIn && role.capabilities.assign && (role.baseRole !== 'admin' || organizationRole === 'owner'),
-  )
+  // Custom roles you may give (the server applies the tiers).
+  const customRoles = (roles.data?.roles ?? []).filter((role) => !role.builtIn && role.capabilities.assign)
   // Roles you may invite someone to, built-in ones included: inviting needs
   // "invite members", not "manage members" (the server works it out as the
   // invitation endpoint does).
@@ -193,7 +186,7 @@ export function TeamSettings({
           {error}
         </Banner>
       )}
-      <ExistingMemberForm customRoles={customRoles} projectId={projectId} onAdded={refresh} />
+      <ExistingMemberForm agentsOn={experience.moduleOn('agents')} customRoles={customRoles} projectId={projectId} onAdded={refresh} />
       <Section description="Anyone with the link can join as the role you pick, until it expires or is used." title="Invite people">
         {oneShot && (
           <OneTimeValue copyLabel="Copy link" icon="link" onDone={() => setOneShot(null)} title="Invitation link ready" value={oneShot.invitationUrl}>
@@ -201,7 +194,6 @@ export function TeamSettings({
           </OneTimeValue>
         )}
         <InviteForm
-          canInviteAdmin={organizationRole === 'owner'}
           inviteRoles={inviteRoles}
           rolesLoaded={Boolean(roles.data)}
           disabled={issueMutation.isPending}
@@ -221,6 +213,7 @@ export function TeamSettings({
               key={member.actorId}
               member={member}
               roles={roles.data?.roles ?? []}
+              runsOn={runsOn}
               onChange={(input) => {
                 setError(null)
                 memberMutation.mutate({ actorId: member.actorId, input })
@@ -294,13 +287,11 @@ export function TeamSettings({
 }
 
 function InviteForm({
-  canInviteAdmin,
   inviteRoles,
   rolesLoaded,
   disabled,
   onSubmit,
 }: {
-  canInviteAdmin: boolean
   inviteRoles: WorkspaceRoleView[]
   rolesLoaded: boolean
   disabled: boolean
@@ -311,8 +302,8 @@ function InviteForm({
   const offers = (key: string) => !rolesLoaded || inviteRoles.some((entry) => entry.builtIn && entry.key === key)
   const offersMember = offers('member')
   const offersViewer = offers('viewer')
-  const offersAdmin = canInviteAdmin && inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
-  const customRoles = inviteRoles.filter((entry) => !entry.builtIn && (entry.baseRole !== 'admin' || canInviteAdmin))
+  const offersAdmin = inviteRoles.some((entry) => entry.builtIn && entry.key === 'admin')
+  const customRoles = inviteRoles.filter((entry) => !entry.builtIn)
   const firstOffered = offersMember
     ? 'member'
     : offersViewer
@@ -365,12 +356,15 @@ function MemberRow({
   disabled,
   onChange,
   roles,
+  runsOn,
 }: {
   customRoles: WorkspaceRoleView[]
   member: Member
   disabled: boolean
   onChange: (input: { expectedVersion: number; role?: TeamRole; roleId?: string; enabled?: boolean }) => void
   roles: WorkspaceRoleView[]
+  /** Whether Runs is on here; off, a person's run account isn't mentioned (W1.39). */
+  runsOn: boolean
 }) {
   // A custom role they hold that you can't give still shows as theirs.
   // Every membership names a role row (K1.10); a starting role is picked by its key.
@@ -432,23 +426,30 @@ function MemberRow({
           size={32}
         />
       }
-      meta={`@${member.handle} · ${
+      meta={[
+        `@${member.handle}`,
         member.enabled
           ? member.actorKind === 'external_agent'
             ? 'Agent'
-            : runReadiness(member.executionProfileReadiness)
-          : 'Disabled: keeps their history here, but can’t open the project'
-      }`}
+            : runsOn
+              ? runReadiness(member.executionProfileReadiness)
+              : null
+          : 'Disabled: keeps their history here, but can’t open the project',
+      ]
+        .filter(Boolean)
+        .join(' · ')}
       title={member.displayName}
     />
   )
 }
 
 function ExistingMemberForm({
+  agentsOn,
   customRoles,
   projectId,
   onAdded,
 }: {
+  agentsOn: boolean
   customRoles: WorkspaceRoleView[]
   projectId: string
   onAdded: () => Promise<void>
@@ -472,7 +473,7 @@ function ExistingMemberForm({
   })
   return (
     <Section
-      description="Add an existing person or agent. Agents keep their identity, connection and conversations."
+      description={agentsOn ? 'Add an existing person or agent. Agents keep their identity, connection and conversations.' : 'Add someone already in the workspace.'}
       title="Add a workspace member"
     >
       {candidates.isError && (
@@ -491,7 +492,7 @@ function ExistingMemberForm({
         <SelectField
           disabled={candidates.isPending || mutation.isPending}
           id="existing-member"
-          label="Person or agent"
+          label={agentsOn ? 'Person or agent' : 'Person'}
           onChange={(event) => setActorId(event.target.value)}
           value={actorId}
         >

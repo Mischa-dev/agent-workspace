@@ -348,9 +348,14 @@ async fn insert_actor_membership(
     display_name: &str,
     handle: &str,
 ) {
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, $2)")
+    // An agent belongs to the space's workspace; a person to nobody.
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) \
+         SELECT $1, $2, CASE WHEN $2 <> 'human' THEN organization_id END FROM projects WHERE id = $3",
+    )
         .bind(actor_id)
         .bind(actor_kind)
+        .bind(project_id)
         .execute(&mut **transaction)
         .await
         .expect("insert foreign Actor");

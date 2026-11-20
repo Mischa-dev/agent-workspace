@@ -10,6 +10,7 @@ import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, Ro
 import type { DashboardEntry } from '../api/generated/operations'
 import { DashboardDetailsDialog } from './DashboardDialogs'
 import { dashboardHref, splitDashboards } from './dashboardModel'
+import { OutsideDataLink } from './OutsideDataPage'
 
 /** A project's dashboards: the shared ones, then the person's own. */
 export function DashboardsListPage() {
@@ -30,6 +31,12 @@ export function DashboardsListPage() {
       New dashboard
     </Button>
   ) : null
+  const actions = (
+    <>
+      <OutsideDataLink projectId={projectId} />
+      {newDashboard}
+    </>
+  )
   const rows = (entries: DashboardEntry[], label: string) => (
     <RowList label={label}>
       {entries.map((dashboard) => (
@@ -45,7 +52,7 @@ export function DashboardsListPage() {
 
   return (
     <div className="aw-page aw-dashboards">
-      <PageHeader actions={newDashboard} icon="chart" title="Dashboards" />
+      <PageHeader actions={actions} icon="chart" title="Dashboards" />
       {list.isPending ? <ListSkeleton label="Loading dashboards" rows={3} /> : null}
       {list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Dashboards didn’t load" /> : null}
       {list.isSuccess && shared.length + own.length === 0 ? (

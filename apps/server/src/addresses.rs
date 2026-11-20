@@ -269,6 +269,15 @@ impl Addresses {
         Self::LEGACY
     }
 
+    /// The path of `target`, in `workspace` when it is known (see [`link`]).
+    pub fn link(self, workspace: Option<Uuid>, target: &Target) -> String {
+        match workspace {
+            Some(workspace) => self.in_workspace(workspace, target),
+            // Today's shape, which the web resolves to its workspace.
+            None => target.legacy_path(),
+        }
+    }
+
     /// Whether links name their workspace.
     pub fn names_workspace(self) -> bool {
         self.workspace_addresses
@@ -458,6 +467,23 @@ impl Linker {
         self.workspaces.insert((owner, id), found.clone());
         Ok(found)
     }
+}
+
+/// The path of `target` where a link is built with only the server state
+/// at hand: in `workspace` when the caller knows it, else in today's shape,
+/// which the web and the resolver still open once links name their
+/// workspace (K4.19).
+pub fn link(state: &AppState, workspace: Option<Uuid>, target: &Target) -> String {
+    Addresses::of(state).link(workspace, target)
+}
+
+/// `path` with `query` added to whatever query it has.
+pub fn with_query(path: String, query: &str) -> String {
+    if query.is_empty() {
+        return path;
+    }
+    let joiner = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{joiner}{query}")
 }
 
 /// A workspace's address: its id and current slug.

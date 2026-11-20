@@ -21,7 +21,7 @@ use crate::{
     events::Caller,
 };
 
-const PEOPLE_ONLY: &str = "Only people make and change bug report links: anyone who can add tasks here makes one, and its maker or the project's owners and admins change it, on the web or through an app connected as themselves.";
+const NOT_YOURS: &str = "Anyone who can add tasks here makes a bug report link; only its maker or someone who manages the project changes it.";
 
 fn to_value(value: impl serde::Serialize) -> Result<Value, AppError> {
     serde_json::to_value(value).map_err(|_| AppError::Internal("serialize tool value"))
@@ -161,6 +161,7 @@ async fn form_from_written(
         fields.push(FormField {
             field: field.id,
             required: asked.required,
+            show_if: None,
         });
     }
     Ok(Ok(FormConfig {
@@ -168,6 +169,7 @@ async fn form_from_written(
         fields,
         thanks: written.thanks.clone().unwrap_or_default(),
         daily_limit: written.daily_limit,
+        ..Default::default()
     }))
 }
 
@@ -178,9 +180,6 @@ pub(crate) async fn bug_report_link_write(
 ) -> ToolResult<Value> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != crate::policy::ActorKind::Human {
-        return ToolResult::denied(PEOPLE_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -335,7 +334,7 @@ pub(crate) async fn bug_report_link_write(
     .await;
     match result {
         Ok(result) => result,
-        Err(AppError::Forbidden) => ToolResult::denied(PEOPLE_ONLY),
+        Err(AppError::Forbidden) => ToolResult::denied(NOT_YOURS),
         Err(AppError::NotFound("bug_report_link")) => ToolResult::not_found("That bug report link"),
         Err(AppError::Validation("bug_report_links.limit")) => ToolResult::conflict(
             "This project has as many bug report links as it can; delete one first.",

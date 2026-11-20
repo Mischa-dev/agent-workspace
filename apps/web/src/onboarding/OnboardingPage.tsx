@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
@@ -64,11 +65,11 @@ function Path({ onboarding }: { onboarding: Onboarding }) {
       <PageHeader
         actions={
           onboarding.complete ? (
-            <ButtonLink to="/home" variant="primary">
+            <ButtonLink to={here('/home')} variant="primary">
               Go to Home
             </ButtonLink>
           ) : (
-            <ButtonLink title="Setup waits on Home until it’s done" to="/home">
+            <ButtonLink title="Setup waits on Home until it’s done" to={here('/home')}>
               Finish later
             </ButtonLink>
           )

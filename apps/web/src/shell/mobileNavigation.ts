@@ -1,10 +1,22 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useSyncExternalStore } from 'react'
 
 /** Phone widths, where the rail and sidebar become one drawer. Matches shell.css. */
 export const MOBILE_QUERY = '(max-width: 860px)'
 
 export function isMobileWidth() {
   return typeof window.matchMedia === 'function' && window.matchMedia(MOBILE_QUERY).matches
+}
+
+function subscribeWidth(onChange: () => void) {
+  if (typeof window.matchMedia !== 'function') return () => undefined
+  const query = window.matchMedia(MOBILE_QUERY)
+  query.addEventListener?.('change', onChange)
+  return () => query.removeEventListener?.('change', onChange)
+}
+
+/** Whether the window is phone width now, following it as it changes. */
+export function useMobileWidth() {
+  return useSyncExternalStore(subscribeWidth, isMobileWidth, () => false)
 }
 
 type ShellHeader = {

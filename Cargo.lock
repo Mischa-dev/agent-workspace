@@ -159,6 +159,7 @@ dependencies = [
  "mime_guess",
  "qrcode",
  "rand_core 0.6.4",
+ "regex-lite",
  "reqwest",
  "resvg",
  "ring",

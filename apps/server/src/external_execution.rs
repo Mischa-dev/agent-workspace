@@ -14,10 +14,7 @@ use crate::{
     mcp::McpPrincipal,
     message_content::MessageContent,
     outbox,
-    policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
-        Subject, authorize,
-    },
+    policy::{Action, MembershipRole, RoleGrant},
     provider::run_config::RunConfig,
 };
 
@@ -106,12 +103,14 @@ impl ExternalExecutionRequestResult {
 struct ExternalAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
 struct SponsorAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -156,8 +155,7 @@ pub(crate) async fn request_sponsored_execution(
     principal: &McpPrincipal,
     mut arguments: ExternalExecutionRequestArguments,
 ) -> ExternalExecutionRequestResult {
-    if principal.actor_kind != ActorKind::ExternalAgent
-        || principal.external_agent_connection_id.is_none()
+    if principal.external_agent_connection_id.is_none()
         || !principal.can_write()
         || !principal.has_scope("worker_request")
     {
@@ -238,8 +236,10 @@ async fn request_sponsored_execution_inner(
     let external = sqlx::query_as::<_, ExternalAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
-        FROM mcp_client_credentials credential
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(membership.actor_id, project.id)
+                 AS membership_group_permissions
+        FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id
@@ -263,7 +263,7 @@ async fn request_sponsored_execution_inner(
           AND connection.actor_id = credential.actor_id
           AND connection.project_id = credential.project_id
           AND connection.scopes = credential.scopes
-          AND actor.kind = 'external_agent' AND actor.status = 'active'
+          AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (the request comes through an agent connection)
           AND project.archived_at IS NULL
           AND membership.enabled AND organization_membership.enabled
         FOR SHARE OF credential, connection, actor, project, membership,
@@ -279,10 +279,10 @@ async fn request_sponsored_execution_inner(
     .ok_or(AppError::Forbidden)?;
     require_policy(
         principal.actor_id,
-        ActorKind::ExternalAgent,
         principal.project_id,
         &external.membership_role,
         external.membership_role_permissions.as_deref(),
+        external.membership_group_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
 
@@ -311,7 +311,9 @@ async fn request_sponsored_execution_inner(
     let sponsor = sqlx::query_as::<_, SponsorAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(membership.actor_id, project.id)
+                 AS membership_group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -322,7 +324,7 @@ async fn request_sponsored_execution_inner(
         JOIN users sponsor_user ON sponsor_user.actor_id = actor.id
         WHERE project.id = $1 AND project.archived_at IS NULL
           AND membership.enabled AND organization_membership.enabled
-          AND actor.kind = 'human' AND actor.status = 'active'
+          AND actor.status = 'active'
           AND sponsor_user.status = 'active'
         FOR SHARE OF project, membership, organization_membership, actor, sponsor_user
         "#,
@@ -334,10 +336,10 @@ async fn request_sponsored_execution_inner(
     .ok_or(AppError::NotFound("sponsor"))?;
     require_policy(
         sponsor_actor_id,
-        ActorKind::Human,
         principal.project_id,
         &sponsor.membership_role,
         sponsor.membership_role_permissions.as_deref(),
+        sponsor.membership_group_permissions.as_deref(),
         Action::WorkerInvoke,
     )?;
     select_run_setup(
@@ -481,9 +483,11 @@ async fn list_sponsored_execution_requests(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<SponsoredExecutionList>, AppError> {
-    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
-        r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id)
+    let (role, role_permissions, groups) =
+        sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>)>(
+            r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id),
+               space_group_permissions(membership.actor_id, project.id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -493,18 +497,18 @@ async fn list_sponsored_execution_requests(
          AND organization_membership.enabled
         WHERE project.id = $1 AND project.archived_at IS NULL AND membership.enabled
         "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::NotFound("project"))?;
+        )
+        .bind(project_id)
+        .bind(principal.actor_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
     require_policy(
         principal.actor_id,
-        ActorKind::Human,
         project_id,
         &role,
         role_permissions.as_deref(),
+        groups.as_deref(),
         Action::WorkerInvoke,
     )?;
     let requests = sqlx::query_as::<_, SponsoredExecutionProjection>(
@@ -597,7 +601,7 @@ pub(crate) async fn approval_settled(
          AND connection.actor_id = request.requesting_actor_id
          AND connection.status = 'active'
         JOIN actors requester ON requester.id = request.requesting_actor_id
-         AND requester.kind = 'external_agent' AND requester.status = 'active'
+         AND requester.kind = 'external_agent' AND requester.status = 'active' -- // kind-check: mechanical (the request came through an agent connection)
         JOIN project_memberships requester_membership
           ON requester_membership.project_id = request.project_id
          AND requester_membership.actor_id = request.requesting_actor_id
@@ -619,7 +623,7 @@ pub(crate) async fn approval_settled(
          AND sponsor_membership.actor_id = request.sponsoring_actor_id
          AND sponsor_membership.enabled
         JOIN actors sponsor ON sponsor.id = request.sponsoring_actor_id
-         AND sponsor.kind = 'human' AND sponsor.status = 'active'
+         AND sponsor.status = 'active'
         JOIN users sponsor_user ON sponsor_user.actor_id = sponsor.id
          AND sponsor_user.status = 'active'
         JOIN organization_memberships sponsor_organization_membership
@@ -844,28 +848,15 @@ fn parse_role(value: &str, permissions: Option<&[String]>) -> Result<RoleGrant, 
 
 fn require_policy(
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
     role: &str,
     role_permissions: Option<&[String]>,
+    groups: Option<&[String]>,
     action: Action,
 ) -> Result<(), AppError> {
-    let role = parse_role(role, role_permissions)?;
-    let subject = Subject::new(
-        actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(project_id, role, true)),
-        None,
-    );
-    if matches!(
-        authorize(
-            &subject,
-            action,
-            Resource::Project(ProjectScope::project(project_id)),
-        ),
-        Decision::Allow
-    ) {
+    let role =
+        parse_role(role, role_permissions)?.with_groups(crate::access::group_permissions(groups));
+    if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -874,5 +865,9 @@ fn require_policy(
 
 /// Where an external execution request's events point.
 fn request_href(project_id: Uuid, request_id: Uuid) -> String {
-    format!("/projects/{project_id}/external-execution-requests/{request_id}")
+    crate::addresses::Target::space(
+        project_id,
+        crate::addresses::Place::ExternalRequest(request_id),
+    )
+    .legacy_path()
 }

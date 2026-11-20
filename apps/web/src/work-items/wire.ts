@@ -1,3 +1,4 @@
+import { isSpaceAddress } from '../app/href'
 import type {
   ActivityChanges,
   ActorRef,
@@ -70,7 +71,7 @@ export function color(value: unknown) {
 /** Only same-app paths are followed, so a hostile href can't leave the app. */
 export function appHref(value: unknown) {
   const href = string(value)
-  return href.startsWith('/projects/') ? href : ''
+  return isSpaceAddress(href) ? href : ''
 }
 
 export function actorRef(value: unknown): ActorRef | null {
@@ -191,6 +192,12 @@ export function milestone(value: unknown): Milestone {
     progress: Math.max(0, Math.min(1, progress)),
     overdue: boolean(entry.overdue),
     version: number(entry.version),
+    initiativeId: string(entry.initiativeId) || null,
+    initiative: string(entry.initiative) || null,
+    position: number(entry.position),
+    estimateTotal: number(entry.estimateTotal),
+    estimateDone: number(entry.estimateDone),
+    latestDueDate: date(entry.latestDueDate),
   }
 }
 

@@ -33,7 +33,13 @@ pub struct AliasWorkspace(pub Uuid);
 /// to their agent limits, as the older tools are.
 pub async fn caller_of(state: &AppState, principal: &McpPrincipal) -> Result<Caller, OpError> {
     let limits = limits_of(state, principal).await?;
-    Ok(Caller::of_principal(principal, limits))
+    let acting = crate::mcp::acting_of(state, principal)
+        .await
+        .map_err(|error| OpError::logged("authenticate", &error))?;
+    let mut caller = Caller::of_principal(principal, limits);
+    caller.requested_by = acting.requested_by;
+    caller.run_id = acting.run;
+    Ok(caller)
 }
 
 async fn limits_of(
@@ -45,6 +51,11 @@ async fn limits_of(
         .map(|(_, limits)| limits)
         .map_err(|error| OpError::logged("authenticate", &error))
 }
+
+/// The end of a write's tool description (R52). The v2 reference leaves it
+/// out, since its introduction says it once for every operation.
+pub const RETRY_NOTE: &str = " Send a clientRequestId to make a retry safe; without one the \
+     change runs once and is not retry-safe (replaySafe: false).";
 
 /// What a tool's description ends with: the permission it needs, and for a
 /// write, what makes a retry safe (R52).
@@ -64,10 +75,7 @@ fn needs(meta: &OpMeta) -> String {
         );
     }
     if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
-        text.push_str(
-            " Send a clientRequestId to make a retry safe; without one the change runs once \
-             and is not retry-safe (replaySafe: false).",
-        );
+        text.push_str(RETRY_NOTE);
     }
     text
 }

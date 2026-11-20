@@ -130,7 +130,6 @@ pub(super) async fn run_publish(
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::RepositoryPublish,
         )
@@ -204,7 +203,6 @@ pub(crate) async fn pull_request_create(
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::PullRequestCreate,
         )
@@ -274,7 +272,6 @@ pub(crate) async fn pull_request_refresh(
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::PullRequestRefresh,
         )

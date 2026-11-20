@@ -37,7 +37,7 @@
 }
 
 .aw-meters__name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-meters__numbers,

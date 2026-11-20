@@ -87,7 +87,7 @@ pub async fn save(
     let space_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         -- visibility: the caller checked the conversation is readable.
-        SELECT project_id FROM conversations WHERE id = $1
+        SELECT COALESCE(project_id, direct_scope_id()) FROM conversations WHERE id = $1
         "#,
     )
     .bind(conversation_id)

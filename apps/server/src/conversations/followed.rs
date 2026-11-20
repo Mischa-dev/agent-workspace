@@ -51,7 +51,8 @@ pub struct FollowedThreadView {
     pub status: String,
     /// The one line it settled on, when it has one.
     pub outcome: Option<String>,
-    /// The space it lives in.
+    /// The space it lives in; for a thread in a DM or group, the direct
+    /// scope, named Messages.
     #[schemars(with = "String")]
     pub space_id: Uuid,
     pub space_name: String,
@@ -91,7 +92,8 @@ pub async fn followed(
         r#"
         SELECT thread.id, thread.name, thread.thread_status AS status,
                thread.thread_outcome AS outcome,
-               space.id AS space_id, space.name AS space_name,
+               COALESCE(space.id, direct_scope_id()) AS space_id,
+               COALESCE(space.name, 'Messages') AS space_name,
                parent.id AS parent_id, parent.kind AS parent_kind,
                CASE WHEN parent.kind = 'channel' THEN parent.name END AS parent_name,
                thread.origin_message_id,
@@ -107,8 +109,8 @@ pub async fn followed(
         FROM conversation_notification_levels level
         JOIN conversations thread ON thread.id = level.conversation_id
         JOIN conversations parent ON parent.id = thread.parent_channel_id
-        JOIN projects space ON space.id = thread.project_id
-        JOIN project_memberships me
+        LEFT JOIN projects space ON space.id = thread.project_id
+        LEFT JOIN project_memberships me
           ON me.project_id = thread.project_id AND me.actor_id = $2 AND me.enabled
         LEFT JOIN conversation_read_states read_state
           ON read_state.conversation_id = thread.id AND read_state.actor_id = $2
@@ -116,11 +118,22 @@ pub async fn followed(
           AND level.level = 'all'
           AND thread.kind = 'thread'
           AND thread.archived_at IS NULL
-          AND space.organization_id = $1
-          AND space.archived_at IS NULL
           AND conversation_visible_to(thread.id, $2)
-          AND actor_can_access_project($2, $5, thread.project_id)
-          AND ($6::uuid IS NULL OR thread.project_id = $6)
+          AND (
+              -- A thread in a space of this workspace.
+              (space.organization_id = $1
+               AND space.archived_at IS NULL
+               AND me.actor_id IS NOT NULL
+               AND actor_can_access_project($2, $5, thread.project_id)
+               AND ($6::uuid IS NULL OR thread.project_id = $6))
+              -- A thread in a DM or group (K4.15): one kept by this
+              -- workspace, or a personal one, which shows in every
+              -- workspace; a credential held to one space reaches none.
+              OR (thread.project_id IS NULL
+                  AND thread.workspace_id IN ($1, direct_scope_id())
+                  AND $6::uuid IS NULL
+                  AND ($5::uuid IS NULL OR agent_connection_can_reach_direct($5)))
+          )
           AND (NOT $3 OR (thread.thread_outcome IS NULL
                           AND lower(thread.thread_status) <> ALL($7::text[])))
         ORDER BY last_activity_at DESC, thread.id DESC

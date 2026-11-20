@@ -448,13 +448,15 @@ async fn open_with(
     }
 
     // Where it lives: the conversation, task and message must be in the
-    // space and visible to the reporter.
+    // space and visible to the reporter. A DM or group is in no space
+    // (K4.17): a run answering one lives in the space it was launched in.
     let mut conversation_id = cause.conversation_id;
     if let Some(message_id) = cause.message_id {
         let found = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT message.conversation_id FROM messages message
-            WHERE message.id = $1 AND message.project_id = $2
+            WHERE message.id = $1
+              AND (message.project_id = $2 OR message.project_id IS NULL)
               AND conversation_visible_to(message.conversation_id, $3)
             "#,
         )
@@ -479,7 +481,8 @@ async fn open_with(
     }
     if let Some(conversation) = conversation_id {
         let visible = sqlx::query_scalar::<_, bool>(
-            "SELECT conversation_visible_to(id, $3) FROM conversations WHERE id = $1 AND project_id = $2",
+            "SELECT conversation_visible_to(id, $3) FROM conversations \
+             WHERE id = $1 AND (project_id = $2 OR project_id IS NULL)",
         )
         .bind(conversation)
         .bind(input.space_id)
@@ -576,7 +579,13 @@ async fn open_with(
 
     // A2.14: a run isn't started once its account's budget on what runs
     // cost is used up.
-    crate::budgets::admit_run(transaction, input.space_id, account_id).await?;
+    Box::pin(crate::budgets::admit_run(
+        transaction,
+        input.space_id,
+        conversation_id,
+        account_id,
+    ))
+    .await?;
 
     let run_id = Uuid::now_v7();
     let working = input.initial == RunState::Working;
@@ -1354,7 +1363,7 @@ pub async fn record_usage(
         ));
     }
     // A2.14: counted against the account's budgets on what runs cost.
-    crate::budgets::record_run_usage(
+    Box::pin(crate::budgets::record_run_usage(
         transaction,
         crate::budgets::RunUsage {
             workspace: workspace_id,
@@ -1368,7 +1377,7 @@ pub async fn record_usage(
             tokens: input.input_tokens.saturating_add(input.output_tokens),
             cost: input.cost,
         },
-    )
+    ))
     .await?;
     if let Some(run) = run {
         super::usage::add_reported(transaction, &run, &model, &input, currency.as_deref()).await?;

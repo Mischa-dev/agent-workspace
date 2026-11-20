@@ -106,13 +106,12 @@ describe('App Thread runs, approvals and GitHub', () => {
     })
     render(<App />)
 
-    expect(
-      await screen.findByRole('heading', { name: 'Codex has a question' }),
-    ).toBeVisible()
+    // One request card (W1.24): the question, answered in your own words.
+    expect(await screen.findByText('What should the release be called?')).toBeVisible()
     fireEvent.change(screen.getByLabelText('Your answer'), {
       target: { value: 'Aurora' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
         String(path).includes('/api/v2/ops/request_respond'),

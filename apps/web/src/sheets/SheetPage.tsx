@@ -41,6 +41,7 @@ import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
 import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
 import { bounds, cards, cellKey, cellMap, cellName, columnName, columnNumber, extent, patched, viewRows, type Selection } from './sheetModel'
+import { spaceHref } from '../app/href'
 
 type Dialogs =
   | { kind: 'details' }
@@ -158,7 +159,7 @@ function SheetWorkspace({ project, sheetId }: { project: Project; sheetId: strin
         {gone ? (
           <ErrorState
             action={
-              <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/sheets`} variant="primary">
+              <ButtonLink to={spaceHref(projectId, `/sheets`)} variant="primary">
                 See the sheets
               </ButtonLink>
             }

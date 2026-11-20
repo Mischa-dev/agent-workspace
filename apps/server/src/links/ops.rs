@@ -97,6 +97,7 @@ async fn check(
     let located = Located {
         workspace_id: call.ctx.workspace_id,
         space_id: call.ctx.space_id,
+        direct: call.ctx.direct,
     };
     let mut connection = crate::db::scoped_tx(&call.state.pool)
         .await

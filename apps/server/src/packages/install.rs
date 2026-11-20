@@ -217,8 +217,8 @@ async fn landing(
         // against: the install makes a new one).
         Place::New(space) => {
             let (Ok(name), Ok(key)) = (
-                crate::projects::normalize_project_name(&space.name),
-                crate::projects::normalize_project_key(&space.key),
+                crate::spaces::manage::normalize_name(&space.name),
+                crate::spaces::manage::normalize_key(&space.key),
             ) else {
                 return Ok(None);
             };

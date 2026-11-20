@@ -697,13 +697,28 @@ async fn windowed(
     workspace: Uuid,
     limit: &Limit,
 ) -> Result<i64, AppError> {
-    if limit.hard.is_some()
-        && let Some((row, _)) = limit.row
-    {
-        sqlx::query("SELECT 1 FROM spend_limits WHERE id = $1 FOR UPDATE")
-            .bind(row)
-            .execute(&mut *connection)
-            .await?;
+    if limit.hard.is_some() {
+        match limit.row {
+            Some((row, _)) => {
+                sqlx::query("SELECT 1 FROM spend_limits WHERE id = $1 FOR UPDATE")
+                    .bind(row)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            // The default rate has no row: its scope's counter for the day
+            // is held instead, which recording the use takes anyway.
+            None => {
+                Box::pin(counted(
+                    connection,
+                    meter,
+                    workspace,
+                    limit.scope,
+                    Period::Day,
+                    true,
+                ))
+                .await?;
+            }
+        }
     }
     let (mut account, mut space, mut conversation) = (None, None, None);
     for scope in std::iter::once(limit.scope).chain(limit.within) {

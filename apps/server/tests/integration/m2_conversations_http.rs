@@ -75,11 +75,15 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     let project_id = uuid_field(&project, "id");
 
     let worker_actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker_actor_id)
-        .execute(&pool)
-        .await
-        .expect("insert Worker Actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) \
+         SELECT $1, 'execution_worker', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(worker_actor_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert Worker Actor");
     sqlx::query(
         r#"
         INSERT INTO project_memberships (
@@ -925,4 +929,214 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .connect(database_url)
         .await
         .expect("connect schema-scoped M2 HTTP pool")
+}
+
+/// K4.11: a private channel is seen by its members only, even by others in
+/// its project: not in the list, the timeline, search or the mention list.
+/// Adding someone gives them access, a thread under it follows it, and
+/// removing an agent withdraws its reply requests there.
+#[tokio::test]
+async fn private_channel() {
+    use super::support::{
+        app::{send, tool},
+        world::WorldBuilder,
+    };
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .agent("mara", "member")
+        .build("private_channel")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let project = world.project("WORK").to_owned();
+    let (ana, ben, mara) = (
+        &world.people["ana"],
+        &world.people["ben"],
+        &world.agents["mara"],
+    );
+    let (status, created) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("private-channel"),
+            json!({"name": "hush", "private": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let channel = created["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let word = format!("hushword{}", Uuid::now_v7().simple());
+    let (status, sent) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some("private-channel-message"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": word}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let message = sent["message"]["id"].as_str().expect("message").to_owned();
+    let (status, thread) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("private-channel-thread"),
+            json!({"originMessageId": message}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    let thread = thread["conversation"]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+
+    let channels = format!("/api/v1/projects/{project}/channels");
+    let sidebar = format!("/api/v1/projects/{project}/conversation-sidebar");
+    let search = format!("/api/v1/search?q={word}");
+    let sees = |browser: &super::support::app::Browser| {
+        let requests = [
+            ("list", browser.request("GET", &channels, None, Value::Null)),
+            (
+                "sidebar",
+                browser.request("GET", &sidebar, None, Value::Null),
+            ),
+            ("search", browser.request("GET", &search, None, Value::Null)),
+        ];
+        let timelines = [&channel, &thread].map(|id| {
+            browser.request(
+                "GET",
+                &format!("/api/v1/conversations/{id}/timeline"),
+                None,
+                Value::Null,
+            )
+        });
+        let app = world.app.clone();
+        let (channel, word) = (channel.clone(), word.clone());
+        async move {
+            let mut seen = Vec::new();
+            for (what, request) in requests {
+                let (_, body) = send(&app, request).await;
+                let body = body.to_string();
+                if body.contains(&channel) || body.contains(&word) {
+                    seen.push(what);
+                }
+            }
+            for (what, request) in ["channel", "thread"].into_iter().zip(timelines) {
+                if send(&app, request).await.0.is_success() {
+                    seen.push(what);
+                }
+            }
+            seen
+        }
+    };
+    assert_eq!(
+        sees(&ana.browser).await,
+        ["list", "sidebar", "search", "channel", "thread"]
+    );
+    assert!(sees(&ben.browser).await.is_empty(), "ben isn't in it");
+    let read = tool(
+        &world.app,
+        &mara.token,
+        &mara.session,
+        "conversation_read",
+        json!({"conversationId": channel}),
+    )
+    .await;
+    assert!(!read.to_string().contains(&word), "{read}");
+
+    // Added, ben sees it all, the thread too.
+    let (status, added) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/members"),
+            None,
+            json!({"actorId": ben.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(
+        sees(&ben.browser).await,
+        ["list", "sidebar", "search", "channel", "thread"]
+    );
+    let events = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {n} notice WHERE event_type = 'conversation.member.added' AND conversation_id = $1",
+        n = crate::support::NOTICES
+    ))
+    .bind(channel.parse::<Uuid>().expect("channel id"))
+    .fetch_one(pool)
+    .await
+    .expect("member events");
+    assert_eq!(events, 1);
+
+    // An agent added reads it; mara then leaves through the tools and reads
+    // nothing more; removing ben takes it all away from him again.
+    let (status, added) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/members"),
+            None,
+            json!({"actorId": mara.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let read = tool(
+        &world.app,
+        &mara.token,
+        &mara.session,
+        "conversation_read",
+        json!({"conversationId": thread}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let left = tool(
+        &world.app,
+        &mara.token,
+        &mara.session,
+        "conversation_members",
+        json!({"conversationId": channel, "remove": [mara.actor.to_string()]}),
+    )
+    .await;
+    assert_eq!(left["outcome"], "ok", "{left}");
+    let read = tool(
+        &world.app,
+        &mara.token,
+        &mara.session,
+        "conversation_read",
+        json!({"conversationId": channel}),
+    )
+    .await;
+    assert!(!read.to_string().contains(&word), "{read}");
+    let (status, removed) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/conversations/{channel}/members/{}/remove",
+                ben.actor
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {removed}");
+    assert!(sees(&ben.browser).await.is_empty(), "ben was removed");
+    world.finish().await;
 }

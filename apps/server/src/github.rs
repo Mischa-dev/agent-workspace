@@ -42,10 +42,7 @@ use crate::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     outbox,
-    policy::{
-        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, Permission, RoleGrant},
     work_item_commands::{self, AuditAttribution, CommandActor, record_audit_for},
 };
 
@@ -167,6 +164,7 @@ pub async fn run_jobs(
 struct ProjectAccess {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -1470,7 +1468,6 @@ pub(crate) struct SyncedInstallation {
 pub(crate) async fn sync_installation_as(
     state: &AppState,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     installation_id: u64,
     repository_ids: &[Uuid],
@@ -1494,7 +1491,6 @@ pub(crate) async fn sync_installation_as(
     let role = require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1553,7 +1549,6 @@ pub(crate) async fn sync_installation_as(
     require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1653,7 +1648,6 @@ async fn sync_installation(
     } = sync_installation_as(
         &state,
         principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         request.installation_id,
         &request.repository_ids,
@@ -5300,7 +5294,8 @@ async fn ensure_github_actor(
     .fetch_optional(&mut **transaction)
     .await?
     {
-        if kind != "integration" {
+        let integration = kind == "integration"; // kind-check: mechanical (the handle belongs to the GitHub integration's own account)
+        if !integration {
             return Err(AppError::Conflict("github_integration", "handle_in_use"));
         }
         sqlx::query("UPDATE actors SET status = 'active', updated_at = now() WHERE id = $1")
@@ -5316,11 +5311,16 @@ async fn ensure_github_actor(
         .await?;
         return Ok(actor_id);
     }
-    let actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(actor_id)
-        .execute(&mut **transaction)
+    let workspace: Uuid = sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&mut **transaction)
         .await?;
+    let actor_id = crate::accounts::create_app(
+        transaction,
+        crate::accounts::Owner::Workspace(workspace),
+        None,
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, enabled) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration', true)",
     )
@@ -6085,7 +6085,6 @@ pub(crate) async fn merge_pull_request_as(
     require_project_access_as(
         &mut transaction,
         actor.actor_id,
-        actor.actor_kind,
         project_id,
         Action::PullRequestMerge,
     )
@@ -6338,14 +6337,7 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
-    require_project_access_as(
-        transaction,
-        principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
+    require_project_access_as(transaction, principal.actor_id, project_id, action).await
 }
 
 /// `require_project_access` for a caller resolved elsewhere, such as a
@@ -6353,13 +6345,13 @@ async fn require_project_access(
 pub(crate) async fn require_project_access_as(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -6378,21 +6370,10 @@ pub(crate) async fn require_project_access_as(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
-    let subject = Subject::new(
-        actor_id,
-        kind,
-        true,
-        Some(Membership::project(project_id, role, true)),
-        None,
+    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(access.group_permissions.as_deref()),
     );
-    if authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+    if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(role)
     } else {
         Err(AppError::Forbidden)

@@ -131,7 +131,8 @@ impl FileRow {
 }
 
 const FILE_COLUMNS: &str = r#"
-    file.id, file.project_id, file.work_item_id, NULL::uuid AS comment_id,
+    file.id, COALESCE(file.project_id, direct_scope_id()) AS project_id,
+    file.work_item_id, NULL::uuid AS comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
     file.preview_text,
@@ -161,7 +162,11 @@ const READABLE: &str = r#"
     file.removed_at IS NULL
     AND file.blob_deleted_at IS NULL
     AND ($5::uuid IS NULL OR file.project_id = $5)
-    AND CASE WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
+    -- A DM's or group's file (no space) by the conversation's rule alone.
+    AND CASE WHEN file.project_id IS NULL
+             THEN file.conversation_id IS NOT NULL
+                  AND ($3::uuid IS NULL OR agent_connection_can_reach_direct($3))
+        WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
         ELSE EXISTS (
             SELECT 1
             FROM project_memberships membership
@@ -193,7 +198,7 @@ const READABLE: &str = r#"
             WHERE task_membership.project_id = file.project_id
               AND task_membership.actor_id = $2
               AND task_membership.enabled
-              AND custom_role_allows(task_membership.role_id, 'tasks.view')
+              AND role_allows(task_membership.role, task_membership.role_id, 'tasks.view')
         )
     END
 "#;
@@ -261,6 +266,11 @@ pub(crate) async fn readable_file(
             .fetch_one(&mut *connection)
             .await?;
     if let Some(conversation) = conversation
+        && direct_beyond_limit(&mut connection, reader.actor_id(), conversation).await?
+    {
+        return Err(AppError::NotFound("file"));
+    }
+    if let Some(conversation) = conversation
         && crate::conversations::task_discussion_hidden(
             &mut connection,
             reader.actor_id(),
@@ -283,11 +293,56 @@ pub(crate) async fn message_files(
         "SELECT {FILE_COLUMNS} FROM files file WHERE file.message_id = $1 AND {READABLE}
          ORDER BY file.position, file.id"
     );
-    Ok(
-        bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(message_id), reader)
-            .fetch_all(crate::db::scoped(pool))
-            .await?,
+    let rows = bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(message_id), reader)
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
+    if rows
+        .iter()
+        .any(|row| row.project_id == crate::spaces::DIRECT)
+    {
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        let conversation = sqlx::query_scalar::<_, Uuid>(
+            "SELECT conversation_id FROM messages \
+             WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+        )
+        .bind(message_id)
+        .bind(reader.actor_id())
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some(conversation) = conversation
+            && direct_beyond_limit(&mut connection, reader.actor_id(), conversation).await?
+        {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(rows)
+}
+
+/// Whether `conversation` is a kept DM or group in a workspace the
+/// credential `actor` calls with doesn't reach (a token made for another
+/// workspace). Channels are checked by their space.
+async fn direct_beyond_limit(
+    connection: &mut sqlx::PgConnection,
+    actor: Uuid,
+    conversation: Uuid,
+) -> Result<bool, AppError> {
+    let Some(allowed) = crate::policy::agent_limit_direct_workspaces(
+        actor,
+        crate::policy::Permission::ProjectsView,
+    ) else {
+        return Ok(false);
+    };
+    let workspace = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT workspace_id FROM conversations
+        WHERE id = $1 AND project_id IS NULL AND conversation_visible_to(id, $2)
+        "#,
     )
+    .bind(conversation)
+    .bind(actor)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(workspace.is_some_and(|workspace| !allowed.contains(&workspace)))
 }
 
 /// A task's files the reader may see (its own and its comments'), oldest
@@ -366,12 +421,15 @@ impl Destination {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThingKind {
     Page,
+    /// A collection record: its file fields hold its files (T1.20).
+    Record,
 }
 
 impl ThingKind {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "page" => Some(Self::Page),
+            "record" => Some(Self::Record),
             _ => None,
         }
     }
@@ -379,6 +437,15 @@ impl ThingKind {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Page => "page",
+            Self::Record => "record",
+        }
+    }
+
+    /// What uploading to one takes: editing it.
+    pub(crate) fn edit_action(self) -> crate::policy::Action {
+        match self {
+            Self::Page => crate::policy::Action::PageEdit,
+            Self::Record => crate::policy::Action::CollectionRecordEdit,
         }
     }
 }
@@ -407,7 +474,6 @@ impl Purpose {
 pub(crate) async fn thing_destination(
     pool: &PgPool,
     editor: Uuid,
-    editor_kind: crate::policy::ActorKind,
     thing: ThingKind,
     thing_id: Uuid,
 ) -> Result<Destination, AppError> {
@@ -417,7 +483,6 @@ pub(crate) async fn thing_destination(
             crate::memory::project_access(
                 pool,
                 editor,
-                editor_kind,
                 project_id,
                 crate::policy::Action::PageEdit,
             )
@@ -438,6 +503,43 @@ pub(crate) async fn thing_destination(
                 thing,
                 thing_id,
                 purpose: Purpose::Inline,
+            })
+        }
+        ThingKind::Record => {
+            let (project_id, archived) = sqlx::query_as::<_, (Uuid, bool)>(
+                "SELECT project_id, archived_at IS NOT NULL FROM collection_records WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(crate::db::scoped(pool))
+            .await?
+            .ok_or(AppError::NotFound("record"))?;
+            crate::memory::project_access(
+                pool,
+                editor,
+                project_id,
+                crate::policy::Action::CollectionRecordEdit,
+            )
+            .await
+            .map_err(|_| AppError::NotFound("record"))?;
+            // A record of a collection that acts like tasks also wants
+            // seeing tasks there.
+            let visible =
+                sqlx::query_scalar::<_, bool>("SELECT subject_visible_to('record', $1, $2)")
+                    .bind(thing_id)
+                    .bind(editor)
+                    .fetch_one(crate::db::scoped(pool))
+                    .await?;
+            if !visible {
+                return Err(AppError::NotFound("record"));
+            }
+            if archived {
+                return Err(AppError::Conflict("record", "archived"));
+            }
+            Ok(Destination::Thing {
+                project_id,
+                thing,
+                thing_id,
+                purpose: Purpose::Attachment,
             })
         }
     }
@@ -488,11 +590,15 @@ pub(crate) async fn organization_of(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-        .bind(project_id)
-        .fetch_optional(executor)
-        .await?
-        .ok_or(AppError::NotFound("project"))
+    // A place: a space's workspace, or the direct scope for a DM's file.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT organization_id FROM projects WHERE id = $1 \
+         UNION ALL SELECT id FROM organizations WHERE id = $1 AND id = direct_scope_id()",
+    )
+    .bind(project_id)
+    .fetch_optional(executor)
+    .await?
+    .ok_or(AppError::NotFound("project"))
 }
 
 /// Stores an upload in `destination` for `uploader` and returns it. The
@@ -984,7 +1090,7 @@ async fn insert_file(
             thumbnail_bytes, attached_at, thing_kind, thing_id, purpose, preview_text,
             store_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+        VALUES ($1, $2, NULLIF($3, direct_scope_id()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
                 CASE WHEN $16 THEN now() END, $17, $18, $19, $20, $21)
         RETURNING {FILE_COLUMNS}
         "#

@@ -24,6 +24,7 @@ import {
 import { AuthLayout } from '../auth/AuthLayout'
 import { Banner, Button, ButtonLink, TextField } from '../ui'
 import '../auth/auth.css'
+import { spaceHref } from '../app/href'
 
 type JoinMode = 'new' | 'existing'
 
@@ -89,8 +90,10 @@ function handleFrom(name: string) {
 
 const HANDLE = /^[a-z0-9][a-z0-9_-]{1,31}$/
 
+const ROLE_TEXT: Record<string, string> = { admin: 'an admin', viewer: 'a viewer' }
+
 function roleText(role: ResolvedInvitation['role']) {
-  return role === 'admin' ? 'an admin' : role === 'viewer' ? 'a viewer' : 'a member'
+  return ROLE_TEXT[role] ?? 'a member'
 }
 
 export function JoinPage() {
@@ -159,7 +162,7 @@ export function JoinPage() {
     try {
       const { projects } = await queryClient.fetchQuery({ queryKey: queryKeys.projects, queryFn: () => listProjects() })
       const matches = projects.filter((project) => project.name === invitation.projectName && !project.archivedAt)
-      return matches.length === 1 ? `/projects/${encodeURIComponent(matches[0].id)}` : '/home'
+      return matches.length === 1 ? spaceHref(matches[0].id) : '/home'
     } catch {
       return '/home'
     }

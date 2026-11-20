@@ -36,6 +36,7 @@ const STATIC_TITLES: [RegExp, string][] = [
   [/^\/home\/?$/, 'Home'],
   [/^\/inbox\/?$/, 'Inbox'],
   [/^\/my-work\/?$/, 'My work'],
+  [/^\/initiatives\/?$/, 'Initiatives'],
   [/^\/later\/?$/, 'Later'],
   [/^\/runs\/?$/, 'Runs'],
   [/^\/runs\/.+$/, 'Run'],
@@ -80,7 +81,8 @@ export function staticPageTitle(address: string) {
   return STATIC_TITLES.find(([pattern]) => pattern.test(pathname))?.[1] ?? ''
 }
 
-export function pageTitleFor(pathname: string, search: string, projects: Pick<Project, 'id' | 'name'>[], pageOverride: string | null) {
+export function pageTitleFor(address: string, search: string, projects: Pick<Project, 'id' | 'name'>[], pageOverride: string | null) {
+  const pathname = legacyPathOf(address)
   const projectMatch = /^\/projects\/([^/]+)(\/.*)?$/.exec(pathname)
   if (projectMatch && projectMatch[1] !== 'new') {
     const id = decodeURIComponent(projectMatch[1])

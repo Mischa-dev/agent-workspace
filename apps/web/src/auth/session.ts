@@ -25,6 +25,8 @@ export type OrganizationSummary = {
   name: string
   slug: string
   role: OrganizationRole
+  /** What the caller may do in this workspace (K1.26); ask with `can`, never the role's name. */
+  permissions: string[]
   /** `suspended` or `deleting` when the workspace refuses changes (H1.24); missing means active. */
   lifecycle?: 'active' | 'importing' | 'suspended' | 'deleting'
 }
@@ -117,7 +119,10 @@ function normalizeOrganization(value: unknown): OrganizationSummary | null {
       ? record.lifecycle
       : undefined
   if (!id || !name || !slug || !role) return null
-  return lifecycle ? { id, name, slug, role, lifecycle } : { id, name, slug, role }
+  const permissions = Array.isArray(record.permissions)
+    ? record.permissions.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  return lifecycle ? { id, name, slug, role, permissions, lifecycle } : { id, name, slug, role, permissions }
 }
 
 function normalizeUser(value: unknown): SessionUser | null {
@@ -187,6 +192,8 @@ export async function logout() {
   // forget them first, so a failed or slow sign-out can't leave them behind.
   clearLocalDrafts()
   setLocalDraftOwner(null)
+  // And the writes waiting for the connection (W1.30), kept in IndexedDB.
+  await import('../data/outbound').then((outbound) => outbound.clearOutbound()).catch(() => undefined)
   await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 

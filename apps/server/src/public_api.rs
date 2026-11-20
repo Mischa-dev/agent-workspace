@@ -48,13 +48,58 @@ pub fn router() -> Router<AppState> {
         .route("/api/public/v1/{tool}", post(call_operation))
 }
 
-async fn openapi_document() -> Response {
-    let mut response = Json(document()).into_response();
-    response.headers_mut().insert(
+/// The document, gzipped for a client that takes it: it is close to a
+/// megabyte as JSON and a tenth of that compressed.
+async fn openapi_document(headers: HeaderMap) -> Response {
+    let gzip = headers
+        .get_all(http::header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|coding| {
+            let mut parts = coding.split(';');
+            let name = parts.next().unwrap_or("").trim();
+            let refused = parts.any(|parameter| {
+                parameter
+                    .trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.trim().parse::<f32>().ok())
+                    == Some(0.0)
+            });
+            name.eq_ignore_ascii_case("gzip") && !refused
+        });
+    let mut response = if gzip {
+        match gzipped(&document()) {
+            Ok(body) => (
+                [
+                    (http::header::CONTENT_TYPE, "application/json"),
+                    (http::header::CONTENT_ENCODING, "gzip"),
+                ],
+                body,
+            )
+                .into_response(),
+            Err(_) => Json(document()).into_response(),
+        }
+    } else {
+        Json(document()).into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(
         http::header::CACHE_CONTROL,
         http::HeaderValue::from_static("public, max-age=300"),
     );
+    headers.insert(
+        http::header::VARY,
+        http::HeaderValue::from_static("accept-encoding"),
+    );
     response
+}
+
+fn gzipped(document: &Value) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&serde_json::to_vec(document).map_err(std::io::Error::other)?)?;
+    encoder.finish()
 }
 
 async fn call_operation(
@@ -226,6 +271,41 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
         "Agent Workspace couldn't finish that. Try again shortly.",
     ),
 ];
+
+/// A schema's descriptions cut to their first sentence: the result's shape
+/// is the reference, and the operation's own description says the rest.
+/// Kept whole, results take most of the document. An argument's first
+/// sentence says what it is; its full text is in the agent tool's schema
+/// (`tools/list`), which is where the longer guidance is read.
+fn brief(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                match child {
+                    Value::String(text) if key == "description" => {
+                        if let Some(end) = first_sentence_end(text) {
+                            text.truncate(end);
+                        }
+                    }
+                    _ => brief(child),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(brief),
+        _ => {}
+    }
+}
+
+/// Where a description's first sentence ends, when more follows it.
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(1)).find_map(|index| {
+        (matches!(bytes[index], b'.' | b'?' | b'!' | b';' | b':')
+            && bytes[index + 1].is_ascii_whitespace()
+            && !text[index + 1..].trim().is_empty())
+        .then_some(index + 1)
+    })
+}
 
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
@@ -568,6 +648,11 @@ fn slim(value: &mut Value) {
             if map.get("additionalProperties") == Some(&Value::Bool(true)) {
                 map.remove("additionalProperties");
             }
+            // A plain integer is read as 64 bits wherever the format is left
+            // out; only narrower ones say so.
+            if map.get("format").and_then(Value::as_str) == Some("int64") {
+                map.remove("format");
+            }
             if map
                 .get("format")
                 .and_then(Value::as_str)
@@ -650,9 +735,17 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
+        // The note on clientRequestId that ends a write's tool description:
+        // the introduction says it once for every operation (said per
+        // operation, it passed the size budget).
+        let description = tool.description.as_deref().unwrap_or_default();
+        let description = description
+            .strip_suffix(crate::ops::mcp::RETRY_NOTE)
+            .unwrap_or(description);
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
         drop_optional_nulls(&mut input);
+        brief(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()
@@ -665,7 +758,10 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let mut hoisted = hoist(&root, schema, &mut components);
+                        let mut briefed = Value::Object(Map::clone(schema.as_ref()));
+                        brief(&mut briefed);
+                        let briefed = briefed.as_object().cloned().unwrap_or_default();
+                        let mut hoisted = hoist(&root, &briefed, &mut components);
                         share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
@@ -677,28 +773,27 @@ pub(crate) fn document() -> Value {
                 (key, reference)
             })
             .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
-        // The result, and a refusal (the same result with its `outcome`),
-        // are one response, shared by every operation with that result, so
-        // the document stays small as tools are added. The introduction says
-        // what each status means.
+        // The result, a refusal (the same result with its `outcome`) and
+        // the shared `Error` body (401, 413 and 429, the same for every
+        // operation) are one response, shared by every operation with that
+        // result, so an operation adds no responses of its own and the
+        // document stays small as operations are added. It is the `default`
+        // (every status, 200 included), written once rather than again
+        // under 200. The introduction says what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "See `outcome`.",
-                "content": { "application/json": { "schema": output } },
+                "description": "The result, a refusal (see `outcome`), or an `Error`.",
+                "content": { "application/json": { "schema": {
+                    "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
+                } } },
             })
         });
-        // Every status shares one answer, the `default` response: the
-        // operation's result, a refusal (its `outcome` says which) or the
-        // edge's own error (401, 413, 429), each a branch of it.
-        let mut responses = Map::new();
-        responses.insert(
-            "default".to_owned(),
-            json!({ "$ref": format!("#/components/responses/{result}") }),
-        );
+        let responses =
+            json!({ "default": { "$ref": format!("#/components/responses/{result}") } });
         let mut post = json!({
             "operationId": name,
             "summary": title,
-            "description": tool.description.as_deref().unwrap_or_default(),
+            "description": description,
             "tags": [tag],
             "requestBody": {
                 "required": true,
@@ -1009,14 +1104,19 @@ mod tests {
         let schemas = document["components"]["schemas"]
             .as_object()
             .expect("schemas");
-        // The reference page fetches it whole, so keep it under a megabyte.
-        // Raised from 768 KiB with AWD-62's question tools; past this, serve
-        // it compressed or slim the result schemas rather than raise it again.
+        // The reference page fetches it whole, gzipped (a tenth of its size
+        // as JSON), so keep that small; the JSON itself has room to grow as
+        // operations are added. Past these, slim the result schemas.
         let size = serde_json::to_vec(&document).expect("serialize").len();
         if std::env::var_os("SHOW_PUBLIC_API_SIZE").is_some() {
             eprintln!("the public API document is {size} bytes");
         }
-        assert!(size < 896 * 1024, "the document is {size} bytes");
+        assert!(size < 1536 * 1024, "the document is {size} bytes");
+        let compressed = super::gzipped(&document).expect("gzip").len();
+        assert!(
+            compressed < 192 * 1024,
+            "the document is {compressed} bytes gzipped"
+        );
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());

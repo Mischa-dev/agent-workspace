@@ -21,7 +21,6 @@ use crate::{
     policy::ActorKind,
 };
 
-const NOT_FOR_AGENTS: &str = "Agents ask a person to launch with run_request; task_launch spends a person's own provider account.";
 const CHOOSE_PROJECT: &str = "Name the project (projectId: an ID, link or key such as \"AWD\").";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -217,9 +216,12 @@ fn launch_value(state: &AppState, project_id: Uuid, view: LaunchView) -> LaunchV
         requested_by: view.requested_by_name,
         run_id: view.run_id.map(|id| id.to_string()),
         run_state: view.run_state,
-        thread_url: view
-            .conversation_id
-            .map(|id| public_url(state, &conversation_path(project_id, "thread", id, false))),
+        thread_url: view.conversation_id.map(|id| {
+            public_url(
+                state,
+                &conversation_path(state, project_id, "thread", id, false),
+            )
+        }),
         created_at: view.created_at.to_rfc3339(),
     }
 }
@@ -255,9 +257,6 @@ pub(super) async fn task_launch(
 ) -> ToolResult<TaskLaunchValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(NOT_FOR_AGENTS);
     }
     if arguments.task_ids.is_empty() || arguments.task_ids.len() > launch::MAX_TASKS_PER_LAUNCH {
         return ToolResult::invalid("taskIds", "Pass 1 to 50 tasks.");
@@ -431,14 +430,7 @@ pub(crate) async fn environment_list(
     if !project_is_chosen(principal) {
         return ToolResult::invalid("projectId", CHOOSE_PROJECT);
     }
-    match crate::environments::list_for(
-        state,
-        principal.actor_id,
-        principal.actor_kind,
-        principal.project_id,
-    )
-    .await
-    {
+    match crate::environments::list_for(state, principal.actor_id, principal.project_id).await {
         Ok(list) => ToolResult::ok(EnvironmentListValue {
             default_environment_id: list.default_environment_id.map(|id| id.to_string()),
             environments: list
@@ -460,7 +452,8 @@ pub(super) async fn session_bind(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::ExternalAgent {
+    let agent_connection = principal.actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (a session runs inside an agent connection)
+    if !agent_connection {
         return ToolResult::denied("Only agents bind their own sessions.");
     }
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
@@ -509,11 +502,13 @@ pub(super) async fn session_bind(
         // connection still reaches the project.
         let Some(project_id) = sqlx::query_scalar::<_, Uuid>(
             r#"
-            SELECT conversation.project_id
+            SELECT COALESCE(conversation.project_id, direct_scope_id())
             FROM conversations conversation
             WHERE conversation.id = $1
               AND conversation_visible_to(conversation.id, $2)
-              AND actor_can_access_project($2, $3, conversation.project_id)
+              AND CASE WHEN conversation.project_id IS NULL
+                       THEN $3::uuid IS NULL OR agent_connection_can_reach_direct($3)
+                       ELSE actor_can_access_project($2, $3, conversation.project_id) END
               AND EXISTS (
                   SELECT 1 FROM reply_requests request
                   WHERE request.agent_actor_id = $2

@@ -82,14 +82,18 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 pub(crate) mod comments;
 mod custom_fields;
+pub mod cycles;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
+pub mod initiatives;
 pub(crate) mod list;
 mod moves;
 pub(crate) mod ops;
 mod planning;
+pub mod project_status;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
+pub mod triage;
 pub(crate) mod views;
 
 pub fn router() -> Router<AppState> {
@@ -307,6 +311,7 @@ struct ProjectMembershipRow {
     project_archived_at: Option<String>,
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -315,6 +320,9 @@ impl ProjectMembershipRow {
     pub(super) fn may(&self, permission: Permission) -> Result<bool, AppError> {
         Ok(self.membership_enabled
             && RoleGrant::stored(&self.role, self.role_permissions.as_deref())?
+                .with_groups(crate::access::group_permissions(
+                    self.group_permissions.as_deref(),
+                ))
                 .permissions()
                 .contains(permission))
     }
@@ -339,6 +347,8 @@ struct WorkItemRow {
     assignee_handle: Option<String>,
     assignee_kind: Option<String>,
     assignee_active: Option<bool>,
+    /// Who it's handed to (T1.22): actorId, displayName, handle, kind.
+    delegate: Option<serde_json::Value>,
     version: i64,
     archived_at: Option<String>,
     created_at: String,
@@ -425,6 +435,12 @@ struct UpdateWorkItemRequest {
     estimate: Option<Option<f64>>,
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     blocked_reason: Option<Option<String>>,
+    /// Who the task is handed to (T1.22); null takes it back.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    delegate_actor_id: Option<Option<Uuid>>,
+    /// The cycle it is planned in (T1.24); null takes it out.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    cycle_id: Option<Option<Uuid>>,
     #[serde(default)]
     add_label_ids: Vec<Uuid>,
     #[serde(default)]
@@ -470,6 +486,9 @@ pub struct WorkItemView {
     status: WorkItemStatusView,
     priority: String,
     assignee: Option<AssigneeView>,
+    /// Who it's handed to to do, beside its assignee (T1.22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delegate: Option<serde_json::Value>,
     version: i64,
     archived_at: Option<String>,
     created_at: String,
@@ -1248,6 +1267,9 @@ async fn update_work_item(
         UpdateWorkItemOutcome::NotFound => return Err(AppError::NotFound("work_item")),
         UpdateWorkItemOutcome::InvalidAssignee => {
             return Err(AppError::Validation("assigneeActorId"));
+        }
+        UpdateWorkItemOutcome::InvalidDelegate => {
+            return Err(AppError::Validation("delegateActorId"));
         }
         UpdateWorkItemOutcome::InvalidMilestone => {
             return Err(AppError::Validation("milestoneId"));
@@ -2219,7 +2241,7 @@ async fn named_assignees(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1
           AND membership.actor_id = ANY($2)
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
         ORDER BY lower(membership.display_name), lower(membership.handle), actor.id
         "#,
     )
@@ -2243,7 +2265,7 @@ async fn assignee_search(
         WHERE membership.project_id = $1
           AND membership.enabled
           AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
+          AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts only: system and worker actors aren't members to list)
           AND (
               $2 = ''
               OR strpos(lower(membership.display_name), $2) > 0
@@ -2432,6 +2454,7 @@ async fn move_work_item(
             }));
         }
         UpdateWorkItemOutcome::InvalidAssignee
+        | UpdateWorkItemOutcome::InvalidDelegate
         | UpdateWorkItemOutcome::TooManyLabels { .. }
         | UpdateWorkItemOutcome::InvalidParent(_)
         | UpdateWorkItemOutcome::InvalidMilestone
@@ -2987,10 +3010,10 @@ async fn create_work_item_comment(
     require_authenticated_write(&state, &headers, &principal).await?;
     MessageContent::from_json(request.content.clone()).map_err(message_content_error)?;
     let key = IdempotencyKey::from_headers(&headers)?;
-    // Commenting takes "edit tasks" on an open task in an active project;
-    // the send pipeline checks the rest (C1.4).
+    // Commenting takes "comment on tasks" on an open task in an active
+    // project (K1.16); the send pipeline checks the rest (C1.4).
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
+    authorize_task_comment(&mut transaction, &principal, project_id, work_item_id).await?;
     transaction.commit().await?;
     let (actor, creator) = comments::browser_poster(&principal, &headers)?;
     let posted = comments::post(
@@ -3190,7 +3213,7 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
         title: row.title,
         status_category: row.status_category,
         archived_at: row.archived_at,
-        href: format!("/projects/{project_id}/work-items/{}", row.id),
+        href: crate::addresses::Target::task(project_id, row.id).legacy_path(),
     }
 }
 
@@ -3364,6 +3387,7 @@ async fn project_membership(
                project.archived_at::text AS project_archived_at,
                membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions(membership.actor_id, project.id) AS group_permissions,
                membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
@@ -3392,6 +3416,7 @@ async fn lock_project_membership(
             project_archived_at: membership.project_archived_at,
             role: membership.role,
             role_permissions: membership.role_permissions,
+            group_permissions: membership.group_permissions,
             membership_enabled: membership.enabled,
         }))
 }
@@ -3416,6 +3441,7 @@ fn authorize_work_item(
         project_archived_at: membership.project_archived_at.clone(),
         role: membership.role.clone(),
         role_permissions: membership.role_permissions.clone(),
+        group_permissions: membership.group_permissions.clone(),
         enabled: membership.membership_enabled,
     };
     match authorize_mutation(&command_actor, &command_membership, action, work_item_id)? {
@@ -3492,15 +3518,45 @@ pub(crate) async fn authorize_task_change(
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<(), AppError> {
+    authorize_open_task(
+        transaction,
+        principal,
+        project_id,
+        work_item_id,
+        Action::WorkItemEdit,
+    )
+    .await
+}
+
+/// `authorize_task_change` for commenting: "comment on tasks", not "edit
+/// tasks" (K1.16).
+pub(crate) async fn authorize_task_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    authorize_open_task(
+        transaction,
+        principal,
+        project_id,
+        work_item_id,
+        Action::WorkItemComment,
+    )
+    .await
+}
+
+async fn authorize_open_task(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    action: Action,
+) -> Result<(), AppError> {
     let membership = lock_project_membership(transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
+    authorize_work_item(principal, &membership, action, Some(work_item_id))?;
     if membership.project_archived_at.is_some() {
         return Err(AppError::ProjectArchived);
     }
@@ -3762,6 +3818,13 @@ const WORK_ITEM_SELECT: &str = concat!(
         CASE WHEN assignee.actor_id IS NULL THEN NULL
              ELSE assignee.enabled AND assignee_actor.status = 'active'
         END AS assignee_active,
+        (SELECT jsonb_build_object(
+                    'actorId', delegate.actor_id, 'displayName', delegate.display_name,
+                    'handle', delegate.handle, 'kind', delegate_actor.kind)
+           FROM project_memberships delegate
+           JOIN actors delegate_actor ON delegate_actor.id = delegate.actor_id
+          WHERE delegate.project_id = item.project_id
+            AND delegate.actor_id = item.delegate_actor_id) AS delegate,
         item.version, item.archived_at::text AS archived_at,
         item.created_at::text AS created_at,
         item.updated_at::text AS updated_at,
@@ -3947,7 +4010,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocked_by,
         COALESCE((
             SELECT jsonb_agg("#,
@@ -3969,7 +4032,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocks,
         COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -3993,7 +4056,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS relations,
         COALESCE((
             SELECT jsonb_agg("#,
@@ -4151,6 +4214,7 @@ fn work_item_view(
         },
         priority: row.priority,
         assignee,
+        delegate: row.delegate,
         version: row.version,
         archived_at: row.archived_at,
         created_at: row.created_at,
@@ -4261,6 +4325,8 @@ fn planning_field_changes(request: &UpdateWorkItemRequest) -> Result<TaskFieldCh
             .as_ref()
             .map(|value| value.as_deref().map(normalize_blocked_reason).transpose())
             .transpose()?,
+        delegate_actor_id: request.delegate_actor_id,
+        cycle_id: request.cycle_id,
     })
 }
 
@@ -4343,18 +4409,7 @@ fn validate_priority(value: &str) -> Result<(), AppError> {
 }
 
 fn validate_semantic_category(value: Option<&str>) -> Result<(), AppError> {
-    if value.is_none_or(|value| {
-        matches!(
-            value,
-            "backlog"
-                | "unstarted"
-                | "started"
-                | "review"
-                | "verification"
-                | "completed"
-                | "canceled"
-        )
-    }) {
+    if value.is_none_or(|value| crate::fields::STATUS_CATEGORIES.contains(&value)) {
         Ok(())
     } else {
         Err(AppError::Validation("semanticCategory"))
@@ -4411,10 +4466,9 @@ fn message_content_error(_error: MessageContentError) -> AppError {
 }
 
 fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {
-    let location = HeaderValue::from_str(&format!(
-        "/projects/{}/work-items/{}",
-        item.project_id, item.id
-    ))
+    let location = HeaderValue::from_str(
+        &crate::addresses::Target::task(item.project_id, item.id).legacy_path(),
+    )
     .map_err(|_| AppError::Internal("construct Work Item Location header"))?;
     Ok((status, [(LOCATION, location)], Json(item)).into_response())
 }

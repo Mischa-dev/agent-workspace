@@ -32,10 +32,7 @@ use crate::{
     ai::gateway::{self, AiError, Scope, Tier},
     error::AppError,
     jobs::{JobContext, JobError, JobRegistry, NewJob},
-    runs::{
-        credentials,
-        ops::{self, Reporter, UsageInput},
-    },
+    runs::ops::{self, Reporter, UsageInput},
 };
 
 /// How the built-in host's own names for its assistants start: each is
@@ -201,16 +198,16 @@ pub async fn model_turn(
     run_id: Uuid,
     turn: ModelTurn,
 ) -> Result<ModelReply, ModelRefusal> {
-    let holder = credentials::resolve(&state.pool, token)
+    let holder = crate::access::tokens::resolve(&state.pool, token)
         .await?
-        .filter(|holder| holder.run_id == run_id)
+        .filter(|holder| holder.run_id == Some(run_id))
         .ok_or(ModelRefusal::Unauthorized)?;
     let (workspace_id, space_id) = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let found = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
             r#"
             SELECT run.workspace_id, run.space_id
-            FROM run_credentials credential
+            FROM access_tokens credential
             JOIN runs run ON run.id = credential.run_id
             JOIN hosts host ON host.id = credential.host_id AND host.builtin
             JOIN host_agents binding
@@ -220,7 +217,7 @@ pub async fn model_turn(
             WHERE credential.id = $1
             "#,
         )
-        .bind(holder.credential_id)
+        .bind(holder.token_id)
         .bind(AGENT_REF_PREFIX)
         .fetch_optional(&mut *connection)
         .await?;

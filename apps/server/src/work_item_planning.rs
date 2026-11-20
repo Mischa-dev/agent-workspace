@@ -143,7 +143,7 @@ pub async fn task_links(
     let visible = "((item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id)) \
          AND EXISTS (SELECT 1 FROM project_memberships sees_task \
              WHERE sees_task.project_id = item.project_id AND sees_task.actor_id = $4 \
-               AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')))";
+               AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')))";
     let blocked_by = sqlx::query_as::<_, TaskRef>(&format!(
         r#"SELECT {TASK_REF_COLUMNS}
         FROM task_dependencies dependency
@@ -242,7 +242,7 @@ pub async fn task_links(
     let shown = |task: &TaskRef| {
         sees_here
             && (task.project_id == project_id
-                || !crate::policy::agent_limit_hides(
+                || !crate::access::limit_hides(
                     reader.actor_id,
                     task.project_id,
                     crate::policy::Permission::TasksView,
@@ -1154,6 +1154,17 @@ pub struct MilestoneView {
     /// Past its target date with tasks still open.
     pub overdue: bool,
     pub version: i64,
+    /// The initiative it is part of (T1.26), and that initiative's name.
+    pub initiative_id: Option<Uuid>,
+    pub initiative: Option<String>,
+    /// Its place in the space's manual order, 1 being first (T1.42).
+    pub position: i32,
+    /// Estimates of its tasks added up, leaving out canceled ones, and of
+    /// its completed ones.
+    pub estimate_total: f64,
+    pub estimate_done: f64,
+    /// The latest due date among its tasks that aren't canceled.
+    pub latest_due_date: Option<NaiveDate>,
 }
 
 pub const MILESTONE_SELECT: &str = r#"
@@ -1170,7 +1181,15 @@ pub const MILESTONE_SELECT: &str = r#"
            COALESCE(milestone.target_date < current_date
                AND count(item.id) FILTER (WHERE status.semantic_category NOT IN ('completed', 'canceled')) > 0,
                false) AS overdue,
-           milestone.version
+           milestone.version, milestone.initiative_id,
+           (SELECT initiative.title FROM collection_records initiative
+            WHERE initiative.id = milestone.initiative_id) AS initiative,
+           milestone.position,
+           COALESCE(sum(item.estimate) FILTER (WHERE status.semantic_category <> 'canceled'), 0)::float8
+               AS estimate_total,
+           COALESCE(sum(item.estimate) FILTER (WHERE status.semantic_category = 'completed'), 0)::float8
+               AS estimate_done,
+           max(item.due_date) FILTER (WHERE status.semantic_category <> 'canceled') AS latest_due_date
     FROM project_milestones milestone
     LEFT JOIN task_rows item
       ON item.project_id = milestone.project_id AND item.milestone_id = milestone.id
@@ -1192,8 +1211,7 @@ pub async fn list_milestones(
         r#"{MILESTONE_SELECT}
         WHERE milestone.project_id = $1 AND ($2 OR milestone.archived_at IS NULL)
         GROUP BY milestone.id
-        ORDER BY milestone.archived_at IS NOT NULL, milestone.target_date NULLS LAST,
-                 lower(milestone.name), milestone.id
+        ORDER BY milestone.archived_at IS NOT NULL, milestone.position, milestone.id
         LIMIT $3"#
     ))
     .bind(project_id)
@@ -1224,13 +1242,20 @@ pub struct MilestoneChange {
     pub description: Option<String>,
     pub target_date: Option<Option<NaiveDate>>,
     pub archived: Option<bool>,
+    /// The initiative record it is part of (T1.26); `Some(None)` takes it
+    /// out.
+    pub initiative: Option<Option<Uuid>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MilestoneRefusal {
     NotFound,
-    VersionConflict { current_version: i64 },
+    VersionConflict {
+        current_version: i64,
+    },
     NameTaken,
+    /// Not an active initiative of the milestone's workspace.
+    InitiativeNotFound,
 }
 
 pub fn normalize_milestone_name(value: &str) -> Option<String> {
@@ -1279,8 +1304,9 @@ pub async fn create_milestone(
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO project_milestones (id, project_id, name, description, target_date, created_by_actor_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO project_milestones (id, project_id, name, description, target_date, created_by_actor_id, position)
+        VALUES ($1, $2, $3, $4, $5, $6,
+                (SELECT COALESCE(max(position), 0) + 1 FROM project_milestones WHERE project_id = $2))
         "#,
     )
     .bind(id)
@@ -1327,6 +1353,24 @@ pub async fn update_milestone(
             current_version: version,
         }));
     }
+    if let Some(Some(initiative)) = change.initiative {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM collection_records record \
+             JOIN collections collection ON collection.id = record.collection_id \
+             JOIN projects home ON home.id = collection.project_id \
+             JOIN projects here ON here.id = $2 \
+             WHERE record.id = $1 AND collection.role = 'initiatives' \
+               AND record.archived_at IS NULL \
+               AND home.organization_id = here.organization_id)",
+        )
+        .bind(initiative)
+        .bind(actor.project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if !found {
+            return Ok(Err(MilestoneRefusal::InitiativeNotFound));
+        }
+    }
     let updated = sqlx::query(
         r#"
         UPDATE project_milestones
@@ -1336,6 +1380,7 @@ pub async fn update_milestone(
             archived_at = CASE WHEN $7::boolean IS NULL THEN archived_at
                                WHEN $7 THEN COALESCE(archived_at, now())
                                ELSE NULL END,
+            initiative_id = CASE WHEN $8 THEN $9 ELSE initiative_id END,
             version = version + 1, updated_at = now()
         WHERE id = $1 AND project_id = $2
         "#,
@@ -1347,6 +1392,8 @@ pub async fn update_milestone(
     .bind(change.target_date.is_some())
     .bind(change.target_date.flatten())
     .bind(change.archived)
+    .bind(change.initiative.is_some())
+    .bind(change.initiative.flatten())
     .execute(&mut **transaction)
     .await;
     if let Err(error) = updated {
@@ -1369,7 +1416,72 @@ pub async fn update_milestone(
             "renamed": change.name.is_some(),
             "targetDate": change.target_date.is_some(),
             "archived": change.archived,
+            "initiative": change.initiative.is_some(),
         }),
+    )
+    .await?;
+    Ok(Ok(()))
+}
+
+/// Moves a milestone to `position` (1 being first) in its space's order;
+/// the others keep theirs around it. Its version moves on. NotFound when
+/// it isn't the space's.
+pub async fn reorder_milestone(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    milestone_id: Uuid,
+    expected_version: Option<i64>,
+    position: i32,
+) -> Result<Result<(), MilestoneRefusal>, AppError> {
+    let order = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT id, version FROM project_milestones WHERE project_id = $1 \
+         ORDER BY archived_at IS NOT NULL, position, id FOR UPDATE",
+    )
+    .bind(actor.project_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let Some(at) = order.iter().position(|(id, _)| *id == milestone_id) else {
+        return Ok(Err(MilestoneRefusal::NotFound));
+    };
+    let version = order[at].1;
+    if expected_version.is_some_and(|expected| expected != version) {
+        return Ok(Err(MilestoneRefusal::VersionConflict {
+            current_version: version,
+        }));
+    }
+    let mut ids: Vec<Uuid> = order.into_iter().map(|(id, _)| id).collect();
+    ids.remove(at);
+    let place = usize::try_from(position.max(1) - 1)
+        .unwrap_or(0)
+        .min(ids.len());
+    ids.insert(place, milestone_id);
+    let positions: Vec<i32> = (1..=ids.len() as i32).collect();
+    sqlx::query(
+        "UPDATE project_milestones milestone SET position = ordered.position \
+         FROM unnest($2::uuid[], $3::int[]) AS ordered(id, position) \
+         WHERE milestone.project_id = $1 AND milestone.id = ordered.id \
+           AND milestone.position IS DISTINCT FROM ordered.position",
+    )
+    .bind(actor.project_id)
+    .bind(&ids)
+    .bind(&positions)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE project_milestones SET version = version + 1, updated_at = now() \
+         WHERE id = $1 AND project_id = $2",
+    )
+    .bind(milestone_id)
+    .bind(actor.project_id)
+    .execute(&mut **transaction)
+    .await?;
+    crate::work_item_commands::record_audit_for(
+        transaction,
+        actor,
+        "milestone",
+        "milestone.updated",
+        milestone_id,
+        serde_json::json!({ "position": place + 1 }),
     )
     .await?;
     Ok(Ok(()))

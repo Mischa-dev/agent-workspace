@@ -184,7 +184,7 @@ async fn sees_code(
         SELECT EXISTS (
             SELECT 1 FROM project_memberships
             WHERE actor_id = $1 AND project_id = $2 AND enabled
-              AND custom_role_allows(role_id, $3)
+              AND role_allows(role, role_id, $3)
         )
         "#,
     )
@@ -193,7 +193,7 @@ async fn sees_code(
     .bind(Permission::CodeView.info().key)
     .fetch_one(&mut *connection)
     .await?;
-    Ok(allowed && !crate::policy::agent_limit_hides(actor_id, project_id, Permission::CodeView))
+    Ok(allowed && !crate::access::limit_hides(actor_id, project_id, Permission::CodeView))
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ async fn load_context(
         SELECT membership.actor_id, membership.display_name, membership.handle
         FROM project_memberships membership
         WHERE membership.project_id = $1 AND membership.enabled
-          AND membership.role <> 'viewer'
+          AND role_allows(membership.role, membership.role_id, 'tasks.edit')
         "#,
     )
     .bind(project_id)
@@ -377,11 +377,17 @@ fn resolve(
             .push(format!("No status “{wanted}”; it starts in the default"));
     }
     if resolved.status_name.is_none() {
-        resolved.status_name = context
+        // A row that says nothing about its status lands in triage when
+        // the space uses it (T1.23), otherwise in the default.
+        let landing = context
             .statuses
             .iter()
-            .find(|status| status.3)
-            .map(|status| status.1.clone());
+            .find(|status| status.2 == "triage")
+            .or_else(|| context.statuses.iter().find(|status| status.3));
+        resolved.status_id = landing
+            .filter(|status| status.2 == "triage")
+            .map(|status| status.0);
+        resolved.status_name = landing.map(|status| status.1.clone());
     }
 
     if let Some(wanted) = &row.type_name {
@@ -786,7 +792,11 @@ async fn import_view(
         None
     };
     Ok(ImportView {
-        href: format!("/projects/{}/work-items?sort=updated", record.project_id),
+        href: crate::addresses::with_query(
+            crate::addresses::Target::space(record.project_id, crate::addresses::Place::Tasks)
+                .legacy_path(),
+            "sort=updated",
+        ),
         options: record.options(),
         mapping: record.mapping(),
         id: record.id,
@@ -1524,7 +1534,7 @@ async fn acting_actor(
 /// Whether `actor` is a person's app or script in this call: the MCP layer
 /// (and so the public API) sets the app's agent limit for the call.
 fn through_app(actor: &CommandActor) -> bool {
-    actor.actor_kind == ActorKind::Human
+    actor.actor_kind == ActorKind::Human // kind-check: mechanical (a person's app signs in as that person)
         && crate::policy::current_agent_limit(
             actor.actor_id,
             MembershipScope::Project(actor.project_id),
@@ -1542,7 +1552,7 @@ async fn app_limits(
         return Ok(None);
     }
     let human = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND kind = 'human')",
+        "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND kind = 'human')", // kind-check: mechanical (apps act for the person who connected them)
     )
     .bind(record.created_by_actor_id)
     .fetch_one(&mut **transaction)

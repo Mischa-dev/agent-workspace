@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { Banner, Button, Dialog, SegmentedControl, Switch, TextField, describeError } from '../ui'
+import { Banner, Button, Checkbox, Dialog, SegmentedControl, SelectField, Switch, TextField, describeError } from '../ui'
+import { useWorkItemWorkflow } from '../work-items/hooks'
 import { collectionKeys, createCollection, updateCollection, type CollectionBody, type CollectionSummary, type ViewType } from './api'
 
 /**
@@ -25,6 +26,11 @@ export function CollectionDetailsDialog({
   const [description, setDescription] = useState(collection?.description ?? '')
   const [titleName, setTitleName] = useState(collection?.titleName ?? 'Name')
   const [taskLike, setTaskLike] = useState(collection?.actsLikeTask === true)
+  // Its own workflow, for a collection whose records already act like tasks.
+  const ownWorkflow = Boolean(collection && !collection.builtin && collection.actsLikeTask)
+  const workflow = useWorkItemWorkflow(ownWorkflow ? projectId : '')
+  const [statuses, setStatuses] = useState<string[]>(collection?.taskStatuses ?? [])
+  const [startStatus, setStartStatus] = useState(collection?.startStatusId ?? '')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const submit = async () => {
@@ -34,9 +40,16 @@ export function CollectionDetailsDialog({
     const details = { name: name.trim(), description: description.trim(), titleName: titleName.trim() || 'Name' }
     try {
       const switched = taskLike !== (collection?.actsLikeTask === true) ? { actsLikeTask: taskLike } : {}
+      const workflowChanged =
+        ownWorkflow && taskLike && (statuses.join() !== (collection?.taskStatuses ?? []).join() || startStatus !== (collection?.startStatusId ?? ''))
+      if (workflowChanged && startStatus && statuses.length > 0 && !statuses.includes(startStatus)) {
+        setBusy(false)
+        return setProblem('New tasks start in one of the statuses it uses.')
+      }
+      const ownStatuses = workflowChanged ? { workflow: { statuses, startStatusId: startStatus || null } } : {}
       let body: CollectionBody
       if (collection) {
-        body = await updateCollection(projectId, collection.id, { expectedVersion: collection.version, ...details, ...switched })
+        body = await updateCollection(projectId, collection.id, { expectedVersion: collection.version, ...details, ...switched, ...ownStatuses })
       } else {
         body = await createCollection(projectId, { ...details, idempotencyKey: crypto.randomUUID() })
         if (taskLike) body = await updateCollection(projectId, body.collection.id, { expectedVersion: body.collection.version, actsLikeTask: true })
@@ -94,14 +107,43 @@ export function CollectionDetailsDialog({
           checked={taskLike}
           description={
             collection?.actsLikeTask && collection.records > 0
-              ? 'Its records are tasks now, with their own history, so this stays on.'
+              ? 'Turned off, its tasks are put away with their keys and history, and come back as they were when it is turned on again. Not while one is claimed or has a run.'
               : 'Each record gets a status, assignee, priority, dates and labels, a key like the project’s tasks, and a task page. Records already here become tasks.'
           }
-          disabled={collection?.actsLikeTask === true && collection.records > 0}
           label="Records act like tasks"
           onChange={setTaskLike}
         />
       )}
+      {ownWorkflow && taskLike && workflow.data ? (
+        <fieldset className="aw-collection-workflow">
+          <legend>Statuses its tasks use</legend>
+          <p className="aw-collection-workflow__hint">From the space’s workflow. Leave all unticked to use every one.</p>
+          {workflow.data.statuses.map((status) => (
+            <Checkbox
+              checked={statuses.includes(status.id)}
+              key={status.id}
+              label={status.name}
+              onChange={(checked) =>
+                setStatuses((current) =>
+                  checked
+                    ? workflow.data.statuses.map((entry) => entry.id).filter((id) => id === status.id || current.includes(id))
+                    : current.filter((id) => id !== status.id),
+                )
+              }
+            />
+          ))}
+          <SelectField label="New tasks start in" onChange={(event) => setStartStatus(event.target.value)} value={startStatus}>
+            <option value="">The space’s default</option>
+            {workflow.data.statuses
+              .filter((status) => statuses.length === 0 || statuses.includes(status.id))
+              .map((status) => (
+                <option key={status.id} value={status.id}>
+                  {status.name}
+                </option>
+              ))}
+          </SelectField>
+        </fieldset>
+      ) : null}
     </Dialog>
   )
 }

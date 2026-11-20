@@ -130,16 +130,52 @@ fn scheduled_line(state: &AppState, message: ScheduledMessageView) -> ScheduledL
     }
 }
 
+/// Whether a person's app made this call (its limit then applies).
+fn through_app(principal: &McpPrincipal) -> bool {
+    principal.actor_kind == ActorKind::Human // kind-check: mechanical (an app acts as the person who connected it)
+}
+
 /// The projects this call reads in: the one it's confined to, or (for an
 /// agent) the ones its connection reaches; a person's app reads everywhere.
 async fn within(state: &AppState, principal: &McpPrincipal) -> Result<Option<Vec<Uuid>>, AppError> {
     if let Some(project_id) = confined_project(principal) {
         return Ok(Some(vec![project_id]));
     }
-    if principal.actor_kind == ActorKind::Human {
-        return Ok(None);
+    let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (how the call signed in: a person's app or an agent's connection)
+    let within = if person {
+        None
+    } else {
+        Some(accessible_project_ids(state, principal).await?)
+    };
+    // K1.24: a credential held to some workspaces (a token's, an app's
+    // limit) reaches the account's items in those alone, and its personal
+    // DMs (the direct scope).
+    let Some(workspaces) = crate::policy::agent_limit_direct_workspaces(
+        principal.actor_id,
+        crate::policy::Permission::ProjectsView,
+    ) else {
+        return Ok(within);
+    };
+    let reached = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects \
+         WHERE (organization_id = ANY($1) OR id = ANY($1)) \
+           AND ($2::uuid[] IS NULL OR id = ANY($2))",
+    )
+    .bind(&workspaces)
+    .bind(&within)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    // The direct scope isn't a project row: keep it when the limit and the
+    // connection reach it. Which kept DMs it covers is decided per item.
+    let mut reached = reached;
+    if workspaces.contains(&crate::spaces::DIRECT)
+        && within
+            .as_ref()
+            .is_none_or(|within| within.contains(&crate::spaces::DIRECT))
+    {
+        reached.push(crate::spaces::DIRECT);
     }
-    accessible_project_ids(state, principal).await.map(Some)
+    Ok(Some(reached))
 }
 
 /// AWD-75: of `within` (or, when it's everywhere, every project the caller
@@ -156,9 +192,11 @@ async fn inbox_within(
         None => {
             sqlx::query_scalar::<_, Uuid>(
                 r#"
-                SELECT project_id FROM saved_items WHERE actor_id = $1
+                SELECT COALESCE(project_id, direct_scope_id()) FROM saved_items
+                WHERE actor_id = $1
                 UNION
-                SELECT project_id FROM scheduled_messages WHERE author_actor_id = $1
+                SELECT COALESCE(project_id, direct_scope_id()) FROM scheduled_messages
+                WHERE author_actor_id = $1
                 "#,
             )
             .bind(actor_id)
@@ -332,7 +370,7 @@ pub(super) async fn later_save(
         }
         let saver = Saver {
             actor_id: principal.actor_id,
-            human,
+            workspace_wide: human,
             organization_id: None,
             project_id: Some(principal.project_id),
             within: if human {
@@ -537,6 +575,7 @@ pub(super) async fn message_schedule(
     let content = match message_content(
         state,
         principal,
+        Some(conversation_id),
         arguments.text.as_deref(),
         arguments.content.clone(),
         "message_schedule",
@@ -572,7 +611,7 @@ pub(super) async fn message_schedule(
             conversation_id,
             content,
             &arguments.send_at,
-            principal.actor_kind == ActorKind::Human,
+            through_app(principal),
         )
         .await?;
         complete_create(&mut transaction, reservation.as_ref(), id).await?;
@@ -686,7 +725,15 @@ pub(super) async fn scheduled_message_update(
                         "Send between 1 and 20,000 characters.",
                     ));
                 }
-                Some(super::common::content_from_text(state, existing.project_id, text).await?)
+                Some(
+                    super::common::content_from_text(
+                        state,
+                        existing.project_id,
+                        Some(existing.conversation_id),
+                        text,
+                    )
+                    .await?,
+                )
             }
         };
         let mut updated = existing;
@@ -697,7 +744,7 @@ pub(super) async fn scheduled_message_update(
                 id,
                 content,
                 arguments.send_at.as_deref(),
-                principal.actor_kind == ActorKind::Human,
+                through_app(principal),
             )
             .await
             {

@@ -11,8 +11,9 @@
 //! (`compute`). Errors at run time are values (`{"error": "Divide by zero"}`):
 //! they show in the cell and filter as empty.
 //!
-//! Recalculation across records (rollups) and nightly recalculation of
-//! formulas that read the time (`volatile`) are T1.18's.
+//! Rollups (T1.18, `super::rollup`) are worked out here too
+//! ([`rollup`]), from the related records' values, and kept beside the
+//! formulas' results, where formulas read them.
 
 pub mod limits;
 
@@ -38,7 +39,10 @@ use self::{
     value::{Ty, V},
 };
 pub use self::{functions::NAMES as FUNCTIONS, parse::FieldRef, value::ResultType};
-use super::{FieldDefinition, FieldType};
+use super::{
+    FieldDefinition, FieldType,
+    rollup::{Aggregate, MAX_ROLLUP_RECORDS, RollupConfig},
+};
 
 /// A formula field's settings, in `FieldConfig::formula`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,9 +84,13 @@ fn field_ty(field: &FieldDefinition) -> Result<Ty, String> {
         FieldType::Number | FieldType::AutoId => Ty::Number,
         FieldType::Date | FieldType::CreatedTime | FieldType::EditedTime => Ty::Date,
         FieldType::Checkbox => Ty::Boolean,
-        FieldType::MultipleChoice | FieldType::People | FieldType::Labels => Ty::List,
-        FieldType::Formula => match &field.config.formula {
-            Some(formula) => formula.result.ty(),
+        FieldType::MultipleChoice
+        | FieldType::People
+        | FieldType::Labels
+        | FieldType::Relation
+        | FieldType::File => Ty::List,
+        FieldType::Formula | FieldType::Rollup => match field.result() {
+            Some(result) => result.ty(),
             None => Ty::Any,
         },
         FieldType::Button => {
@@ -206,7 +214,7 @@ pub fn compile(source: &str, scope: &Scope<'_>) -> Result<FormulaConfig, String>
 }
 
 /// The formula fields a stored formula reads.
-fn formula_reads(config: &FormulaConfig) -> Vec<Uuid> {
+pub(crate) fn formula_reads(config: &FormulaConfig) -> Vec<Uuid> {
     parse::parse(&config.source, &stored_reference)
         .map(|expr| {
             expr.references()
@@ -282,11 +290,11 @@ pub fn shown(config: &FormulaConfig, fields: &[FieldDefinition], title_name: &st
     })
 }
 
-/// Whether any active field is a formula.
-pub fn has_formulas(definitions: &[FieldDefinition]) -> bool {
+/// Whether any active field is worked out: a formula or a rollup.
+pub fn has_computed(definitions: &[FieldDefinition]) -> bool {
     definitions
         .iter()
-        .any(|field| field.field_type == FieldType::Formula && !field.archived)
+        .any(|field| field.is_computed() && !field.archived)
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +312,9 @@ pub struct RecordData<'a> {
     pub updated_by: Uuid,
     /// What the people, tasks, pages and records it names are called.
     pub labels: &'a HashMap<Uuid, String>,
+    /// Its worked-out values known so far, keyed by field ID: a related
+    /// record's stored ones, or the rollups of the record being worked out.
+    pub computed: &'a Value,
 }
 
 struct Reader<'a> {
@@ -323,7 +334,15 @@ impl Reader<'_> {
     fn read(&self, field: &FieldDefinition) -> V {
         let record = self.record;
         match field.field_type {
-            FieldType::Formula => return self.computed.get(&field.id).cloned().unwrap_or(V::Blank),
+            FieldType::Formula | FieldType::Rollup => {
+                if let Some(value) = self.computed.get(&field.id) {
+                    return value.clone();
+                }
+                return match (record.computed.get(field.id.to_string()), field.result()) {
+                    (Some(stored), Some(result)) => from_stored(stored, result),
+                    _ => V::Blank,
+                };
+            }
             FieldType::CreatedTime => return V::Time(record.created_at),
             FieldType::EditedTime => return V::Time(record.updated_at),
             FieldType::AutoId => return V::Num(record.number as f64),
@@ -365,6 +384,18 @@ impl Reader<'_> {
             FieldType::Person | FieldType::Link => {
                 stored.as_str().map_or(V::Blank, |id| self.label(id))
             }
+            FieldType::Relation | FieldType::File => V::List(
+                stored
+                    .as_array()
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(Value::as_str)
+                            .map(|id| self.label(id))
+                            .filter(|label| !label.is_blank())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
             _ => match stored {
                 Value::String(text) => V::Text(text.clone()),
                 Value::Number(number) => number.as_f64().map_or(V::Blank, V::Num),
@@ -392,6 +423,129 @@ impl Fields for Reader<'_> {
                 .map_or(V::Blank, |field| self.read(field)),
         }
     }
+}
+
+/// A kept result as a formula reads it.
+fn from_stored(stored: &Value, result: ResultType) -> V {
+    if let Some(message) = stored.get("error").and_then(Value::as_str) {
+        return V::Err(message.to_owned());
+    }
+    match (result, stored) {
+        (ResultType::Number, Value::Number(number)) => number.as_f64().map_or(V::Blank, V::Num),
+        (ResultType::Boolean, Value::Bool(value)) => V::Bool(*value),
+        (ResultType::Date, Value::String(text)) => {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d").map_or(V::Blank, V::Date)
+        }
+        (ResultType::List, Value::Array(items)) => V::List(
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|text| V::Text(text.to_owned())))
+                .collect(),
+        ),
+        (_, Value::String(text)) => V::Text(text.clone()),
+        _ => V::Blank,
+    }
+}
+
+/// A rollup's value over `related` (the active records its relation names,
+/// each read with `related_fields`), as `computed_values` keeps it.
+pub fn rollup(
+    config: &RollupConfig,
+    related_fields: &[FieldDefinition],
+    related: &[RecordData<'_>],
+) -> Option<Value> {
+    if related.len() > MAX_ROLLUP_RECORDS {
+        return Some(serde_json::json!({ "error": "Too many records to roll up." }));
+    }
+    let target = config
+        .target
+        .and_then(|id| related_fields.iter().find(|field| field.id == id));
+    if config.target.is_some() && target.is_none() {
+        return Some(serde_json::json!({ "error": "The field it rolls up is gone." }));
+    }
+    let values = related
+        .iter()
+        .map(|record| {
+            target.map_or(V::Blank, |field| {
+                Reader {
+                    definitions: related_fields,
+                    record,
+                    computed: HashMap::new(),
+                }
+                .read(field)
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(error) = values.iter().find(|value| value.is_err()) {
+        return stored(error.clone(), config.result);
+    }
+    let filled = |value: &V| !value.is_blank() && *value != V::Bool(false);
+    let total = related.len() as f64;
+    let share = |count: usize| {
+        if related.is_empty() {
+            V::Blank
+        } else {
+            V::Num((count as f64 / total * 1000.0).round() / 10.0)
+        }
+    };
+    let numbers = || {
+        values.iter().filter_map(|value| match value {
+            V::Num(number) => Some(*number),
+            _ => None,
+        })
+    };
+    let dates = || {
+        values.iter().filter_map(|value| match value {
+            V::Date(date) => Some(*date),
+            V::Time(time) => Some(time.date_naive()),
+            _ => None,
+        })
+    };
+    let value = match config.aggregate {
+        Aggregate::Count => V::Num(total),
+        Aggregate::CountValues => {
+            V::Num(values.iter().filter(|value| filled(value)).count() as f64)
+        }
+        Aggregate::CountUnique => {
+            let mut seen = HashSet::new();
+            for value in values.iter().filter(|value| filled(value)) {
+                for item in value.items() {
+                    if let Ok(text) = item.to_text() {
+                        seen.insert(text.to_lowercase());
+                    }
+                }
+            }
+            V::Num(seen.len() as f64)
+        }
+        Aggregate::Sum => V::Num(numbers().sum()),
+        Aggregate::Average => {
+            let all = numbers().collect::<Vec<_>>();
+            if all.is_empty() {
+                V::Blank
+            } else {
+                V::Num(all.iter().sum::<f64>() / all.len() as f64)
+            }
+        }
+        Aggregate::Min => numbers().reduce(f64::min).map_or(V::Blank, V::Num),
+        Aggregate::Max => numbers().reduce(f64::max).map_or(V::Blank, V::Num),
+        Aggregate::Earliest => dates().min().map_or(V::Blank, V::Date),
+        Aggregate::Latest => dates().max().map_or(V::Blank, V::Date),
+        Aggregate::PercentChecked => share(
+            values
+                .iter()
+                .filter(|value| **value == V::Bool(true))
+                .count(),
+        ),
+        Aggregate::PercentEmpty => share(values.iter().filter(|value| !filled(value)).count()),
+        Aggregate::List => V::List(
+            values
+                .iter()
+                .flat_map(|value| value.items())
+                .filter(|item| !item.is_blank())
+                .collect(),
+        ),
+    };
+    stored(value, config.result)
 }
 
 /// A result as `computed_values` keeps it: None for no value (blank,
@@ -486,6 +640,15 @@ pub fn compute(
         computed: HashMap::new(),
     };
     let mut out = Map::new();
+    // The record's rollups, worked out by the caller, kept as they are.
+    for field in definitions
+        .iter()
+        .filter(|field| field.field_type == FieldType::Rollup && !field.archived)
+    {
+        if let Some(value) = record.computed.get(field.id.to_string()) {
+            out.insert(field.id.to_string(), value.clone());
+        }
+    }
     // Kahn's order over the formulas reading each other; whatever is left in
     // a loop (only possible if fields changed under a saved formula) is an error.
     let ids = formulas
@@ -541,7 +704,10 @@ pub fn compute(
     let computed = Value::Object(out);
     if serde_json::to_vec(&computed).map_or(0, |bytes| bytes.len()) > MAX_COMPUTED_BYTES {
         let mut cut = Map::new();
-        for (field, _) in &formulas {
+        for field in definitions
+            .iter()
+            .filter(|field| field.is_computed() && !field.archived)
+        {
             cut.insert(
                 field.id.to_string(),
                 serde_json::json!({ "error": "This record's formula results are too large." }),

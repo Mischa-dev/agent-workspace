@@ -209,12 +209,18 @@ export function DesignSystemPage() {
           </Button>
           <Button
             onClick={() =>
-              showToast({ tone: 'agent', title: 'Run finished', description: 'The agent opened a pull request.', action: { label: 'Open PR', onSelect: () => undefined } })
+              showToast({
+                tone: 'success',
+                title: 'AWD-12 Draft the release notes finished',
+                description: 'Muse',
+                action: { label: 'Open', onSelect: () => undefined },
+                link: { label: 'Pull request #7', href: '#toasts' },
+              })
             }
           >
             Background result
           </Button>
-          <Button onClick={() => showToast({ tone: 'danger', title: 'Couldn’t save the task.', description: 'Someone changed it first. Your edit is still here.' })}>
+          <Button onClick={() => showToast({ tone: 'danger', title: 'The task wasn’t saved', description: 'Someone changed it first. Your edit is still here.' })}>
             Error
           </Button>
         </div>

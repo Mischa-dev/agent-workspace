@@ -65,28 +65,30 @@ async fn accounts_have_one_kind_and_agents_one_owner() {
         "an agent belongs to its workspace"
     );
 
-    // Old code inserting `kind` only.
-    let worker = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker)
+    // An agent or app has its owner from the start (K1.31).
+    let ownerless = sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
+        .bind(Uuid::now_v7())
         .execute(pool)
-        .await
-        .expect("old-style insert");
+        .await;
+    assert!(ownerless.is_err(), "an agent never exists without an owner");
+
+    // An agent owned by a person; a loop is refused; a person has no owner.
+    let lena = world.people["lena"].actor;
+    let worker = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_account_id) VALUES ($1, 'execution_worker', $2)",
+    )
+    .bind(worker)
+    .bind(lena)
+    .execute(pool)
+    .await
+    .expect("a person may own an agent");
     let kind = sqlx::query_scalar::<_, String>("SELECT account_kind FROM actors WHERE id = $1")
         .bind(worker)
         .fetch_one(pool)
         .await
         .expect("kind");
     assert_eq!(kind, "agent");
-
-    // An agent owned by a person; a loop is refused; a person has no owner.
-    let lena = world.people["lena"].actor;
-    sqlx::query("UPDATE actors SET owner_account_id = $2 WHERE id = $1")
-        .bind(worker)
-        .bind(lena)
-        .execute(pool)
-        .await
-        .expect("a person may own an agent");
     let second = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO actors (id, kind, owner_account_id) VALUES ($1, 'external_agent', $2)",
@@ -689,4 +691,125 @@ async fn assert_secret_unstored(pool: &sqlx::PgPool, secret: &str) {
         .unwrap_or_else(|error| panic!("{table}: {error}"));
         assert_eq!(found, 0, "{table} holds a one-time secret");
     }
+}
+
+/// No permission depends on the kind of account (rule 2): an agent whose
+/// role lets it create projects makes one, and owns it under its own name.
+#[tokio::test]
+async fn an_agent_that_may_create_projects_makes_one() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("ivy", "member")
+        .build("k4_agent_makes_space")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let ivy = &world.agents["ivy"];
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ivy.actor)
+    .execute(pool)
+    .await
+    .expect("ivy runs the workspace");
+    let made = tool(
+        &world.app,
+        &ivy.token,
+        &ivy.session,
+        "space_create",
+        json!({"key": "IVY", "name": "Ivy space", "clientRequestId": "ivy-space"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT membership.actor_id FROM project_memberships membership \
+         JOIN projects project ON project.id = membership.project_id \
+         WHERE project.project_key = 'IVY' AND membership.role = 'owner'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("owner");
+    assert_eq!(owner, ivy.actor);
+    world.finish().await;
+}
+
+/// K1.28: an account has one name in a workspace. Renaming it on any of
+/// its seats renames it in every space of the workspace, and nothing
+/// reverts the write.
+#[tokio::test]
+async fn renaming_an_agent_once_renames_it_in_every_space() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("PLAY")
+        .agent("rook", "member")
+        .build("k128_one_name")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let rook = world.agents["rook"].actor;
+    let work = world.project("WORK").parse::<Uuid>().expect("work");
+    let play = world.project("PLAY").parse::<Uuid>().expect("play");
+    // Rook takes a seat in PLAY too.
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'member', 'Someone else', 'someone-else') \
+         ON CONFLICT (project_id, actor_id) DO NOTHING",
+    )
+    .bind(Uuid::now_v7())
+    .bind(play)
+    .bind(rook)
+    .execute(pool)
+    .await
+    .expect("rook joins play");
+    let names = || async {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT DISTINCT membership.display_name, membership.handle \
+             FROM project_memberships membership \
+             JOIN projects space ON space.id = membership.project_id \
+             WHERE membership.actor_id = $1 AND space.organization_id = $2",
+        )
+        .bind(rook)
+        .bind(world.organization)
+        .fetch_all(pool)
+        .await
+        .expect("names")
+    };
+    let before = names().await;
+    assert_eq!(before.len(), 1, "one name in every seat: {before:?}");
+    assert_ne!(
+        before[0].1, "someone-else",
+        "a new seat takes the account's name"
+    );
+
+    // A rename on one seat (as a host's profile notice writes it).
+    sqlx::query(
+        "UPDATE project_memberships SET display_name = 'Rook the Second', handle = 'rook-two' \
+         WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(rook)
+    .execute(pool)
+    .await
+    .expect("rename");
+    assert_eq!(
+        names().await,
+        vec![("Rook the Second".to_owned(), "rook-two".to_owned())],
+        "renamed everywhere, not reverted"
+    );
+    let profile = sqlx::query_scalar::<_, String>(
+        "SELECT display_name FROM organization_actor_profiles \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(rook)
+    .fetch_one(pool)
+    .await
+    .expect("profile");
+    assert_eq!(profile, "Rook the Second");
+    world.finish().await;
 }

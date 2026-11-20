@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -278,7 +279,10 @@ pub(crate) async fn task_fields(
     );
     fields.insert(
         "task.url",
-        format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        format!(
+            "{origin}{}",
+            crate::addresses::link(state, None, &Target::task(project_id, task.id))
+        ),
     );
     fields.insert(
         "task.priority",
@@ -294,7 +298,10 @@ pub(crate) async fn task_fields(
         "task.pages",
         pages
             .iter()
-            .map(|(id, title)| format!("- {title}: {origin}/projects/{project_id}/pages/{id}"))
+            .map(|(id, title)| {
+                let page = crate::addresses::link(state, None, &Target::page(project_id, *id));
+                format!("- {title}: {origin}{page}")
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     );
@@ -314,7 +321,13 @@ pub(crate) async fn task_fields(
     .await?;
     fields.insert(
         "project.skills",
-        skills_field(&skills, &format!("{origin}/projects/{project_id}/pages")),
+        skills_field(
+            &skills,
+            &format!(
+                "{origin}{}",
+                crate::addresses::link(state, None, &Target::space(project_id, Place::Pages))
+            ),
+        ),
     );
     Ok(fields)
 }
@@ -565,11 +578,47 @@ impl LaunchCaller {
         })
     }
 
+    /// The caller as task changes a launch makes name them (`launch`, for
+    /// a queued launch acting later).
+    fn command_actor(
+        &self,
+        project_id: Uuid,
+        launch: Uuid,
+    ) -> crate::work_item_commands::CommandActor {
+        use crate::work_item_commands::AuditAttribution;
+        let audit = match (self.session_id, self.mcp) {
+            (Some(session_id), false) => AuditAttribution::Browser {
+                session_id,
+                request_id: self.request_id.clone(),
+            },
+            (_, true) => AuditAttribution::Mcp {
+                authentication_class: "mcp_bearer",
+                request_id: self
+                    .request_id
+                    .clone()
+                    .unwrap_or_else(|| launch.to_string()),
+                client_name: "launch".to_owned(),
+                mcp_credential_id: None,
+                oauth_grant_id: self.via_grant_id,
+                external_agent_connection_id: None,
+            },
+            (None, false) => AuditAttribution::Job {
+                job_id: launch,
+                source: "launch",
+            },
+        };
+        crate::work_item_commands::CommandActor {
+            actor_id: self.actor_id,
+            actor_kind: self.actor_kind,
+            project_id,
+            audit,
+        }
+    }
+
     /// Who starts a launch's thread, for `threads::create`.
     fn thread_creator(&self) -> crate::conversations::threads::ThreadCreator {
         crate::conversations::threads::ThreadCreator::plain(
             self.actor_id,
-            self.actor_kind,
             self.session_id,
             self.authentication_class(),
             self.request_id.clone(),
@@ -880,7 +929,6 @@ async fn can_manage(state: &AppState, caller: &LaunchCaller, project_id: Uuid) -
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::SettingsManage,
     )
@@ -1192,7 +1240,6 @@ async fn plan_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1202,8 +1249,7 @@ async fn plan_for(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
-    let list =
-        environments::list_for(state, caller.actor_id, caller.actor_kind, project_id).await?;
+    let list = environments::list_for(state, caller.actor_id, project_id).await?;
     let environment_id = query
         .environment_id
         .filter(|id| {
@@ -1423,7 +1469,6 @@ pub(crate) async fn launch_tasks(
     let organization_id = environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkerInvoke,
     )
@@ -1435,7 +1480,6 @@ pub(crate) async fn launch_tasks(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1621,6 +1665,7 @@ pub(crate) async fn launch_tasks(
         .await?;
     let immediate =
         request.work_item_ids.len() == 1 && request.start_when == StartWhen::Now && !request.queue;
+    let person_caller = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
     let mut launch_ids = Vec::new();
     for work_item_id in &request.work_item_ids {
         let task = load_task(&mut *transaction, project_id, *work_item_id).await?;
@@ -1675,7 +1720,7 @@ pub(crate) async fn launch_tasks(
         // within the app's limit: it starts only within that limit when the
         // queue drains.
         .bind(
-            caller.actor_kind == ActorKind::Human
+            person_caller
                 && (caller.mcp
                     || crate::policy::current_agent_limit(
                         caller.actor_id,
@@ -1686,6 +1731,17 @@ pub(crate) async fn launch_tasks(
         .bind(request.agent_account_id)
         .execute(&mut *transaction)
         .await?;
+        // T1.22: the agent a launch names becomes the task's delegate,
+        // unless someone already holds that.
+        if let Some(agent) = request.agent_account_id {
+            crate::work_item_commands::delegate_unless_set(
+                &mut transaction,
+                &caller.command_actor(project_id, id),
+                task.id,
+                agent,
+            )
+            .await?;
+        }
         audit(
             &mut *transaction,
             caller,
@@ -1802,7 +1858,6 @@ async fn task_thread(
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ThreadCreate,
     )
@@ -2301,13 +2356,7 @@ async fn hand_off(
     if !settings.is_empty() {
         text.push_str(&format!("\n\nSettings: {}", settings.join(" ")));
     }
-    let actor_kind = match caller.actor_kind {
-        ActorKind::Human => "human",
-        ActorKind::ExternalAgent => "external_agent",
-        ActorKind::ExecutionWorker => "execution_worker",
-        ActorKind::Integration => "integration",
-        ActorKind::System => "system",
-    };
+    let actor_kind = crate::accounts::actor_kind_key(caller.actor_kind);
     let outcome = crate::conversations::append_message_command(
         state,
         crate::conversations::MessageCommandActor {
@@ -2486,21 +2535,20 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         // directly, in a batch or through an app-made automation) must still
         // be within that app's agent limit as it is now. Source mcp covers
         // rows queued before the flag was set on every insert.
-        let limits =
-            if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
-                let mut connection = crate::db::scoped_tx(&state.pool).await?;
-                Some(
-                    crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
-                        .await?
-                        .limits,
-                )
-            } else {
-                None
-            };
+        let person = kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+        let limits = if (queued.source == "mcp" || queued.made_through_app) && person {
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
+            Some(
+                crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
+                    .await?
+                    .limits,
+            )
+        } else {
+            None
+        };
         let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
-            kind,
             queued.project_id,
             Action::WorkerInvoke,
         );
@@ -2526,7 +2574,6 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             let view = memory::project_access(
                 &state.pool,
                 queued.requested_by_actor_id,
-                kind,
                 queued.project_id,
                 Action::WorkItemView,
             );
@@ -2743,7 +2790,6 @@ pub(crate) async fn list_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2807,7 +2853,6 @@ pub(crate) async fn cancel(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2877,6 +2922,10 @@ pub(crate) struct TagPayload {
     /// limit the launch keeps (checked in the job and again at drain).
     #[serde(default)]
     pub made_through_app: bool,
+    /// Where a run for a DM or group (in no space, K4.17) is launched: the
+    /// space its decisions are kept in (`memory::direct_home_space`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<Uuid>,
 }
 
 /// A person tagged an agent backed by a harness, or any agent a host runs
@@ -2891,6 +2940,22 @@ pub(crate) async fn queue_tag_launches(
     mentioned_actor_ids: &[Uuid],
     hosts_only: bool,
 ) -> Result<(), AppError> {
+    let author =
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(message_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    // A DM or group is in no space (K4.17): its run is launched in the
+    // space the author's decisions from it are kept in.
+    let direct = project_id == crate::spaces::DIRECT;
+    let project_id = if direct {
+        match crate::memory::direct_home_space(transaction, author, conversation_id).await? {
+            Some(space) => space,
+            None => return Ok(()),
+        }
+    } else {
+        project_id
+    };
     // An agent a host runs (A1.25: the built-in host's assistant too), or,
     // unless `hosts_only` (a DM or group), a built-in worker.
     let workers = sqlx::query_scalar::<_, Uuid>(
@@ -2905,7 +2970,7 @@ pub(crate) async fn queue_tag_launches(
           AND actor.status = 'active'
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
-          AND ((NOT $4 AND actor.kind = 'execution_worker' AND worker.id IS NOT NULL)
+          AND ((NOT $4 AND actor.kind = 'execution_worker' AND worker.id IS NOT NULL) -- // kind-check: mechanical (a profile agent runs on its worker)
                OR EXISTS (
                    SELECT 1 FROM host_agents binding
                    JOIN hosts host ON host.id = binding.host_id
@@ -2929,12 +2994,7 @@ pub(crate) async fn queue_tag_launches(
     // This runs inside the call that sent the message: an author's app whose
     // agent limit leaves out "start runs" doesn't launch one by tagging, as
     // the launch job later runs without that limit.
-    let author =
-        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
-            .bind(message_id)
-            .fetch_one(&mut **transaction)
-            .await?;
-    if crate::policy::agent_limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
+    if crate::access::limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
         return Ok(());
     }
     // An app acting for the author is in this call when its limit is set.
@@ -2956,6 +3016,7 @@ pub(crate) async fn queue_tag_launches(
                 message_id,
                 worker_actor_id: *worker_actor_id,
                 made_through_app,
+                space_id: direct.then_some(project_id),
             })
             .unique(format!("launch.tag:{message_id}"))
             .max_attempts(3),
@@ -2979,29 +3040,37 @@ struct TagMessage {
 async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), AppError> {
     let Some(message) = sqlx::query_as::<_, TagMessage>(
         r#"
-        SELECT message.project_id, project.organization_id, message.conversation_id,
+        SELECT project.id AS project_id, project.organization_id, message.conversation_id,
                conversation.kind AS conversation_kind, message.author_actor_id,
                actor.kind AS author_kind, message.plain_text,
                message.removed_at IS NOT NULL AS removed
         FROM messages message
         JOIN conversations conversation ON conversation.id = message.conversation_id
-        JOIN projects project ON project.id = message.project_id
+        -- A DM or group's run is in the space the tag chose for it.
+        JOIN projects project ON project.id = COALESCE(message.project_id, $2)
         JOIN actors actor ON actor.id = message.author_actor_id
         WHERE message.id = $1
         "#,
     )
     .bind(payload.message_id)
+    .bind(payload.space_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
         return Ok(());
     };
-    if message.removed || message.author_kind != "human" {
+    // A run's own messages never start runs; anyone else's tag does when
+    // their role lets them start runs here.
+    let Some(author_kind) = actor_kind(&message.author_kind) else {
+        return Ok(());
+    };
+    let from_a_run = author_kind == ActorKind::ExecutionWorker; // kind-check: mechanical (a run's own output doesn't start runs)
+    if message.removed || from_a_run {
         return Ok(());
     }
     let caller = LaunchCaller {
         actor_id: message.author_actor_id,
-        actor_kind: ActorKind::Human,
+        actor_kind: author_kind,
         via_grant_id: None,
         mcp: false,
         session_id: None,
@@ -3028,7 +3097,6 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     let access = memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         message.project_id,
         Action::WorkerInvoke,
     );

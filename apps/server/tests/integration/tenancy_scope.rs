@@ -35,14 +35,16 @@ async fn workspace(pool: &PgPool) -> Uuid {
     id
 }
 
-async fn account(pool: &PgPool, kind: &str) -> Uuid {
+async fn agent_of(pool: &PgPool, owner: Uuid) -> Uuid {
     let id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, $2)")
-        .bind(id)
-        .bind(kind)
-        .execute(pool)
-        .await
-        .expect("account");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) VALUES ($1, 'external_agent', $2)",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("account");
     id
 }
 
@@ -86,7 +88,7 @@ async fn each_scope_reaches_the_database_and_ends_with_its_transaction() {
     let b = workspace(&pool).await;
     let left = workspace(&pool).await;
     // An agent in two workspaces, and one it was removed from.
-    let agent = account(&pool, "external_agent").await;
+    let agent = agent_of(&pool, a).await;
     join(&pool, a, agent, true).await;
     join(&pool, b, agent, true).await;
     join(&pool, left, agent, false).await;

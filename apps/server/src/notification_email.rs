@@ -132,10 +132,20 @@ fn footer(origin: &str) -> String {
     )
 }
 
-async fn organization_of(state: &AppState, project_id: Uuid) -> Result<Uuid, AppError> {
+/// The workspace a notification's mail is sent from: its space's, or for a
+/// DM or group (the direct scope) the recipient's default workspace, as
+/// `notifications` chose when it queued the mail.
+async fn organization_of(state: &AppState, place: Uuid, recipient: Uuid) -> Result<Uuid, AppError> {
+    if crate::spaces::kind::holds_messages(place) {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        return crate::workspace::default_workspace(&mut *connection, recipient)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+            .ok_or(AppError::NotFound("organization"));
+    }
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
+            .bind(place)
             .fetch_one(crate::db::scoped(&state.pool))
             .await?,
     )
@@ -157,7 +167,7 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     if notification.read {
         return Ok(());
     }
-    let organization_id = organization_of(state, notification.project_id).await?;
+    let organization_id = organization_of(state, notification.project_id, job.recipient).await?;
     {
         let mut connection = crate::db::scoped_tx(&state.pool)
             .await
@@ -296,11 +306,17 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
         return Ok(());
     }
     let since = candidate.last_sent_at.unwrap_or(now - period);
+    // DMs and groups (no space) go in the digest of the recipient's default
+    // workspace, where their mail is sent from.
+    let home = crate::workspace::default_workspace(&mut *connection, candidate.actor_id)
+        .await?
+        .map(|(organization_id, _)| organization_id);
     let ids = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT n.id FROM notifications n
-        JOIN projects project ON project.id = n.project_id
-        WHERE n.recipient_actor_id = $1 AND project.organization_id = $2
+        LEFT JOIN projects project ON project.id = n.project_id
+        WHERE n.recipient_actor_id = $1
+          AND (project.organization_id = $2 OR (n.project_id IS NULL AND $4))
           AND n.read_at IS NULL AND n.surfaced_at > $3
         ORDER BY n.surfaced_at DESC
         LIMIT 200
@@ -309,6 +325,7 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     .bind(candidate.actor_id)
     .bind(candidate.organization_id)
     .bind(since)
+    .bind(home == Some(candidate.organization_id))
     .fetch_all(&mut *connection)
     .await?;
     let mut items = Vec::new();
@@ -376,8 +393,9 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     }
     if total > DIGEST_ITEMS {
         text.push_str(&format!(
-            "\n…and {} more in your inbox: {origin}/inbox\n",
-            total - DIGEST_ITEMS
+            "\n…and {} more in your inbox: {origin}{}\n",
+            total - DIGEST_ITEMS,
+            crate::addresses::Target::Inbox.legacy_path()
         ));
     }
     text.push_str(&footer(&origin));

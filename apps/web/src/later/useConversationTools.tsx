@@ -23,6 +23,7 @@ import {
 import { commandsFor, type SlashCommand, type SlashOutcome } from './slashCommands'
 import { atPhrase, parseReminder, parseSchedule, whenPhrase } from './when'
 import '../styles/conversation.css'
+import { here, spaceHref } from '../app/href'
 
 const LEVELS: { level: NotificationLevel; label: string }[] = [
   { level: 'all', label: 'Every new message' },
@@ -142,7 +143,7 @@ export function useConversationTools({
         } else if (latestMessageId) {
           await saveForLater({ messageId: latestMessageId })
         } else {
-          navigate('/later')
+          navigate(here('/later'))
           return { kind: 'done' }
         }
         invalidateLater(queryClient)
@@ -177,7 +178,7 @@ export function useConversationTools({
       case 'tag':
         return { kind: 'replace', text: '@' }
       case 'launch':
-        navigate(`/projects/${encodeURIComponent(projectId)}/launches`)
+        navigate(spaceHref(projectId, `/launches`))
         return { kind: 'done' }
     }
     throw new Error(`/${command.name} isn’t available here.`)
@@ -211,7 +212,7 @@ export function useConversationTools({
       {waiting.length === 1
         ? `You have a message scheduled to send here ${whenPhrase(waiting[0].sendAt)}.`
         : `You have ${countLabel(waiting.length, 'message')} scheduled here.`}{' '}
-      <Link to="/later?view=scheduled">See scheduled</Link>
+      <Link to={here('/later?view=scheduled')}>See scheduled</Link>
     </Banner>
   ) : null
 

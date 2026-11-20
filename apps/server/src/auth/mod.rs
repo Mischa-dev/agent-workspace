@@ -1,3 +1,4 @@
+pub mod identity;
 pub mod oidc;
 pub mod password;
 pub mod workos;
@@ -28,7 +29,7 @@ use crate::{
     AppState,
     config::{AppConfig, Environment},
     error::{ApiJson, AppError},
-    policy::{Action, Membership, Resource, RoleGrant, Subject, authorize},
+    policy::RoleGrant,
 };
 
 const SESSION_COOKIE_DEV: &str = "agent_workspace_session";
@@ -135,6 +136,10 @@ struct OrganizationSummary {
     role_name: Option<String>,
     #[serde(skip)]
     role_permissions: Option<Vec<String>>,
+    /// What they may do in the workspace (K1.26): the web asks this, never
+    /// the role's name.
+    #[sqlx(skip)]
+    permissions: Vec<&'static str>,
     /// `active`, `importing`, `suspended` or `deleting` (H1.24): the web
     /// says why a workspace that isn't active refuses changes.
     lifecycle: String,
@@ -263,7 +268,7 @@ async fn login(
         WHERE lower(u.login_name) = $1
           AND u.status = 'active'
           AND a.status = 'active'
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a password signs in a person)
         "#,
         )
         .bind(&login_name)
@@ -585,7 +590,7 @@ pub async fn load_authenticated_actor(
           AND s.authentication_epoch = u.authentication_epoch
           AND u.status = 'active'
           AND a.status = 'active'
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a browser session signs in a person)
         "#,
         )
         .bind(token_hash.to_vec())
@@ -596,7 +601,10 @@ pub async fn load_authenticated_actor(
     let Some(row) = row else {
         return Ok(None);
     };
-    if !workos::session_valid(state, row.session_id).await? {
+    // Only a configured identity provider is asked (K1.30).
+    if let Some(provider) = identity::configured(state)
+        && !identity::IdentityProvider::session_valid(&provider, state, row.session_id).await?
+    {
         return Ok(None);
     }
     crate::db::scoped_one(&state.pool, async |connection| {
@@ -636,7 +644,7 @@ async fn session_response(
             organizations: Vec::new(),
         });
     };
-    let organizations = crate::db::scoped_one(&state.pool, async |connection| {
+    let mut organizations = crate::db::scoped_one(&state.pool, async |connection| {
         sqlx::query_as::<_, OrganizationSummary>(
             r#"
         SELECT o.id, o.name, o.slug, om.role, custom.name AS role_name,
@@ -654,29 +662,18 @@ async fn session_response(
         .await
     })
     .await?;
-    let actor_kind = crate::accounts::actor_kind(&principal.actor_kind)?;
     let mut create_project = false;
-    for organization in &organizations {
-        let role = RoleGrant::stored(&organization.role, organization.role_permissions.as_deref())?;
-        let subject = Subject::new(
+    for organization in &mut organizations {
+        let grant =
+            RoleGrant::stored(&organization.role, organization.role_permissions.as_deref())?;
+        organization.permissions = grant.permissions().keys();
+        create_project |= crate::access::workspace_membership_allows(
             principal.actor_id,
-            actor_kind,
+            organization.id,
+            grant,
             true,
-            Some(Membership::organization(organization.id, role, true)),
-            None,
+            crate::policy::Permission::ProjectsCreate,
         );
-        if authorize(
-            &subject,
-            Action::OrganizationProjectCreate,
-            Resource::Organization {
-                organization_id: organization.id,
-            },
-        )
-        .is_allowed()
-        {
-            create_project = true;
-            break;
-        }
     }
     let default_organization_id =
         crate::workspace::default_workspace(&state.pool, principal.actor_id)

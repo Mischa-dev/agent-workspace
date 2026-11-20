@@ -64,6 +64,9 @@ pub trait Targeted {
 pub struct Located {
     pub workspace_id: Uuid,
     pub space_id: Option<Uuid>,
+    /// The DM or group the target lives in, which is in no space (K4.17):
+    /// access is decided by the conversation (`access::Target::Conversation`).
+    pub direct: Option<Uuid>,
 }
 
 /// Kinds `locate` finds, with the query that returns `(workspace, space)`
@@ -75,33 +78,30 @@ const KINDS: &[(&str, &str)] = &[
     ),
     (
         "conversation",
-        "SELECT project.organization_id, project.id FROM conversations conversation \
-         JOIN projects project ON project.id = conversation.project_id \
+        "SELECT conversation.workspace_id, conversation.project_id FROM conversations conversation \
          WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (conversation.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = conversation.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     (
         "message",
-        "SELECT project.organization_id, project.id FROM messages message \
-         JOIN projects project ON project.id = message.project_id \
+        "SELECT message.workspace_id, message.project_id FROM messages message \
          WHERE message.id = $1 AND message.removed_at IS NULL \
            AND conversation_visible_to(message.conversation_id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (message.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = message.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     // K2.7: a message found after it was removed too (its history, a
     // removal retried); still only in a conversation the caller may see.
     (
         "message_record",
-        "SELECT project.organization_id, project.id FROM messages message \
-         JOIN projects project ON project.id = message.project_id \
+        "SELECT message.workspace_id, message.project_id FROM messages message \
          WHERE message.id = $1 AND conversation_visible_to(message.conversation_id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (message.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = message.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     // K2.21: a long call's task is found only by its caller.
     (
@@ -128,6 +128,12 @@ const KINDS: &[(&str, &str)] = &[
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
     (
+        "milestone",
+        "SELECT project.organization_id, project.id FROM project_milestones milestone \
+         JOIN projects project ON project.id = milestone.project_id \
+         WHERE milestone.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "collection",
         "SELECT project.organization_id, project.id FROM collections collection \
          JOIN projects project ON project.id = collection.project_id \
@@ -147,6 +153,18 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT dashboard.workspace_id, dashboard.space_id FROM dashboards dashboard \
          WHERE dashboard.id = $1 \
            AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+    ),
+    // Outside data (T1.34): a connection, and a saved query. Who sees which
+    // is the operation's to say (data.connect, or a shared query).
+    (
+        "data_connection",
+        "SELECT connection.workspace_id, connection.space_id FROM data_connections connection \
+         WHERE connection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "data_query",
+        "SELECT query.workspace_id, query.space_id FROM data_queries query \
+         WHERE query.id = $1 AND $2::uuid IS NOT NULL",
     ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
@@ -186,6 +204,24 @@ const KINDS: &[(&str, &str)] = &[
            AND (upload.conversation_id IS NULL \
                 OR conversation_visible_to(upload.conversation_id, $2))",
     ),
+    // K4.7: a space its member may bring back, archived or not. Archived
+    // spaces are closed to everything else, so only the workspace comes
+    // back; `space_restore` checks the space as it was.
+    (
+        "member_space",
+        "SELECT space.organization_id, NULL::uuid FROM projects space \
+         WHERE space.id = $1 AND EXISTS ( \
+             SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = space.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K4.8: a space the caller may read, to join it: only its workspace
+    // comes back, since they aren't in it yet.
+    (
+        "readable_space",
+        "SELECT space.organization_id, NULL::uuid FROM projects space \
+         WHERE space.id = $1 AND space_readable_by(space.id, $2)",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
     // C1.3: things with a discussion, by the same rule their comments follow.
@@ -223,6 +259,21 @@ const KINDS: &[(&str, &str)] = &[
            AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
     ),
     (
+        "record_template",
+        "SELECT template.workspace_id, template.space_id FROM record_templates template \
+         WHERE template.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "recurring_record",
+        "SELECT recurring.workspace_id, recurring.space_id FROM recurring_records recurring \
+         WHERE recurring.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "form",
+        "SELECT form.workspace_id, form.space_id FROM forms form \
+         WHERE form.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "record",
         "SELECT project.organization_id, project.id FROM collection_records record \
          JOIN projects project ON project.id = record.project_id \
@@ -247,23 +298,29 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
     // K2.9: a reply request, for the agent it asks (claim, reply, pass,
-    // release); another agent's is not found.
+    // release); another agent's is not found. One in a DM or group has no
+    // space (K4.15) and is located at its conversation.
     (
         "reply_request",
-        "SELECT project.organization_id, project.id FROM reply_requests request \
-         JOIN projects project ON project.id = request.project_id \
-         WHERE request.id = $1 AND request.agent_actor_id = $2",
+        "SELECT COALESCE(project.organization_id, conversation.workspace_id), request.project_id \
+         FROM reply_requests request \
+         JOIN conversations conversation ON conversation.id = request.conversation_id \
+         LEFT JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND request.agent_actor_id = $2 \
+           AND conversation_visible_to(request.conversation_id, $2)",
     ),
     // K2.9: a reply request for anyone who sees its conversation (stop it,
     // ask again).
     (
         "reply_request_seen",
-        "SELECT project.organization_id, project.id FROM reply_requests request \
-         JOIN projects project ON project.id = request.project_id \
+        "SELECT COALESCE(project.organization_id, conversation.workspace_id), request.project_id \
+         FROM reply_requests request \
+         JOIN conversations conversation ON conversation.id = request.conversation_id \
+         LEFT JOIN projects project ON project.id = request.project_id \
          WHERE request.id = $1 AND conversation_visible_to(request.conversation_id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
+           AND (request.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
              WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+               AND membership.enabled))",
     ),
     // K2.18: a repository, archived ones too, in its space; the command
     // checks who may see or manage it.
@@ -281,10 +338,17 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = pull.project_id \
          WHERE pull.id = $1 AND pull_request_visible_to(pull.id, $2)",
     ),
-    // A2.12: a file, in its space; who may read it is `files::readable_file`.
+    // A2.12: a file, in its space, or in the DM or group it was sent in
+    // (K4.15), which is found as the conversation is; who may read it is
+    // `files::readable_file`.
     (
         "file",
-        "SELECT organization_id, project_id FROM files WHERE id = $1 AND $2::uuid IS NOT NULL",
+        "SELECT COALESCE(conversation.workspace_id, file.organization_id), file.project_id \
+         FROM files file \
+         LEFT JOIN conversations conversation \
+           ON conversation.id = file.conversation_id AND file.project_id IS NULL \
+         WHERE file.id = $1 AND $2::uuid IS NOT NULL \
+           AND (conversation.id IS NULL OR conversation_visible_to(conversation.id, $2))",
     ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
@@ -322,10 +386,12 @@ pub async fn locate(
                 message: "Say which workspace (workspace: its id or slug).".into(),
             })?,
             space_id: None,
+            direct: None,
         },
         Target::Workspace(Some(id)) => Located {
             workspace_id: *id,
             space_id: None,
+            direct: None,
         },
         Target::Space(id) => thing(connection, "project", *id, viewer).await?,
         Target::Thing { kind, id, .. } => thing(connection, kind, *id, viewer).await?,
@@ -375,9 +441,62 @@ async fn thing(
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?;
     let (workspace_id, space_id) = row.ok_or(OpError::not_found(what_of(kind)))?;
+    // A conversation or message with no space is in a DM or group.
+    let direct = match (kind, space_id) {
+        ("conversation", None) => Some(id),
+        ("message" | "message_record", None) => sqlx::query_scalar::<_, Uuid>(
+            "-- visibility: the message was just found through conversation_visible_to\n\
+                 SELECT conversation_id FROM messages WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
+        ("file", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the file's conversation was just checked through conversation_visible_to\n\
+                 SELECT conversation_id FROM files WHERE id = $1 AND project_id IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?
+        .flatten(),
+        ("file_upload", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the upload's conversation was just checked through conversation_visible_to\n\
+                 SELECT conversation_id FROM file_uploads WHERE id = $1 AND space_id IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?
+        .flatten(),
+        ("reply_request" | "reply_request_seen", None) => sqlx::query_scalar::<_, Uuid>(
+            "-- visibility: the request was just found through its conversation\n\
+                 SELECT conversation_id FROM reply_requests WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
+        // A registry thing with no space: a DM's or group's conversation,
+        // message or file is located at it.
+        ("thing", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the thing was just found through conversation_visible_to\n\
+             SELECT COALESCE( \
+                 (SELECT id FROM conversations WHERE id = $1 AND project_id IS NULL), \
+                 (SELECT conversation_id FROM messages WHERE id = $1 AND project_id IS NULL), \
+                 (SELECT conversation_id FROM files WHERE id = $1 AND project_id IS NULL))",
+        )
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
+        _ => None,
+    };
     Ok(Located {
         workspace_id,
         space_id,
+        direct,
     })
 }
 
@@ -391,18 +510,22 @@ fn not_found_what(target: &Target) -> &'static str {
 
 fn what_of(kind: &str) -> &'static str {
     match kind {
-        "project" => "That space",
+        "project" | "member_space" | "readable_space" => "That space",
         "conversation" => "That conversation",
         "message" | "message_record" => "That message",
         "scheduled_message" => "That scheduled message",
         "decision" => "That decision",
         "task" => "That task",
+        "milestone" => "That milestone",
         "run" => "That run",
         "page" => "That page",
         "proposal" => "That proposal",
         "change_set" => "That change",
         "sheet" => "That sheet",
         "record" => "That record",
+        "form" => "That form",
+        "record_template" => "That template",
+        "recurring_record" => "That recurring record",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",

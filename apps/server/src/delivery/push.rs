@@ -495,12 +495,12 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
         // next period instead of failing (counted once, so a retry after a
         // failed post doesn't count again).
         if !skip
-            && let Some(until) = crate::budgets::admit_delivery(
+            && let Some(until) = Box::pin(crate::budgets::admit_delivery(
                 &mut transaction,
-                row.event.workspace_id,
+                &row.event,
                 delivery.account_id,
                 &format!("delivery:{}:{}", delivery.id, row.event.position),
-            )
+            ))
             .await?
         {
             sqlx::query(

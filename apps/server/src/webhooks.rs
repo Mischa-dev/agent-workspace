@@ -17,16 +17,18 @@ use crate::{
     events::{self, Subject},
 };
 
-/// Whether `owner` can see what the event is about right now.
+/// Whether `owner` can see what the event is about right now, through
+/// `connection` when they act through an agent connection.
 pub(crate) async fn visible_to(
     pool: &PgPool,
     owner: Uuid,
+    connection: Option<Uuid>,
     project_id: Uuid,
     subject: &Subject,
 ) -> Result<bool, AppError> {
     let seen = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT actor_can_access_project($1, NULL, $2)
+        SELECT actor_can_access_project($1, $7, $2)
            AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
            AND ($4::uuid IS NULL OR pull_request_visible_to($4, $1))
            AND ($5::uuid IS NULL OR EXISTS (
@@ -37,12 +39,12 @@ pub(crate) async fn visible_to(
            AND ($5::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_task
                WHERE sees_task.project_id = $2 AND sees_task.actor_id = $1
-                 AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+                 AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
            ))
            AND ($4::uuid IS NULL OR EXISTS (
                SELECT 1 FROM project_memberships sees_code
                WHERE sees_code.project_id = $2 AND sees_code.actor_id = $1
-                 AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+                 AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
            ))
            -- A record's events (AWD-110) while it's in the project, in a
            -- collection that isn't archived.
@@ -62,6 +64,7 @@ pub(crate) async fn visible_to(
     .bind(subject.pull_request_id)
     .bind(subject.work_item_id)
     .bind(subject.record_id)
+    .bind(connection)
     .fetch_one(crate::db::scoped(pool))
     .await?;
     if !seen {
@@ -162,7 +165,10 @@ pub(crate) async fn task_data(
         "archived": task.archived,
         "version": task.version,
         "updatedAt": task.updated_at,
-        "url": format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::task(project_id, task.id).legacy_path()
+        ),
     })))
 }
 
@@ -214,7 +220,17 @@ pub(crate) async fn record_data(
         "archived": line.archived,
         "version": line.version,
         "updatedAt": line.updated_at,
-        "url": format!("{origin}/projects/{project_id}/collections/{collection_id}?record={record_id}"),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::space(
+                project_id,
+                crate::addresses::Place::Record {
+                    collection: collection_id,
+                    record: record_id,
+                },
+            )
+            .legacy_path()
+        ),
     })))
 }
 

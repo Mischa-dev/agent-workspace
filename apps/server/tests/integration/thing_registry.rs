@@ -101,10 +101,12 @@ async fn counts_match(pool: &PgPool) {
             "{table} rows missing from things: {missing:#?}"
         );
     }
-    // Records: their own kind, or the task they are.
+    // Records: their own kind, the task they are, or the page they are
+    // (a page's record shares its id, T1.36).
     let missing = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM collection_records record \
-         WHERE NOT EXISTS (SELECT 1 FROM things WHERE id = record.id AND kind IN ('record', 'task'))",
+         WHERE NOT EXISTS (SELECT 1 FROM things WHERE id = record.id \
+                           AND kind IN ('record', 'task', 'page'))",
     )
     .fetch_one(pool)
     .await
@@ -271,11 +273,7 @@ async fn every_kind_keeps_its_row_in_step_and_converts_once() {
     )
     .await;
     assert!(row(pool, &board).await.deleted);
-    call(
-        "project_update",
-        json!({"projectId": work, "name": "Gates"}),
-    )
-    .await;
+    call("space_update", json!({"spaceId": work, "name": "Gates"})).await;
     assert_eq!(row(pool, &work).await.title.as_deref(), Some("Gates"));
     let sheet_version = row(pool, &sheet).await.version;
     call(

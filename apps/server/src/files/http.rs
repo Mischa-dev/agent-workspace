@@ -101,14 +101,14 @@ async fn upload_to_conversation(
     )
     .await?;
     require_active_conversation(&conversation)?;
-    let limit = upload_limit(&mut transaction, conversation.project_id).await?;
+    let limit = upload_limit(&mut transaction, conversation.place()).await?;
     // Nothing stays locked while the bytes arrive.
     transaction.commit().await?;
     let row = store_body(
         &state,
         principal.actor_id,
         Destination::Conversation {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
         },
         query.name,
@@ -173,14 +173,7 @@ async fn upload_to_thing(
         return Err(AppError::Validation("for"));
     }
     let thing = ThingKind::parse(&kind).ok_or(AppError::NotFound("thing"))?;
-    let destination = thing_destination(
-        &state.pool,
-        principal.actor_id,
-        crate::conversations::parse_actor_kind(&principal.actor_kind)?,
-        thing,
-        thing_id,
-    )
-    .await?;
+    let destination = thing_destination(&state.pool, principal.actor_id, thing, thing_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let limit = upload_limit(&mut transaction, destination.project_id()).await?;
     transaction.commit().await?;

@@ -143,11 +143,15 @@ pub(super) async fn seed_pull_request(
     number: i64,
 ) -> (Uuid, String) {
     let integration = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(integration)
-        .execute(&setup.pool)
-        .await
-        .expect("integration actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+         SELECT $1, 'integration', 'active', organization_id FROM projects WHERE id = $2::uuid",
+    )
+    .bind(integration)
+    .bind(project)
+    .execute(&setup.pool)
+    .await
+    .expect("integration actor");
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) VALUES ($1, $2::uuid, $3, 'member', 'GitHub', 'github_integration')",
     )

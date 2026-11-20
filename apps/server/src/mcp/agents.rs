@@ -25,15 +25,11 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        SNIPPET_CHARACTERS, StoredRole, ToolResult, accessible_project_ids, public_url,
-        role_allows, scope_projects, snippet,
+        SNIPPET_CHARACTERS, StoredRole, ToolResult, accessible_project_ids, link_url, role_allows,
+        scope_projects, snippet,
     },
 };
-use crate::{
-    AppState,
-    error::AppError,
-    policy::{Action, ActorKind},
-};
+use crate::{AppState, error::AppError, policy::Action};
 
 const DEFAULT_AGENTS: i64 = 50;
 const MAX_AGENTS: i64 = 100;
@@ -244,7 +240,7 @@ pub(super) async fn agent_list(
                       AND membership.project_id = ANY($1)
                 ) shared ON shared.name IS NOT NULL
                 -- Turning an agent off in the web app also disables its actor.
-                WHERE actor.kind = 'external_agent' AND actor.status IN ('active', 'disabled')
+                WHERE actor.kind = 'external_agent' AND actor.status IN ('active', 'disabled') -- // kind-check: mechanical (this lists agents)
                   AND actor.id <> $2
                   AND ($3 = '' OR EXISTS (
                       SELECT 1 FROM project_memberships membership
@@ -274,8 +270,10 @@ pub(super) async fn agent_list(
         let actor_ids = agents.iter().map(|agent| agent.actor_id).collect::<Vec<_>>();
 
         // Roles are shown where the caller may see the member list.
-        let my_roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
-            "SELECT project_id, role, workspace_role_permissions(role_id) FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
+        let my_roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
+            "SELECT project_id, role, workspace_role_permissions(role_id), \
+                    space_group_permissions(actor_id, project_id) \
+             FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
         )
         .bind(principal.actor_id)
         .bind(&projects)
@@ -283,23 +281,20 @@ pub(super) async fn agent_list(
         .await?;
         let sees_roles = my_roles
             .into_iter()
-            .filter(|(project_id, role, role_permissions)| {
+            .filter(|(project_id, role, role_permissions, groups)| {
                 role_allows(
                     principal,
                     *project_id,
-                    &StoredRole {
-                        role: role.clone(),
-                        role_permissions: role_permissions.clone(),
-                    },
+                    &StoredRole::of(role, role_permissions.as_deref()).with_groups(groups.clone()),
                     Action::MembershipView,
                 )
             })
-            .map(|(project_id, _, _)| project_id)
+            .map(|(project_id, _, _, _)| project_id)
             .collect::<HashSet<_>>();
         let memberships = sqlx::query_as::<_, MembershipRow>(
             r#"
             SELECT membership.actor_id, project.id AS project_id, project.project_key,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    membership.role
             FROM project_memberships membership
             JOIN projects project ON project.id = membership.project_id
@@ -330,7 +325,7 @@ pub(super) async fn agent_list(
             r#"
             SELECT claim.actor_id, item.id AS task_id,
                    project.project_key || '-' || item.number::text AS key, item.title,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    claim.claimed_at, claim.expires_at, claim.note
             FROM work_item_claims claim
             JOIN task_rows item
@@ -372,7 +367,8 @@ pub(super) async fn agent_list(
                    count(*) FILTER (WHERE status = 'claimed' AND lease_expires_at > now())
                        AS answering
             FROM reply_requests
-            WHERE agent_actor_id = ANY($1) AND project_id = ANY($2)
+            WHERE agent_actor_id = ANY($1)
+              AND COALESCE(project_id, direct_scope_id()) = ANY($2)
               AND status IN ('pending', 'claimed')
               AND conversation_visible_to(conversation_id, $3)
             GROUP BY agent_actor_id
@@ -429,7 +425,7 @@ pub(super) async fn agent_list(
                         access: if has("write") { "full" } else { "read" }.to_owned(),
                         can_request_runs: has("worker_request"),
                         last_error: agent.last_error_category.clone(),
-                        manage_url: public_url(state, "/messages/agents"),
+                        manage_url: link_url(state, None, &crate::addresses::Target::MessageAgents),
                     }
                 });
                 AgentLine {
@@ -451,17 +447,13 @@ pub(super) async fn agent_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "agent_list"))
 }
 
-/// The agents' home projects in which the caller manages agents the way the
-/// web app allows it: a person, an owner or admin of the organization, whose
-/// role there allows ExternalAgentManage, in a project the call can reach.
+/// The agents' home projects in which the caller's role allows managing
+/// agents (any kind of account), in a project the call can reach.
 async fn managed_projects(
     state: &AppState,
     principal: &McpPrincipal,
     agents: &[AgentRow],
 ) -> Result<HashSet<Uuid>, AppError> {
-    if principal.actor_kind != ActorKind::Human {
-        return Ok(HashSet::new());
-    }
     let homes = agents
         .iter()
         .map(|agent| agent.home_project_id)
@@ -469,16 +461,16 @@ async fn managed_projects(
         .into_iter()
         .collect::<Vec<_>>();
     let reach = accessible_project_ids(state, principal).await?;
-    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
         SELECT project.id, membership.role,
-               workspace_role_permissions(membership.role_id) AS role_permissions
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($1, project.id) AS group_permissions
         FROM projects project
         JOIN organization_memberships organization
           ON organization.organization_id = project.organization_id
          AND organization.actor_id = $1
          AND organization.enabled
-         AND organization.role IN ('owner', 'admin')
         JOIN project_memberships membership
           ON membership.project_id = project.id
          AND membership.actor_id = $1
@@ -494,18 +486,15 @@ async fn managed_projects(
     .await?;
     Ok(roles
         .into_iter()
-        .filter(|(project_id, role, role_permissions)| {
+        .filter(|(project_id, role, role_permissions, groups)| {
             role_allows(
                 principal,
                 *project_id,
-                &StoredRole {
-                    role: role.clone(),
-                    role_permissions: role_permissions.clone(),
-                },
+                &StoredRole::of(role, role_permissions.as_deref()).with_groups(groups.clone()),
                 Action::ExternalAgentManage,
             )
         })
-        .map(|(project_id, _, _)| project_id)
+        .map(|(project_id, _, _, _)| project_id)
         .collect())
 }
 
@@ -522,7 +511,7 @@ async fn connection_methods(
     let tokens = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT DISTINCT credential.external_agent_connection_id
-        FROM mcp_client_credentials credential
+        FROM account_credentials credential
         WHERE credential.external_agent_connection_id = ANY($1)
           AND credential.status = 'active' AND credential.revoked_at IS NULL
           AND credential.expires_at > now()

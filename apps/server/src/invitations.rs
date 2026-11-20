@@ -18,10 +18,7 @@ use crate::{
         require_authenticated_write, respond_with_established_session,
     },
     error::{ApiJson, ApiPath, AppError},
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, RoleGrant},
 };
 
 pub mod engine;
@@ -119,6 +116,9 @@ struct InvitationAccess {
     organization_membership_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given in the project (K1.27).
+    #[sqlx(default)]
+    project_group_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -153,6 +153,7 @@ struct InvitationMutationRow {
     organization_membership_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    project_group_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -433,6 +434,7 @@ pub(crate) async fn revoke_invitation_in(
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
         project_role_permissions: row.project_role_permissions,
+        project_group_permissions: row.project_group_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
@@ -533,6 +535,7 @@ pub(crate) async fn replace_invitation_in(
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
         project_role_permissions: row.project_role_permissions,
+        project_group_permissions: row.project_group_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
@@ -618,6 +621,8 @@ async fn lock_invitation_for_mutation(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
@@ -744,13 +749,9 @@ async fn accept_new_user(
         .execute(&mut *transaction)
         .await
         .map_err(map_join_database_error)?;
-    // Only the built-in project Admin makes a workspace admin: a custom
-    // Admin-based role is narrower, so it never widens into it.
-    let organization_role = if invitation.role == "admin" && invitation.role_id.is_none() {
-        "admin"
-    } else {
-        "member"
-    };
+    // A project role never makes a workspace role (K1.19): someone who
+    // joins through a project starts as a workspace member.
+    let organization_role = crate::policy::MembershipRole::Member.key();
     crate::metering::admit_member(&mut transaction, invitation.organization_id, actor_id).await?;
     sqlx::query(
         "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, $3)",
@@ -844,12 +845,10 @@ async fn accept_existing_user(
     #[derive(FromRow)]
     struct ExistingIdentity {
         authentication_epoch: i64,
-        organization_role: String,
     }
     let identity = sqlx::query_as::<_, ExistingIdentity>(
         r#"
-        SELECT user_account.authentication_epoch,
-               organization_membership.role AS organization_role
+        SELECT user_account.authentication_epoch
         FROM users user_account
         JOIN actors actor ON actor.id = user_account.actor_id
         JOIN organization_memberships organization_membership
@@ -857,7 +856,7 @@ async fn accept_existing_user(
          AND organization_membership.organization_id = $2
          AND organization_membership.enabled
         WHERE user_account.id = $1 AND user_account.status = 'active'
-          AND actor.status = 'active' AND actor.kind = 'human'
+          AND actor.status = 'active' AND actor.kind = 'human' -- // kind-check: mechanical (a signed-in user accepts an invitation)
         FOR UPDATE OF user_account, actor, organization_membership
         "#,
     )
@@ -891,29 +890,6 @@ async fn accept_existing_user(
             "project_membership",
             "handle already exists",
         ));
-    }
-    // Only the built-in project Admin makes a workspace admin, as the sync on
-    // a role change does: never a custom Admin-based role, and never over a
-    // custom workspace role, which would widen it.
-    if invitation.role == "admin"
-        && invitation.role_id.is_none()
-        && identity.organization_role != "owner"
-    {
-        sqlx::query(
-            r#"
-            UPDATE organization_memberships
-            SET role = 'admin', version = version + 1, updated_at = now()
-            WHERE organization_id = $1 AND actor_id = $2
-              AND NOT EXISTS (
-                  SELECT 1 FROM workspace_roles held
-                  WHERE held.id = organization_memberships.role_id AND NOT held.built_in
-              )
-            "#,
-        )
-        .bind(invitation.organization_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
     }
     sqlx::query(
         r#"
@@ -1007,7 +983,7 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
         JOIN projects project ON project.id = invitation.project_id
           AND project.organization_id = invitation.organization_id
         JOIN actors issuer_actor ON issuer_actor.id = invitation.issued_by_actor_id
-          AND issuer_actor.kind = 'human' AND issuer_actor.status = 'active'
+          AND issuer_actor.status = 'active'
         JOIN organization_memberships issuer_organization
           ON issuer_organization.organization_id = invitation.organization_id
          AND issuer_organization.actor_id = invitation.issued_by_actor_id
@@ -1018,8 +994,6 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
          AND issuer_project.enabled
         WHERE invitation.token_prefix = $1 AND invitation.status = 'active'
           AND invitation.expires_at > now() AND project.archived_at IS NULL
-          AND (issuer_organization.role = 'owner'
-               OR (issuer_organization.role = 'admin' AND invitation.role <> 'admin'))
         FOR UPDATE OF invitation, project, issuer_actor,
                       issuer_organization, issuer_project
         "#
@@ -1036,7 +1010,7 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
         JOIN projects project ON project.id = invitation.project_id
           AND project.organization_id = invitation.organization_id
         JOIN actors issuer_actor ON issuer_actor.id = invitation.issued_by_actor_id
-          AND issuer_actor.kind = 'human' AND issuer_actor.status = 'active'
+          AND issuer_actor.status = 'active'
         JOIN organization_memberships issuer_organization
           ON issuer_organization.organization_id = invitation.organization_id
          AND issuer_organization.actor_id = invitation.issued_by_actor_id
@@ -1047,8 +1021,6 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
          AND issuer_project.enabled
         WHERE invitation.token_prefix = $1 AND invitation.status = 'active'
           AND invitation.expires_at > now() AND project.archived_at IS NULL
-          AND (issuer_organization.role = 'owner'
-               OR (issuer_organization.role = 'admin' AND invitation.role <> 'admin'))
         "#
     }
 }
@@ -1169,6 +1141,8 @@ async fn invitation_access(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1200,6 +1174,8 @@ async fn lock_invitation_access(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1230,30 +1206,25 @@ fn authorize_manage(
     {
         return Err(AppError::NotFound("project"));
     }
-    let manager = matches!(access.organization_role.as_str(), "owner" | "admin")
-        && matches!(
-            authorize(
-                &Subject::new(
-                    actor_id,
-                    ActorKind::Human,
-                    true,
-                    Some(Membership::project(
-                        project_id,
-                        RoleGrant::stored(
-                            &access.project_role,
-                            access.project_role_permissions.as_deref(),
-                        )?,
-                        access.project_membership_enabled,
-                    )),
-                    None,
-                ),
-                Action::InvitationManage,
-                Resource::Project(ProjectScope::project(project_id)),
-            ),
-            Decision::Allow
+    // Invitations are sent by the workspace's owner and admin tiers whose
+    // project role manages them; an admin-tier role comes only from an owner.
+    let grant = RoleGrant::stored(
+        &access.project_role,
+        access.project_role_permissions.as_deref(),
+    )?
+    .with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
+    let manager = crate::access::tier::stored_high(&access.organization_role)
+        && crate::access::membership_allows(
+            actor_id,
+            project_id,
+            grant,
+            access.project_membership_enabled,
+            Action::InvitationManage.permission(),
         );
-    let admin_invite_requires_owner =
-        invitation_role == Some("admin") && access.organization_role != "owner";
+    let admin_invite_requires_owner = invitation_role.is_some_and(crate::access::tier::stored_high)
+        && !crate::access::tier::stored_owner(&access.organization_role);
     if !manager || admin_invite_requires_owner {
         return Err(AppError::Forbidden);
     }
@@ -1383,6 +1354,8 @@ async fn require_issuer_still_grants(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1460,6 +1433,7 @@ mod tests {
             organization_membership_enabled: true,
             project_role: "owner".to_owned(),
             project_role_permissions: None,
+            project_group_permissions: None,
             project_membership_enabled: true,
         };
         let actor_id = Uuid::now_v7();

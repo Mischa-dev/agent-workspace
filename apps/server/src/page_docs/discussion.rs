@@ -22,7 +22,6 @@ use super::{
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, AppError},
     idempotency::IdempotencyKey,
     memory,
@@ -64,15 +63,9 @@ async fn page_access(
     action: Action,
 ) -> Result<Uuid, AppError> {
     let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
-    memory::project_access(
-        &state.pool,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    memory::project_access(&state.pool, principal.actor_id, project_id, action)
+        .await
+        .map_err(|_| AppError::NotFound("page"))?;
     Ok(project_id)
 }
 
@@ -85,7 +78,6 @@ pub async fn get_discussion(
     let can_comment = memory::project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::PageEdit,
     )

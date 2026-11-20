@@ -1,3 +1,4 @@
+import { legacyPathOf } from '../../app/href'
 import type { EmbedDecl, ThingDecl } from '../../modules/contract'
 import { DECLARED_EMBEDS, DECLARED_THINGS } from '../../pieces/declared'
 import { listQuery, readListState } from '../../work-items/listModel'
@@ -43,8 +44,10 @@ export function moduleEmbedTarget(href: string): ModuleEmbedTarget | null {
     return null
   }
   if (url.origin !== 'https://app.invalid') return null
+  // Either shape of address: the workspace's or the old one the manifests name.
+  const path = legacyPathOf(url.pathname)
   try {
-    const list = TASK_LIST.exec(url.pathname)
+    const list = TASK_LIST.exec(path)
     if (list) {
       // The task list's own address contract: its filters and sort go to the
       // server, and its view (list or board) picks the piece.
@@ -57,7 +60,7 @@ export function moduleEmbedTarget(href: string): ModuleEmbedTarget | null {
     }
     for (const { decl } of DECLARED_THINGS) {
       if (!OPENS.has(decl.kind) || !decl.href.includes('{id}')) continue
-      const match = pattern(decl.href).exec(url.pathname)
+      const match = pattern(decl.href).exec(path)
       if (!match) continue
       const embed = embedFor(decl.kind, 'card')
       if (!embed) return null

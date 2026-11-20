@@ -33,5 +33,5 @@ export default {
     { kind: 'channel', label: 'Channel', icon: 'message' },
     { kind: 'thread', label: 'Thread', icon: 'message' },
   ],
-  phone: true,
+  phone: { id: 'chat', space: 'project', rank: 20, part: 'area.chat', icon: 'hash', label: 'Chat', path: '' },
 } satisfies WebModule

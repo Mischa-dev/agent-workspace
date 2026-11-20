@@ -12,6 +12,7 @@ import type { Project } from '../projects/types'
 import { WorkspaceContext } from '../app/workspace'
 import { resetCommandState } from './commandStore'
 import { ProjectRail } from './ProjectRail'
+import { permissionsOf } from '../test/permissions'
 
 const session = vi.hoisted(() => ({
   organizations: [{ id: 'org-1', name: 'Mischa', slug: 'mischa', role: 'owner' }] as { id: string; name: string; slug: string; role: string }[],
@@ -106,7 +107,7 @@ describe('ProjectRail', () => {
 
     await waitFor(() =>
       expect(screen.getByLabelText('Current route')).toHaveTextContent(
-        `/projects/${viewerProject.id}`,
+        `/s/${viewerProject.id}`,
       ),
     )
     expect(switchProject).not.toHaveBeenCalled()
@@ -141,8 +142,8 @@ describe('ProjectRail', () => {
     act(() => resetCommandState())
   })
   it('switches workspace from the rail, with what needs you in the others (W1.14a)', async () => {
-    const acme = { id: viewerProject.organizationId, name: 'Acme Labs', slug: 'acme', role: 'owner' as const }
-    const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const }
+    const acme = { id: viewerProject.organizationId, name: 'Acme Labs', slug: 'acme', role: 'owner' as const, permissions: permissionsOf('owner') }
+    const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const, permissions: permissionsOf('member') }
     session.organizations = [acme, beta]
     const betaProject: Project = { ...viewerProject, id: 'project-beta', organizationId: beta.id, key: 'BETA', name: 'Beta Project', attentionCount: 3 }
     vi.mocked(useProjects).mockReturnValue({

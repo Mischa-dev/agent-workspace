@@ -397,7 +397,7 @@ pub async fn deliver(
             actor_id, conversation_id, message_id, work_item_id,
             agent_run_id, pull_request_id, detail, group_key, archived_at,
             read_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+        ) VALUES ($1, NULLIF($2, direct_scope_id()), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                   CASE WHEN $15 THEN NULL ELSE now() END,
                   CASE WHEN $16 THEN now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
@@ -438,11 +438,12 @@ pub async fn deliver(
     .fetch_one(&mut **transaction)
     .await?;
     if decision.push || decision.email {
-        let organization_id =
-            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-                .bind(notification.project_id)
-                .fetch_one(&mut **transaction)
-                .await?;
+        let organization_id = notice_workspace(
+            transaction,
+            notification.project_id,
+            notification.recipient_actor_id,
+        )
+        .await?;
         if decision.push {
             crate::push::enqueue_delivery(
                 transaction,
@@ -481,6 +482,27 @@ pub async fn deliver(
     Ok(true)
 }
 
+/// The workspace a notification is sent from: its space's, or for a DM
+/// (no space) the recipient's default workspace.
+async fn notice_workspace(
+    transaction: &mut Transaction<'_, Postgres>,
+    place: Uuid,
+    recipient: Uuid,
+) -> Result<Uuid, AppError> {
+    if crate::spaces::kind::holds_messages(place) {
+        return crate::workspace::default_workspace(&mut **transaction, recipient)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+            .ok_or(AppError::NotFound("organization"));
+    }
+    Ok(
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(place)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )
+}
+
 /// The `notifications` consumer: every change notice in the log, turned
 /// into notifications in the transaction that moves its cursor.
 pub struct Notifier;
@@ -506,7 +528,8 @@ impl crate::events::Consumer for Notifier {
         batch: &[crate::events::LoggedEvent],
     ) -> Result<(), crate::events::ConsumerError> {
         for event in batch {
-            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+            // A DM's event is in the direct scope.
+            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.place()) else {
                 continue;
             };
             let Ok(payload) = OutboxEventPayload::from_json(notice, event.payload.clone()) else {
@@ -659,7 +682,8 @@ async fn message_mentions(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT id, project_id, conversation_id, author_actor_id, content,
+            SELECT id, COALESCE(project_id, direct_scope_id()) AS project_id, conversation_id,
+                   author_actor_id, content,
                    may_notify_everyone
             FROM messages
             WHERE id = $1 AND removed_at IS NULL
@@ -674,7 +698,7 @@ async fn message_mentions(
             FROM message
             JOIN project_memberships membership
               ON membership.project_id = message.project_id AND membership.enabled
-            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
+            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
             -- Written in the text itself, so a person whose handle happens
             -- to be "everyone" is still only a mention of them.
             WHERE EXISTS (
@@ -689,9 +713,15 @@ async fn message_mentions(
         grouped AS (
             SELECT DISTINCT member.account_id AS actor_id
             FROM message
-            JOIN projects space ON space.id = message.project_id
+            LEFT JOIN projects space ON space.id = message.project_id
+            -- A DM or group is in no workspace (K4.17): the groups of the
+            -- workspaces its author is in.
             JOIN account_groups grp
-              ON grp.workspace_id = space.organization_id AND grp.archived_at IS NULL
+              ON grp.archived_at IS NULL
+             AND (grp.workspace_id = space.organization_id
+                  OR (message.project_id = direct_scope_id() AND grp.workspace_id IN (
+                      SELECT author_in.organization_id FROM organization_memberships author_in
+                      WHERE author_in.actor_id = message.author_actor_id AND author_in.enabled)))
             JOIN account_group_members member
               ON member.group_id = grp.id AND member.workspace_id = grp.workspace_id
             WHERE EXISTS (
@@ -714,8 +744,7 @@ async fn message_mentions(
                      ON author.project_id = message.project_id
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
-                   WHERE author.role IN ('owner', 'admin')
-                     AND custom_role_allows(author.role_id, 'channels.moderate')
+                   WHERE role_allows(author.role, author.role_id, 'channels.mention_everyone')
                )) AS allowed
         ),
         everyone_allowed AS (
@@ -736,7 +765,8 @@ async fn message_mentions(
               UNION SELECT actor_id FROM everyone_allowed
               UNION SELECT actor_id FROM grouped_allowed) recipient
           ON recipient.actor_id <> message.author_actor_id
-        WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
+        WHERE (message.project_id = direct_scope_id()
+               OR actor_can_access_project(recipient.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, recipient.actor_id)
           -- W21: set to nothing, a conversation doesn't notify even of mentions.
           AND conversation_notification_level(recipient.actor_id, message.conversation_id)
@@ -779,7 +809,8 @@ async fn followed_messages(
     let rows = sqlx::query_as::<_, FollowedRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id, conversation.parent_channel_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
@@ -799,9 +830,10 @@ async fn followed_messages(
                message.parent_channel_id IS NOT NULL AS in_thread
         FROM message
         JOIN following ON following.actor_id <> message.author_actor_id
-        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human'
+        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
         WHERE conversation_notification_level(following.actor_id, message.conversation_id) = 'all'
-          AND actor_can_access_project(following.actor_id, NULL, message.project_id)
+          AND (message.project_id = direct_scope_id()
+               OR actor_can_access_project(following.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, following.actor_id)
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
@@ -866,7 +898,8 @@ async fn direct_messages(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
@@ -882,7 +915,8 @@ async fn direct_messages(
         JOIN actors actor ON actor.id = member.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (an agent in a DM is asked to reply, not told)
         WHERE conversation_notification_level(member.actor_id, message.conversation_id)
               <> 'nothing'
-          AND actor_can_access_project(member.actor_id, NULL, message.project_id)
+          AND (message.project_id = direct_scope_id()
+               OR actor_can_access_project(member.actor_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, member.actor_id)
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
@@ -928,12 +962,12 @@ async fn keyword_messages(
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
         WITH message AS (
-            SELECT message.id, message.project_id, message.conversation_id,
+            SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+                   message.conversation_id,
                    message.author_actor_id, message.plain_text,
-                   project.organization_id AS workspace_id
+                   message.workspace_id
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
-            JOIN projects project ON project.id = message.project_id
             WHERE message.id = $1 AND message.removed_at IS NULL
               AND conversation.kind NOT IN ('dm', 'group')
               AND message.plain_text IS NOT NULL
@@ -941,7 +975,11 @@ async fn keyword_messages(
         matched AS (
             SELECT DISTINCT keyword.account_id
             FROM message
-            JOIN notification_keywords keyword ON keyword.workspace_id = message.workspace_id
+            -- A thread in a personal DM or group (the direct scope) hears
+            -- its members' keywords from any workspace.
+            JOIN notification_keywords keyword
+              ON keyword.workspace_id = message.workspace_id
+              OR message.workspace_id = direct_scope_id()
             WHERE keyword.account_id <> message.author_actor_id
               AND message.plain_text ~* ('(^|[^[:alnum:]_])'
                   || regexp_replace(keyword.keyword, '([^[:alnum:][:space:]])', '\\\1', 'g')
@@ -951,7 +989,8 @@ async fn keyword_messages(
                matched.account_id AS recipient_actor_id
         FROM message
         JOIN matched ON true
-        WHERE actor_can_access_project(matched.account_id, NULL, message.project_id)
+        WHERE (message.project_id = direct_scope_id()
+               OR actor_can_access_project(matched.account_id, NULL, message.project_id))
           AND conversation_visible_to(message.conversation_id, matched.account_id)
           AND conversation_notification_level(matched.account_id, message.conversation_id)
               <> 'nothing'
@@ -1511,7 +1550,9 @@ async fn pull_request_notifications(
 
 /// The checks every read applies, for viewer `$1`.
 const VISIBLE: &str = r#"
-    actor_can_access_project($1, NULL, n.project_id)
+    -- A DM's notification (no space) by the visibility rule alone.
+    (CASE WHEN n.project_id IS NULL THEN n.conversation_id IS NOT NULL
+          ELSE actor_can_access_project($1, NULL, n.project_id) END)
     AND (n.conversation_id IS NULL OR conversation_visible_to(n.conversation_id, $1))
     AND (n.pull_request_id IS NULL OR pull_request_visible_to(n.pull_request_id, $1))
     -- A task's or pull request's notification only while the recipient's
@@ -1520,12 +1561,12 @@ const VISIBLE: &str = r#"
     AND (n.work_item_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_task
         WHERE sees_task.project_id = n.project_id AND sees_task.actor_id = $1
-          AND sees_task.enabled AND custom_role_allows(sees_task.role_id, 'tasks.view')
+          AND sees_task.enabled AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view')
     ))
     AND (n.pull_request_id IS NULL OR EXISTS (
         SELECT 1 FROM project_memberships sees_code
         WHERE sees_code.project_id = n.project_id AND sees_code.actor_id = $1
-          AND sees_code.enabled AND custom_role_allows(sees_code.role_id, 'code.view')
+          AND sees_code.enabled AND role_allows(sees_code.role, sees_code.role_id, 'code.view')
     ))
     AND (n.subject_kind <> 'provider_account' OR EXISTS (
         SELECT 1 FROM provider_accounts account
@@ -1697,11 +1738,12 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
     let run_join = crate::runs::sql::builtin_run_and_worker_join("n.agent_run_id");
     format!(
         r#"
-        SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
-               project.organization_id AS workspace_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
-                   AS project_name,
-               project.kind = 'direct' AS direct_space,
+        SELECT n.id, n.kind, n.subject_kind, n.subject_id,
+               COALESCE(n.project_id, direct_scope_id()) AS project_id,
+               COALESCE(project.organization_id, conversation.workspace_id, direct_scope_id())
+                   AS workspace_id,
+               COALESCE(project.name, 'Messages') AS project_name,
+               n.project_id IS NULL AS direct_space,
                n.actor_id, actor_member.display_name AS actor_name,
                actor.kind AS actor_kind,
                n.repeat_count, n.read_at IS NOT NULL AS read,
@@ -1768,9 +1810,9 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                to_char(request.answered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                    AS request_answered_at
         FROM notifications n
-        JOIN projects project ON project.id = n.project_id
-        LEFT JOIN project_memberships actor_member
-          ON actor_member.project_id = n.project_id AND actor_member.actor_id = n.actor_id
+        LEFT JOIN projects project ON project.id = n.project_id
+        LEFT JOIN LATERAL place_profile(n.project_id, n.actor_id) actor_member
+          ON n.actor_id IS NOT NULL
         LEFT JOIN actors actor ON actor.id = n.actor_id
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
         LEFT JOIN conversations comments_parent
@@ -1788,8 +1830,8 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         WHERE n.recipient_actor_id = $1
           AND {view_condition}
           AND ($2::text[] IS NULL OR n.kind = ANY($2))
-          AND ($3::uuid IS NULL OR n.project_id = $3)
-          AND ($4::uuid[] IS NULL OR n.project_id = ANY($4))
+          AND ($3::uuid IS NULL OR COALESCE(n.project_id, direct_scope_id()) = $3)
+          AND ($4::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($4))
           AND {VISIBLE}
           AND {switches}
           {extra}
@@ -1817,6 +1859,10 @@ pub async fn list(
         r#"
           AND ($5::bigint IS NULL
                OR ((extract(epoch FROM n.surfaced_at) * 1000000)::bigint, n.id) < ($5, $6))
+          -- A DM's or group's follows a credential's limit by the
+          -- workspace it is kept in.
+          AND ($8::uuid[] IS NULL OR n.project_id IS NOT NULL
+               OR COALESCE(conversation.workspace_id, n.workspace_id) = ANY($8))
         ORDER BY n.surfaced_at DESC, n.id DESC
         LIMIT $7
         "#,
@@ -1829,6 +1875,10 @@ pub async fn list(
         .bind(cursor.map(|(micros, _)| micros))
         .bind(cursor.map(|(_, id)| id))
         .bind(limit + 1)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            viewer,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(pool))
         .await?;
     let next_cursor = if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
@@ -1853,10 +1903,11 @@ pub async fn list(
 /// A task's or pull request's notification an app acting for `viewer` may
 /// not see: its agent limit leaves out "see tasks", or "see code", there.
 fn hidden_by_limit(viewer: Uuid, row: &NotificationRow) -> bool {
-    use crate::policy::{Permission, agent_limit_hides};
-    (row.work_item_id.is_some() && agent_limit_hides(viewer, row.project_id, Permission::TasksView))
+    use crate::policy::Permission;
+    (row.work_item_id.is_some()
+        && crate::access::limit_hides(viewer, row.project_id, Permission::TasksView))
         || (row.pull_request_number.is_some()
-            && agent_limit_hides(viewer, row.project_id, Permission::CodeView))
+            && crate::access::limit_hides(viewer, row.project_id, Permission::CodeView))
 }
 
 /// The given notifications, if they are the viewer's and still visible.
@@ -1912,7 +1963,11 @@ pub async fn unread_count(
         SELECT count(*) FROM notifications n
         WHERE n.recipient_actor_id = $1
           AND {view}
-          AND ($2::uuid[] IS NULL OR n.project_id = ANY($2))
+          AND ($2::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($2))
+          AND ($3::uuid[] IS NULL OR n.project_id IS NOT NULL
+               -- visibility: only the DM's workspace is read, to apply a credential's limit
+               OR COALESCE((SELECT kept.workspace_id FROM conversations kept
+                            WHERE kept.id = n.conversation_id), n.workspace_id) = ANY($3))
           AND {VISIBLE}
           AND {switches}
         "#,
@@ -1920,6 +1975,10 @@ pub async fn unread_count(
     ))
     .bind(viewer)
     .bind(within)
+    .bind(crate::policy::agent_limit_direct_workspaces(
+        viewer,
+        crate::policy::Permission::ProjectsView,
+    ))
     .fetch_one(crate::db::scoped(pool))
     .await?)
 }
@@ -1976,12 +2035,12 @@ pub async fn attention_counts(
     let switches = crate::modules::state::notification_switches_sql();
     let rows = sqlx::query_as::<_, (Uuid, i64)>(&format!(
         r#"
-        SELECT n.project_id, count(*) FROM notifications n
+        SELECT COALESCE(n.project_id, direct_scope_id()), count(*) FROM notifications n
         WHERE n.recipient_actor_id = $1
           AND {view}
           AND {VISIBLE}
           AND {switches}
-        GROUP BY n.project_id
+        GROUP BY 1
         "#,
         view = View::Unread.condition(),
     ))
@@ -2492,15 +2551,15 @@ pub async fn update(
         SET {change}, updated_at = now()
         WHERE n.recipient_actor_id = $1
           AND ($2::uuid[] IS NULL OR n.id = ANY($2))
-          AND ($3::uuid IS NULL OR n.project_id = $3)
-          AND ($4::uuid[] IS NULL OR n.project_id = ANY($4))
+          AND ($3::uuid IS NULL OR COALESCE(n.project_id, direct_scope_id()) = $3)
+          AND ($4::uuid[] IS NULL OR COALESCE(n.project_id, direct_scope_id()) = ANY($4))
           AND ($5 OR $2::uuid[] IS NOT NULL)
           AND {all_condition}
           AND {applies}
           AND ($6::timestamptz IS NULL OR true)
           AND {VISIBLE}
           AND {switches}
-        RETURNING n.id, n.project_id
+        RETURNING n.id, COALESCE(n.project_id, direct_scope_id())
         "#
     );
     let mut transaction = crate::db::scoped_tx(pool).await?;

@@ -109,6 +109,10 @@ pub struct RequestOpenInput {
     /// when there are no options).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_text: Option<bool>,
+    /// Sensitive: only someone holding "answer sensitive requests" may
+    /// answer it, even when it names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitive: Option<bool>,
     /// Who it's for: accounts, or roles.
     pub audience: AudienceInput,
     /// The conversation it's about; the people asked must see it.
@@ -247,6 +251,7 @@ impl Operation for RequestOpen {
             "detail": input.detail,
             "options": input.options,
             "allowText": input.allow_text,
+            "sensitive": input.sensitive,
             "audience": {"accounts": accounts, "roles": input.audience.roles},
             "expiresInSeconds": input.expires_in_seconds,
             "onExpiry": input.on_expiry,
@@ -321,7 +326,14 @@ impl Operation for RequestAnswer {
     const MODULE: &'static str = "runs";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-    const EMITS: &'static [&'static str] = &["request.answered"];
+    // A proposal's card decides the proposal (T1.41).
+    const EMITS: &'static [&'static str] = &[
+        "request.answered",
+        "record.updated",
+        "record.proposals_changed",
+        "task.updated",
+        "task.proposals_changed",
+    ];
     const TITLE: &'static str = "Answer a request";
     const DESCRIPTION: &'static str = "Answer a request asked of you or a role you hold (request_list for_me lists them): pick an option by its id, type an answer, or both. An answer is final; it goes back to whoever asked, and a run waiting on it goes on.";
     type Input = RequestAnswerInput;

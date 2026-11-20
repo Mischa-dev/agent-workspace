@@ -105,7 +105,6 @@ pub(crate) async fn github_integration_write(
             let mut synced = github::sync_installation_as(
                 state,
                 principal.actor_id,
-                principal.actor_kind,
                 project_id,
                 installation_id,
                 &repository_ids,
@@ -145,7 +144,6 @@ pub(crate) async fn github_integration_write(
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::GithubIntegrationManage,
         )

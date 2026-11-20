@@ -21,6 +21,7 @@ use crate::{
 pub(super) struct ConnectionAuthorization {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,7 +39,8 @@ pub(super) async fn begin_authorized_read<'a>(
     let connection_id = principal
         .external_agent_connection_id
         .ok_or(ReadFailure::Authorization)?;
-    if principal.actor_kind != ActorKind::ExternalAgent || !principal.has_scope(required_scope) {
+    let through_connection = principal.actor_kind == ActorKind::ExternalAgent; // kind-check: mechanical (agents sign in through connections)
+    if !through_connection || !principal.has_scope(required_scope) {
         return Err(ReadFailure::Authorization);
     }
     let mut transaction = crate::db::scoped_tx(&state.pool)
@@ -47,20 +49,26 @@ pub(super) async fn begin_authorized_read<'a>(
     let authorization = sqlx::query_as::<_, ConnectionAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
-               workspace_role_permissions(membership.role_id) AS membership_role_permissions
-        FROM mcp_client_credentials credential
+               workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+               space_group_permissions(credential.actor_id, project.id)
+                 AS membership_group_permissions
+        FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id
-        JOIN projects project ON project.id = $2
+        -- In a DM or group (the direct scope) the agent answers as a member
+        -- of its connection's own space.
+        JOIN projects project
+          ON project.id = COALESCE(NULLIF($2::uuid, direct_scope_id()), credential.project_id)
         JOIN project_memberships membership
-          ON membership.project_id = $2
+          ON membership.project_id = project.id
          AND membership.actor_id = credential.actor_id
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = credential.actor_id
         WHERE credential.id = $1
-          AND agent_connection_can_access(connection.id, $2)
+          AND agent_connection_can_access(connection.id, project.id)
+          AND ($2 <> direct_scope_id() OR agent_connection_can_reach_direct(connection.id))
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active' AND credential.revoked_at IS NULL
@@ -70,7 +78,7 @@ pub(super) async fn begin_authorized_read<'a>(
           AND connection.project_id = credential.project_id
           AND connection.actor_id = credential.actor_id
           AND connection.scopes = credential.scopes
-          AND actor.kind = 'external_agent' AND actor.status = 'active'
+          AND actor.kind = 'external_agent' AND actor.status = 'active' -- // kind-check: mechanical (agents sign in through connections)
           AND project.archived_at IS NULL
           AND membership.enabled AND organization_membership.enabled
         FOR SHARE OF credential, connection, actor, project, membership,
@@ -86,12 +94,14 @@ pub(super) async fn begin_authorized_read<'a>(
     .await
     .map_err(|_| ReadFailure::Database("authorize"))?
     .ok_or(ReadFailure::Authorization)?;
-    if !super::mcp_policy_allows(
-        principal.actor_id,
-        principal.actor_kind,
+    if !super::common::role_allows(
+        principal,
         principal.project_id,
-        &authorization.membership_role,
-        authorization.membership_role_permissions.as_deref(),
+        &super::common::StoredRole::of(
+            &authorization.membership_role,
+            authorization.membership_role_permissions.as_deref(),
+        )
+        .with_groups(authorization.membership_group_permissions.clone()),
         Action::McpRead,
     ) {
         return Err(ReadFailure::Authorization);

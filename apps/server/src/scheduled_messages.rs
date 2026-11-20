@@ -94,6 +94,7 @@ struct ScheduledRow {
     conversation_kind: String,
     conversation_name: String,
     parent_conversation_id: Option<Uuid>,
+    conversation_workspace_id: Option<Uuid>,
     project_id: Uuid,
     workspace_id: Uuid,
     project_name: String,
@@ -116,19 +117,21 @@ fn select_sql(extra: &str) -> String {
         SELECT scheduled.id, scheduled.conversation_id,
                conversation.kind AS conversation_kind, conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
-               scheduled.project_id, project.organization_id AS workspace_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
-                   AS project_name,
-               project.kind = 'direct' AS direct_space,
+               conversation.workspace_id AS conversation_workspace_id,
+               COALESCE(scheduled.project_id, direct_scope_id()) AS project_id,
+               scheduled.organization_id AS workspace_id,
+               COALESCE(project.name, 'Messages') AS project_name,
+               scheduled.project_id IS NULL AS direct_space,
                scheduled.content, scheduled.plain_text,
                scheduled.mentioned_actors, scheduled.referenced_work_items,
                scheduled.send_at, scheduled.status, scheduled.failure, scheduled.message_id,
                scheduled.created_at
         FROM scheduled_messages scheduled
         JOIN conversations conversation ON conversation.id = scheduled.conversation_id
-        JOIN projects project ON project.id = scheduled.project_id
+        LEFT JOIN projects project ON project.id = scheduled.project_id
         WHERE scheduled.author_actor_id = $1
-          AND actor_can_access_project($1, scheduled.external_agent_connection_id, scheduled.project_id)
+          AND (scheduled.project_id IS NULL
+               OR actor_can_access_project($1, scheduled.external_agent_connection_id, scheduled.project_id))
           AND conversation_visible_to(scheduled.conversation_id, $1)
           {extra}
         "#
@@ -190,7 +193,11 @@ pub async fn list(
     let sql = select_sql(&format!(
         r#"
         AND ($2::uuid IS NULL OR scheduled.conversation_id = $2)
-        AND ($3::uuid[] IS NULL OR scheduled.project_id = ANY($3))
+        AND ($3::uuid[] IS NULL OR COALESCE(scheduled.project_id, direct_scope_id()) = ANY($3))
+        -- $5: while a credential held to some workspaces acts for them, a
+        -- DM's only when it's kept in one of those (or personal).
+        AND ($5::uuid[] IS NULL OR scheduled.project_id IS NOT NULL
+             OR conversation.workspace_id = ANY($5))
         AND (scheduled.status = 'scheduled'
              OR (scheduled.status = 'failed'
                  AND scheduled.updated_at > now() - interval '{FAILED_SHOWN_DAYS} days'))
@@ -203,9 +210,11 @@ pub async fn list(
         .bind(conversation_id)
         .bind(within)
         .bind(LIST_LIMIT)
+        .bind(crate::access::limited_direct_workspaces(viewer))
         .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
+        .filter(|row| !hidden_by_limit(viewer, row))
         .map(|row| view(addresses, row))
         .collect())
 }
@@ -221,8 +230,15 @@ pub async fn get_scheduled(
         .bind(id)
         .fetch_optional(crate::db::scoped(pool))
         .await?
+        .filter(|row| !hidden_by_limit(viewer, row))
         .map(|row| view(addresses, row))
         .ok_or(AppError::NotFound("scheduled_message"))
+}
+
+/// A scheduled DM message an app or token acting for `viewer` may not
+/// see: the DM is kept in a workspace the credential isn't held to.
+fn hidden_by_limit(viewer: Uuid, row: &ScheduledRow) -> bool {
+    row.direct_space && crate::access::limit_hides_direct(viewer, row.conversation_workspace_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +276,7 @@ async fn check(
     let conversation =
         lock_message_conversation(transaction, actor, conversation_id, Action::MessageSend).await?;
     require_active_conversation(&conversation)?;
-    let resolved = resolve_message_content(transaction, conversation.project_id, content).await?;
+    let resolved = resolve_message_content(transaction, conversation.place(), content).await?;
     let mentioned_actors = fetch_actor_views(
         transaction,
         conversation.project_id,
@@ -278,19 +294,24 @@ async fn check(
                     "title": title,
                     "statusCategory": status_category,
                     "archivedAt": archived_at,
-                    "href": Target::task(conversation.project_id, *id).legacy_path(),
+                    "href": Target::task(conversation.place(), *id).legacy_path(),
                 })
             })
             .collect(),
     );
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(conversation.project_id)
-            .fetch_one(&mut **transaction)
-            .await?;
+    // A personal DM belongs to no workspace: the author's current one
+    // holds the scheduled message (its links and its failure notice).
+    let organization_id = if conversation.workspace_id == crate::spaces::DIRECT {
+        crate::workspace::default_workspace(&mut **transaction, actor.actor_id)
+            .await?
+            .map(|(workspace, _)| workspace)
+            .ok_or(AppError::NotFound("organization"))?
+    } else {
+        conversation.workspace_id
+    };
     Ok(Checked {
         organization_id,
-        project_id: conversation.project_id,
+        project_id: conversation.place(),
         content: resolved.content_json,
         plain_text: resolved.plain_text,
         mentioned_actors,
@@ -353,7 +374,7 @@ pub(crate) async fn schedule_in(
             id, organization_id, project_id, conversation_id, author_actor_id,
             external_agent_connection_id, via_oauth_grant_id, content, plain_text,
             mentioned_actors, referenced_work_items, send_at, made_through_app
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ) VALUES ($1, $2, NULLIF($3, direct_scope_id()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
     .bind(id)
@@ -666,7 +687,8 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
     let key = IdempotencyKey::parse(&format!("scheduled-message-{}", row.id))?;
     // A person's app or script scheduled it: it goes out within that app's
     // agent limit as it is now, as the tool call that scheduled it did.
-    let limits = if row.made_through_app && row.author_kind == "human" {
+    let person = row.author_kind == "human"; // kind-check: mechanical (an app acting for a person sends within that app's limit)
+    let limits = if row.made_through_app && person {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Some(
             crate::roles::app_access(&mut connection, row.author_actor_id)
@@ -763,7 +785,7 @@ async fn sender(
             };
             let credential_id = sqlx::query_scalar::<_, Uuid>(
                 r#"
-                SELECT credential.id FROM mcp_client_credentials credential
+                SELECT credential.id FROM account_credentials credential
                 WHERE credential.external_agent_connection_id = $1
                   AND credential.actor_id = $2
                   AND credential.status = 'active'
@@ -808,13 +830,14 @@ async fn fail(
     .bind(reason)
     .execute(&mut **transaction)
     .await?;
-    if row.author_kind != "human" {
+    let person = row.author_kind == "human"; // kind-check: mechanical (how they are told: a failure goes to a person's inbox)
+    if !person {
         return Ok(());
     }
     // Told in their workspace's own space: the conversation may be one
     // they can no longer see.
     let Some(space) =
-        crate::direct::space_for_member(transaction, row.organization_id, row.author_actor_id)
+        crate::spaces::workspace::join(transaction, row.organization_id, row.author_actor_id)
             .await?
     else {
         return Ok(());

@@ -133,12 +133,23 @@ async fn member(
     project_id: Uuid,
     action: Action,
 ) -> Result<Member, AppError> {
-    let Some((organization_id, archived_at, role, role_permissions, enabled)) =
+    let Some((organization_id, archived_at, role, role_permissions, group_permissions, enabled)) =
         crate::db::scoped_one(&state.pool, async |connection| {
-            sqlx::query_as::<_, (Uuid, Option<String>, String, Option<Vec<String>>, bool)>(
+            sqlx::query_as::<
+                _,
+                (
+                    Uuid,
+                    Option<String>,
+                    String,
+                    Option<Vec<String>>,
+                    Option<Vec<String>>,
+                    bool,
+                ),
+            >(
                 r#"
             SELECT project.organization_id, project.archived_at::text, membership.role,
-                   workspace_role_permissions(membership.role_id), membership.enabled
+                   workspace_role_permissions(membership.role_id),
+                   space_group_permissions($2, project.id), membership.enabled
             FROM projects project
             JOIN project_memberships membership
               ON membership.project_id = project.id AND membership.actor_id = $2
@@ -172,6 +183,7 @@ async fn member(
         project_archived_at: archived_at,
         role,
         role_permissions,
+        group_permissions,
         enabled,
     };
     if !authorize_mutation(&actor, &membership, Action::WorkItemView, None)?.is_allowed() {
@@ -1108,12 +1120,15 @@ async fn thread_summary(
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let Some(project_id) = crate::db::scoped_one(&state.pool, async |connection| {
+        // A DM or group is in no space, so it has no summary here.
         sqlx::query_scalar::<_, Uuid>(
-        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-    )
-    .bind(conversation_id)
-    .bind(principal.actor_id)
-    .fetch_optional(connection).await
+            "SELECT project_id FROM conversations \
+         WHERE id = $1 AND project_id IS NOT NULL AND conversation_visible_to(id, $2)",
+        )
+        .bind(conversation_id)
+        .bind(principal.actor_id)
+        .fetch_optional(connection)
+        .await
     })
     .await?
     else {

@@ -1,4 +1,5 @@
 pub mod ops;
+pub mod scope;
 
 use axum::{
     Json, Router,
@@ -17,10 +18,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, Permission, ProjectScope,
-        Resource, RoleGrant, Subject, authorize,
-    },
+    policy::{Action, Permission, RoleGrant},
 };
 
 const TOKEN_BYTES: usize = 32;
@@ -69,9 +67,12 @@ struct AccessRow {
     organization_id: Uuid,
     project_archived: bool,
     organization_role: String,
+    organization_role_permissions: Option<Vec<String>>,
     organization_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the manager's groups are given in the project (K1.27).
+    project_group_permissions: Option<Vec<String>>,
     project_enabled: bool,
 }
 
@@ -402,15 +403,29 @@ async fn insert_agent(
         },
     )
     .await?;
+    // Its workspace name comes first: writing it joins the workspace's own
+    // space, where the membership then takes the asked role.
     sqlx::query(
         r#"
-        INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle,
-            invited_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (organization_id, actor_id) DO NOTHING
         "#,
     )
-    .bind(Uuid::now_v7())
+    .bind(organization_id)
+    .bind(actor_id)
+    .bind(&normalized.display_name)
+    .bind(&normalized.handle)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_database_error)?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE project_memberships
+        SET role = $3, display_name = $4, handle = $5, invited_by_actor_id = $6
+        WHERE project_id = $1 AND actor_id = $2
+        "#,
+    )
     .bind(project_id)
     .bind(actor_id)
     .bind(&normalized.role)
@@ -419,7 +434,28 @@ async fn insert_agent(
     .bind(created_by)
     .execute(&mut **transaction)
     .await
-    .map_err(map_database_error)?;
+    .map_err(map_database_error)?
+    .rows_affected();
+    if updated == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO project_memberships (
+                id, project_id, actor_id, role, display_name, handle,
+                invited_by_actor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(actor_id)
+        .bind(&normalized.role)
+        .bind(&normalized.display_name)
+        .bind(&normalized.handle)
+        .bind(created_by)
+        .execute(&mut **transaction)
+        .await
+        .map_err(map_database_error)?;
+    }
     crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     let (connection_id, credential) = connect(
         transaction,
@@ -942,7 +978,7 @@ async fn mutate_connection(
     };
     let has_explicit_scopes = requested_scopes.is_some();
     let requested_scopes = requested_scopes.unwrap_or_else(|| current.scopes.clone());
-    if next_role == "viewer"
+    if sees_only(next_role)
         && has_explicit_scopes
         && requested_scopes
             .iter()
@@ -950,7 +986,7 @@ async fn mutate_connection(
     {
         return Err(AppError::Validation("external_agent_scopes"));
     }
-    let next_scopes = if next_role == "viewer" {
+    let next_scopes = if sees_only(next_role) {
         requested_scopes
             .iter()
             .filter(|scope| matches!(scope.as_str(), "read" | "events"))
@@ -1022,7 +1058,7 @@ async fn mutate_connection(
             r#"
             UPDATE actors
             SET status = CASE WHEN $2 THEN 'active' ELSE 'disabled' END, updated_at = now()
-            WHERE id = $1 AND kind = 'external_agent'
+            WHERE id = $1 AND kind = 'external_agent' -- // kind-check: mechanical (the agent's own account row)
             "#,
         )
         .bind(current.actor_id)
@@ -1091,6 +1127,17 @@ async fn mutate_connection(
             "external_agent_connection",
             "stale version",
         ));
+    }
+    // K4.9: a retired agent's personal space is archived with it, its notes
+    // and pages kept.
+    if remove {
+        crate::spaces::personal::archive_for(
+            &mut transaction,
+            access.organization_id,
+            current.actor_id,
+            principal.actor_id,
+        )
+        .await?;
     }
 
     let one_time_credential = if should_issue {
@@ -1209,7 +1256,7 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
     }
     let scopes = normalize_scopes(request.scopes)?;
     if scopes.is_empty()
-        || (request.role == "viewer"
+        || (sees_only(&request.role)
             && scopes
                 .iter()
                 .any(|scope| !matches!(scope.as_str(), "read" | "events")))
@@ -1311,57 +1358,59 @@ fn authorize_management(
     access: &AccessRow,
     project_id: Uuid,
 ) -> Result<(), AppError> {
-    let kind = crate::hosts::builtin::http::parse_actor_kind(&principal.actor_kind)?;
-    if management_allowed(principal.actor_id, kind, true, access, project_id) {
+    if management_allowed(principal.actor_id, true, access, project_id) {
         Ok(())
     } else {
         Err(AppError::NotFound("project"))
     }
 }
 
+/// Whether a role only lets its holder see things (the built-in Viewer):
+/// a connection holding it gets read scopes only.
+fn sees_only(role: &str) -> bool {
+    RoleGrant::stored(role, None::<&[String]>).is_ok_and(|grant| !crate::access::writes(grant))
+}
+
 /// The one rule for managing an agent, and so for acting as it (P0.6): an
-/// active manager who is an enabled owner or admin of the agent's workspace
-/// and whose role in the agent's home project allows ExternalAgentManage.
-/// "agents.manage" is people-only in the catalogue, so the policy refuses
-/// other kinds of account; no kind check is written here.
+/// active manager whose roles in the agent's workspace and in its home
+/// project both manage agents, whatever kind of account they are.
 fn management_allowed(
     manager: Uuid,
-    manager_kind: ActorKind,
     manager_active: bool,
     access: &AccessRow,
     project_id: Uuid,
 ) -> bool {
-    if !access.organization_enabled
-        || !matches!(access.organization_role.as_str(), "owner" | "admin")
-    {
+    let permission = Action::ExternalAgentManage.permission();
+    let Ok(workspace_grant) = RoleGrant::stored(
+        &access.organization_role,
+        access.organization_role_permissions.as_deref(),
+    ) else {
         return false;
-    }
-    let role = match RoleGrant::stored(
+    };
+    let Ok(project_grant) = RoleGrant::stored(
         &access.project_role,
         access.project_role_permissions.as_deref(),
-    ) {
-        Ok(role) if role.role() != MembershipRole::Worker => role,
-        _ => return false,
+    ) else {
+        return false;
     };
-    let subject = Subject::new(
-        manager,
-        manager_kind,
-        manager_active,
-        Some(Membership::project(
+    let project_grant = project_grant.with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
+    manager_active
+        && crate::access::workspace_membership_allows(
+            manager,
+            access.organization_id,
+            workspace_grant,
+            access.organization_enabled,
+            permission,
+        )
+        && crate::access::membership_allows(
+            manager,
             project_id,
-            role,
+            project_grant,
             access.project_enabled,
-        )),
-        None,
-    );
-    matches!(
-        authorize(
-            &subject,
-            Action::ExternalAgentManage,
-            Resource::Project(ProjectScope::project(project_id)),
-        ),
-        Decision::Allow
-    )
+            permission,
+        )
 }
 
 /// An agent connection someone may manage, with where it lives.
@@ -1471,8 +1520,10 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT p.organization_id, p.archived_at IS NOT NULL AS project_archived,
                om.role AS organization_role, om.enabled AS organization_enabled,
+               workspace_role_permissions(om.role_id) AS organization_role_permissions,
                pm.role AS project_role,
                workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               space_group_permissions(pm.actor_id, p.id) AS project_group_permissions,
                pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om
@@ -1486,8 +1537,10 @@ fn access_sql(lock: bool) -> &'static str {
         r#"
         SELECT p.organization_id, p.archived_at IS NOT NULL AS project_archived,
                om.role AS organization_role, om.enabled AS organization_enabled,
+               workspace_role_permissions(om.role_id) AS organization_role_permissions,
                pm.role AS project_role,
                workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               space_group_permissions(pm.actor_id, p.id) AS project_group_permissions,
                pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om
@@ -1571,7 +1624,7 @@ async fn insert_credential(
 ) -> Result<String, AppError> {
     Ok(sqlx::query_scalar::<_, String>(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at, external_agent_connection_id
         ) VALUES (
@@ -1600,7 +1653,7 @@ async fn revoke_credentials(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials
+        UPDATE account_credentials
         SET status = 'revoked', revoked_at = now(), version = version + 1,
             updated_at = now()
         WHERE external_agent_connection_id = $1 AND status = 'active'

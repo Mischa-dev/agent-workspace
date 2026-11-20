@@ -9,10 +9,7 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, RoleGrant},
 };
 
 pub fn router() -> Router<AppState> {
@@ -39,6 +36,8 @@ struct AccessRow {
     organization_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given in the project (K1.27).
+    project_group_permissions: Option<Vec<String>>,
     project_enabled: bool,
 }
 
@@ -354,6 +353,10 @@ pub(crate) async fn change_member(
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
     let next_enabled = enabled.unwrap_or(target.enabled);
+    let via_group = group_seat(transaction, project_id, actor_id).await?;
+    if via_group && target.enabled && !next_enabled {
+        return Err(THROUGH_A_GROUP);
+    }
     // Bringing someone back hands their role out again, so it has to be
     // within what the caller holds, as a role change is.
     if next_role != target.role
@@ -378,7 +381,9 @@ pub(crate) async fn change_member(
         });
     }
 
-    if target.role == "owner" && (next_role != "owner" || !next_enabled) {
+    if crate::access::tier::stored_owner(&target.role)
+        && (!crate::access::tier::stored_owner(next_role) || !next_enabled)
+    {
         lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
             .await?;
     }
@@ -443,11 +448,21 @@ pub(crate) async fn change_member(
         current_version: target.version,
     })?;
 
-    if target.actor_kind == "human" {
-        sync_organization_role(transaction, target.organization_id, actor_id).await?;
+    if via_group {
+        // A role given to someone in through a group makes the seat theirs.
+        sqlx::query(
+            "UPDATE project_memberships SET via_group = false \
+             WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
     }
     if target.enabled && !next_enabled {
         revoke_project_credentials(transaction, project_id, actor_id).await?;
+        // A group they're in may still give them the space (K1.27).
+        sync_group_seat(transaction, project_id, actor_id).await?;
     }
     enqueue_typed(
         transaction,
@@ -464,6 +479,78 @@ pub(crate) async fn change_member(
         before: target,
         updated: Some(updated),
     })
+}
+
+pub mod expiry;
+
+/// Turns off a space membership whose time has passed (K1.27), as removing
+/// someone does; a group they're in may still give them the space.
+pub(crate) async fn expire_member(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let version = sqlx::query_scalar::<_, i64>(
+        "UPDATE project_memberships \
+         SET enabled = false, disabled_at = now(), disabled_by_actor_id = NULL, \
+             version = version + 1, updated_at = now() \
+         WHERE project_id = $1 AND actor_id = $2 RETURNING version",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    revoke_project_credentials(transaction, project_id, actor_id).await?;
+    sync_group_seat(transaction, project_id, actor_id).await?;
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id,
+            actor_id,
+            version,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Refused when someone in a space through a group (K1.27) is removed or
+/// leaves: the group's grant is what gives them the space.
+const THROUGH_A_GROUP: AppError = AppError::Conflict(
+    "project_membership",
+    "they're in this space through a group: take them out of the group, or the group out of the space",
+);
+
+/// Whether `actor_id`'s seat in `project_id` is a group's (K1.27).
+async fn group_seat(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT via_group FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false))
+}
+
+/// Brings `actor_id`'s group seat in `project_id` in step with the group
+/// grants there (`space_group_seat_sync`).
+pub(crate) async fn sync_group_seat(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT space_group_seat_sync($1, $2)")
+        .bind(project_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 /// Refuses a project role that would give someone a permission the caller
@@ -521,7 +608,7 @@ pub(crate) async fn pick_custom_role(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("role"))?;
-    if base == "owner" {
+    if crate::access::tier::stored_owner(&base) {
         return Err(AppError::Validation("project membership role"));
     }
     Ok((base, (!built_in).then_some(role_id)))
@@ -564,28 +651,40 @@ fn authorize_access(
     {
         return Err(AppError::NotFound("project"));
     }
-    let subject = Subject::new(
+    let grant = RoleGrant::stored(
+        &access.project_role,
+        access.project_role_permissions.as_deref(),
+    )?
+    .with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
+    if crate::access::membership_allows(
         actor_id,
-        ActorKind::Human,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(
-                &access.project_role,
-                access.project_role_permissions.as_deref(),
-            )?,
-            access.project_enabled,
-        )),
-        None,
-    );
-    match authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
+        project_id,
+        grant,
+        access.project_enabled,
+        action.permission(),
     ) {
-        Decision::Allow => Ok(()),
-        Decision::Deny(_) => Err(AppError::NotFound("project")),
+        Ok(())
+    } else {
+        Err(AppError::NotFound("project"))
     }
+}
+
+/// Whether the caller's workspace tier reaches someone: an owner reaches
+/// anyone, an admin those below admin in the workspace and the project.
+fn tier_reaches(caller_role: &str, target_workspace_role: &str, target_roles: &[&str]) -> bool {
+    use crate::access::tier;
+    let below_admin = |role: &str| {
+        matches!(
+            tier::of(role),
+            Some(crate::policy::MembershipRole::Member | crate::policy::MembershipRole::Viewer)
+        )
+    };
+    tier::stored_owner(caller_role)
+        || (tier::stored_high(caller_role)
+            && below_admin(target_workspace_role)
+            && target_roles.iter().all(|role| below_admin(role)))
 }
 
 fn authorize_target(
@@ -593,25 +692,24 @@ fn authorize_target(
     target: &MemberRow,
     next_role: &str,
 ) -> Result<(), AppError> {
-    match access.organization_role.as_str() {
-        "owner" => Ok(()),
-        "admin"
-            if target.organization_role == "member"
-                && matches!(target.role.as_str(), "member" | "viewer")
-                && matches!(next_role, "member" | "viewer") =>
-        {
-            Ok(())
-        }
-        _ => Err(AppError::Forbidden),
+    if tier_reaches(
+        &access.organization_role,
+        &target.organization_role,
+        &[&target.role, next_role],
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 
 fn member_view(row: MemberRow, principal: &AuthenticatedActor, access: &AccessRow) -> MemberView {
     let manageable = row.actor_id != principal.actor_id
-        && (access.organization_role == "owner"
-            || (access.organization_role == "admin"
-                && row.organization_role == "member"
-                && matches!(row.role.as_str(), "member" | "viewer")));
+        && tier_reaches(
+            &access.organization_role,
+            &row.organization_role,
+            &[&row.role],
+        );
     MemberView {
         id: row.id,
         project_id: row.project_id,
@@ -679,6 +777,8 @@ fn access_sql(lock: bool) -> &'static str {
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -699,6 +799,8 @@ fn access_sql(lock: bool) -> &'static str {
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -742,7 +844,7 @@ fn member_list_sql() -> &'static str {
         "WHEN EXISTS (SELECT 1 FROM execution_profiles profile WHERE profile.project_id = membership.project_id AND profile.owner_actor_id = membership.actor_id) THEN 'disabled' ",
         "ELSE 'not_configured' END AS profile_readiness ",
         "FROM project_memberships membership JOIN projects project ON project.id = membership.project_id ",
-        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') ",
+        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent', 'integration') ", // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
         "LEFT JOIN users user_account ON user_account.actor_id = actor.id ",
         "JOIN organization_memberships organization_membership ON organization_membership.organization_id = project.organization_id AND organization_membership.actor_id = actor.id ",
         "LEFT JOIN project_memberships inviter ON inviter.project_id = membership.project_id AND inviter.actor_id = membership.invited_by_actor_id ",
@@ -776,7 +878,7 @@ fn member_query_sql() -> &'static str {
            END AS profile_readiness
     FROM project_memberships membership
     JOIN projects project ON project.id = membership.project_id
-    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent')
+    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
     LEFT JOIN users user_account ON user_account.actor_id = actor.id
     JOIN organization_memberships organization_membership
       ON organization_membership.organization_id = project.organization_id
@@ -795,15 +897,17 @@ async fn lock_and_require_other_owners(
     actor_id: Uuid,
 ) -> Result<(), AppError> {
     let organization_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' AND enabled FOR UPDATE",
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = $2 AND enabled FOR UPDATE",
     )
     .bind(organization_id)
+    .bind(crate::access::tier::OWNER)
     .fetch_all(&mut **transaction)
     .await?;
     let project_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = 'owner' AND enabled FOR UPDATE",
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled FOR UPDATE",
     )
     .bind(project_id)
+    .bind(crate::access::tier::OWNER)
     .fetch_all(&mut **transaction)
     .await?;
     if !organization_owners.iter().any(|owner| *owner != actor_id)
@@ -817,62 +921,6 @@ async fn lock_and_require_other_owners(
     Ok(())
 }
 
-/// Keeps a human's Organization role in step with their Project roles: managing
-/// members requires an Organization admin, so a Project owner or admin anywhere
-/// in the Organization is one, and someone who is neither anywhere is not.
-/// Owners are never changed here, nor a role an owner set on the
-/// workspace's Members page (`role_explicit`), nor a custom workspace role.
-/// Only the built-in project Owner and Admin roles count: a custom role
-/// based on Admin is narrower than workspace Admin, so it never widens into
-/// it.
-async fn sync_organization_role(
-    transaction: &mut Transaction<'_, Postgres>,
-    organization_id: Uuid,
-    actor_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        WITH next AS (
-            SELECT CASE WHEN EXISTS (
-                SELECT 1 FROM project_memberships membership
-                JOIN projects project ON project.id = membership.project_id
-                WHERE project.organization_id = $1 AND project.archived_at IS NULL
-                  -- The workspace's own space follows the workspace role,
-                  -- never the other way round.
-                  AND project.kind <> $3
-                  AND membership.actor_id = $2 AND membership.enabled
-                  AND membership.role IN ('owner', 'admin')
-                  -- Only the starting roles as they come: a custom or edited
-                  -- Admin-based role grants less than workspace Admin, so it
-                  -- never widens into it.
-                  AND NOT EXISTS (
-                      SELECT 1 FROM workspace_roles held
-                      WHERE held.id = membership.role_id
-                        AND (NOT held.built_in OR held.customized)
-                  )
-            ) THEN 'admin' ELSE 'member' END AS role
-        )
-        UPDATE organization_memberships
-        SET role = next.role, version = version + 1, updated_at = now()
-        FROM next
-        WHERE organization_id = $1 AND actor_id = $2
-          AND organization_memberships.role IN ('admin', 'member')
-          AND NOT organization_memberships.role_explicit
-          AND NOT EXISTS (
-              SELECT 1 FROM workspace_roles held
-              WHERE held.id = organization_memberships.role_id AND NOT held.built_in
-          )
-          AND organization_memberships.role <> next.role
-        "#,
-    )
-    .bind(organization_id)
-    .bind(actor_id)
-    .bind(crate::spaces::SpaceKind::Workspace.stored())
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
 async fn revoke_project_credentials(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -882,7 +930,7 @@ async fn revoke_project_credentials(
     // project it was first added to only anchors it, so leaving that project
     // closes the project (checked on every call) without signing it out.
     sqlx::query(
-        "UPDATE mcp_client_credentials SET status = 'revoked', version = version + 1, revoked_at = now(), updated_at = now() WHERE project_id = $1 AND actor_id = $2 AND status = 'active' AND external_agent_connection_id IS NULL",
+        "UPDATE account_credentials SET status = 'revoked', version = version + 1, revoked_at = now(), updated_at = now() WHERE project_id = $1 AND actor_id = $2 AND status = 'active' AND external_agent_connection_id IS NULL",
     )
     .bind(project_id)
     .bind(actor_id)
@@ -1032,8 +1080,8 @@ async fn member_candidates(
         JOIN organization_memberships om ON om.organization_id = profile.organization_id
           AND om.actor_id = profile.actor_id AND om.enabled
         LEFT JOIN users u ON u.actor_id = actor.id
-        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent')
-          AND (actor.kind = 'external_agent' OR u.status = 'active')
+        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps)
+          AND (actor.kind <> 'human' OR u.status = 'active') -- // kind-check: mechanical (a person signs in with an active user account)
           AND NOT EXISTS (SELECT 1 FROM project_memberships pm WHERE pm.project_id = $1 AND pm.actor_id = actor.id)
         ORDER BY profile.display_name, actor.id LIMIT 200
     "#).bind(project_id).fetch_all(&state.pool).await?))
@@ -1126,11 +1174,23 @@ pub(crate) async fn add_member(
         FROM projects p
         JOIN organization_actor_profiles profile ON profile.organization_id = p.organization_id AND profile.actor_id = $2
         JOIN organization_memberships om ON om.organization_id = p.organization_id AND om.actor_id = $2 AND om.enabled
-        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent')
-        WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active'))
+        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps)
+        WHERE p.id = $1 AND (a.kind <> 'human' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active')) -- // kind-check: mechanical (a person signs in with an active user account)
         FOR SHARE OF om, a
     "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;
+    // Someone in through a group gets a seat of their own (K1.27).
+    sqlx::query(
+        "UPDATE project_memberships SET via_group = false, role = $3, role_id = $4, \
+         version = version + 1, updated_at = now() \
+         WHERE project_id = $1 AND actor_id = $2 AND via_group AND enabled",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .bind(role)
+    .bind(role_id)
+    .execute(&mut **tx)
+    .await?;
     let inserted = sqlx::query(r#"
         INSERT INTO project_memberships (id, project_id, actor_id, role, role_id, display_name, handle, invited_by_actor_id)
         VALUES ($1,$2,$3,$4,$8,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
@@ -1164,4 +1224,194 @@ pub(crate) async fn add_member(
         member,
         inserted,
     })
+}
+
+/// What joining or leaving did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelfChange {
+    /// Nothing to do: already a member (or already gone).
+    Unchanged,
+    Changed,
+}
+
+/// K4.8: someone joins a project or team space open to the workspace, as a
+/// member (or a viewer, when their workspace role holds less than a
+/// member's). A space only its members find is joined by being added. Someone
+/// removed from it isn't let back in this way.
+pub(crate) async fn join(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    space: Uuid,
+) -> Result<SelfChange, AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{space}"))
+        .execute(&mut **tx)
+        .await?;
+    let open = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT space.workspace_id, profile.display_name, profile.handle
+        FROM spaces space
+        JOIN organization_actor_profiles profile
+          ON profile.organization_id = space.workspace_id AND profile.actor_id = $2
+        WHERE space.id = $1 AND space.archived_at IS NULL
+          AND space.visibility = $3 AND space.kind = ANY($4)
+          AND space_readable_by(space.id, $2)
+        FOR SHARE OF space
+        "#,
+    )
+    .bind(space)
+    .bind(account)
+    .bind(crate::spaces::SpaceVisibility::Workspace.stored())
+    .bind([
+        crate::spaces::SpaceKind::Project.stored(),
+        crate::spaces::SpaceKind::Team.stored(),
+    ])
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((workspace, display_name, handle)) = open else {
+        return Err(AppError::NotFound("space"));
+    };
+    if let Some(enabled) = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        return if enabled {
+            Ok(SelfChange::Unchanged)
+        } else {
+            Err(AppError::Refused {
+                field: "spaceId",
+                message: "You were removed from this space. Ask someone who manages it to add you back.",
+            })
+        };
+    }
+    let held = crate::roles::standing(tx, workspace, account).await?;
+    let member = RoleGrant::stored("member", None::<&[String]>)?;
+    let role = if crate::roles::project_checked(member.permissions()).is_subset_of(held.permissions)
+    {
+        "member"
+    } else {
+        "viewer"
+    };
+    let membership = sqlx::query_scalar::<_, i64>(
+        r#"
+        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING version
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(space)
+    .bind(account)
+    .bind(role)
+    .bind(display_name)
+    .bind(handle)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(map_membership_database_error)?;
+    crate::roles::apply_arrival_defaults(tx, space, account, account).await?;
+    enqueue_typed(
+        tx,
+        space,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id: space,
+            actor_id: account,
+            version: membership,
+        }),
+    )
+    .await?;
+    Ok(SelfChange::Changed)
+}
+
+/// K4.8: someone leaves a project or team space they're in. A space always
+/// keeps an enabled owner, so its last owner hands it over first. Their
+/// credentials held to it stop.
+pub(crate) async fn leave(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    space: Uuid,
+) -> Result<SelfChange, AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{space}"))
+        .execute(&mut **tx)
+        .await?;
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM spaces WHERE id = $1 FOR SHARE")
+        .bind(space)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(AppError::NotFound("space"))?;
+    if !matches!(
+        crate::spaces::SpaceKind::from_stored(&kind),
+        Some(crate::spaces::SpaceKind::Project | crate::spaces::SpaceKind::Team)
+    ) {
+        return Err(AppError::Refused {
+            field: "spaceId",
+            message: "Only a project or team space can be left; everyone in the workspace is in its own space.",
+        });
+    }
+    let Some((role, enabled, via_group)) = sqlx::query_as::<_, (String, bool, bool)>(
+        "SELECT role, enabled, via_group FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = $2 FOR UPDATE",
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok(SelfChange::Unchanged);
+    };
+    if !enabled {
+        return Ok(SelfChange::Unchanged);
+    }
+    if via_group {
+        return Err(THROUGH_A_GROUP);
+    }
+    let owner = crate::policy::MembershipRole::Owner.key();
+    // The owner tier, by its stored key: a space keeps one.
+    if crate::policy::MembershipRole::parse(&role) == Some(crate::policy::MembershipRole::Owner) {
+        let others = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM project_memberships \
+             WHERE project_id = $1 AND role = $3 AND enabled AND actor_id <> $2",
+        )
+        .bind(space)
+        .bind(account)
+        .bind(owner)
+        .fetch_one(&mut **tx)
+        .await?;
+        if others == 0 {
+            return Err(AppError::Conflict(
+                "project_membership",
+                "the last enabled owner cannot leave",
+            ));
+        }
+    }
+    let version = sqlx::query_scalar::<_, i64>(
+        r#"
+        UPDATE project_memberships
+        SET enabled = false, disabled_by_actor_id = $2, disabled_at = now(),
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND actor_id = $2
+        RETURNING version
+        "#,
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_one(&mut **tx)
+    .await?;
+    revoke_project_credentials(tx, space, account).await?;
+    sync_group_seat(tx, space, account).await?;
+    enqueue_typed(
+        tx,
+        space,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id: space,
+            actor_id: account,
+            version,
+        }),
+    )
+    .await?;
+    Ok(SelfChange::Changed)
 }

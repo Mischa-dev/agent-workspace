@@ -6,6 +6,11 @@
   },
   {
     "kind": "change",
+    "name": "account_owner_take",
+    "title": "Take ownership of an agent"
+  },
+  {
+    "kind": "change",
     "name": "account_workspace_add",
     "title": "Add an agent you have to this workspace"
   },
@@ -36,6 +41,26 @@
   },
   {
     "kind": "change",
+    "name": "agent_ref_decide",
+    "title": "Decide on an agent's proposed rebind"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_remove",
+    "title": "Detach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_set",
+    "title": "Attach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "name": "agent_ref_update",
+    "title": "Rebind an agent's outside reference"
+  },
+  {
+    "kind": "change",
     "name": "agent_register_decide",
     "title": "Approve an agent a host made"
   },
@@ -43,6 +68,11 @@
     "kind": "change",
     "name": "agent_resume",
     "title": "Resume agent"
+  },
+  {
+    "kind": "change",
+    "name": "app_consent_set",
+    "title": "Let an app hear a conversation"
   },
   {
     "kind": "create",
@@ -186,6 +216,21 @@
   },
   {
     "kind": "create",
+    "name": "credential_create",
+    "title": "Make a secret"
+  },
+  {
+    "kind": "change",
+    "name": "credential_revoke",
+    "title": "Revoke a secret"
+  },
+  {
+    "kind": "change",
+    "name": "credential_rotate",
+    "title": "Rotate a secret"
+  },
+  {
+    "kind": "create",
     "name": "custom_emoji_create",
     "title": "Add custom emoji"
   },
@@ -193,6 +238,11 @@
     "kind": "change",
     "name": "custom_emoji_update",
     "title": "Retire custom emoji"
+  },
+  {
+    "kind": "change",
+    "name": "cycle_set",
+    "title": "Set up cycles"
   },
   {
     "kind": "create",
@@ -208,6 +258,51 @@
     "kind": "change",
     "name": "dashboard_update",
     "title": "Change a dashboard"
+  },
+  {
+    "kind": "create",
+    "name": "data_connection_create",
+    "title": "Connect outside data"
+  },
+  {
+    "kind": "change",
+    "name": "data_connection_delete",
+    "title": "Remove an outside data connection"
+  },
+  {
+    "kind": "change",
+    "name": "data_connection_update",
+    "title": "Change an outside data connection"
+  },
+  {
+    "kind": "create",
+    "name": "data_query_create",
+    "title": "Save an outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_delete",
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_review",
+    "title": "Review a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_run",
+    "title": "Run a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_share",
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_update",
+    "title": "Change a saved outside data query"
   },
   {
     "kind": "create",
@@ -275,6 +370,21 @@
     "title": "Follow"
   },
   {
+    "kind": "create",
+    "name": "form_answer_send",
+    "title": "Answer a form"
+  },
+  {
+    "kind": "create",
+    "name": "form_create",
+    "title": "Create a form"
+  },
+  {
+    "kind": "change",
+    "name": "form_update",
+    "title": "Change a form"
+  },
+  {
     "kind": "change",
     "name": "github_automation_update",
     "title": "Update pull request automation"
@@ -283,6 +393,31 @@
     "kind": "change",
     "name": "github_installation_link",
     "title": "Link GitHub installation"
+  },
+  {
+    "kind": "change",
+    "name": "group_archive",
+    "title": "Archive a group"
+  },
+  {
+    "kind": "create",
+    "name": "group_create",
+    "title": "Make a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_members_set",
+    "title": "Change who is in a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_restore",
+    "title": "Bring back a group"
+  },
+  {
+    "kind": "change",
+    "name": "group_update",
+    "title": "Change a group"
   },
   {
     "kind": "change",
@@ -333,6 +468,11 @@
     "kind": "change",
     "name": "incoming_hook_delete",
     "title": "Delete an incoming hook"
+  },
+  {
+    "kind": "create",
+    "name": "initiative_create",
+    "title": "Create an initiative"
   },
   {
     "kind": "create",
@@ -403,6 +543,11 @@
     "kind": "create",
     "name": "milestone_create",
     "title": "Create milestone"
+  },
+  {
+    "kind": "change",
+    "name": "milestone_reorder",
+    "title": "Reorder milestones"
   },
   {
     "kind": "change",
@@ -486,6 +631,16 @@
   },
   {
     "kind": "change",
+    "name": "project_status_set",
+    "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "name": "project_update_create",
+    "title": "Post a project update"
+  },
+  {
+    "kind": "change",
     "name": "proposal_decide",
     "title": "Decide a proposal"
   },
@@ -511,8 +666,38 @@
   },
   {
     "kind": "create",
+    "name": "record_template_create",
+    "title": "Create a record template"
+  },
+  {
+    "kind": "change",
+    "name": "record_template_update",
+    "title": "Change a record template"
+  },
+  {
+    "kind": "change",
+    "name": "record_update",
+    "title": "Update a record"
+  },
+  {
+    "kind": "create",
     "name": "recurring_create",
     "title": "Schedule a template"
+  },
+  {
+    "kind": "create",
+    "name": "recurring_record_create",
+    "title": "Make records on a schedule"
+  },
+  {
+    "kind": "change",
+    "name": "recurring_record_delete",
+    "title": "Stop a recurring record"
+  },
+  {
+    "kind": "change",
+    "name": "recurring_record_update",
+    "title": "Change a recurring record"
   },
   {
     "kind": "change",
@@ -671,6 +856,61 @@
   },
   {
     "kind": "change",
+    "name": "space_archive",
+    "title": "Archive a space"
+  },
+  {
+    "kind": "create",
+    "name": "space_create",
+    "title": "Make a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_group_add",
+    "title": "Give a group a role in a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_group_remove",
+    "title": "Take a group out of a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_join",
+    "title": "Join a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_leave",
+    "title": "Leave a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_add",
+    "title": "Add someone to a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_remove",
+    "title": "Remove someone from a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_member_update",
+    "title": "Change someone's role in a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_restore",
+    "title": "Restore a space"
+  },
+  {
+    "kind": "change",
+    "name": "space_update",
+    "title": "Change a space"
+  },
+  {
+    "kind": "change",
     "name": "status_delete",
     "title": "Clear status"
   },
@@ -780,9 +1020,39 @@
     "title": "Update task template"
   },
   {
+    "kind": "create",
+    "name": "theme_create",
+    "title": "Make theme"
+  },
+  {
+    "kind": "change",
+    "name": "theme_delete",
+    "title": "Delete theme"
+  },
+  {
+    "kind": "change",
+    "name": "theme_update",
+    "title": "Change theme"
+  },
+  {
     "kind": "change",
     "name": "thing_link",
     "title": "Link two things"
+  },
+  {
+    "kind": "create",
+    "name": "thing_link_create",
+    "title": "Make a link to one thing"
+  },
+  {
+    "kind": "change",
+    "name": "thing_share_add",
+    "title": "Share one thing"
+  },
+  {
+    "kind": "change",
+    "name": "thing_share_remove",
+    "title": "Stop sharing one thing"
   },
   {
     "kind": "change",
@@ -798,6 +1068,21 @@
     "kind": "change",
     "name": "thread_update",
     "title": "Update thread"
+  },
+  {
+    "kind": "change",
+    "name": "triage_decide",
+    "title": "Triage tasks"
+  },
+  {
+    "kind": "change",
+    "name": "triage_enable",
+    "title": "Turn on triage"
+  },
+  {
+    "kind": "change",
+    "name": "triage_rule_set",
+    "title": "Write a triage rule"
   },
   {
     "kind": "create",
@@ -871,6 +1156,11 @@
   },
   {
     "kind": "change",
+    "name": "workspace_member_update",
+    "title": "Change someone's workspace membership"
+  },
+  {
+    "kind": "change",
     "name": "workspace_shape_set",
     "title": "Change what the workspace is for"
   },
@@ -883,5 +1173,10 @@
     "kind": "change",
     "name": "workspace_store_set",
     "title": "Use the workspace's own file bucket"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_theme_set",
+    "title": "Offer theme to the workspace"
   }
 ]

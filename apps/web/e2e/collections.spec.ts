@@ -344,8 +344,8 @@ test('a form shared from the collection adds a record for someone who isn’t si
 })
 
 const schemes = [
-  { scheme: 'light', theme: 'daylight' },
-  { scheme: 'dark', theme: 'midnight' },
+  { scheme: 'light', theme: 'quiet' },
+  { scheme: 'dark', theme: 'quiet-dark' },
 ] as const
 const widths = [
   { name: 'desktop', width: 1440, height: 900 },
@@ -394,7 +394,8 @@ test('the built-in Tasks collection shows the project\'s tasks, takes new ones a
 
   // A task opens on its own page.
   await page.getByRole('button', { name: `Open ${title}` }).click()
-  await expect(page).toHaveURL(/\/work-items\//)
+  // Its own page: /w/<ws>/s/<space>/tasks/<id> (W1.14b), or the old address.
+  await expect(page).toHaveURL(/\/(?:work-items|tasks)\/[^/?]+/)
   await expect(page.getByRole('heading', { name: title })).toBeVisible()
   expect(errors).toEqual([])
 })

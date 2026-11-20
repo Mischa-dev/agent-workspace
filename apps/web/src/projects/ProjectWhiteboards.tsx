@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useDeferredValue, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -136,7 +137,7 @@ export default function ProjectWhiteboards({ canEdit, projectId }: { canEdit: bo
       ) : null}
       {list.length > SHOWN ? (
         <p className="aw-overview__more">
-          And {list.length - SHOWN} more on the <Link to="/whiteboards">Whiteboards</Link> page.
+          And {list.length - SHOWN} more on the <Link to={here('/whiteboards')}>Whiteboards</Link> page.
         </p>
       ) : null}
       <NewWhiteboardDialog

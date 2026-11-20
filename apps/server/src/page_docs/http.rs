@@ -23,7 +23,6 @@ use super::{store, ydoc};
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write, require_csrf},
-    conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, AppError},
     memory,
     policy::Action,
@@ -103,15 +102,9 @@ async fn page_access(
     action: Action,
 ) -> Result<Uuid, AppError> {
     let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
-    memory::project_access(
-        &state.pool,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    memory::project_access(&state.pool, principal.actor_id, project_id, action)
+        .await
+        .map_err(|_| AppError::NotFound("page"))?;
     Ok(project_id)
 }
 
@@ -124,7 +117,6 @@ pub async fn get_document(
     let can_edit = memory::project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::PageEdit,
     )
@@ -198,7 +190,6 @@ pub async fn update_document(
     memory::project_access(
         &mut *transaction,
         writer.actor_id,
-        writer.actor_kind,
         project_id,
         Action::PageEdit,
     )

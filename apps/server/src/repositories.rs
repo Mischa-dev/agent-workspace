@@ -20,10 +20,7 @@ use crate::{
     },
     github::repository_git_token,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
-    policy::{
-        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, Permission, RoleGrant},
 };
 
 const MAX_REPOSITORIES: i64 = 100;
@@ -48,6 +45,7 @@ pub fn router() -> Router<AppState> {
 struct ProjectAccess {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -749,14 +747,7 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
-    require_project_access_as(
-        transaction,
-        principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
+    require_project_access_as(transaction, principal.actor_id, project_id, action).await
 }
 
 /// `require_project_access` for an actor, such as a person through MCP.
@@ -764,13 +755,13 @@ async fn require_project_access(
 pub(crate) async fn require_project_access_as(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -789,21 +780,10 @@ pub(crate) async fn require_project_access_as(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
-    let subject = Subject::new(
-        actor_id,
-        kind,
-        true,
-        Some(Membership::project(project_id, role, true)),
-        None,
+    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(access.group_permissions.as_deref()),
     );
-    if authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+    if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(role)
     } else {
         Err(AppError::Forbidden)

@@ -10,7 +10,7 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids_in,
-        archived_task_message, parse_id, public_url, version_conflict_message,
+        archived_task_message, link_url, parse_id, version_conflict_message,
     },
     planning,
     workflow::Workflow,
@@ -23,7 +23,7 @@ use crate::{
         resource_bound_scope,
     },
     message_content::MessageContent,
-    policy::{Action, ActorKind, Decision},
+    policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, CommandActor, ConflictKind, CreateWorkItemCommand,
@@ -50,6 +50,7 @@ pub(super) const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 l
 pub(super) const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
 pub(super) const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
 pub(super) const PRIORITY_MESSAGE: &str = "Use no_priority, low, medium, high, or urgent.";
+const DELEGATE_MESSAGE: &str = "Hand the task to someone in its project who can hold tasks: \"me\", an @handle, or an actor ID.";
 const ASSIGNEE_ID_MESSAGE: &str = "Pass the assignee as \"me\", an @handle, or an actor ID.";
 const ASSIGNEE_MESSAGE: &str =
     "That person can't be assigned tasks here: only active people and agents in the project can.";
@@ -61,7 +62,8 @@ pub(super) const MILESTONE_MESSAGE: &str =
 pub(super) const DATES_MESSAGE: &str = "The start date must be on or before the due date.";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
 pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
-const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, startDate, dueDate, estimate, clearEstimate, or archived.";
+const CYCLE_MESSAGE: &str = "Pass one of this space's cycles that hasn't ended: \"current\", \"next\", its number or name (see cycle_list), or \"none\".";
+const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, delegate, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, cycle, startDate, dueDate, estimate, clearEstimate, or archived.";
 /// The most acceptance criteria one task_create call takes.
 const MAX_CRITERIA_ON_CREATE: usize = 50;
 const TASK_NOT_FOUND_MESSAGE: &str = "That task wasn't found, or you can't see it.";
@@ -131,6 +133,10 @@ pub struct UpdateWorkItemArguments {
     /// An active milestone by name or ID, or "none".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+    /// A cycle that hasn't ended ("current", "next", number, ID or name),
+    /// or "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
     /// YYYY-MM-DD, or "" to clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
@@ -144,6 +150,12 @@ pub struct UpdateWorkItemArguments {
     /// Custom field values by field name or ID; null clears one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Who the task is handed to (T1.22), by actor ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_actor_id: Option<String>,
+    /// true takes the task back from its delegate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_delegate: Option<bool>,
 }
 
 // The create arguments flatten NewTaskDetails, which serde can't combine
@@ -349,7 +361,7 @@ impl WriteResult {
         self
     }
 
-    fn unavailable() -> Self {
+    pub(super) fn unavailable() -> Self {
         Self::TemporarilyUnavailable {
             retry_category: "retry_with_backoff".to_owned(),
         }
@@ -991,6 +1003,7 @@ async fn update_work_item_inner(
         && arguments.before_task_id.is_none()
         && arguments.after_task_id.is_none()
         && arguments.milestone.is_none()
+        && arguments.cycle.is_none()
         && start_date.is_none()
         && due_date.is_none()
         && estimate.is_none()
@@ -998,9 +1011,22 @@ async fn update_work_item_inner(
             .fields
             .as_ref()
             .is_none_or(|fields| fields.is_empty())
+        && arguments.delegate_actor_id.is_none()
+        && arguments.clear_delegate != Some(true)
     {
         return Ok(WriteResult::invalid("update", NOTHING_TO_CHANGE_MESSAGE));
     }
+    let delegate_update = if arguments.clear_delegate == Some(true) {
+        Some(None)
+    } else {
+        match arguments.delegate_actor_id.as_deref() {
+            Some(value) => match parse_id(value) {
+                Some(actor_id) => Some(Some(actor_id)),
+                None => return Ok(WriteResult::invalid("delegate", DELEGATE_MESSAGE)),
+            },
+            None => None,
+        }
+    };
     if arguments.clear_assignee == Some(true) && arguments.assignee_actor_id.is_some() {
         return Ok(WriteResult::invalid(
             "update",
@@ -1186,6 +1212,20 @@ async fn update_work_item_inner(
         }
         None => None,
     };
+    let cycle_id = match arguments.cycle.as_deref() {
+        Some(value) => match crate::work_items::cycles::reference(
+            &mut transaction,
+            principal.project_id,
+            value,
+            chrono::Utc::now().date_naive(),
+        )
+        .await?
+        {
+            Some(cycle) => Some(cycle),
+            None => return Ok(WriteResult::invalid("cycle", CYCLE_MESSAGE)),
+        },
+        None => None,
+    };
     let field_values = match arguments
         .fields
         .as_ref()
@@ -1237,6 +1277,8 @@ async fn update_work_item_inner(
                 due_date,
                 estimate,
                 blocked_reason: None,
+                delegate_actor_id: delegate_update,
+                cycle_id,
             },
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
@@ -1334,7 +1376,10 @@ async fn post_update_inner(
         },
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    // Commenting needs "comment on tasks", as on the web (K1.16).
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemComment).await?
+    {
         return Ok(result);
     }
     let Some(current) =
@@ -1899,12 +1944,9 @@ pub(super) async fn check_access_for(
     let Some(membership) = membership else {
         return Ok(WriteAccess::NotFound);
     };
-    if !membership.enabled
-        || !matches!(
-            principal.actor_kind,
-            ActorKind::Human | ActorKind::ExternalAgent
-        )
-    {
+    // Whatever kind of account: a worker's membership never passes
+    // `authorize_mutation`, which is where that is decided (K1.16).
+    if !membership.enabled {
         return Ok(WriteAccess::NotFound);
     }
     if membership.project_archived_at.is_some() {
@@ -2168,6 +2210,9 @@ async fn finish_update_outcome(
         UpdateWorkItemOutcome::NotFound => Ok(WriteResult::not_found(TASK_NOT_FOUND_MESSAGE)),
         UpdateWorkItemOutcome::InvalidAssignee => {
             Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE))
+        }
+        UpdateWorkItemOutcome::InvalidDelegate => {
+            Ok(WriteResult::invalid("delegate", DELEGATE_MESSAGE))
         }
         UpdateWorkItemOutcome::InvalidMilestone => {
             Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE))
@@ -2575,9 +2620,10 @@ pub(super) async fn locate(
     .await?;
     Ok((
         key,
-        public_url(
+        link_url(
             state,
-            &format!("/projects/{project_id}/work-items/{work_item_id}"),
+            None,
+            &crate::addresses::Target::task(project_id, work_item_id),
         ),
     ))
 }
@@ -2711,6 +2757,7 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
                     .to_owned(),
             ),
         },
+        AppError::Refused { field, message } => WriteResult::invalid(field, message),
         error => {
             let (database_code, database_constraint) = error.database_log_fields();
             tracing::error!(
@@ -2885,11 +2932,14 @@ mod tests {
             before_task_id: None,
             after_task_id: None,
             milestone: None,
+            cycle: None,
             start_date: None,
             due_date: None,
             estimate: None,
             clear_estimate: None,
             fields: None,
+            delegate_actor_id: None,
+            clear_delegate: None,
         };
         assert_eq!(
             serde_json::to_string(&update).expect("update"),

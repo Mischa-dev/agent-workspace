@@ -716,6 +716,7 @@ impl Operation for RunActivityReport {
             let located = Located {
                 workspace_id: call.ctx.workspace_id,
                 space_id: call.ctx.space_id,
+                direct: None,
             };
             let mut connection = call
                 .state

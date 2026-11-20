@@ -1557,7 +1557,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-        WorkItemEdit
+        WorkItemComment
     ),
     policy_route!(
         "work_items/comments",

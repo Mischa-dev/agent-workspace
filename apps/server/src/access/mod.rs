@@ -3,12 +3,15 @@
 //! to decide what a caller may do (ruling R2: allow, suggest only, deny).
 //!
 //! - `catalogue`: every permission, its kind and level or capability (K1.9).
+//! - `acting`: who a call acts for, for its writes (K1.25).
 //! - `caller`: who is calling, resolved at the edge (`Caller`, `Via`,
 //!   `Reach`).
 //! - `decide`: the pure core, with no database and no account kind.
 //! - `holding`: what a caller holds in one scope.
-//! - `compare`: old and new checks side by side while areas move (K1 §4.3).
-//! - `http`: the operators' view of recorded disagreements.
+//! - `sharing`: one thing shared with an account or by link (K1.32).
+//! - `tier`: a role's standing for ownership and granting.
+//! - `credentials`: an account's secrets: made, rotated, revoked (K1.23).
+//! - `tokens`: short-lived narrow tokens for one account (K1.24).
 //! - `manage`: the one rule for managing an agent or app account, and
 //!   `may_grant` (nobody grants more than they hold).
 //!
@@ -18,11 +21,16 @@
 //! permissions"). `write_mode` (K1.12) answers the three-way question for
 //! writes on kinds with levels. Everything else calls these.
 
+pub mod acting;
 pub mod caller;
 pub mod catalogue;
+pub mod credentials;
 pub mod decide;
 pub mod holding;
 pub mod manage;
+pub mod sharing;
+pub mod tier;
+pub mod tokens;
 
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
@@ -143,6 +151,9 @@ pub enum Target {
     Account,
     Workspace(Uuid),
     Space(Uuid),
+    /// A DM or group, which lives in no space (K4.17): what the caller's
+    /// roles allow there (`direct_permissions`).
+    Conversation(Uuid),
 }
 
 impl Target {
@@ -152,6 +163,7 @@ impl Target {
             Self::Account => ("account", None),
             Self::Workspace(id) => ("workspace", Some(*id)),
             Self::Space(id) => ("space", Some(*id)),
+            Self::Conversation(id) => ("conversation", Some(*id)),
         }
     }
 }
@@ -260,6 +272,18 @@ pub async fn check_locked(
     check_with(tx, caller, need, target, true).await
 }
 
+/// `check` against an archived space, for bringing it back: what its
+/// members held there as it was archived, locked inside the write.
+pub async fn check_archived_space(
+    tx: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    need: Need,
+    space: Uuid,
+) -> Result<Result<Grant, Denied>, AppError> {
+    let held = holding::load_archived(tx, caller, space, true).await?;
+    Ok(decide(held.as_ref(), &need, credential_of(caller)))
+}
+
 async fn check_with(
     connection: &mut PgConnection,
     caller: &Caller,
@@ -289,6 +313,10 @@ async fn check_with(
         }
         Target::Workspace(id) => Scope::Workspace(id),
         Target::Space(id) => Scope::Space(id),
+        Target::Conversation(conversation) => {
+            let held = holding::load_direct(connection, caller, conversation).await?;
+            return Ok(decide(held.as_ref(), &need, credential_of(caller)));
+        }
     };
     let started = std::time::Instant::now();
     let held = holding::load(connection, caller, scope, lock).await?;
@@ -385,6 +413,135 @@ pub async fn write_mode_locked(
         module,
         credential_of(caller),
     ))
+}
+
+/// What the roles given to an account's groups in a space allow (K1.27),
+/// as SQL's `space_group_permissions(account, space)` reads them. Every
+/// grant built from a seat for [`membership_allows`] adds them
+/// (`RoleGrant::with_groups`), as `holding::load` does.
+pub fn group_permissions<S: AsRef<str>>(keys: Option<&[S]>) -> PermissionSet {
+    keys.map_or(PermissionSet::EMPTY, PermissionSet::from_keys)
+}
+
+/// A membership read with the row it governs (a conversation looked up
+/// with the caller's membership joined in): whether it lets `account` use
+/// `permission` in `space`, the answer `check` gives from the same
+/// membership. The role's permissions, an enabled membership, and the
+/// delegation limit of an app acting for the account. A worker's
+/// membership acts only through its run's delegated scope, never here.
+pub fn membership_allows(
+    account: Uuid,
+    space: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    permission: Permission,
+) -> bool {
+    enabled
+        && grant.role() != MembershipRole::Worker
+        && grant.permissions().contains(permission)
+        && !limit_hides(account, space, permission)
+}
+
+/// [`membership_allows`] for an account speaking as one of its runs, in the
+/// run's space (`runs::say`): a worker membership holds what the run hands
+/// it (seeing the space and sending what its agent says, as
+/// [`holding::RUN_DELEGATION`] does for the rest); any other role holds its
+/// own permissions.
+pub fn run_membership_allows(
+    account: Uuid,
+    space: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    action: crate::policy::Action,
+) -> bool {
+    if grant.role() == MembershipRole::Worker {
+        enabled
+            && matches!(
+                action,
+                crate::policy::Action::ProjectView | crate::policy::Action::MessageSend
+            )
+    } else {
+        membership_allows(account, space, grant, enabled, action.permission())
+    }
+}
+
+/// Whether a role lets its holder change anything: any permission beyond
+/// seeing. Reporting one's own runs and raising or answering requests come
+/// with every role, a Viewer's too, so they don't count as writing.
+pub fn writes(grant: crate::policy::RoleGrant) -> bool {
+    grant.permissions().iter().any(|permission| {
+        !permission.only_sees()
+            && !matches!(
+                permission,
+                Permission::RunsReport | Permission::RequestsRaise | Permission::RequestsAnswer
+            )
+    })
+}
+
+/// `membership_allows` for a workspace membership: its role, an enabled
+/// membership, and the delegation limit an app acting for `account` has in
+/// `workspace`.
+pub fn workspace_membership_allows(
+    account: Uuid,
+    workspace: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    permission: Permission,
+) -> bool {
+    enabled
+        && grant.role() != MembershipRole::Worker
+        && grant.permissions().contains(permission)
+        && !crate::policy::current_agent_limit(
+            account,
+            crate::policy::MembershipScope::Organization(workspace),
+        )
+        .is_some_and(|limit| !limit.contains(permission))
+}
+
+/// Whether a grant read for a DM or group (`direct_permissions`, which
+/// already checked the account's roles) allows `permission`, after the
+/// delegation limit of an app acting for `account`.
+pub fn direct_grant_allows(
+    account: Uuid,
+    workspace: Uuid,
+    grant: crate::policy::RoleGrant,
+    permission: Permission,
+) -> bool {
+    grant.permissions().contains(permission)
+        && !crate::policy::agent_limit_hides_direct(account, workspace, permission)
+}
+
+/// Whether the delegation limit of an app acting for `account` keeps it
+/// from `permission` in `space`; false outside such a call. For SQL that
+/// checks the role itself (`role_allows`) and needs the limit beside it.
+pub fn limit_hides(account: Uuid, space: Uuid, permission: Permission) -> bool {
+    crate::policy::agent_limit_hides(account, space, permission)
+}
+
+/// While a credential held to some workspaces acts for `account`, whether a
+/// DM or group kept in `workspace` is beyond it. A personal one (the direct
+/// scope) never is, and nothing is outside such a call.
+pub fn limit_hides_direct(account: Uuid, workspace: Option<Uuid>) -> bool {
+    match (limited_direct_workspaces(account), workspace) {
+        (Some(allowed), Some(workspace)) => {
+            workspace != crate::spaces::DIRECT && !allowed.contains(&workspace)
+        }
+        _ => false,
+    }
+}
+
+/// While a credential held to some workspaces acts for `account`, the
+/// workspaces whose DMs and groups it reaches (with the direct scope for
+/// personal ones); `None` outside such a call. For list SQL.
+pub fn limited_direct_workspaces(account: Uuid) -> Option<Vec<Uuid>> {
+    crate::policy::agent_limit_direct_workspaces(account, Permission::ProjectsView)
+}
+
+/// While an app acts for `account`, the spaces its delegation limit leaves
+/// `permission` in; `None` outside such a call. For list SQL that checks
+/// the role itself and binds the limit as a space list.
+pub fn limited_spaces(account: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    crate::policy::agent_limit_projects_allowing(account, permission)
 }
 
 /// A list filter: SQL true for rows whose space (`space_column`) the

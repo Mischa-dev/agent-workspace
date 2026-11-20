@@ -421,7 +421,13 @@ async fn concurrent_writers_leave_no_gaps() {
     assert_eq!(written.len(), 800);
     for tail in &mut tails {
         let seen = tail_until(tail, &written, Duration::from_secs(30)).await;
-        assert_eq!(seen.len(), written.len(), "each event once");
+        // The tail may also hand on the log project's own `space.created`,
+        // logged before the writers start; each written event comes once.
+        let ours = seen
+            .iter()
+            .filter(|(_, id)| written.contains(id))
+            .collect::<Vec<_>>();
+        assert_eq!(ours.len(), written.len(), "each event once");
         assert_dense(&seen);
     }
     cluster.finish().await;
@@ -986,6 +992,8 @@ async fn write_budget_is_never_exceeded() {
     };
     let browser = cluster.instance(0).login("owner").await;
     let (_, channel) = work_channel(&cluster, &browser).await;
+    // The write bound is what's tested, not a workspace's message rate.
+    crate::support::db::lift_message_rate(&cluster.pool, &channel.to_string()).await;
     let started = Instant::now();
     let mut accepted = 0;
     let mut refused = 0;

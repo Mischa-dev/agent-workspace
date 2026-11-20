@@ -41,9 +41,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::{
-        Action, ActorKind, Membership, ProjectScope, Resource, RoleGrant, Subject, authorize,
-    },
+    policy::{Action, ActorKind, RoleGrant},
 };
 
 // ---------------------------------------------------------------------------
@@ -341,6 +339,17 @@ pub const REGISTRY: &[SettingDef] = &[
         scopes: TEAM_SCOPES,
         launch_override: false,
         default: "true",
+    },
+    SettingDef {
+        key: "messages.direct_messages",
+        label: "Direct messages",
+        description: "Personal: DMs belong to the people in them and show in every workspace they share. Kept: DMs between members that start here belong to this workspace and end when someone leaves it.",
+        kind: SettingType::Choice {
+            options: &["personal", "kept"],
+        },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "\"personal\"",
     },
     SettingDef {
         key: "notifications.paused_until",
@@ -665,6 +674,26 @@ struct StoredRow {
     version: i64,
     updated_at: DateTime<Utc>,
     updated_by_actor_id: Option<Uuid>,
+}
+
+/// One workspace-level value as stored, or the built-in default when none
+/// is (or the stored one no longer fits the type).
+pub(crate) async fn workspace_value<'e, E: PgExecutor<'e>>(
+    executor: E,
+    workspace_id: Uuid,
+    key: &str,
+) -> Result<Value, AppError> {
+    let definition = definition(key).ok_or(AppError::Internal("unknown setting key"))?;
+    let stored = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM settings WHERE organization_id = $1 AND scope = 'workspace' AND key = $2",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .fetch_optional(executor)
+    .await?;
+    Ok(stored
+        .filter(|value| definition.validate(value).is_ok())
+        .unwrap_or_else(|| definition.default_value()))
 }
 
 /// Resolve every setting for `context`, with `launch` overrides (keys that
@@ -1074,11 +1103,12 @@ async fn project_role<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
     project_id: Uuid,
-) -> Result<Option<(Uuid, String, Option<Vec<String>>)>, AppError> {
-    Ok(sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+) -> Result<Option<(Uuid, String, RoleGrant)>, AppError> {
+    let row = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
         SELECT project.organization_id, membership.role,
-               workspace_role_permissions(membership.role_id)
+               workspace_role_permissions(membership.role_id),
+               space_group_permissions($2, project.id)
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $2
@@ -1094,7 +1124,14 @@ async fn project_role<'e, E: PgExecutor<'e>>(
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(executor)
-    .await?)
+    .await?;
+    // With what their groups are given in the project (K1.27).
+    row.map(|(organization_id, role, permissions, groups)| {
+        let grant = membership_grant(&role, permissions.as_deref())?
+            .with_groups(crate::access::group_permissions(groups.as_deref()));
+        Ok((organization_id, role, grant))
+    })
+    .transpose()
 }
 
 /// Owners and admins of the workspace, as people. Anyone else gets "not
@@ -1104,43 +1141,25 @@ pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    authorize_workspace_manage_as(
-        executor,
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        organization_id,
-    )
-    .await
+    authorize_workspace_manage_as(executor, principal.actor_id, organization_id).await
 }
 
 /// `authorize_workspace_manage` for an actor, such as a person through MCP.
 pub(crate) async fn authorize_workspace_manage_as<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
-    kind: ActorKind,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
     let (role, permissions) = workspace_role(executor, actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    let subject = Subject::new(
+    if crate::access::workspace_membership_allows(
         actor_id,
-        kind,
+        organization_id,
+        membership_grant(&role, permissions.as_deref())?,
         true,
-        Some(Membership::organization(
-            organization_id,
-            membership_grant(&role, permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    if authorize(
-        &subject,
-        Action::SettingsManage,
-        Resource::Organization { organization_id },
-    )
-    .is_allowed()
-    {
+        Action::SettingsManage.permission(),
+    ) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -1154,43 +1173,25 @@ pub async fn authorize_project_manage<'e, E: PgExecutor<'e>>(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    authorize_project_manage_as(
-        executor,
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        project_id,
-    )
-    .await
+    authorize_project_manage_as(executor, principal.actor_id, project_id).await
 }
 
 /// `authorize_project_manage` for an actor, such as a person through MCP.
 pub(crate) async fn authorize_project_manage_as<'e, E: PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let (organization_id, role, permissions) = project_role(executor, actor_id, project_id)
+    let (organization_id, _, grant) = project_role(executor, actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    let subject = Subject::new(
+    if crate::access::membership_allows(
         actor_id,
-        kind,
+        project_id,
+        grant,
         true,
-        Some(Membership::project(
-            project_id,
-            membership_grant(&role, permissions.as_deref())?,
-            true,
-        )),
-        None,
-    );
-    if authorize(
-        &subject,
-        Action::SettingsManage,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+        Action::SettingsManage.permission(),
+    ) {
         Ok(organization_id)
     } else {
         Err(AppError::Forbidden)
@@ -1383,7 +1384,7 @@ async fn effective(
         capabilities: SettingsCapabilities {
             manage_workspace,
             manage_project,
-            manage_own: principal.actor_kind == "human",
+            manage_own: principal.actor_kind == "human", // kind-check: mechanical (own settings are a signed-in person's web preferences)
         },
     }))
 }
@@ -1452,14 +1453,13 @@ pub(crate) async fn authorize_target_as(
     match scope {
         Scope::Workspace => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_workspace_manage_as(&mut *connection, actor_id, kind, organization_id)
-                .await?;
+            authorize_workspace_manage_as(&mut *connection, actor_id, organization_id).await?;
             Ok(Target::Workspace { organization_id })
         }
         Scope::Project => {
             let project_id = project_id.ok_or(AppError::Validation("projectId"))?;
             let organization_id =
-                authorize_project_manage_as(&mut *connection, actor_id, kind, project_id).await?;
+                authorize_project_manage_as(&mut *connection, actor_id, project_id).await?;
             Ok(Target::Project {
                 organization_id,
                 project_id,

@@ -311,12 +311,13 @@ pub async fn enrol(state: &crate::AppState, request: EnrolRequest) -> Result<Enr
     let Some((enrolment_id, owner_account, owner_workspace, created_by)) = enrolment else {
         return Err(HostError::CodeRefused);
     };
-    let account_id = Uuid::now_v7();
+    let owner = match (owner_account, owner_workspace) {
+        (Some(account), _) => crate::accounts::Owner::Account(account),
+        (None, Some(workspace)) => crate::accounts::Owner::Workspace(workspace),
+        (None, None) => crate::accounts::Owner::Account(created_by),
+    };
+    let account_id = crate::accounts::create_app(&mut transaction, owner, Some(created_by)).await?;
     let host_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(account_id)
-        .execute(&mut *transaction)
-        .await?;
     let (token, prefix, token_digest) = new_token();
     let host = sqlx::query_as::<_, HostRow>(&format!(
         r#"
@@ -939,6 +940,21 @@ pub async fn notice(
                 "ref": outside_ref,
             });
             bounded(&body, 8 * 1024, "ref")?;
+            // K1.7: a new outside reference only waits for a manager; it
+            // never becomes the account's on the host's word.
+            let proposed = match (outside_ref["issuer"].as_str(), outside_ref["id"].as_str()) {
+                (Some(issuer), Some(id)) => {
+                    crate::accounts::refs::propose_from_host(
+                        &mut transaction,
+                        host.id,
+                        account_id,
+                        issuer,
+                        id,
+                    )
+                    .await?
+                }
+                _ => false,
+            };
             if lineage.is_some() && lineage == new_lineage {
                 // Same lineage: the same agent, moved or re-keyed. The
                 // binding follows now; K1.7 replays this notice for the
@@ -965,6 +981,20 @@ pub async fn notice(
                 .bind(&new_reference)
                 .execute(&mut *transaction)
                 .await?;
+                // The binding follows; a new outside reference still asks
+                // the managers.
+                if proposed {
+                    request_ids = crate::requests::open_for_host_agent(
+                        &mut transaction,
+                        host.id,
+                        host.account_id,
+                        account_id,
+                        &host.name,
+                        &reference,
+                        &new_reference,
+                    )
+                    .await?;
+                }
                 ("waiting", body)
             } else {
                 // A different lineage may be a different agent: the

@@ -90,6 +90,12 @@ pub struct OpContext {
     pub workspace_id: Uuid,
     /// Today's project id.
     pub space_id: Option<Uuid>,
+    /// The DM or group the call is about, when it is in no space.
+    pub direct: Option<Uuid>,
+    /// The workspace the request named, if it named one: for a call about a
+    /// DM or group, which is in none, where the caller's own things (such
+    /// as sidebar sections) are.
+    pub requested_workspace: Option<Uuid>,
     pub target: Target,
     /// Set for every write.
     pub request_id: Option<String>,
@@ -115,7 +121,17 @@ pub struct OpCall<'a> {
     /// The command wrote the write's audit row itself (K2.7's message
     /// commands keep theirs), so dispatch adds none.
     pub(super) audited: bool,
+    /// What runs once the write commits (`after_commit`).
+    pub(super) after_commit: Vec<AfterCommit>,
 }
+
+/// Work a write leaves for after it commits: something that is its own
+/// write through its own pipeline (a comment through the send pipeline).
+pub type AfterCommit = Box<
+    dyn FnOnce(AppState) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// What the audit row says the write was about, when not the target.
 #[derive(Clone, Debug)]
@@ -144,6 +160,14 @@ impl OpCall<'_> {
     /// queue now rather than at its next pass.
     pub fn start_queued_runs(&mut self) {
         self.start_queued_runs = true;
+    }
+
+    /// Runs `work` once the write commits, and only then: a step that is a
+    /// write of its own through another pipeline, such as a comment the
+    /// write says it posts. It reports its own failures (the write stands);
+    /// a replay or a preview never runs it.
+    pub fn after_commit(&mut self, work: AfterCommit) {
+        self.after_commit.push(work);
     }
 
     /// For commands that keep their own idempotency (`Idempotency::Command`):
@@ -225,19 +249,16 @@ impl From<&OpContext> for crate::conversations::MessageCommandActor {
             actor_kind: actor_kind_key(ctx.caller.kind).to_owned(),
             mcp_credential: match (&ctx.edge, ctx.caller.connection_id) {
                 (
-                    Edge::Mcp {
-                        credential_id: Some(credential_id),
-                        ..
-                    }
-                    | Edge::PublicApi {
-                        credential_id: Some(credential_id),
-                        ..
-                    },
+                    Edge::Mcp { credential_id, .. } | Edge::PublicApi { credential_id, .. },
                     Some(connection_id),
-                ) => Some(crate::conversations::MessageMcpCredential {
-                    credential_id: *credential_id,
-                    connection_id,
-                }),
+                ) => credential_id
+                    // A narrow token (K1.24) is the credential the call came
+                    // through, though it is no MCP credential.
+                    .or(ctx.caller.credential_id)
+                    .map(|credential_id| crate::conversations::MessageMcpCredential {
+                        credential_id,
+                        connection_id,
+                    }),
                 _ => None,
             },
             via_grant_id: ctx.caller.via_grant_id,

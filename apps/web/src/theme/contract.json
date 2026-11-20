@@ -1,0 +1,661 @@
+{
+  "$comment": "The theme contract (version 1): the tokens a theme may set, the built-in themes it may start from, and the CSS a theme may add. The server (src/themes.rs) and the web app (src/theme/contract.ts) both read this file; docs/theming.md explains it.",
+  "version": 1,
+  "presets": [
+    {
+      "id": "quiet",
+      "name": "Quiet",
+      "scheme": "light"
+    },
+    {
+      "id": "quiet-dark",
+      "name": "Quiet dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "paper",
+      "name": "Paper",
+      "scheme": "light"
+    },
+    {
+      "id": "paper-dark",
+      "name": "Paper dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "frame",
+      "name": "Frame",
+      "scheme": "light"
+    },
+    {
+      "id": "frame-dark",
+      "name": "Frame dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "indigo",
+      "name": "Indigo",
+      "scheme": "light"
+    },
+    {
+      "id": "midnight",
+      "name": "Midnight",
+      "scheme": "dark"
+    },
+    {
+      "id": "daylight",
+      "name": "Daylight",
+      "scheme": "light"
+    },
+    {
+      "id": "evergreen",
+      "name": "Evergreen",
+      "scheme": "light"
+    },
+    {
+      "id": "graphite",
+      "name": "Graphite",
+      "scheme": "light"
+    },
+    {
+      "id": "nord",
+      "name": "Nord",
+      "scheme": "dark"
+    },
+    {
+      "id": "dracula",
+      "name": "Dracula",
+      "scheme": "dark"
+    },
+    {
+      "id": "gruvbox-dark",
+      "name": "Gruvbox Dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "solarized-dark",
+      "name": "Solarized Dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "catppuccin-frappe",
+      "name": "Catppuccin Frappé",
+      "scheme": "dark"
+    },
+    {
+      "id": "catppuccin-macchiato",
+      "name": "Catppuccin Macchiato",
+      "scheme": "dark"
+    },
+    {
+      "id": "catppuccin-mocha",
+      "name": "Catppuccin Mocha",
+      "scheme": "dark"
+    },
+    {
+      "id": "tokyo-night",
+      "name": "Tokyo Night",
+      "scheme": "dark"
+    },
+    {
+      "id": "one-dark",
+      "name": "One Dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "rose-pine",
+      "name": "Rosé Pine",
+      "scheme": "dark"
+    },
+    {
+      "id": "github-dark",
+      "name": "GitHub Dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "monokai",
+      "name": "Monokai",
+      "scheme": "dark"
+    },
+    {
+      "id": "everforest-dark",
+      "name": "Everforest Dark",
+      "scheme": "dark"
+    },
+    {
+      "id": "kanagawa",
+      "name": "Kanagawa",
+      "scheme": "dark"
+    },
+    {
+      "id": "gruvbox-light",
+      "name": "Gruvbox Light",
+      "scheme": "light"
+    },
+    {
+      "id": "solarized-light",
+      "name": "Solarized Light",
+      "scheme": "light"
+    },
+    {
+      "id": "catppuccin-latte",
+      "name": "Catppuccin Latte",
+      "scheme": "light"
+    },
+    {
+      "id": "rose-pine-dawn",
+      "name": "Rosé Pine Dawn",
+      "scheme": "light"
+    },
+    {
+      "id": "github-light",
+      "name": "GitHub Light",
+      "scheme": "light"
+    },
+    {
+      "id": "everforest-light",
+      "name": "Everforest Light",
+      "scheme": "light"
+    },
+    {
+      "id": "one-light",
+      "name": "One Light",
+      "scheme": "light"
+    }
+  ],
+  "groups": [
+    {
+      "id": "frame",
+      "label": "Rail and sidebar",
+      "kind": "color",
+      "tokens": [
+        "rail-bg",
+        "rail-fg",
+        "rail-tile",
+        "rail-tile-active",
+        "rail-indicator",
+        "sidebar-bg",
+        "sidebar-fg",
+        "sidebar-fg-strong",
+        "sidebar-fg-muted",
+        "sidebar-hover",
+        "sidebar-active-bg",
+        "sidebar-active-fg",
+        "sidebar-border"
+      ]
+    },
+    {
+      "id": "content",
+      "label": "Pages",
+      "kind": "color",
+      "tokens": [
+        "content-bg",
+        "content-fg",
+        "content-fg-muted",
+        "content-hover",
+        "content-border",
+        "control-border",
+        "surface-raised",
+        "surface-sunken",
+        "highlight-bg",
+        "scrim",
+        "tooltip-bg",
+        "tooltip-fg"
+      ]
+    },
+    {
+      "id": "accent",
+      "label": "Accent and links",
+      "kind": "color",
+      "tokens": [
+        "accent",
+        "accent-hover",
+        "on-accent",
+        "accent-soft",
+        "link",
+        "focus-ring",
+        "mention-fg",
+        "mention-bg",
+        "badge-bg",
+        "badge-fg",
+        "brand",
+        "brand-deep",
+        "brand-tint",
+        "brand-on",
+        "brand-muted"
+      ]
+    },
+    {
+      "id": "status",
+      "label": "Status",
+      "kind": "color",
+      "tokens": [
+        "presence-online",
+        "success",
+        "success-soft",
+        "warning",
+        "warning-soft",
+        "danger",
+        "danger-soft",
+        "danger-hover",
+        "on-danger"
+      ]
+    },
+    {
+      "id": "agents",
+      "label": "Agents",
+      "kind": "color",
+      "tokens": [
+        "agent",
+        "agent-soft",
+        "agent-working"
+      ]
+    },
+    {
+      "id": "swatches",
+      "label": "Label and avatar colours",
+      "kind": "color",
+      "tokens": [
+        "swatch-indigo",
+        "swatch-blue",
+        "swatch-teal",
+        "swatch-green",
+        "swatch-rust",
+        "swatch-rose",
+        "swatch-orchid",
+        "swatch-slate",
+        "on-swatch"
+      ]
+    },
+    {
+      "id": "type",
+      "label": "Type",
+      "kind": "type",
+      "tokens": [
+        "font-sans",
+        "font-display",
+        "font-mono",
+        "weight-regular",
+        "weight-medium",
+        "weight-semibold",
+        "weight-bold",
+        "tracking-tight",
+        "t-display",
+        "t-headline",
+        "t-title",
+        "t-heading",
+        "t-body",
+        "t-ui",
+        "t-ui-strong",
+        "t-label",
+        "t-small",
+        "t-caption",
+        "t-caption-strong",
+        "t-tag",
+        "t-code",
+        "t-code-sm"
+      ]
+    },
+    {
+      "id": "spacing",
+      "label": "Spacing",
+      "kind": "length",
+      "tokens": [
+        "space-half",
+        "space-1",
+        "space-1-5",
+        "space-2",
+        "space-2-5",
+        "space-3",
+        "space-4",
+        "space-5",
+        "space-6",
+        "space-8",
+        "space-10",
+        "space-12"
+      ]
+    },
+    {
+      "id": "shape",
+      "label": "Shape",
+      "kind": "length",
+      "tokens": [
+        "radius-xs",
+        "radius-sm",
+        "radius-md",
+        "radius-lg",
+        "radius-full",
+        "border-width",
+        "focus-width",
+        "focus-offset"
+      ]
+    },
+    {
+      "id": "depth",
+      "label": "Depth",
+      "kind": "shadow",
+      "tokens": [
+        "shadow-card",
+        "shadow-popover",
+        "shadow-dialog"
+      ]
+    },
+    {
+      "id": "motion",
+      "label": "Motion",
+      "kind": "motion",
+      "tokens": [
+        "duration-fast",
+        "duration-standard",
+        "duration-slow",
+        "duration-fade",
+        "ease-out",
+        "ease-in-out"
+      ]
+    }
+  ],
+  "valueFunctions": [
+    "calc",
+    "clamp",
+    "color",
+    "color-mix",
+    "cubic-bezier",
+    "hsl",
+    "hsla",
+    "hwb",
+    "lab",
+    "lch",
+    "light-dark",
+    "max",
+    "min",
+    "oklab",
+    "oklch",
+    "rgb",
+    "rgba",
+    "steps",
+    "var"
+  ],
+  "cssFunctions": [
+    "blur",
+    "brightness",
+    "calc",
+    "circle",
+    "clamp",
+    "color",
+    "color-mix",
+    "conic-gradient",
+    "contrast",
+    "cubic-bezier",
+    "dir",
+    "drop-shadow",
+    "ellipse",
+    "fit-content",
+    "grayscale",
+    "has",
+    "hsl",
+    "hsla",
+    "hue-rotate",
+    "hwb",
+    "inset",
+    "invert",
+    "is",
+    "lab",
+    "lang",
+    "lch",
+    "light-dark",
+    "linear-gradient",
+    "matrix",
+    "max",
+    "min",
+    "minmax",
+    "not",
+    "nth-child",
+    "nth-last-child",
+    "nth-last-of-type",
+    "nth-of-type",
+    "oklab",
+    "oklch",
+    "opacity",
+    "polygon",
+    "radial-gradient",
+    "repeat",
+    "repeating-conic-gradient",
+    "repeating-linear-gradient",
+    "repeating-radial-gradient",
+    "rgb",
+    "rgba",
+    "rotate",
+    "saturate",
+    "scale",
+    "scaleX",
+    "scaleY",
+    "sepia",
+    "skew",
+    "steps",
+    "translate",
+    "translateX",
+    "translateY",
+    "var",
+    "where"
+  ],
+  "cssAtRules": [
+    "container",
+    "keyframes",
+    "layer",
+    "media",
+    "supports"
+  ],
+  "limits": {
+    "name": 60,
+    "value": 240,
+    "css": 32768,
+    "document": 65536
+  },
+  "parts": [
+    {
+      "class": "aw-shell",
+      "label": "The whole app frame"
+    },
+    {
+      "class": "aw-rail",
+      "label": "The narrow strip of workspaces"
+    },
+    {
+      "class": "aw-sidebar",
+      "label": "The sidebar"
+    },
+    {
+      "class": "aw-main",
+      "label": "The main column"
+    },
+    {
+      "class": "aw-panel",
+      "label": "A side panel"
+    },
+    {
+      "class": "aw-page",
+      "label": "A page"
+    },
+    {
+      "class": "aw-pagehead",
+      "label": "A page's title row"
+    },
+    {
+      "class": "aw-section",
+      "label": "A section of a page"
+    },
+    {
+      "class": "aw-card",
+      "label": "A card"
+    },
+    {
+      "class": "aw-doc",
+      "label": "A document's body"
+    },
+    {
+      "class": "aw-md",
+      "label": "Formatted text"
+    },
+    {
+      "class": "aw-btn",
+      "label": "A button"
+    },
+    {
+      "class": "aw-iconbtn",
+      "label": "An icon button"
+    },
+    {
+      "class": "aw-menu",
+      "label": "A menu"
+    },
+    {
+      "class": "aw-popover",
+      "label": "A popover"
+    },
+    {
+      "class": "aw-tooltip",
+      "label": "A tooltip"
+    },
+    {
+      "class": "aw-dialog",
+      "label": "A dialog"
+    },
+    {
+      "class": "aw-banner",
+      "label": "A banner"
+    },
+    {
+      "class": "aw-toast",
+      "label": "A toast"
+    },
+    {
+      "class": "aw-field",
+      "label": "A form field"
+    },
+    {
+      "class": "aw-check",
+      "label": "A checkbox"
+    },
+    {
+      "class": "aw-seg",
+      "label": "A segmented control"
+    },
+    {
+      "class": "aw-combobox",
+      "label": "A combobox"
+    },
+    {
+      "class": "aw-tabs",
+      "label": "Tabs"
+    },
+    {
+      "class": "aw-filterbar",
+      "label": "A filter bar"
+    },
+    {
+      "class": "aw-avatar",
+      "label": "An avatar"
+    },
+    {
+      "class": "aw-badge",
+      "label": "A count badge"
+    },
+    {
+      "class": "aw-chip",
+      "label": "A chip"
+    },
+    {
+      "class": "aw-tag",
+      "label": "A tag"
+    },
+    {
+      "class": "aw-thingchip",
+      "label": "A link to a thing"
+    },
+    {
+      "class": "aw-empty",
+      "label": "An empty state"
+    },
+    {
+      "class": "aw-skel",
+      "label": "A loading placeholder"
+    },
+    {
+      "class": "aw-table",
+      "label": "A table"
+    },
+    {
+      "class": "aw-piece",
+      "label": "A shared list, board or table"
+    },
+    {
+      "class": "aw-piece-table",
+      "label": "The table piece"
+    },
+    {
+      "class": "aw-pboard",
+      "label": "A board piece: columns of cards"
+    },
+    {
+      "class": "aw-calendar",
+      "label": "A calendar piece"
+    },
+    {
+      "class": "aw-gallery",
+      "label": "A gallery piece: a grid of cards"
+    },
+    {
+      "class": "aw-datepicker",
+      "label": "The date picker"
+    },
+    {
+      "class": "aw-request",
+      "label": "A request to answer"
+    },
+    {
+      "class": "aw-row",
+      "label": "A list row"
+    },
+    {
+      "class": "aw-tcard",
+      "label": "A task card"
+    },
+    {
+      "class": "aw-tile",
+      "label": "A tile"
+    },
+    {
+      "class": "aw-detail",
+      "label": "A thing's detail view"
+    },
+    {
+      "class": "aw-prop",
+      "label": "A property row"
+    },
+    {
+      "class": "aw-msg",
+      "label": "A message"
+    },
+    {
+      "class": "aw-composer",
+      "label": "The message composer"
+    },
+    {
+      "class": "aw-convhead",
+      "label": "A conversation's header"
+    },
+    {
+      "class": "aw-timeline",
+      "label": "A conversation's timeline"
+    },
+    {
+      "class": "aw-cmdk",
+      "label": "The command palette"
+    }
+  ],
+  "regions": [
+    "rail",
+    "sidebar",
+    "content"
+  ]
+}

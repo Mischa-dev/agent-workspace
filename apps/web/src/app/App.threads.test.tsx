@@ -152,7 +152,7 @@ describe('App Thread access and capabilities', () => {
     render(<App />)
 
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`),
     )
     expect(
       await screen.findByRole('heading', {
@@ -214,7 +214,7 @@ describe('App Thread access and capabilities', () => {
     render(<App />)
 
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`),
     )
     expect(
       await screen.findByRole('heading', {
@@ -287,7 +287,7 @@ describe('App Thread access and capabilities', () => {
 
     await waitFor(() =>
       expect(window.location.pathname).toBe(
-        `/projects/${projectAId}/channels/${parentChannelId}`,
+        `/w/mischa/s/${projectAId}/chat/${parentChannelId}`,
       ),
     )
   })
@@ -320,7 +320,7 @@ describe('App Thread access and capabilities', () => {
     render(<App />)
 
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`),
     )
     expect(
       await screen.findByRole('heading', {

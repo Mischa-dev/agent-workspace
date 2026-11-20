@@ -166,6 +166,30 @@ pub async fn active_under_space(
     .await?)
 }
 
+/// Whether any task of a collection has a run that hasn't finished
+/// (switching it off waits for them).
+pub async fn active_for_collection_tasks(
+    executor: impl sqlx::PgExecutor<'_>,
+    space_id: Uuid,
+    collection_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM runs run
+            JOIN work_items task ON task.id = run.work_item_id AND task.project_id = run.space_id
+            WHERE run.space_id = $1 AND task.collection_id = $2 AND run.state = ANY($3)
+        )
+        "#,
+    )
+    .bind(space_id)
+    .bind(collection_id)
+    .bind(RunState::active_keys())
+    .fetch_one(executor)
+    .await?)
+}
+
 /// Whether a project's repository has a run that hasn't finished: a run on
 /// the built-in host working in it.
 pub async fn active_for_repository(
@@ -277,6 +301,28 @@ pub async fn get(
 
 /// The project of a run the account does itself, while it still sees the
 /// run's conversation. Every reporting call (and its replay) starts here.
+/// The DM or group (in no space) a run of `account_id` answers, when it
+/// answers one it can see: where its messages may go besides its space.
+pub async fn direct_of_own(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT run.conversation_id FROM runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1 AND run.account_id = $2
+          AND conversation.project_id IS NULL
+          AND conversation_visible_to(run.conversation_id, $2)
+        "#,
+    )
+    .bind(run_id)
+    .bind(account_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 pub async fn space_of_own(
     executor: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,

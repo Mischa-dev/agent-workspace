@@ -1,3 +1,4 @@
+import { here } from '../../app/href'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
@@ -163,7 +164,7 @@ export function HarnessForm({
             hint={
               list.runners.length === 0 ? (
                 <>
-                  No agent has a runner attached yet. Attach one in <Link to="/messages/agents">Agents</Link> first.
+                  No agent has a runner attached yet. Attach one in <Link to={here('/messages/agents')}>Agents</Link> first.
                 </>
               ) : (
                 'The agent whose runner takes these runs.'

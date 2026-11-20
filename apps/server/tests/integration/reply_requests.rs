@@ -279,6 +279,147 @@ async fn agents_are_asked_claim_and_answer_exactly_once() {
         .expect("drop schema");
 }
 
+/// A2.15: what an agent does because someone asked is recorded as asked by
+/// them. Answering a reply request is made for the request's asker; any
+/// other call says who asked by naming the request in `context`, and a
+/// request that isn't the agent's names nobody.
+#[tokio::test]
+async fn what_an_agent_does_for_someone_is_recorded_as_asked_by_them() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("asked_by").await
+    else {
+        return;
+    };
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let rook = owner.add_agent(&app, &space, "Rook", "rook").await;
+    let mara_mcp = mara.connect(&app).await;
+    let rook_mcp = rook.connect(&app).await;
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": mara.actor_id }),
+        )
+        .await;
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    owner
+        .say(&app, &dm_id, "asked-1", "Mara, please look")
+        .await;
+    let owner_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT author_actor_id FROM messages WHERE conversation_id = $1::uuid LIMIT 1",
+    )
+    .bind(&dm_id)
+    .fetch_one(&pool)
+    .await
+    .expect("owner");
+    let mara_id = Uuid::parse_str(&mara.actor_id).expect("mara");
+    let asked_by = async |pool: &PgPool| -> i64 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT (SELECT count(*) FROM events \
+                     WHERE actor_account_id = $1 AND requested_by_account_id = $2) \
+                  + (SELECT count(*) FROM event_staging \
+                     WHERE actor_account_id = $1 AND requested_by_account_id = $2)",
+        )
+        .bind(mara_id)
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await
+        .expect("asked-by events")
+    };
+
+    let request = only_request(&mara_mcp, &app).await;
+    let request_id = request["requestId"].as_str().expect("id").to_owned();
+    let claim = mara_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": request_id }))
+        .await;
+    assert_eq!(claim["outcome"], "ok", "{claim}");
+    let generation = claim["value"]["request"]["generation"]
+        .as_i64()
+        .expect("generation");
+    let before_reply = asked_by(&pool).await;
+    let sent = mara_mcp
+        .tool(
+            &app,
+            "reply_send",
+            json!({ "requestId": request_id, "generation": generation, "text": "On it." }),
+        )
+        .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let after_reply = asked_by(&pool).await;
+    assert!(
+        after_reply > before_reply,
+        "the reply is made for its asker"
+    );
+
+    // Another call says who asked by naming the request.
+    let unasked = mara_mcp
+        .tool(
+            &app,
+            "message_send",
+            json!({ "conversationId": dm_id, "text": "A note of my own", "clientRequestId": "own-1" }),
+        )
+        .await;
+    assert_eq!(unasked["outcome"], "ok", "{unasked}");
+    assert_eq!(asked_by(&pool).await, after_reply, "nobody asked for this");
+    let asked = mara_mcp
+        .tool(
+            &app,
+            "message_send",
+            json!({
+                "conversationId": dm_id,
+                "text": "Done, as you asked",
+                "clientRequestId": "asked-2",
+                "context": { "replyRequestId": request_id },
+            }),
+        )
+        .await;
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    assert!(asked_by(&pool).await > after_reply, "recorded as asked");
+
+    // A request addressed to another agent, an unknown one, or two names
+    // at once name nobody: the call is refused, not run unattributed.
+    for context in [
+        json!({ "replyRequestId": Uuid::now_v7() }),
+        json!({ "replyRequestId": request_id, "runId": Uuid::now_v7() }),
+        json!({ "somethingElse": true }),
+    ] {
+        let refused = rook_mcp
+            .tool(
+                &app,
+                "message_send",
+                json!({ "conversationId": dm_id, "text": "x", "context": context }),
+            )
+            .await;
+        assert_eq!(
+            refused["outcome"], "invalid_request",
+            "{context}: {refused}"
+        );
+    }
+    let borrowed = rook_mcp
+        .tool(
+            &app,
+            "follow_list",
+            json!({ "context": { "replyRequestId": request_id } }),
+        )
+        .await;
+    assert_eq!(
+        borrowed["outcome"], "invalid_request",
+        "another agent's request names nobody: {borrowed}"
+    );
+
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}
+
 /// An agent taken out of a group can't see it any more, so every open
 /// request it had there (pending, claimed, expired or released, in the group
 /// and its threads) is withdrawn and none can be answered or retried. A
@@ -900,7 +1041,8 @@ async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
 
 /// Stop ends an agent's work: the request and its queued follow-ups are
 /// cancelled, the agent's next call is refused with the reason, its
-/// connections hear about it at once, and only people can press it.
+/// connections hear about it at once, and only roles holding replies.steer
+/// can press it.
 #[tokio::test]
 async fn stop_cancels_the_claim_and_refuses_the_next_call() {
     let Some(Fixture {
@@ -1798,7 +1940,10 @@ async fn fixture(prefix: &str) -> Option<Fixture> {
     let (_, overview) = owner
         .call(&app, "GET", "/api/v1/direct", None, Value::Null)
         .await;
-    let space = overview["projectId"].as_str().expect("space").to_owned();
+    let space = overview["workspaceSpaceId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
     Some(Fixture {
         admin,
         schema,
@@ -1928,7 +2073,11 @@ impl Owner {
     /// A new project in the owner's organization.
     async fn project(&self, app: &axum::Router, pool: &PgPool, space: &str, key: &str) -> String {
         let organization_id = sqlx::query_scalar::<_, String>(
-            "SELECT organization_id::text FROM projects WHERE id = $1::uuid",
+            // The direct scope is no space: then the owner's workspace.
+            "SELECT COALESCE( \
+                 (SELECT organization_id FROM projects WHERE id = $1::uuid), \
+                 (SELECT id FROM organizations WHERE id <> direct_scope_id() \
+                  ORDER BY created_at LIMIT 1))::text",
         )
         .bind(space)
         .fetch_one(pool)

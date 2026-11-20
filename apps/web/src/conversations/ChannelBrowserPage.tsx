@@ -1,3 +1,4 @@
+import { spaceHref } from '../app/href'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
@@ -33,7 +34,7 @@ export function ChannelBrowserPage() {
   const shown = (channels.data?.channels ?? []).filter(
     (channel) => !words || channel.name.toLowerCase().includes(words) || (channel.topic ?? '').toLowerCase().includes(words),
   )
-  const base = `/projects/${encodeURIComponent(projectId)}`
+  const base = spaceHref(projectId)
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.channelList(projectId) }),
@@ -72,7 +73,7 @@ export function ChannelBrowserPage() {
         <ul className="aw-archive">
           {shown.map((channel) => (
             <li className="aw-archive__item" key={channel.id}>
-              <Link className="aw-archive__row" to={`${base}/channels/${encodeURIComponent(channel.id)}`}>
+              <Link className="aw-archive__row" to={`${base}/chat/${encodeURIComponent(channel.id)}`}>
                 <Icon name={channel.private ? 'lock' : 'hash'} />
                 <span className="aw-archive__name">{channel.name}</span>
                 <span className="aw-archive__meta">

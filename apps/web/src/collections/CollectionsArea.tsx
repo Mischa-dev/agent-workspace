@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { CollectionPage } from './CollectionPage'
 import { CollectionsListPage } from './CollectionsListPage'
 import './collections.css'
+import { spaceHref } from '../app/href'
 
 /**
  * A project's Collections area (AWD-90), one lazy chunk: the list of its
@@ -21,5 +22,5 @@ export default function CollectionsArea() {
 
 function BackToList() {
   const { projectId = '' } = useParams()
-  return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/collections`} />
+  return <Navigate replace to={spaceHref(projectId, `/collections`)} />
 }

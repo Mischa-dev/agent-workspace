@@ -121,6 +121,7 @@ struct SavedRow {
     conversation_kind: Option<String>,
     conversation_name: Option<String>,
     parent_conversation_id: Option<Uuid>,
+    conversation_workspace_id: Option<Uuid>,
     author_name: Option<String>,
     message_preview: Option<String>,
     message_removed: Option<bool>,
@@ -143,13 +144,14 @@ fn select_sql(extra: &str) -> String {
     format!(
         r#"
         SELECT item.id, item.kind, item.note, item.remind_at, item.done_at, item.created_at,
-               item.project_id, project.organization_id AS workspace_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
-                   AS project_name,
-               project.kind = 'direct' AS direct_space,
+               COALESCE(item.project_id, direct_scope_id()) AS project_id,
+               item.organization_id AS workspace_id,
+               COALESCE(project.name, 'Messages') AS project_name,
+               item.project_id IS NULL AS direct_space,
                message.id AS message_id, message.conversation_id,
                conversation.kind AS conversation_kind, conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
+               conversation.workspace_id AS conversation_workspace_id,
                author.display_name AS author_name,
                CASE WHEN message.removed_at IS NULL
                     THEN left(message.plain_text, {PREVIEW_CHARACTERS}) END AS message_preview,
@@ -160,16 +162,19 @@ fn select_sql(extra: &str) -> String {
                work.title AS work_item_title,
                status.semantic_category AS work_item_status
         FROM saved_items item
-        JOIN projects project ON project.id = item.project_id
+        LEFT JOIN projects project ON project.id = item.project_id
         LEFT JOIN messages message ON message.id = item.message_id
         LEFT JOIN conversations conversation ON conversation.id = message.conversation_id
-        LEFT JOIN project_memberships author
-          ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
+        LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author
+          ON message.id IS NOT NULL
         LEFT JOIN task_rows work ON work.id = item.work_item_id
         LEFT JOIN work_item_statuses status
           ON status.project_id = work.project_id AND status.id = work.status_id
         WHERE item.actor_id = $1
-          AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
+          -- A saved DM message is kept by the visibility rule alone.
+          AND (CASE WHEN item.project_id IS NULL
+                    THEN item.message_id IS NOT NULL
+                    ELSE actor_can_access_project($1, item.external_agent_connection_id, item.project_id) END)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
           AND (item.work_item_id IS NULL OR {sees_task})
           {extra}
@@ -314,11 +319,13 @@ pub async fn list(
 ) -> Result<LaterPage, AppError> {
     let extra = match view_ {
         ListView::Open => {
-            "AND item.done_at IS NULL AND ($2::uuid[] IS NULL OR item.project_id = ANY($2))
+            "AND item.done_at IS NULL AND ($2::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($2))
+             AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL OR conversation.workspace_id = ANY($4))
              ORDER BY item.remind_at ASC NULLS LAST, item.created_at DESC, item.id DESC LIMIT $3"
         }
         ListView::Done => {
-            "AND item.done_at IS NOT NULL AND ($2::uuid[] IS NULL OR item.project_id = ANY($2))
+            "AND item.done_at IS NOT NULL AND ($2::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($2))
+             AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL OR conversation.workspace_id = ANY($4))
              ORDER BY item.done_at DESC, item.id DESC LIMIT $3"
         }
     };
@@ -326,6 +333,8 @@ pub async fn list(
         .bind(viewer)
         .bind(within)
         .bind(LIST_LIMIT)
+        // Before the limit, so DMs kept elsewhere don't crowd out the rest.
+        .bind(crate::access::limited_direct_workspaces(viewer))
         .fetch_all(crate::db::scoped(pool))
         .await?;
     let open_count = open_count(pool, viewer, within).await?;
@@ -341,13 +350,13 @@ pub async fn list(
 
 /// A saved task an app acting for `viewer` may not see: its agent limit
 /// leaves out "see tasks" there.
+/// A saved DM message is hidden when the DM is kept in a workspace the
+/// credential isn't held to.
 fn hidden_by_limit(viewer: Uuid, row: &SavedRow) -> bool {
-    row.work_item_id.is_some()
-        && crate::policy::agent_limit_hides(
-            viewer,
-            row.project_id,
-            crate::policy::Permission::TasksView,
-        )
+    (row.work_item_id.is_some()
+        && crate::access::limit_hides(viewer, row.project_id, crate::policy::Permission::TasksView))
+        || (row.direct_space
+            && crate::access::limit_hides_direct(viewer, row.conversation_workspace_id))
 }
 
 pub async fn open_count(
@@ -362,19 +371,28 @@ pub async fn open_count(
         SELECT count(*) FROM saved_items item
         LEFT JOIN messages message ON message.id = item.message_id
         WHERE item.actor_id = $1 AND item.done_at IS NULL
-          AND ($2::uuid[] IS NULL OR item.project_id = ANY($2))
-          AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
+          AND ($2::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($2))
+          -- A saved DM message is kept by the visibility rule alone.
+          AND (CASE WHEN item.project_id IS NULL
+                    THEN item.message_id IS NOT NULL
+                    ELSE actor_can_access_project($1, item.external_agent_connection_id, item.project_id) END)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
           AND (item.work_item_id IS NULL OR ({sees_task}
-               AND ($3::uuid[] IS NULL OR item.project_id = ANY($3))))
+               AND ($3::uuid[] IS NULL OR COALESCE(item.project_id, direct_scope_id()) = ANY($3))))
+          -- $4: while a credential held to some workspaces acts for them,
+          -- a saved DM message only from a DM kept in one of those.
+          AND ($4::uuid[] IS NULL OR item.project_id IS NOT NULL
+               OR (SELECT kept.workspace_id FROM conversations kept
+                   WHERE kept.id = message.conversation_id) = ANY($4))
         "#
     ))
     .bind(viewer)
     .bind(within)
-    .bind(crate::policy::agent_limit_projects_allowing(
+    .bind(crate::access::limited_spaces(
         viewer,
         crate::policy::Permission::TasksView,
     ))
+    .bind(crate::access::limited_direct_workspaces(viewer))
     .fetch_one(crate::db::scoped(pool))
     .await?)
 }
@@ -442,11 +460,14 @@ where
 // ---------------------------------------------------------------------------
 // Changing
 
-/// Who saves: a person, or an agent acting as itself in one project.
+/// Who saves, and where a bare reminder of theirs is filed.
 #[derive(Clone, Copy, Debug)]
 pub struct Saver {
     pub actor_id: Uuid,
-    pub human: bool,
+    /// Signed in across their workspaces (the web, or an app acting as its
+    /// person): a bare reminder files in the workspace's own space rather
+    /// than in the one project a token is bound to.
+    pub workspace_wide: bool,
     /// For a bare reminder: the workspace a person files it in, or the
     /// project an agent files it in.
     pub organization_id: Option<Uuid>,
@@ -529,13 +550,13 @@ pub async fn save(
         (Some(message_id), None) => {
             let (project_id, organization_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 r#"
-                SELECT message.project_id, project.organization_id
+                SELECT COALESCE(message.project_id, direct_scope_id()), message.workspace_id
                 FROM messages message
-                JOIN projects project ON project.id = message.project_id
                 WHERE message.id = $2 AND message.removed_at IS NULL
-                  AND actor_can_access_project($1, $4, message.project_id)
+                  AND (message.project_id IS NULL
+                       OR actor_can_access_project($1, $4, message.project_id))
                   AND conversation_visible_to(message.conversation_id, $1)
-                  AND ($3::uuid IS NULL OR message.project_id = $3)
+                  AND ($3::uuid IS NULL OR COALESCE(message.project_id, direct_scope_id()) = $3)
                 "#,
             )
             .bind(saver.actor_id)
@@ -590,14 +611,14 @@ pub async fn save(
             let note = note
                 .filter(|note| !note.is_empty())
                 .ok_or(AppError::Validation("note"))?;
-            let (organization_id, project_id) = if saver.human {
+            let (organization_id, project_id) = if saver.workspace_wide {
                 let organization_id = crate::notification_settings::home_workspace(
                     &state.pool,
                     saver.actor_id,
                     request.organization_id.or(saver.organization_id),
                 )
                 .await?;
-                let project_id = crate::direct::space_for_member(
+                let project_id = crate::spaces::workspace::join(
                     &mut transaction,
                     organization_id,
                     saver.actor_id,
@@ -690,7 +711,7 @@ async fn upsert(
         INSERT INTO saved_items (
             id, organization_id, project_id, actor_id, kind, message_id, work_item_id,
             note, remind_at, external_agent_connection_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, ''), $9, $10)
+        ) VALUES ($1, $2, NULLIF($3, direct_scope_id()), $4, $5, $6, $7, COALESCE($8, ''), $9, $10)
         {conflict} {update}
         RETURNING id, remind_at
         "#,
@@ -932,11 +953,13 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
     // Access is checked now, as the item's owner, with an active account.
     let Some(row) = sqlx::query_as::<_, DueRow>(
         r#"
-        SELECT item.id, item.actor_id, actor.kind AS actor_kind, item.project_id, item.kind,
+        SELECT item.id, item.actor_id, actor.kind AS actor_kind,
+               COALESCE(item.project_id, direct_scope_id()) AS project_id, item.kind,
                item.note, item.message_id, message.conversation_id, item.work_item_id,
                item.remind_at, item.reminded_for, item.done_at,
                (actor.status = 'active'
-                AND actor_can_access_project(item.actor_id, item.external_agent_connection_id, item.project_id)
+                AND (CASE WHEN item.project_id IS NULL THEN item.message_id IS NOT NULL
+                          ELSE actor_can_access_project(item.actor_id, item.external_agent_connection_id, item.project_id) END)
                 AND (item.message_id IS NULL
                      OR (message.removed_at IS NULL
                          AND conversation_visible_to(message.conversation_id, item.actor_id)))
@@ -945,7 +968,7 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
                     SELECT 1 FROM project_memberships sees_task
                     WHERE sees_task.project_id = item.project_id
                       AND sees_task.actor_id = item.actor_id AND sees_task.enabled
-                      AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                      AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
                    AS visible
         FROM saved_items item
         JOIN actors actor ON actor.id = item.actor_id
@@ -970,7 +993,8 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
         return Ok(());
     }
     if row.visible {
-        if row.actor_kind == "human" {
+        let person = row.actor_kind == "human"; // kind-check: mechanical (how a reminder is delivered)
+        if person {
             notify(&mut transaction, &row, at).await?;
         } else {
             tell_agent(&mut transaction, &row).await?;
@@ -1095,14 +1119,11 @@ async fn save_http(
     ApiJson(request): ApiJson<SaveRequest>,
 ) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let item = save(
         &state,
         Saver {
             actor_id: principal.actor_id,
-            human: true,
+            workspace_wide: true,
             organization_id: None,
             project_id: None,
             within: None,

@@ -91,7 +91,46 @@ pub async fn dispatch(
     let Some(call) = registry().get(name).map(|entry| entry.call) else {
         return Answer::error(&OpError::not_found("That operation"));
     };
-    call(state, request, input).await
+    // Boxed, as below: an operation's future is already deep (automations
+    // call operations from inside operations).
+    let (request, input) = match Box::pin(asked_for(state, request, input)).await {
+        Ok(asked) => asked,
+        Err(error) => return Answer::error(&error),
+    };
+    // K1.25: every write the operation makes says which credential it came
+    // through, and for a run's token, the run and who asked for it.
+    let acting = crate::access::acting::Acting::of(&request.caller);
+    crate::access::acting::within(acting, call(state, request, input)).await
+}
+
+/// A2.15: any operation may say what it acts on (`context`), and is then
+/// made for that one's asker (`replies::asker`). A run's credential already
+/// says who asked, which `context` doesn't change.
+async fn asked_for(
+    state: &AppState,
+    mut request: DispatchRequest,
+    mut input: Value,
+) -> Result<(DispatchRequest, Value), OpError> {
+    let Some(context) = input
+        .as_object_mut()
+        .and_then(|fields| fields.remove("context"))
+        .filter(|context| !context.is_null())
+    else {
+        return Ok((request, input));
+    };
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(|error| OpError::logged("context", &error.into()))?;
+    let asker =
+        crate::replies::asker::resolve(&mut connection, request.caller.account_id, context).await?;
+    connection
+        .commit()
+        .await
+        .map_err(|error| OpError::logged("context", &error.into()))?;
+    if request.caller.requested_by.is_none() {
+        request.caller.requested_by = asker;
+    }
+    Ok((request, input))
 }
 
 /// A space's key (such as "AWD") in the input's `spaceId` or `projectId`
@@ -105,6 +144,34 @@ async fn space_keys_to_ids(
     mut input: Value,
 ) -> Result<Value, OpError> {
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
+        // K4.9: "me" is the caller's personal space in the named workspace,
+        // made on first use; a credential held to one space never reaches it.
+        // Only a caller who could then use it makes it: not a preview, a
+        // read-only credential, or a credential held to other spaces (whose
+        // limits name no new space), so nothing is written for a call the
+        // checks after this would refuse.
+        if input.pointer(field).and_then(Value::as_str) == Some("me") {
+            if let (Some(workspace), None) = (request.workspace, request.caller.confined_space) {
+                let caller = &request.caller;
+                let make = !request.preview && caller.can_write && caller.limits.is_none();
+                let mut tx = crate::db::scoped_tx(&state.pool)
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                let space = if make {
+                    crate::spaces::personal::personal(&mut tx, workspace, caller.account_id).await
+                } else {
+                    crate::spaces::personal::existing(&mut tx, workspace, caller.account_id).await
+                }
+                .map_err(|error| OpError::logged("personal space", &error))?;
+                tx.commit()
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                if let (Some(space), Some(slot)) = (space, input.pointer_mut(field)) {
+                    *slot = Value::String(space.to_string());
+                }
+            }
+            continue;
+        }
         let Some(key) = input
             .pointer(field)
             .and_then(Value::as_str)
@@ -160,18 +227,25 @@ async fn task_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    // K2.14: a bulk change's first task too, which says where it acts (the
-    // command resolves the rest).
-    for field in [
+    // Single task fields, then each task of a list (K2.14: a bulk change's
+    // first task says where it acts) and a link's task.
+    let mut places = [
         "/taskId",
         "/workItemId",
         "/parentId",
         "/parentWorkItemId",
-        "/taskIds/0",
+        "/duplicateOf",
         "/links/0/taskId",
-    ] {
+    ]
+    .iter()
+    .map(|field| (*field).to_owned())
+    .collect::<Vec<String>>();
+    if let Some(list) = input.get("taskIds").and_then(Value::as_array) {
+        places.extend((0..list.len().min(100)).map(|index| format!("/taskIds/{index}")));
+    }
+    for field in places {
         let Some((space_key, number)) = input
-            .pointer(field)
+            .pointer(&field)
             .and_then(Value::as_str)
             .and_then(crate::mcp::split_task_key)
             .map(|(key, number)| (key.to_owned(), number))
@@ -235,12 +309,16 @@ async fn task_keys_to_ids(
             .filter(|(_, preference)| Some(*preference) == best)
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
+        // A list's later tasks are the command's to report one by one: a
+        // key this caller can't resolve stays as it was.
+        let later_in_list = field.starts_with("/taskIds/") && field != "/taskIds/0";
         match found.as_slice() {
             [id] => {
-                if let Some(slot) = input.pointer_mut(field) {
+                if let Some(slot) = input.pointer_mut(&field) {
                     *slot = Value::String(id.to_string());
                 }
             }
+            _ if later_in_list => {}
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(
@@ -350,6 +428,7 @@ async fn admit<O: Operation>(
         let located = target::Located {
             workspace_id: Uuid::nil(),
             space_id: None,
+            direct: None,
         };
         // Across workspaces only the credential is checked here; the read
         // keeps to what the caller may see (and has on) in each one.
@@ -530,6 +609,8 @@ async fn pipeline<O: Operation>(
         trace_id: request.trace_id,
         workspace_id: located.workspace_id,
         space_id: located.space_id,
+        direct: located.direct,
+        requested_workspace: request.workspace,
         target: target.clone(),
         request_id: key
             .as_ref()
@@ -548,19 +629,23 @@ async fn pipeline<O: Operation>(
         start_queued_runs: false,
         keyed: false,
         audited: false,
+        after_commit: Vec::new(),
     };
     // A2.14: a call through the API or an agent tool spends its caller's
     // budgets (the app's own pages are bounded by people's hands). Before
-    // the call's transaction opens: see `budgets::admit_call`.
-    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) && !request.preview {
-        crate::budgets::admit_call(
+    // the call's transaction opens: see `budgets::admit_call`. A read that
+    // spans workspaces is in none, so no workspace's budget counts it.
+    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. })
+        && !request.preview
+        && !ctx.workspace_id.is_nil()
+    {
+        Box::pin(crate::budgets::admit_call(
             &state.pool,
             ctx.workspace_id,
             ctx.space_id,
             ctx.caller.account_id,
             writes,
-            ctx.request_id.as_deref(),
-        )
+        ))
         .await?;
     }
     let mut reservation = None;
@@ -713,6 +798,9 @@ async fn pipeline<O: Operation>(
     if call.start_queued_runs {
         crate::scheduler::kick(state.clone());
     }
+    for work in std::mem::take(&mut call.after_commit) {
+        work(state.clone()).await;
+    }
     Ok(answer)
 }
 
@@ -763,7 +851,7 @@ async fn module_here<O: Operation>(
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
-    if registry.also_serving(O::NAME).next().is_some() {
+    if located.direct.is_none() && registry.also_serving(O::NAME).next().is_some() {
         let modules = match located.space_id {
             Some(space) => {
                 crate::modules::state::for_project(connection, space, caller.account_id).await
@@ -786,24 +874,24 @@ async fn module_here<O: Operation>(
             return Ok(also);
         }
     }
-    let Some(space) = located.space_id else {
+    if located.space_id.is_none() && located.direct.is_none() {
         return Ok(O::MODULE);
-    };
+    }
     if !registry.governs_conversations(O::MODULE) {
         return Ok(O::MODULE);
     }
-    let direct = crate::spaces::kind::holds_messages(connection, space)
-        .await
-        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
+    Ok(registry
+        .conversation_module(located.direct.is_some())
+        .unwrap_or(O::MODULE))
 }
 
 /// What `access` is asked about for a located target.
 fn access_target(target: &Target, located: &target::Located) -> crate::access::Target {
-    match (target, located.space_id) {
-        (Target::Account, _) => crate::access::Target::Account,
-        (_, Some(space)) => crate::access::Target::Space(space),
-        (_, None) => crate::access::Target::Workspace(located.workspace_id),
+    match (target, located.space_id, located.direct) {
+        (Target::Account, _, _) => crate::access::Target::Account,
+        (_, Some(space), _) => crate::access::Target::Space(space),
+        (_, None, Some(conversation)) => crate::access::Target::Conversation(conversation),
+        (_, None, None) => crate::access::Target::Workspace(located.workspace_id),
     }
 }
 
@@ -815,9 +903,10 @@ fn denied_error<O: Operation>(
 ) -> OpError {
     use crate::access::{Denied, DenyReason as Because};
     match denied {
-        Denied::NotFound => match located.space_id {
-            Some(_) => OpError::not_found("That space"),
-            None => OpError::not_found("That workspace"),
+        Denied::NotFound => match (located.space_id, located.direct) {
+            (Some(_), _) => OpError::not_found("That space"),
+            (None, Some(_)) => OpError::not_found("That conversation"),
+            (None, None) => OpError::not_found("That workspace"),
         },
         Denied::ModuleOff { module } => OpError::Denied {
             reason: DenyReason::ModuleOff {
@@ -890,6 +979,7 @@ pub(super) async fn begin(
         &crate::events::EventContext {
             actor: Some(ctx.caller.account_id),
             via_credential: ctx.caller.via_grant_id,
+            credential: ctx.caller.credential_id,
             requested_by: ctx.caller.requested_by,
             run: ctx.caller.run_id,
             request_id: ctx.request_id.clone(),
@@ -1013,10 +1103,11 @@ async fn audit_row(
             id, actor_id, project_id, organization_id, session_id,
             authentication_class, action, target_kind, target_id, outcome,
             request_id, correlation_id, metadata, channel, client_name,
-            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id
+            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id,
+            via_credential_id, requested_by_account_id, run_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'succeeded',
-            $10, $11, $12, $13, $14, $15, $16, $17
+            $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
         )
         "#,
     )
@@ -1041,6 +1132,9 @@ async fn audit_row(
     .bind(columns.credential_id)
     .bind(columns.oauth_grant_id)
     .bind(columns.connection_id)
+    .bind(ctx.caller.credential_id)
+    .bind(ctx.caller.requested_by)
+    .bind(ctx.caller.run_id)
     .execute(&mut **tx)
     .await
     .map_err(|error| OpError::logged(ctx.op, &error.into()))?;

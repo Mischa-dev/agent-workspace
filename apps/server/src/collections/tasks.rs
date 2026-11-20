@@ -51,18 +51,24 @@ pub const START_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000004");
 pub const DUE_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000005");
 pub const LABELS: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000006");
 // The built-in fields views over tasks read beyond the six a collection
-// lists (T1.7). 00d and 00e are kept for Delegate and Cycle.
+// lists (T1.7).
 pub const TYPE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000007");
 pub const MILESTONE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000008");
 pub const PARENT: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000009");
 pub const BLOCKED: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000a");
 pub const READY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000b");
 pub const CLAIMED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000c");
+/// Who the task is handed to to do (T1.22).
+pub const DELEGATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000d");
+/// The cycle it is planned in (T1.24).
+pub const CYCLE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000e");
 pub const ESTIMATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000f");
 pub const CREATED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000010");
 pub const CREATED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000011");
 pub const EDITED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000012");
 pub const KEY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000013");
+/// Whether a snooze keeps the task out of the triage queue now (T1.23).
+pub const SNOOZED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000014");
 
 /// Priorities as choice options, most urgent first; "no_priority" is no value.
 const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
@@ -129,6 +135,7 @@ pub fn is_builtin_field(id: Uuid) -> bool {
 /// A status's color, by what kind of status it is.
 fn status_color(category: &str) -> &'static str {
     match category {
+        "triage" => "#f59e0b",
         "backlog" => "#8b8d98",
         "unstarted" => "#a1a1aa",
         "started" => "#3b82f6",
@@ -141,6 +148,7 @@ fn status_color(category: &str) -> &'static str {
 /// SQL for the color of a status of `category` (an expression).
 fn status_color_sql(category: &str) -> String {
     let arms = [
+        "triage",
         "backlog",
         "unstarted",
         "started",
@@ -194,6 +202,7 @@ pub fn accessor(id: Uuid) -> Option<Accessor> {
         },
         TYPE => column("core.type_id", "uuid"),
         MILESTONE => column("core.milestone_id", "uuid"),
+        CYCLE => column("core.cycle_id", "uuid"),
         PARENT => column("core.parent_work_item_id", "uuid"),
         BLOCKED => column(
             format!(
@@ -216,11 +225,16 @@ pub fn accessor(id: Uuid) -> Option<Accessor> {
               ORDER BY claim.expires_at DESC LIMIT 1)",
             "uuid",
         ),
+        DELEGATE => column("core.delegate_actor_id", "uuid"),
         ESTIMATE => column("core.estimate", "double precision"),
         CREATED_BY => column("core.created_by_actor_id", "uuid"),
         CREATED => column("core.created_at", "timestamptz"),
         EDITED => column("core.updated_at", "timestamptz"),
         KEY => column("core.number", "bigint"),
+        SNOOZED => column(
+            "CASE WHEN core.snoozed_until > now() THEN true END",
+            "boolean",
+        ),
         _ => return None,
     })
 }
@@ -243,6 +257,9 @@ fn builtin(
             collection: None,
             formula: None,
             button: None,
+            inverse: None,
+            rollup: None,
+            rules: None,
         },
         position,
         archived: false,
@@ -395,6 +412,24 @@ pub async fn system_fields(
         category: None,
     })
     .collect();
+    // Ended cycles are archived options: still shown on their tasks, not
+    // offered.
+    let cycles = sqlx::query_as::<_, (Uuid, i32, String, bool)>(
+        "SELECT id, number, name, completed_at IS NOT NULL FROM cycles \
+         WHERE space_id = $1 ORDER BY number",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|(id, number, name, archived)| ChoiceOption {
+        id,
+        name: crate::work_items::cycles::title(number, &name),
+        color: "#71717a".to_owned(),
+        archived,
+        category: None,
+    })
+    .collect();
     let mut parent = builtin(PARENT, "Parent", FieldType::Link, Vec::new(), 8);
     parent.config.target = Some(LinkTarget::Task);
     found.extend([
@@ -415,6 +450,9 @@ pub async fn system_fields(
         builtin(CREATED, "Created", FieldType::Date, Vec::new(), 14),
         builtin(EDITED, "Edited", FieldType::Date, Vec::new(), 15),
         builtin(KEY, "Key", FieldType::Number, Vec::new(), 16),
+        builtin(DELEGATE, "Delegate", FieldType::Person, Vec::new(), 17),
+        builtin(SNOOZED, "Snoozed", FieldType::Checkbox, Vec::new(), 18),
+        builtin(CYCLE, "Cycle", FieldType::SingleChoice, cycles, 19),
     ]);
     Ok(found)
 }
@@ -542,7 +580,11 @@ impl RecordSource for TasksAcross {
         builder.push_bind(self.projects.clone());
         builder.push(") AND core.project_id = ANY(");
         builder.push_bind(self.projects.clone());
-        builder.push(")");
+        // A collection switched off keeps its tasks, hidden (T1.25).
+        builder.push(
+            ") AND EXISTS (SELECT 1 FROM collections task_collection \
+             WHERE task_collection.id = record.collection_id AND task_collection.acts_like_task)",
+        );
         if let Some(collection) = self.collection {
             builder.push(" AND core.collection_id IS NOT DISTINCT FROM ");
             builder.push_bind(collection);
@@ -700,6 +742,20 @@ pub fn group_sql(field: Uuid) -> Option<GroupSql> {
                 order("COALESCE(group_field.id::text, '')", "text"),
             ],
         },
+        CYCLE => GroupSql {
+            join: " LEFT JOIN cycles group_field \
+                   ON group_field.space_id = core.project_id AND group_field.id = core.cycle_id"
+                .to_owned(),
+            key: "COALESCE(group_field.id::text, 'none')".to_owned(),
+            label: "COALESCE(NULLIF(group_field.name, ''), 'Cycle ' || group_field.number, 'No cycle')"
+                .to_owned(),
+            color: "NULL::text".to_owned(),
+            order: vec![
+                none_last("group_field.id"),
+                order("COALESCE(group_field.starts_on, 'infinity'::date)", "date"),
+                order("COALESCE(group_field.id::text, '')", "text"),
+            ],
+        },
         PARENT => GroupSql {
             join: " LEFT JOIN task_rows group_field \
                    ON group_field.project_id = core.project_id \
@@ -757,7 +813,7 @@ pub async fn ensure(
         FROM projects project
         JOIN project_memberships member
           ON member.project_id = project.id AND member.actor_id = $2
-        WHERE project.id = $1 AND project.kind <> 'direct'
+        WHERE project.id = $1
         "#,
     )
     .bind(project_id)

@@ -20,22 +20,19 @@ use crate::{
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, ActorKind, RoleGrant},
     provider::run_config::RunConfig,
 };
 
 #[derive(Debug, FromRow)]
 struct ConversationRow {
-    id: Uuid,
     project_id: Uuid,
     kind: String,
     conversation_archived: bool,
     project_archived: bool,
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -132,6 +129,11 @@ pub(crate) async fn start_run_in(
     }
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
+    }
+    // K4.17: a DM's thread lives in no space, so it has no repositories or
+    // run settings to start a run with; runs start in a space's threads.
+    if crate::spaces::kind::holds_messages(conversation.project_id) {
+        return Err(AppError::Invalid("agent runs start in a space's threads"));
     }
 
     let idempotency_key = idempotency_key?;
@@ -795,11 +797,11 @@ pub(crate) async fn select_run_setup_for(
         JOIN project_memberships worker_membership
           ON worker_membership.project_id = ew.project_id
          AND worker_membership.actor_id = ew.actor_id
-         AND worker_membership.role = 'worker'
+         AND worker_membership.role = $7
          AND worker_membership.enabled
         JOIN actors worker_actor
           ON worker_actor.id = ew.actor_id
-         AND worker_actor.kind = 'execution_worker'
+         AND worker_actor.kind = 'execution_worker' -- // kind-check: mechanical (the execution worker's own account)
          AND worker_actor.status = 'active'
         JOIN provider_connections connection
           ON connection.project_id = ew.project_id
@@ -839,6 +841,7 @@ pub(crate) async fn select_run_setup_for(
     .bind(harness)
     .bind(provider_account_id)
     .bind(worker_id)
+    .bind(crate::policy::MembershipRole::Worker.key())
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)
@@ -885,9 +888,9 @@ pub(crate) async fn interrupt_run_in(
     struct RunContext {
         conversation_id: Uuid,
         project_id: Uuid,
-        repository_id: Uuid,
         membership_role: String,
         membership_role_permissions: Option<Vec<String>>,
+        membership_group_permissions: Option<Vec<String>>,
         membership_enabled: bool,
         state: String,
     }
@@ -898,9 +901,9 @@ pub(crate) async fn interrupt_run_in(
         SELECT
             ar.conversation_id,
             c.project_id,
-            ar.repository_id,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled,
             ar.state
         FROM agent_runs ar
@@ -929,14 +932,9 @@ pub(crate) async fn interrupt_run_in(
         context.project_id,
         &context.membership_role,
         context.membership_role_permissions.as_deref(),
+        context.membership_group_permissions.as_deref(),
         context.membership_enabled,
         Action::RunInterrupt,
-        Resource::Project(ProjectScope::run(
-            context.project_id,
-            context.conversation_id,
-            run_id,
-            context.repository_id,
-        )),
     )?;
 
     let idempotency_key = idempotency_key?;
@@ -1213,11 +1211,11 @@ async fn guard_conversation_mutation(
 ) -> Result<(), AppError> {
     #[derive(FromRow)]
     struct MutationGuard {
-        kind: String,
         conversation_archived: bool,
         project_archived: bool,
         membership_role: String,
         membership_role_permissions: Option<Vec<String>>,
+        membership_group_permissions: Option<Vec<String>>,
         membership_enabled: bool,
     }
 
@@ -1261,6 +1259,7 @@ async fn guard_conversation_mutation(
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         JOIN projects p
@@ -1287,19 +1286,14 @@ async fn guard_conversation_mutation(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    let scope = if guard.kind == "thread" {
-        ProjectScope::thread(project_id, conversation_id)
-    } else {
-        ProjectScope::project(project_id)
-    };
     authorize_project_action(
         principal,
         project_id,
         &guard.membership_role,
         guard.membership_role_permissions.as_deref(),
+        guard.membership_group_permissions.as_deref(),
         guard.membership_enabled,
         action,
-        Resource::Project(scope),
     )?;
     if guard.project_archived {
         return Err(AppError::ProjectArchived);
@@ -1339,6 +1333,7 @@ async fn authorized_conversation(
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         LEFT JOIN conversations parent
@@ -1362,19 +1357,14 @@ async fn authorized_conversation(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    let scope = if conversation.kind == "thread" {
-        ProjectScope::thread(conversation.project_id, conversation.id)
-    } else {
-        ProjectScope::project(conversation.project_id)
-    };
     authorize_project_action(
         principal,
         conversation.project_id,
         &conversation.membership_role,
         conversation.membership_role_permissions.as_deref(),
+        conversation.membership_group_permissions.as_deref(),
         conversation.membership_enabled,
         action,
-        Resource::Project(scope),
     )?;
     Ok(conversation)
 }
@@ -1384,24 +1374,23 @@ pub(crate) fn authorize_project_action(
     project_id: Uuid,
     membership_role: &str,
     membership_role_permissions: Option<&[String]>,
+    membership_group_permissions: Option<&[String]>,
     membership_enabled: bool,
     action: Action,
-    resource: Resource,
 ) -> Result<(), AppError> {
-    let subject = Subject::new(
-        principal.actor_id(),
-        principal.actor_kind()?,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(membership_role, membership_role_permissions)?,
-            membership_enabled,
-        )),
-        None,
+    let grant = RoleGrant::stored(membership_role, membership_role_permissions)?.with_groups(
+        crate::access::group_permissions(membership_group_permissions),
     );
-    match authorize(&subject, action, resource) {
-        Decision::Allow => Ok(()),
-        Decision::Deny(_) => Err(AppError::Forbidden),
+    if crate::access::membership_allows(
+        principal.actor_id(),
+        project_id,
+        grant,
+        membership_enabled,
+        action.permission(),
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 

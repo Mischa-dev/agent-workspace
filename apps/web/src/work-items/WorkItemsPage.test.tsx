@@ -319,7 +319,7 @@ describe('Work Items list', () => {
 
     expect(await screen.findByText(hostileTitle)).toBeVisible()
     expect(rendered.container.querySelector('img')).toBeNull()
-    expect(screen.getByText(hostileTitle).closest('a')).toHaveAttribute('href', `/projects/${projectId}/work-items/${workItemId}`)
+    expect(screen.getByText(hostileTitle).closest('a')).toHaveAttribute('href', `/w/-/s/${projectId}/tasks/${workItemId}`)
     expect((await axe.run(rendered.container)).violations).toEqual([])
   })
 

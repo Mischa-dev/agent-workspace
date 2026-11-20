@@ -32,9 +32,15 @@ export type AgentTemplateView = { definition: unknown; id: string; installId?: s
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
 
+export type Aggregate = ("sum" | "average" | "min" | "max") | "count" | "count_values" | "count_unique" | "earliest" | "latest" | "percent_checked" | "percent_empty" | "list"
+
+export type AnswerEntry = { columns: string[]; durationMs?: number | null; error?: string | null; parameters: unknown; ranAt?: string | null; reviewed: boolean; rowCount: number; rows: unknown[]; running: boolean; truncated: boolean }
+
 export type ArchiveParts = "archive" | "keep"
 
 export type AssigneeProjection = { actorId: string; displayName: string; handle: string }
+
+export type Audience = "public" | "internal"
 
 export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
@@ -90,6 +96,8 @@ export type CommentThreadView = { anchor?: unknown; createdAt: string; id: strin
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
+export type ConnectionEntry = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
+
 export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
@@ -108,7 +116,13 @@ export type ConversationTab = { id: string; kind: string; position: number; titl
 
 export type ConversationTask = { how: string; id: string; key: string; statusCategory: string; title: string }
 
+export type CreatableKind = "project" | "team"
+
 export type CreatedTask = { assignee?: string | null; criteriaCount: number; id?: string | null; index: number; key: string; labels?: string[]; parentKey?: string | null; ref?: string | null; status: string; title: string; type: string; url?: string | null; version: number }
+
+export type CredentialReach = "space" | "account"
+
+export type CredentialView = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
 
 export type CriterionOp = "add" | "edit" | "check" | "uncheck" | "remove" | "move"
 
@@ -119,6 +133,8 @@ export type CriterionOperationOutcome = { changed: boolean; criterionId: string;
 export type CriterionValue = { completed: boolean; completedAt?: string | null; completedBy?: string | null; id: string; position: number; text: string }
 
 export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type Cycle = { completed: number; completedAt?: string | null; endsOn: string; id: string; name: string; number: number; scope: number; snapshots: Snapshot[]; started: number; startsOn: string; state: string; title: string; version: number }
 
 export type DashboardEntry = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
@@ -158,15 +174,15 @@ export type FieldFilterArgument = { field: string; op: FieldOp; values?: string[
 
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
 
-export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id" | "formula" | "button"
+export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "relation" | "rollup" | "file" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id" | "formula" | "button"
 
-export type FieldView = { archived: boolean; button?: ButtonView | null; collection?: string | null; description?: string; formula?: FormulaView | null; id: string; name: string; options?: OptionView[]; position: number; target?: LinkTarget | null; type: FieldType; version: number }
+export type FieldView = { archived: boolean; button?: ButtonView | null; collection?: string | null; description?: string; formula?: FormulaView | null; id: string; inverse?: string | null; name: string; options?: OptionView[]; position: number; rollup?: RollupView | null; rules?: RulesInput | null; target?: LinkTarget | null; type: FieldType; version: number }
 
-export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; target?: string | null; type?: string | null }
+export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; pairName?: string | null; position?: number | null; rollup?: RollupInput | null; rules?: RulesInput | null; target?: string | null; twoWay?: boolean | null; type?: string | null }
 
 export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
 
-export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
+export type Figures = { collectionName: string; columns?: string[]; error?: string | null; groups: FigureGroup[]; measure?: string | null; ranAt?: string | null; records: string[]; rows?: unknown[]; running?: boolean; style?: string | null; total: number; truncated?: boolean; value?: number | null; viewName: string; viewType: string }
 
 export type FileSummary = { commentId?: string | null; contentType: string; fileId: string; height?: number | null; idempotentReplay?: boolean; name: string; size: number; width?: number | null }
 
@@ -182,7 +198,17 @@ export type FollowView = { id: string; kind: FollowKind; level: FollowLevel; spa
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
+export type FormConfig = { dailyLimit?: number | null; fields?: FormField[]; intro?: string; sections?: FormSection[]; sets?: FormSet[]; thanks?: string }
+
+export type FormField = { field: string; required?: boolean; showIf?: ShowIf | null }
+
 export type FormFieldWrite = { field: string; required?: boolean }
+
+export type FormSection = { before: string; description?: string; title: string }
+
+export type FormSet = { field: string; value: unknown }
+
+export type FormSummary = { archived?: boolean; audience: Audience; collectionId: string; collectionName: string; id: string; linkId?: string | null; name: string; questions: number; version: number }
 
 export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[]; intro?: string | null; thanks?: string | null }
 
@@ -202,7 +228,7 @@ export type HandoffNote = { at: string; by: string; note: string; via?: string |
 
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
-export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+export type HistoryEntry = { acceptedBy?: string | null; actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
 
 export type HookDeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
 
@@ -219,6 +245,14 @@ export type InboxFilter = { category?: Category; spaces?: string[]; view?: View 
 export type InboxItem = { conversationId: string; conversationKind: string; conversationName: string; createdAt: string; followsRequestId?: string | null; generation: number; leaseExpiresAt?: string | null; mentioned: boolean; messageAuthor: string; messageExcerpt: string; messageId: string; otherMembers: string; projectId: string; replyConversationId: string; requestId: string; required: boolean; status: string; threadId?: string | null }
 
 export type InboxViewItem = { density: Density; filter: InboxFilter; id: string; name: string; position: number }
+
+export type Initiative = { archived: boolean; completed: number; fields: InitiativeField[]; id: string; milestones: InitiativeMilestone[]; number: number; scope: number; spaces: InitiativeSpace[]; title: string; version: number }
+
+export type InitiativeField = { name: string; type: string; value: unknown }
+
+export type InitiativeMilestone = { archived: boolean; completed: number; id: string; name: string; scope: number; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null }
+
+export type InitiativeSpace = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null; version: number }
 
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
@@ -247,6 +281,8 @@ export type LabelLine = { archived: boolean; color: string; description?: string
 export type LastMessage = { at: string; author: string; removed?: boolean; text: string }
 
 export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
+
+export type LatestUpdate = { author?: Person | null; channelId: string; health?: string | null; name: string; postedAt: string; threadId: string }
 
 export type LayoutLine = { fromWorkspace: boolean; preset: string; tone: string; words?: WordLine[] }
 
@@ -286,9 +322,11 @@ export type MeterKind = "gauge" | "counter" | "each"
 
 export type MeterUsage = { kind: MeterKind; limit?: number | null; meter: string; name: string; resetsAt?: string | null; unit: string; used: number }
 
+export type MilestonePlace = { archived: boolean; id: string; name: string; position: number; version: number }
+
 export type MilestoneRef = { id: string; name: string; targetDate?: string | null }
 
-export type MilestoneValue = { archived: boolean; canceled?: number; description: string; finished: number; id: string; idempotentReplay?: boolean; name: string; open?: number; overdue: boolean; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
+export type MilestoneValue = { archived: boolean; canceled?: number; description: string; estimateDone?: number; estimateTotal?: number; finished: number; id: string; idempotentReplay?: boolean; initiative?: string | null; initiativeId?: string | null; latestDueDate?: string | null; name: string; open?: number; overdue: boolean; position?: number; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
 
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
@@ -322,6 +360,8 @@ export type OptionInput = { category?: string | null; color?: string | null; id?
 
 export type OptionView = { archived?: boolean; category?: string | null; color: string; id: string; name: string }
 
+export type OutsideRef = { at: string; externalId: string; hostId?: string | null; issuer: string; lineage: unknown[] }
+
 export type OwnerView = { id: string; kind: string; name: string }
 
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
@@ -332,9 +372,15 @@ export type PageLine = { id: string; stale: boolean; title: string; updatedAt: s
 
 export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
 
+export type Parameter = { default?: unknown; name: string; type: ParameterKind }
+
+export type ParameterKind = ("text" | "number" | "boolean") | "date"
+
 export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
+
+export type Person = { id: string; name: string }
 
 export type PinItem = { id: string; kind: string; text: string; title: string }
 
@@ -354,6 +400,12 @@ export type ProjectLine = { archived?: boolean; id: string; key: string; message
 
 export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
+export type PublicField = { description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
+
+export type PublicOption = { color: string; id: string; name: string }
+
+export type PublicSection = { description?: string; title: string }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type PullRequest = { baseRef: string; checksState: string; draft: boolean; headRef: string; id: string; mergedAt?: string | null; number: number; repository: string; repositoryId: string; reviewState: string; spaceId: string; state: string; title: string; updatedAt: string; url: string }
@@ -362,6 +414,8 @@ export type PullRequestLine = { checksState: string; draft: boolean; failingChec
 
 export type PullRequestProjection = { baseRef: string; canonicalUrl: string; checksState: string; draft: boolean; headRef: string; headSha: string; id: string; mergeabilityState: string; number: number; projectId: string; repositoryId: string; reviewState: string; state: string; suggested?: boolean; syncState: string; title: string; url: string; version: number }
 
+export type QueryEntry = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
@@ -369,6 +423,8 @@ export type ReactionSummary = { byYou: boolean; count: number; emoji: string; na
 export type RecipeView = { id: string; title: string }
 
 export type Recipients = "owner" | "assignee" | "project_admins"
+
+export type RecurringView = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
 
 export type RelationRef = { kind: string; task: TaskRef }
 
@@ -402,7 +458,21 @@ export type ResolutionAction = "leave" | "set"
 
 export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 
+export type ReviewState = "draft" | "reviewed"
+
 export type RevisionItem = { redacted?: boolean; revision: number; text: string; truncated?: boolean; via?: string | null; writtenAt: string; writtenBy: string }
+
+export type RollupInput = { aggregate: string; field?: string | null; relation: string }
+
+export type RollupView = { aggregate: Aggregate; relation: string; result: ResultType; target?: string | null }
+
+export type Rule = { action: RuleAction; enabled: boolean; filter: unknown; id: string; name: string; position: number; version: number }
+
+export type RuleAction = { kind: RuleActionKind; status?: string | null; to?: string | null }
+
+export type RuleActionKind = "accept" | "assign" | "keep"
+
+export type RulesInput = { buildersOnly?: boolean; default?: unknown; max?: number | null; min?: number | null; pattern?: string | null; required?: boolean; unique?: boolean }
 
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
 
@@ -414,9 +484,19 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 
 export type SavedSearch = { id: string; name: string; position: number; query: string }
 
+export type ScheduleInput = { every?: number | null; frequency: string; monthDay?: number | null; startsOn?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] }
+
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
+
+export type ScopeAccount = { accountId: string; displayName?: string | null }
+
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; members: ScopeMember[]; name?: string | null; workspaceId: string }
+
+export type ScopeMember = { accountId: string; displayName?: string | null; you: boolean }
+
+export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
 
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
 
@@ -426,11 +506,23 @@ export type SectionSort = "manual" | "alpha" | "recent"
 
 export type SentMessage = { conversationId: string; idempotentReplay: boolean; messageId: string; sentAt: string; sequence: number; text: string }
 
+export type Settings = { enabled: boolean; lengthDays: number; rollOver: boolean; startsOnWeekday: number; upcoming: number; version: number }
+
+export type ShapeChannel = { name: string; private?: boolean }
+
+export type ShapePage = { guide?: boolean; markdown?: string; title: string }
+
+export type SharedAccount = { account: string; expiresAt?: string | null }
+
+export type SharedLink = { expiresAt?: string | null; id: string }
+
 export type SharedSpace = { id: string; name: string }
 
 export type SheetMatch = { cell: string; input: string; shown: string; tab: string }
 
 export type SheetViewOut = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
+
+export type ShowIf = { field: string; isOneOf?: string[] }
 
 export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
@@ -438,15 +530,29 @@ export type SidebarSection = { collapsed: boolean; id: string; items: SidebarIte
 
 export type SkillLine = { description: string; name: string; pageId: string; stale: boolean; title: string; updatedAt: string; version: number }
 
+export type Snapshot = { completed: number; completedPoints?: number | null; onDate: string; scope: number; scopePoints?: number | null; started: number }
+
 export type SortWrite = { direction?: Direction; field: string }
 
 export type SourceView = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
+
+export type SpaceKind = "workspace" | "project" | "team" | "personal"
+
+export type SpaceShape = { channels?: ShapeChannel[]; kind?: string | null; pages?: ShapePage[] }
+
+export type SpaceStatus = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+
+export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceVisibility = "members" | "workspace"
 
 export type StatusCount = { category: string; count: number; status: string }
 
 export type StatusProjection = { id: string; name: string; semanticCategory: string }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
+
+export type StoredKind = SpaceKind
 
 export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 
@@ -470,21 +576,35 @@ export type TaskSummary = { archived?: boolean; assignee?: string | null; blocke
 
 export type TemplateSubtask = { description?: string | null; title: string }
 
+export type TemplateView = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
+
+export type ThemeDocument = { css?: string; dark: ThemeMode; format: number; light: ThemeMode }
+
+export type ThemeMode = { base: string; tokens?: Record<string, string> }
+
+export type ThemeSummary = { darkBase: string; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThingInput = { id: string; kind: SubjectKind }
+
+export type ThingKind = "page"
 
 export type ThreadRef = { id: string; name: string; status: string }
 
 export type ThreadUpdate = { changedAt: string; changedBy?: string | null; name: string; outcome?: string | null; status: string; threadId: string; under: string }
 
-export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; range?: string; sheet?: string | null; style?: ChartStyle | null; text?: string; title?: string; unseen?: string | null; view?: string | null; width: number }
+export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; query?: string | null; range?: string; sheet?: string | null; style?: ChartStyle | null; text?: string; title?: string; unseen?: string | null; view?: string | null; width: number }
 
-export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; range?: string | null; sheet?: string | null; style?: ChartStyle | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
+export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; query?: string | null; range?: string | null; sheet?: string | null; style?: ChartStyle | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
 
-export type TileKind = "view" | "text" | "sheet"
+export type TileKind = "view" | "text" | "sheet" | "query"
 
 export type TransferOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
 
-export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | { hookId: string; kind: "incoming_hook" } | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
+export type TriageAction = "accept" | "decline" | "duplicate" | "snooze"
+
+export type TriagedTask = { snoozedUntil?: string | null; status: string; taskId: string; version: number }
+
+export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ collectionId: string; filters?: FilterWrite[]; kind: "record_matches"; viewId?: string | null }) | ({ collectionId: string; field: string; filters?: FilterWrite[]; kind: "field_changed"; to?: string[]; viewId?: string | null }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | { hookId: string; kind: "incoming_hook" } | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
@@ -508,7 +628,7 @@ export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName
 
 export type WordLine = { many: string; noun: string; one: string }
 
-export type WorkItemProjection = { acceptanceCriteria: AcceptanceCriterionProjection[]; archived: boolean; assignee?: AssigneeProjection | null; blocked?: BlockedProjection | null; canonicalUrl: string; description: string; descriptionTruncated: boolean; id: string; itemType: NamedProjection; key: string; labels: string[]; linkedPullRequests: PullRequestProjection[]; linkedRepositories: LinkedRepositoryProjection[]; parentWorkItemId?: string | null; priority: string; projectId: string; status: StatusProjection; title: string; version: number }
+export type WorkItemProjection = { acceptanceCriteria: AcceptanceCriterionProjection[]; archived: boolean; assignee?: AssigneeProjection | null; blocked?: BlockedProjection | null; canonicalUrl: string; delegate?: AssigneeProjection | null; description: string; descriptionTruncated: boolean; id: string; itemType: NamedProjection; key: string; labels: string[]; linkedPullRequests: PullRequestProjection[]; linkedRepositories: LinkedRepositoryProjection[]; parentWorkItemId?: string | null; priority: string; projectId: string; status: StatusProjection; title: string; version: number }
 
 export type WorkspaceStoreView = { bucket: string; endpoint: string; pathStyle: boolean; prefix: string; region: string; storeId: string; verifiedAt: string }
 
@@ -525,6 +645,10 @@ export type AccountBlockSetOutput = { blocked: BlockedAccount[] }
 export type AccountJoinableListInput = Record<string, never>
 
 export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
+
+export type AccountOwnerTakeInput = { account: string }
+
+export type AccountOwnerTakeOutput = { account: string; ownerAccount: string }
 
 export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
 
@@ -566,6 +690,22 @@ export type AgentRecipeListInput = Record<string, never>
 
 export type AgentRecipeListOutput = { recipes: RecipeView[] }
 
+export type AgentRefDecideInput = { accept: boolean; agent: string }
+
+export type AgentRefDecideOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefRemoveInput = { agent: string }
+
+export type AgentRefRemoveOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefSetInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefSetOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
+export type AgentRefUpdateInput = { agent: string; externalId: string; issuer: string }
+
+export type AgentRefUpdateOutput = { active?: OutsideRef | null; agent: string; pending?: OutsideRef | null }
+
 export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
 
 export type AgentRegisterDecideOutput = { accountId?: string | null; proposalId: string; status: string }
@@ -574,6 +714,10 @@ export type AgentResumeInput = { account: string; everywhere?: boolean; reason?:
 
 export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
+export type AgentScopeGetInput = { account: string }
+
+export type AgentScopeGetOutput = { accountId: string; alsoInOtherWorkspaces: boolean; connections: number; displayName?: string | null; follows: number; handle?: string | null; managers: ScopeAccount[]; privateConversations: ScopeConversation[]; readsWithConsent: boolean; spaces: ScopeSpace[]; workspaceRole: string }
+
 export type AgentTemplateListInput = { spaceId?: string | null }
 
 export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
@@ -581,6 +725,10 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AppConsentSetInput = { app: string; conversation: string; granted?: boolean | null }
+
+export type AppConsentSetOutput = { appAccountId: string; changed: boolean; conversationId: string; granted: boolean }
 
 export type AutomationCreateInput = { actions: Action[]; conditions?: Conditions | null; enabled?: boolean | null; name: string; projectId: string; trigger: Trigger }
 
@@ -762,6 +910,22 @@ export type ConversationsMarkReadInput = { spaceId?: string | null }
 
 export type ConversationsMarkReadOutput = { marked: number; more: boolean }
 
+export type CredentialCreateInput = { account?: string | null; days?: number | null; name: string; reach?: CredentialReach | null; space?: string | null; write?: boolean | null }
+
+export type CredentialCreateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
+
+export type CredentialListInput = { account?: string | null }
+
+export type CredentialListOutput = { credentials: CredentialView[] }
+
+export type CredentialRevokeInput = { credential: string }
+
+export type CredentialRevokeOutput = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
+
+export type CredentialRotateInput = { credential: string; days?: number | null; graceMinutes?: number | null }
+
+export type CredentialRotateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
+
 export type CustomEmojiCreateInput = { imageBase64: string; name: string }
 
 export type CustomEmojiCreateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
@@ -773,6 +937,14 @@ export type CustomEmojiListOutput = { emoji: CustomEmojiView[] }
 export type CustomEmojiUpdateInput = { id: string; retired: boolean }
 
 export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type CycleListInput = { spaceId: string }
+
+export type CycleListOutput = { cycles: Cycle[]; settings: Settings }
+
+export type CycleSetInput = { cycle?: string | null; enabled?: boolean | null; expectedVersion?: number | null; lengthDays?: number | null; name?: string | null; rollOver?: boolean | null; spaceId: string; startsOnWeekday?: number | null; upcoming?: number | null }
+
+export type CycleSetOutput = { cycles: Cycle[]; settings: Settings }
 
 export type DashboardCreateInput = { description?: string | null; name: string; shared?: boolean | null; spaceId: string; tiles?: TileInput[] }
 
@@ -793,6 +965,54 @@ export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntr
 export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean | null; tiles?: TileInput[] | null }
 
 export type DashboardUpdateOutput = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DataConnectionCreateInput = { address: string; name: string; spaceId: string }
+
+export type DataConnectionCreateOutput = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
+
+export type DataConnectionDeleteInput = { connection: string }
+
+export type DataConnectionDeleteOutput = { id: string; removed: boolean }
+
+export type DataConnectionListInput = { spaceId: string }
+
+export type DataConnectionListOutput = { connections: ConnectionEntry[] }
+
+export type DataConnectionUpdateInput = { address?: string | null; connection: string; expectedVersion?: number | null; name?: string | null }
+
+export type DataConnectionUpdateOutput = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
+
+export type DataQueryCreateInput = { connection: string; description?: string | null; name: string; parameters?: Parameter[]; rowCap?: number | null; spaceId: string; statement: string }
+
+export type DataQueryCreateOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryDeleteInput = { query: string }
+
+export type DataQueryDeleteOutput = { id: string; removed: boolean }
+
+export type DataQueryGetInput = { query: string }
+
+export type DataQueryGetOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryListInput = { spaceId: string }
+
+export type DataQueryListOutput = { canConnect: boolean; canShare: boolean; queries: QueryEntry[] }
+
+export type DataQueryReviewInput = { expectedVersion?: number | null; query: string; state: ReviewState }
+
+export type DataQueryReviewOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryRunInput = { parameters?: Record<string, unknown> | null; query: string }
+
+export type DataQueryRunOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryShareInput = { query: string; shared: boolean }
+
+export type DataQueryShareOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
+
+export type DataQueryUpdateInput = { connection?: string | null; description?: string | null; expectedVersion?: number | null; name?: string | null; parameters?: Parameter[] | null; query: string; rowCap?: number | null; statement?: string | null }
+
+export type DataQueryUpdateOutput = { answer?: AnswerEntry | null; canRun: boolean; connection?: string | null; description?: string; id: string; name: string; parameters: Parameter[]; review: ReviewState; reviewedAt?: string | null; reviewedBy?: string | null; rowCap?: number | null; shared: boolean; statement?: string | null; updatedAt: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -886,6 +1106,26 @@ export type FollowSetInput = { id: string; kind: FollowKind; level?: FollowLevel
 
 export type FollowSetOutput = { changed: boolean; id: string; kind: FollowKind; level?: FollowLevel | null }
 
+export type FormAnswerSendInput = { answers: Record<string, unknown>; form: string }
+
+export type FormAnswerSendOutput = { collectionId: string; number: number; recordId: string; thanks?: string; title: string }
+
+export type FormCreateInput = { collection: string; definition?: unknown; name: string }
+
+export type FormCreateOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
+
+export type FormGetInput = { form: string }
+
+export type FormGetOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
+
+export type FormListInput = { collection?: string | null; includeArchived?: boolean; spaceId: string }
+
+export type FormListOutput = { forms: FormSummary[] }
+
+export type FormUpdateInput = { archived?: boolean | null; definition?: unknown; expectedVersion?: number | null; form: string; name?: string | null }
+
+export type FormUpdateOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
+
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
 export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
@@ -898,9 +1138,29 @@ export type GithubInstallationLinkInput = { installationId: number; projectId: s
 
 export type GithubInstallationLinkOutput = { automation?: Record<string, unknown> | null; done: string; installation?: Record<string, unknown> | null }
 
+export type GroupArchiveInput = { group: string }
+
+export type GroupArchiveOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupCreateInput = { description?: string | null; handle: string; members?: string[]; name: string }
+
+export type GroupCreateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
 export type GroupListInput = { members?: boolean; prefix?: string | null }
 
 export type GroupListOutput = { groups: GroupView[] }
+
+export type GroupMembersSetInput = { add?: string[]; group: string; remove?: string[] }
+
+export type GroupMembersSetOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupRestoreInput = { group: string }
+
+export type GroupRestoreOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupUpdateInput = { description?: string | null; expectedVersion?: number | null; group: string; handle?: string | null; name?: string | null }
+
+export type GroupUpdateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
 
 export type GuardListInput = Record<string, never>
 
@@ -965,6 +1225,14 @@ export type IncomingHookDeleteOutput = { deleted: boolean }
 export type IncomingHookListInput = { spaceId: string }
 
 export type IncomingHookListOutput = { hooks: HookView[] }
+
+export type InitiativeCreateInput = { fields?: Record<string, unknown>; title: string }
+
+export type InitiativeCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
+export type InitiativeListInput = { includeArchived?: boolean }
+
+export type InitiativeListOutput = { collectionId?: string | null; initiatives: Initiative[]; spaceId?: string | null }
 
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
@@ -1042,17 +1310,21 @@ export type MessageUpdateInput = { content?: MessageContent | null; expectedRevi
 
 export type MessageUpdateOutput = { changed: boolean; conversationId: string; editedAt?: string | null; idempotentReplay: boolean; messageId: string; newlyMentioned?: string[]; revision: number; text: string; url: string }
 
-export type MilestoneCreateInput = { addTasks?: string[] | null; archived?: boolean | null; clientRequestId?: string | null; description?: string | null; expectedVersion?: number | null; milestoneId?: string | null; name?: string | null; projectId: string; removeTasks?: string[] | null; targetDate?: string | null }
+export type MilestoneCreateInput = { addTasks?: string[] | null; archived?: boolean | null; clientRequestId?: string | null; description?: string | null; expectedVersion?: number | null; initiative?: string | null; milestoneId?: string | null; name?: string | null; projectId: string; removeTasks?: string[] | null; targetDate?: string | null }
 
-export type MilestoneCreateOutput = { archived: boolean; canceled?: number; description: string; finished: number; id: string; idempotentReplay?: boolean; name: string; open?: number; overdue: boolean; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
+export type MilestoneCreateOutput = { archived: boolean; canceled?: number; description: string; estimateDone?: number; estimateTotal?: number; finished: number; id: string; idempotentReplay?: boolean; initiative?: string | null; initiativeId?: string | null; latestDueDate?: string | null; name: string; open?: number; overdue: boolean; position?: number; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
 
 export type MilestoneListInput = { includeArchived?: boolean | null; projectId: string }
 
 export type MilestoneListOutput = { milestones: MilestoneValue[] }
 
-export type MilestoneUpdateInput = { addTasks?: string[] | null; archived?: boolean | null; clientRequestId?: string | null; description?: string | null; expectedVersion?: number | null; milestoneId?: string | null; name?: string | null; projectId: string; removeTasks?: string[] | null; targetDate?: string | null }
+export type MilestoneReorderInput = { expectedVersion?: number | null; milestoneId: string; position: number }
 
-export type MilestoneUpdateOutput = { archived: boolean; canceled?: number; description: string; finished: number; id: string; idempotentReplay?: boolean; name: string; open?: number; overdue: boolean; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
+export type MilestoneReorderOutput = { milestones: MilestonePlace[] }
+
+export type MilestoneUpdateInput = { addTasks?: string[] | null; archived?: boolean | null; clientRequestId?: string | null; description?: string | null; expectedVersion?: number | null; initiative?: string | null; milestoneId?: string | null; name?: string | null; projectId: string; removeTasks?: string[] | null; targetDate?: string | null }
+
+export type MilestoneUpdateOutput = { archived: boolean; canceled?: number; description: string; estimateDone?: number; estimateTotal?: number; finished: number; id: string; idempotentReplay?: boolean; initiative?: string | null; initiativeId?: string | null; latestDueDate?: string | null; name: string; open?: number; overdue: boolean; position?: number; progress?: number; targetDate?: string | null; total: number; url: string; version: number }
 
 export type ModuleArchiveInput = { moduleId: string; parts: ArchiveParts }
 
@@ -1088,7 +1360,7 @@ export type ModuleUpdateOutput = { archived: boolean; archivedParts?: string | n
 
 export type MyWorkGetInput = { projectId?: string | null }
 
-export type MyWorkGetOutput = { assigned: unknown; claimed: unknown; review: unknown }
+export type MyWorkGetOutput = { assigned: unknown; claimed: unknown; review: unknown; updates: unknown }
 
 export type NotificationKeywordListInput = Record<string, never>
 
@@ -1162,6 +1434,18 @@ export type ProjectListInput = { includeArchived?: boolean | null }
 
 export type ProjectListOutput = { projects: ProjectLine[] }
 
+export type ProjectStatusGetInput = { spaceId: string }
+
+export type ProjectStatusGetOutput = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+
+export type ProjectStatusSetInput = { expectedVersion?: number | null; health?: string | null; lead?: string | null; spaceId: string; targetDate?: string | null }
+
+export type ProjectStatusSetOutput = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+
+export type ProjectUpdateCreateInput = { channelId?: string | null; health: string; spaceId: string; text: string; title?: string | null }
+
+export type ProjectUpdateCreateOutput = { channelId: string; messageId: string; status: SpaceStatus; threadId: string }
+
 export type ProposalDecideInput = { decision: DecisionArg; parts?: number[] | null; proposalId: string }
 
 export type ProposalDecideOutput = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
@@ -1190,13 +1474,45 @@ export type PullRequestRefreshInput = { pullRequestId: string }
 
 export type PullRequestRefreshOutput = { job: Record<string, unknown>; queued: boolean }
 
-export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; title?: string | null }
+export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; template?: string | null; title?: string | null }
 
 export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
+export type RecordTemplateCreateInput = { collection: string; fields?: Record<string, unknown>; name: string; title: string }
+
+export type RecordTemplateCreateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
+
+export type RecordTemplateListInput = { collection: string; includeArchived?: boolean }
+
+export type RecordTemplateListOutput = { templates: TemplateView[] }
+
+export type RecordTemplateUpdateInput = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown> | null; name?: string | null; template: string; title?: string | null }
+
+export type RecordTemplateUpdateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
+
+export type RecordUpdateInput = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown>; note?: string | null; record: string; title?: string | null }
+
+export type RecordUpdateOutput = { changed: string[]; collectionId: string; id: string; number: number; proposalId?: string | null; proposed?: unknown[]; title: string; version: number }
 
 export type RecurringCreateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
 export type RecurringCreateOutput = { created: boolean; deleted: boolean; recurring?: unknown }
+
+export type RecurringRecordCreateInput = { every?: number | null; frequency: string; monthDay?: number | null; startsOn?: string | null; template: string; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] }
+
+export type RecurringRecordCreateOutput = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
+
+export type RecurringRecordDeleteInput = { recurring: string }
+
+export type RecurringRecordDeleteOutput = { id: string }
+
+export type RecurringRecordListInput = { collection: string; includeArchived?: boolean }
+
+export type RecurringRecordListOutput = { recurring: RecurringView[] }
+
+export type RecurringRecordUpdateInput = { enabled?: boolean | null; expectedVersion?: number | null; recurring: string; schedule?: ScheduleInput | null }
+
+export type RecurringRecordUpdateOutput = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
 
 export type RecurringUpdateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
@@ -1254,7 +1570,7 @@ export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
-export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; spaceId?: string | null; taskId?: string | null; title: string }
+export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; sensitive?: boolean | null; spaceId?: string | null; taskId?: string | null; title: string }
 
 export type RequestCreateOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
@@ -1366,6 +1682,62 @@ export type SidebarSectionSetInput = { collapsed?: boolean | null; delete?: bool
 
 export type SidebarSectionSetOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
 
+export type SpaceArchiveInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; shape?: SpaceShape | null; templateId?: string | null; visibility?: SpaceVisibility | null }
+
+export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceGroupAddInput = { group: string; role?: string | null; spaceId: string }
+
+export type SpaceGroupAddOutput = { groupId: string; handle: string; role: string; roleId: string; seats: number; spaceId: string }
+
+export type SpaceGroupRemoveInput = { group: string; spaceId: string }
+
+export type SpaceGroupRemoveOutput = { groupId: string; removed: boolean; spaceId: string }
+
+export type SpaceJoinInput = { spaceId: string }
+
+export type SpaceJoinOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceLeaveInput = { spaceId: string }
+
+export type SpaceLeaveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | null }
+
+export type SpaceListOutput = { spaces: SpaceView[] }
+
+export type SpaceMemberAddInput = { account: string; expiresAt?: string | null; role?: string | null; spaceId: string }
+
+export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceMemberRemoveInput = { account: string; expectedVersion?: number | null; spaceId: string }
+
+export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role: string; spaceId: string }
+
+export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+
+export type SpaceOpenInput = { spaceId: string }
+
+export type SpaceOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpacePersonalOpenInput = Record<string, never>
+
+export type SpacePersonalOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceRestoreInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceRestoreOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceUpdateInput = { description?: string | null; expectedVersion?: number | null; icon?: string | null; name?: string | null; spaceId: string; visibility?: SpaceVisibility | null }
+
+export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
 export type StatusDeleteOutput = { cleared: boolean }
@@ -1380,7 +1752,7 @@ export type StatusSetOutput = { accountId: string; awayUntil?: string | null; cl
 
 export type TaskArchiveInput = { expectedVersion: number; taskId: string }
 
-export type TaskArchiveOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskArchiveOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskClaimInput = { minutes?: number | null; note?: string | null; taskId: string }
 
@@ -1388,7 +1760,7 @@ export type TaskClaimOutput = { claimedAt: string; claimedBy: string; expiresAt:
 
 export type TaskCommentCreateInput = { attachmentIds?: string[] | null; replyToCommentId?: string | null; taskId: string; text: string }
 
-export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskCommentDeleteInput = { commentId: string; taskId: string }
 
@@ -1400,7 +1772,7 @@ export type TaskCommentUpdateOutput = { changed: boolean; commentId: string; rev
 
 export type TaskCreateInput = { acceptanceCriteria?: string[] | null; afterTaskId?: string | null; assignee?: string | null; beforeTaskId?: string | null; collection?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; fromMessageId?: string | null; labels?: string[] | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; projectId?: string | null; saySo?: boolean | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
 
-export type TaskCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskCreateManyInput = { clientRequestId?: string | null; createMissingLabels?: boolean | null; preview?: boolean | null; projectId?: string | null; tasks: NewTask[] }
 
@@ -1426,7 +1798,7 @@ export type TaskLinkManyInput = { links: DependencyLinks[]; projectId?: string |
 
 export type TaskLinkManyOutput = { changed: number; tasks: DependencyChange[] }
 
-export type TaskListInput = { anyLabels?: string[] | null; assignee?: string[] | null; blocked?: boolean | null; claimed?: string | null; collection?: string | null; createdBy?: string | null; cursor?: string | null; dueAfter?: string | null; dueBefore?: string | null; fieldFilters?: FieldFilterArgument[] | null; includeArchived?: boolean | null; includeDone?: boolean | null; labels?: string[] | null; limit?: number | null; milestone?: string[] | null; notAssignee?: string[] | null; notLabels?: string[] | null; notMilestone?: string[] | null; notPriority?: string[] | null; notStatus?: string[] | null; notType?: string[] | null; overdue?: boolean | null; parentId?: string | null; priority?: string[] | null; projectId?: string | null; projectIds?: string[] | null; query?: string | null; ready?: boolean | null; sort?: string | null; status?: string[] | null; type?: string[] | null; updatedSince?: string | null; view?: string | null }
+export type TaskListInput = { anyLabels?: string[] | null; assignee?: string[] | null; blocked?: boolean | null; claimed?: string | null; collection?: string | null; createdBy?: string | null; cursor?: string | null; delegate?: string[] | null; dueAfter?: string | null; dueBefore?: string | null; fieldFilters?: FieldFilterArgument[] | null; includeArchived?: boolean | null; includeDone?: boolean | null; labels?: string[] | null; limit?: number | null; milestone?: string[] | null; notAssignee?: string[] | null; notLabels?: string[] | null; notMilestone?: string[] | null; notPriority?: string[] | null; notStatus?: string[] | null; notType?: string[] | null; overdue?: boolean | null; parentId?: string | null; priority?: string[] | null; projectId?: string | null; projectIds?: string[] | null; query?: string | null; ready?: boolean | null; sort?: string | null; status?: string[] | null; type?: string[] | null; updatedSince?: string | null; view?: string | null }
 
 export type TaskListOutput = { nextCursor?: string | null; tasks: TaskSummary[]; total: number }
 
@@ -1448,11 +1820,11 @@ export type TaskReorderOutput = { changed: boolean; column: string[]; status: st
 
 export type TaskRestoreInput = { expectedVersion: number; taskId: string }
 
-export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
-export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
+export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; cycle?: string | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; note?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
 
-export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
+export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
 export type TaskUpdateManyInput = { addLabels?: string[] | null; archived?: boolean | null; assignee?: string | null; clearAssignee?: boolean | null; clientRequestId?: string | null; dueDate?: string | null; expectedVersions?: Record<string, number> | null; fields?: Record<string, unknown> | null; milestone?: string | null; preview?: boolean | null; priority?: string | null; projectId?: string | null; removeLabels?: string[] | null; status?: string | null; taskIds: string[]; type?: string | null }
 
@@ -1474,9 +1846,41 @@ export type TemplateUpdateInput = { acceptanceCriteria?: string[] | null; archiv
 
 export type TemplateUpdateOutput = { created: boolean; template: unknown }
 
+export type ThemeCreateInput = { document: ThemeDocument; name: string }
+
+export type ThemeCreateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeDeleteInput = { id: string }
+
+export type ThemeDeleteOutput = { deleted: boolean; id: string }
+
+export type ThemeGetInput = { id: string }
+
+export type ThemeGetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeListInput = Record<string, never>
+
+export type ThemeListOutput = { builtIn: string[]; canOffer: boolean; format: number; themes: ThemeSummary[] }
+
+export type ThemeUpdateInput = { document?: ThemeDocument | null; expectedVersion: number; id: string; name?: string | null }
+
+export type ThemeUpdateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingLinkOutput = { changed: boolean }
+
+export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind }
+
+export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
+
+export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
+
+export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
+export type ThingShareRemoveInput = { account?: string | null; id: string; kind: ThingKind; link?: string | null }
+
+export type ThingShareRemoveOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
 
 export type ThingUnlinkInput = { from: string; kind: HandLinkKind; to: string }
 
@@ -1493,6 +1897,22 @@ export type ThreadStartOutput = { created?: boolean | null; id: string; message?
 export type ThreadUpdateInput = { clearOutcome?: boolean | null; name?: string | null; outcome?: string | null; status?: string | null; threadId: string }
 
 export type ThreadUpdateOutput = { created?: boolean | null; id: string; message?: SentMessage | null; name: string; outcome?: string | null; parentId: string; status: string; url: string }
+
+export type TriageDecideInput = { action: TriageAction; duplicateOf?: string | null; reason?: string | null; status?: string | null; taskIds: string[]; until?: string | null }
+
+export type TriageDecideOutput = { tasks: TriagedTask[] }
+
+export type TriageEnableInput = { spaceId: string }
+
+export type TriageEnableOutput = { statusId: string }
+
+export type TriageRuleListInput = { spaceId: string }
+
+export type TriageRuleListOutput = { rules: Rule[]; triageStatusId?: string | null }
+
+export type TriageRuleSetInput = { action?: RuleAction | null; enabled?: boolean | null; expectedVersion?: number | null; filter?: unknown; name?: string | null; position?: number | null; remove?: boolean; rule?: string | null; spaceId: string }
+
+export type TriageRuleSetOutput = { removed: boolean; rule?: Rule | null }
 
 export type ViewCreateInput = { collection: string; config?: unknown; name: string; position?: number | null; shared?: boolean; type: string }
 
@@ -1558,6 +1978,10 @@ export type WorkspaceExportStartInput = Record<string, never>
 
 export type WorkspaceExportStartOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
 
+export type WorkspaceMemberUpdateInput = { account: string; expiresAt: string }
+
+export type WorkspaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; version: number }
+
 export type WorkspaceSearchInput = { conversationId?: string | null; from?: string | null; kinds?: string[] | null; limit?: number | null; projectId?: string | null; query: string; since?: string | null; until?: string | null }
 
 export type WorkspaceSearchOutput = { hint: string; results: SearchResult[] }
@@ -1578,6 +2002,10 @@ export type WorkspaceStoreSetInput = { accessKeyId: string; bucket: string; endp
 
 export type WorkspaceStoreSetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
 
+export type WorkspaceThemeSetInput = { offered: boolean; themeId: string }
+
+export type WorkspaceThemeSetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type WorkspaceTransferGetInput = { transferId: string }
 
 export type WorkspaceTransferGetOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
@@ -1594,6 +2022,7 @@ export type Operations = {
   account_block_list: { input: AccountBlockListInput; output: AccountBlockListOutput }
   account_block_set: { input: AccountBlockSetInput; output: AccountBlockSetOutput }
   account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_owner_take: { input: AccountOwnerTakeInput; output: AccountOwnerTakeOutput }
   account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
@@ -1604,10 +2033,16 @@ export type Operations = {
   agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
   agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
   agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
+  agent_ref_decide: { input: AgentRefDecideInput; output: AgentRefDecideOutput }
+  agent_ref_remove: { input: AgentRefRemoveInput; output: AgentRefRemoveOutput }
+  agent_ref_set: { input: AgentRefSetInput; output: AgentRefSetOutput }
+  agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
+  agent_scope_get: { input: AgentScopeGetInput; output: AgentScopeGetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  app_consent_set: { input: AppConsentSetInput; output: AppConsentSetOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
   automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }
@@ -1653,14 +2088,32 @@ export type Operations = {
   conversation_task_list: { input: ConversationTaskListInput; output: ConversationTaskListOutput }
   conversation_update: { input: ConversationUpdateInput; output: ConversationUpdateOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
+  credential_create: { input: CredentialCreateInput; output: CredentialCreateOutput }
+  credential_list: { input: CredentialListInput; output: CredentialListOutput }
+  credential_revoke: { input: CredentialRevokeInput; output: CredentialRevokeOutput }
+  credential_rotate: { input: CredentialRotateInput; output: CredentialRotateOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
+  cycle_list: { input: CycleListInput; output: CycleListOutput }
+  cycle_set: { input: CycleSetInput; output: CycleSetOutput }
   dashboard_create: { input: DashboardCreateInput; output: DashboardCreateOutput }
   dashboard_delete: { input: DashboardDeleteInput; output: DashboardDeleteOutput }
   dashboard_get: { input: DashboardGetInput; output: DashboardGetOutput }
   dashboard_list: { input: DashboardListInput; output: DashboardListOutput }
   dashboard_update: { input: DashboardUpdateInput; output: DashboardUpdateOutput }
+  data_connection_create: { input: DataConnectionCreateInput; output: DataConnectionCreateOutput }
+  data_connection_delete: { input: DataConnectionDeleteInput; output: DataConnectionDeleteOutput }
+  data_connection_list: { input: DataConnectionListInput; output: DataConnectionListOutput }
+  data_connection_update: { input: DataConnectionUpdateInput; output: DataConnectionUpdateOutput }
+  data_query_create: { input: DataQueryCreateInput; output: DataQueryCreateOutput }
+  data_query_delete: { input: DataQueryDeleteInput; output: DataQueryDeleteOutput }
+  data_query_get: { input: DataQueryGetInput; output: DataQueryGetOutput }
+  data_query_list: { input: DataQueryListInput; output: DataQueryListOutput }
+  data_query_review: { input: DataQueryReviewInput; output: DataQueryReviewOutput }
+  data_query_run: { input: DataQueryRunInput; output: DataQueryRunOutput }
+  data_query_share: { input: DataQueryShareInput; output: DataQueryShareOutput }
+  data_query_update: { input: DataQueryUpdateInput; output: DataQueryUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   dependency_graph_get: { input: DependencyGraphGetInput; output: DependencyGraphGetOutput }
@@ -1684,10 +2137,20 @@ export type Operations = {
   file_upload_start: { input: FileUploadStartInput; output: FileUploadStartOutput }
   follow_list: { input: FollowListInput; output: FollowListOutput }
   follow_set: { input: FollowSetInput; output: FollowSetOutput }
+  form_answer_send: { input: FormAnswerSendInput; output: FormAnswerSendOutput }
+  form_create: { input: FormCreateInput; output: FormCreateOutput }
+  form_get: { input: FormGetInput; output: FormGetOutput }
+  form_list: { input: FormListInput; output: FormListOutput }
+  form_update: { input: FormUpdateInput; output: FormUpdateOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
   github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }
+  group_archive: { input: GroupArchiveInput; output: GroupArchiveOutput }
+  group_create: { input: GroupCreateInput; output: GroupCreateOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
+  group_members_set: { input: GroupMembersSetInput; output: GroupMembersSetOutput }
+  group_restore: { input: GroupRestoreInput; output: GroupRestoreOutput }
+  group_update: { input: GroupUpdateInput; output: GroupUpdateOutput }
   guard_list: { input: GuardListInput; output: GuardListOutput }
   guard_set: { input: GuardSetInput; output: GuardSetOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
@@ -1704,6 +2167,8 @@ export type Operations = {
   incoming_hook_create: { input: IncomingHookCreateInput; output: IncomingHookCreateOutput }
   incoming_hook_delete: { input: IncomingHookDeleteInput; output: IncomingHookDeleteOutput }
   incoming_hook_list: { input: IncomingHookListInput; output: IncomingHookListOutput }
+  initiative_create: { input: InitiativeCreateInput; output: InitiativeCreateOutput }
+  initiative_list: { input: InitiativeListInput; output: InitiativeListOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
@@ -1725,6 +2190,7 @@ export type Operations = {
   message_update: { input: MessageUpdateInput; output: MessageUpdateOutput }
   milestone_create: { input: MilestoneCreateInput; output: MilestoneCreateOutput }
   milestone_list: { input: MilestoneListInput; output: MilestoneListOutput }
+  milestone_reorder: { input: MilestoneReorderInput; output: MilestoneReorderOutput }
   milestone_update: { input: MilestoneUpdateInput; output: MilestoneUpdateOutput }
   module_archive: { input: ModuleArchiveInput; output: ModuleArchiveOutput }
   module_create: { input: ModuleCreateInput; output: ModuleCreateOutput }
@@ -1753,6 +2219,9 @@ export type Operations = {
   profile_update: { input: ProfileUpdateInput; output: ProfileUpdateOutput }
   project_get: { input: ProjectGetInput; output: ProjectGetOutput }
   project_list: { input: ProjectListInput; output: ProjectListOutput }
+  project_status_get: { input: ProjectStatusGetInput; output: ProjectStatusGetOutput }
+  project_status_set: { input: ProjectStatusSetInput; output: ProjectStatusSetOutput }
+  project_update_create: { input: ProjectUpdateCreateInput; output: ProjectUpdateCreateOutput }
   proposal_decide: { input: ProposalDecideInput; output: ProposalDecideOutput }
   proposal_list: { input: ProposalListInput; output: ProposalListOutput }
   pull_request_create: { input: PullRequestCreateInput; output: PullRequestCreateOutput }
@@ -1761,7 +2230,15 @@ export type Operations = {
   pull_request_merge: { input: PullRequestMergeInput; output: PullRequestMergeOutput }
   pull_request_refresh: { input: PullRequestRefreshInput; output: PullRequestRefreshOutput }
   record_create: { input: RecordCreateInput; output: RecordCreateOutput }
+  record_template_create: { input: RecordTemplateCreateInput; output: RecordTemplateCreateOutput }
+  record_template_list: { input: RecordTemplateListInput; output: RecordTemplateListOutput }
+  record_template_update: { input: RecordTemplateUpdateInput; output: RecordTemplateUpdateOutput }
+  record_update: { input: RecordUpdateInput; output: RecordUpdateOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
+  recurring_record_create: { input: RecurringRecordCreateInput; output: RecurringRecordCreateOutput }
+  recurring_record_delete: { input: RecurringRecordDeleteInput; output: RecurringRecordDeleteOutput }
+  recurring_record_list: { input: RecurringRecordListInput; output: RecurringRecordListOutput }
+  recurring_record_update: { input: RecurringRecordUpdateInput; output: RecurringRecordUpdateOutput }
   recurring_update: { input: RecurringUpdateInput; output: RecurringUpdateOutput }
   reply_claim: { input: ReplyClaimInput; output: ReplyClaimOutput }
   reply_pass: { input: ReplyPassInput; output: ReplyPassOutput }
@@ -1804,6 +2281,20 @@ export type Operations = {
   sidebar_item_move: { input: SidebarItemMoveInput; output: SidebarItemMoveOutput }
   sidebar_list: { input: SidebarListInput; output: SidebarListOutput }
   sidebar_section_set: { input: SidebarSectionSetInput; output: SidebarSectionSetOutput }
+  space_archive: { input: SpaceArchiveInput; output: SpaceArchiveOutput }
+  space_create: { input: SpaceCreateInput; output: SpaceCreateOutput }
+  space_group_add: { input: SpaceGroupAddInput; output: SpaceGroupAddOutput }
+  space_group_remove: { input: SpaceGroupRemoveInput; output: SpaceGroupRemoveOutput }
+  space_join: { input: SpaceJoinInput; output: SpaceJoinOutput }
+  space_leave: { input: SpaceLeaveInput; output: SpaceLeaveOutput }
+  space_list: { input: SpaceListInput; output: SpaceListOutput }
+  space_member_add: { input: SpaceMemberAddInput; output: SpaceMemberAddOutput }
+  space_member_remove: { input: SpaceMemberRemoveInput; output: SpaceMemberRemoveOutput }
+  space_member_update: { input: SpaceMemberUpdateInput; output: SpaceMemberUpdateOutput }
+  space_open: { input: SpaceOpenInput; output: SpaceOpenOutput }
+  space_personal_open: { input: SpacePersonalOpenInput; output: SpacePersonalOpenOutput }
+  space_restore: { input: SpaceRestoreInput; output: SpaceRestoreOutput }
+  space_update: { input: SpaceUpdateInput; output: SpaceUpdateOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }
@@ -1831,11 +2322,23 @@ export type Operations = {
   template_create: { input: TemplateCreateInput; output: TemplateCreateOutput }
   template_list: { input: TemplateListInput; output: TemplateListOutput }
   template_update: { input: TemplateUpdateInput; output: TemplateUpdateOutput }
+  theme_create: { input: ThemeCreateInput; output: ThemeCreateOutput }
+  theme_delete: { input: ThemeDeleteInput; output: ThemeDeleteOutput }
+  theme_get: { input: ThemeGetInput; output: ThemeGetOutput }
+  theme_list: { input: ThemeListInput; output: ThemeListOutput }
+  theme_update: { input: ThemeUpdateInput; output: ThemeUpdateOutput }
   thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
+  thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
+  thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
+  thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
   thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
   thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }
+  triage_decide: { input: TriageDecideInput; output: TriageDecideOutput }
+  triage_enable: { input: TriageEnableInput; output: TriageEnableOutput }
+  triage_rule_list: { input: TriageRuleListInput; output: TriageRuleListOutput }
+  triage_rule_set: { input: TriageRuleSetInput; output: TriageRuleSetOutput }
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
   view_default_set: { input: ViewDefaultSetInput; output: ViewDefaultSetOutput }
   view_delete: { input: ViewDeleteInput; output: ViewDeleteOutput }
@@ -1852,11 +2355,13 @@ export type Operations = {
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
   workspace_export_start: { input: WorkspaceExportStartInput; output: WorkspaceExportStartOutput }
+  workspace_member_update: { input: WorkspaceMemberUpdateInput; output: WorkspaceMemberUpdateOutput }
   workspace_search: { input: WorkspaceSearchInput; output: WorkspaceSearchOutput }
   workspace_shape_set: { input: WorkspaceShapeSetInput; output: WorkspaceShapeSetOutput }
   workspace_store_get: { input: WorkspaceStoreGetInput; output: WorkspaceStoreGetOutput }
   workspace_store_revoke: { input: WorkspaceStoreRevokeInput; output: WorkspaceStoreRevokeOutput }
   workspace_store_set: { input: WorkspaceStoreSetInput; output: WorkspaceStoreSetOutput }
+  workspace_theme_set: { input: WorkspaceThemeSetInput; output: WorkspaceThemeSetOutput }
   workspace_transfer_get: { input: WorkspaceTransferGetInput; output: WorkspaceTransferGetOutput }
   workspace_transfer_list: { input: WorkspaceTransferListInput; output: WorkspaceTransferListOutput }
   workspace_usage_get: { input: WorkspaceUsageGetInput; output: WorkspaceUsageGetOutput }
