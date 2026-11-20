@@ -1,8 +1,31 @@
 import type { ComponentType } from 'react'
 
-import { CheckboxFieldEditor, ChoiceFieldEditor, DateFieldEditor, LinkFieldEditor, PersonFieldEditor, TypedFieldEditor, type EditorProps } from './editors'
+import {
+  CheckboxFieldEditor,
+  ChoiceFieldEditor,
+  DateFieldEditor,
+  FileFieldEditor,
+  LinkFieldEditor,
+  PersonFieldEditor,
+  RelationFieldEditor,
+  TypedFieldEditor,
+  type EditorProps,
+} from './editors'
 import { FIELD_TYPE_INFO, FIELD_TYPE_LIST, type FieldType, type FieldTypeInfo } from './fieldTypes'
-import { CheckRenderer, ChipsRenderer, EmailRenderer, FormulaRenderer, LinkRenderer, LongTextRenderer, PhoneRenderer, TextRenderer, UrlRenderer, type RendererProps } from './renderers'
+import {
+  CheckRenderer,
+  ChipsRenderer,
+  EmailRenderer,
+  FileRenderer,
+  FormulaRenderer,
+  LinkRenderer,
+  LongTextRenderer,
+  PhoneRenderer,
+  RelationRenderer,
+  TextRenderer,
+  UrlRenderer,
+  type RendererProps,
+} from './renderers'
 
 /**
  * The field registry (T1.13a, moved from W1.16 by R17): one entry per field
@@ -42,8 +65,11 @@ const DRAWINGS: Record<FieldType, Drawing> = {
   phone: { Renderer: PhoneRenderer, Editor: TypedFieldEditor },
   checkbox: { Renderer: CheckRenderer, Editor: CheckboxFieldEditor },
   link: { Renderer: LinkRenderer, Editor: LinkFieldEditor },
+  relation: { Renderer: RelationRenderer, Editor: RelationFieldEditor },
+  file: { Renderer: FileRenderer, Editor: FileFieldEditor },
   // Worked out by the server; nobody fills it in.
   formula: { Renderer: FormulaRenderer, Editor: null },
+  rollup: { Renderer: FormulaRenderer, Editor: null },
   // No value to show: collections draw it as a button that runs its steps.
   button: shown,
   created_time: shown,

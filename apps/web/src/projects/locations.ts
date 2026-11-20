@@ -138,3 +138,8 @@ export function locationsEqual(
   if (left.kind === 'page' && right.kind === 'page') return left.pageId === right.pageId
   return true
 }
+
+/** A collection of the project, such as its built-in Pages collection (T1.36). */
+export function collectionHref(projectId: string, collectionId: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collectionId)}`
+}

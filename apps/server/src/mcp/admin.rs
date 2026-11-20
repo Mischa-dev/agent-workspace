@@ -333,7 +333,8 @@ pub(super) async fn workflow_update(
         if !role_allows(
             principal,
             project_id,
-            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref())
+                .with_groups(membership.group_permissions.clone()),
             Action::WorkflowManage,
         ) {
             return Ok(ToolResult::denied(ADMIN_ONLY));
@@ -521,7 +522,7 @@ pub(super) async fn project_members(
             FROM project_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1
-              AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
+              AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
               AND ($2 OR membership.enabled)
             ORDER BY membership.enabled DESC,
                      CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1
@@ -554,12 +555,14 @@ pub(super) async fn project_members(
 struct AdminRow {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     kind: String,
 }
 
 impl AdminRow {
     fn role(&self) -> StoredRole {
         StoredRole::of(&self.role, self.role_permissions.as_deref())
+            .with_groups(self.group_permissions.clone())
     }
 }
 
@@ -581,6 +584,7 @@ async fn admin_row(
         r#"
         SELECT membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions,
                project.kind
         FROM projects project
         JOIN project_memberships membership

@@ -38,6 +38,7 @@ export const FILTER_FIELDS: Array<{ field: FilterField; label: string; keys: Arr
 ]
 
 export const CATEGORY_LABELS: Record<string, string> = {
+  triage: 'Triage',
   backlog: 'Backlog',
   unstarted: 'Not started',
   started: 'In progress',

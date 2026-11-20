@@ -82,6 +82,7 @@ export function HistoryPanel({
                 <span>
                   {entry.actor || 'Someone'}
                   {entry.via ? ` through ${entry.via}` : ''}
+                  {entry.acceptedBy ? `, accepted by ${entry.acceptedBy}` : ''}
                 </span>
                 <time dateTime={entry.at} title={formatFullDate(entry.at)}>
                   {formatRelative(entry.at)}

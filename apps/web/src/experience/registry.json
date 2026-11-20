@@ -173,6 +173,13 @@
       "default": true
     },
     {
+      "id": "task.delegate",
+      "group": "task",
+      "label": "Delegate",
+      "description": "Who a task is handed to to do, often an agent, beside who owns it.",
+      "default": true
+    },
+    {
       "id": "task.estimate",
       "group": "task",
       "label": "Estimate",
@@ -404,6 +411,20 @@
       "default": true
     },
     {
+      "id": "workspace.initiatives",
+      "group": "workspace",
+      "label": "Initiatives",
+      "description": "Work that spans projects, followed through each project's milestones.",
+      "default": true
+    },
+    {
+      "id": "workspace.project_updates",
+      "group": "workspace",
+      "label": "Project status and updates",
+      "description": "Each project's health, target date and lead, and its latest update, on its home, in My work and in initiatives.",
+      "default": true
+    },
+    {
       "id": "workspace.threads",
       "group": "workspace",
       "label": "Threads",
@@ -586,6 +607,7 @@
         "area.board",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -755,6 +777,7 @@
         "area.sheets",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.milestone",
@@ -845,6 +868,7 @@
         "area.files",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -898,6 +922,7 @@
         "area.decisions",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.estimate",
         "task.labels",
         "task.custom_fields",
@@ -936,6 +961,7 @@
         "area.pages",
         "area.decisions",
         "task.priority",
+        "task.delegate",
         "task.milestone",
         "task.dates",
         "talk.threads",

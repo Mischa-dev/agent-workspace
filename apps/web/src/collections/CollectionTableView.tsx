@@ -171,6 +171,7 @@ function RecordGrid({
             void edits.save(record, { values: { [field.id]: value } }, reference)
           }}
           projectId={projectId}
+          recordId={editing.record.id}
           references={references}
           value={editing.record.values[editing.field.id]}
         />

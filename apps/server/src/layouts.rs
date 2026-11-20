@@ -864,6 +864,8 @@ struct ProjectAccess {
     organization_id: Uuid,
     role: String,
     role_permissions: Option<Vec<String>>,
+    /// What their groups are given in the project (K1.27).
+    group_permissions: Option<Vec<String>>,
     /// The custom role they hold here, if any.
     role_id: Option<Uuid>,
     /// The preset their role (custom or built-in) starts people with.
@@ -883,6 +885,7 @@ async fn project_access(
         r#"
         SELECT project.organization_id, membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions,
                custom_role_id(membership.role_id) AS role_id,
                held.defaults->>'layoutPreset' AS role_layout,
                organization_membership.role AS organization_role,
@@ -912,7 +915,7 @@ async fn project_access(
     if !crate::access::membership_allows(
         principal.actor_id,
         project_id,
-        settings::membership_grant(&access.role, access.role_permissions.as_deref())?,
+        access.grant()?,
         true,
         Action::ProjectView.permission(),
     ) {
@@ -928,13 +931,30 @@ fn manages(role: &str, permissions: Option<&[String]>) -> bool {
         .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
 }
 
+impl ProjectAccess {
+    /// Their seat's grant, with what their groups are given here.
+    fn grant(&self) -> Result<crate::policy::RoleGrant, AppError> {
+        Ok(
+            settings::membership_grant(&self.role, self.role_permissions.as_deref())?.with_groups(
+                crate::access::group_permissions(self.group_permissions.as_deref()),
+            ),
+        )
+    }
+
+    /// Whether they manage the project's settings (`manages`).
+    fn manages_settings(&self) -> bool {
+        self.grant()
+            .is_ok_and(|grant| grant.permissions().contains(Permission::SettingsManage))
+    }
+}
+
 async fn project_view(
     connection: &mut PgConnection,
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<ProjectLayoutView, AppError> {
     let access = project_access(connection, principal, project_id).await?;
-    let manager = manages(&access.role, access.role_permissions.as_deref());
+    let manager = access.manages_settings();
     let stored = Stored::load(
         connection,
         access.organization_id,

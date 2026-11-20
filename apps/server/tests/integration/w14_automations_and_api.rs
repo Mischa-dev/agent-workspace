@@ -1417,11 +1417,15 @@ async fn seed_failing_pull_request(
     linked_by: Uuid,
 ) -> Uuid {
     let integration = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(integration)
-        .execute(pool)
-        .await
-        .expect("integration actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+         SELECT $1, 'integration', 'active', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(integration)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("integration actor");
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration')",
     )

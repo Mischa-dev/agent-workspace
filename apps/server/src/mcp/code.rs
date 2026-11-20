@@ -239,10 +239,11 @@ async fn repository_projects(
             .await?
             .keep(projects, |set, _| set.contains("code"))
     };
-    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
         SELECT membership.project_id, membership.role,
-               workspace_role_permissions(membership.role_id)
+               workspace_role_permissions(membership.role_id),
+               space_group_permissions(membership.actor_id, membership.project_id)
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled
@@ -255,18 +256,15 @@ async fn repository_projects(
     .await?;
     Ok(roles
         .into_iter()
-        .filter(|(project_id, role, role_permissions)| {
+        .filter(|(project_id, role, role_permissions, groups)| {
             role_allows(
                 principal,
                 *project_id,
-                &StoredRole {
-                    role: role.clone(),
-                    role_permissions: role_permissions.clone(),
-                },
+                &StoredRole::of(role, role_permissions.as_deref()).with_groups(groups.clone()),
                 Action::RepositoryView,
             )
         })
-        .map(|(project_id, _, _)| project_id)
+        .map(|(project_id, _, _, _)| project_id)
         .collect())
 }
 

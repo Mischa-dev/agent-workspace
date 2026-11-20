@@ -124,8 +124,10 @@ pub(crate) async fn task_made_from_message(
 }
 
 /// After `actor` made `message` (in `conversation`, which they can read)
-/// into a thing: with `say_so`, a system entry says so there; either way,
-/// the message's made-into line changes, so open timelines refresh.
+/// into a thing: with `say_so`, a system entry says so there, when they may
+/// post in it (someone who may only read it makes the thing quietly);
+/// either way, the message's made-into line changes, so open timelines
+/// refresh.
 pub(crate) async fn made_from_message(
     tx: &mut Transaction<'_, Postgres>,
     conversation: Uuid,
@@ -135,7 +137,7 @@ pub(crate) async fn made_from_message(
     message: Uuid,
     say_so: bool,
 ) -> Result<(), AppError> {
-    if say_so {
+    if say_so && may_post(tx, conversation, actor).await? {
         post(
             tx,
             conversation,
@@ -151,6 +153,36 @@ pub(crate) async fn made_from_message(
         announce(tx, conversation).await?;
     }
     Ok(())
+}
+
+/// Whether `actor` may send in `conversation` now, by the send pipeline's
+/// own rule (their role's posting permission there, and the
+/// conversation's).
+async fn may_post(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+    actor: Uuid,
+) -> Result<bool, AppError> {
+    let known = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1)")
+        .bind(actor)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !known {
+        return Ok(false);
+    }
+    match crate::conversations::lock_conversation_for(
+        tx,
+        actor,
+        conversation,
+        crate::policy::Action::MessageSend,
+        false,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(AppError::NotFound(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// A thing a message was made into (C2.20), as a chip under the message:

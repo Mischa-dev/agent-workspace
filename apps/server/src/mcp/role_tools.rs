@@ -345,7 +345,7 @@ pub(super) async fn role_write(
         Some(Err(_)) => {
             return ToolResult::invalid(
                 "defaults",
-                "Use layoutPreset (a preset id), channels (names), pinnedViews (my_tasks, ready_for_agents, blocked, recently_changed) and homeHidden (part ids).",
+                "Use layoutPreset (a preset id), channels (names), pinnedViews (my_tasks, ready_for_agents, blocked, recently_changed, triage) and homeHidden (part ids).",
             );
         }
     };

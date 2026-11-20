@@ -15,7 +15,7 @@ import {
   type Trigger,
   type TriggerKind,
 } from '../../automations/api'
-import { useCollections } from '../../collections/api'
+import { useCollection, useCollections } from '../../collections/api'
 import { listPages, memoryKeys } from '../../memory/api'
 import { useSheets } from '../../sheets/api'
 import { listWhiteboards, whiteboardKeys } from '../../whiteboards/api'
@@ -55,6 +55,8 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'message_posted', label: 'Someone posts a message' },
   { kind: 'record_created', label: 'A record is added to a collection' },
   { kind: 'record_changed', label: 'A record in a collection changes' },
+  { kind: 'record_matches', label: 'A record starts matching a view' },
+  { kind: 'field_changed', label: 'A field of a record changes' },
   { kind: 'page_changed', label: 'A page changes' },
   { kind: 'sheet_changed', label: 'A sheet changes' },
   { kind: 'whiteboard_changed', label: 'A whiteboard changes' },
@@ -79,6 +81,8 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
 const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'record_created' ||
   trigger.kind === 'record_changed' ||
+  trigger.kind === 'record_matches' ||
+  trigger.kind === 'field_changed' ||
   trigger.kind === 'page_changed' ||
   trigger.kind === 'sheet_changed' ||
   trigger.kind === 'whiteboard_changed' ||
@@ -90,6 +94,10 @@ function defaultTrigger(kind: TriggerKind): Trigger {
     case 'record_created':
     case 'record_changed':
       return { kind, collectionId: null }
+    case 'record_matches':
+      return { kind, collectionId: '', viewId: null }
+    case 'field_changed':
+      return { kind, collectionId: '', field: '', to: [] }
     case 'page_changed':
       return { kind, pageId: null }
     case 'sheet_changed':
@@ -136,7 +144,8 @@ function defaultAction(kind: RuleActionKind, records = false, hook = false): Rul
     case 'post_message':
       return { kind, conversationId: '', text: '' }
     case 'run_operation':
-      return { kind, operation: '', input: {} }
+      // The builder offers one operation for now: a task, named from what fired.
+      return { kind, operation: 'task_create', input: { title: records ? '{{record.title}}' : '{{task.title}}' } }
     case 'ask_agent':
       return { kind, accountId: '', prompt: records ? '{{record.title}}: ' : '{{task.key}} {{task.title}}: ', conversationId: records ? '' : null }
   }
@@ -298,6 +307,7 @@ export function RuleDialog({
             documents={documents}
             hooks={hooks.data?.hooks ?? []}
             onChange={setTrigger}
+            projectId={projectId}
             trigger={trigger}
           />
         </fieldset>
@@ -375,7 +385,7 @@ export function RuleDialog({
             </p>
           ) : records ? (
             <p className="aw-quiet">
-              Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
+              Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{record.number}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
             </p>
           ) : (
             <p className="aw-quiet">
@@ -456,16 +466,21 @@ function TriggerFields({
   documents,
   hooks,
   onChange,
+  projectId,
   trigger,
 }: {
   channels: ChannelChoice[]
-  collections: { id: string; name: string }[]
+  collections: { id: string; name: string; actsLikeTask?: boolean }[]
   documents: DocumentChoice[]
   hooks: { id: string; name: string }[]
   onChange: (trigger: Trigger) => void
+  projectId: string
   trigger: Trigger
 }) {
   switch (trigger.kind) {
+    case 'record_matches':
+    case 'field_changed':
+      return <RecordTriggerFields collections={collections.filter((collection) => !collection.actsLikeTask)} onChange={onChange} projectId={projectId} trigger={trigger} />
     case 'page_changed':
     case 'sheet_changed':
     case 'whiteboard_changed': {
@@ -937,5 +952,110 @@ function FieldValue({
         </option>
       ))}
     </SelectField>
+  )
+}
+
+/** Which records a record_matches or field_changed rule watches: a collection, a view of it, and for a field, what it changes to. */
+function RecordTriggerFields({
+  collections,
+  onChange,
+  projectId,
+  trigger,
+}: {
+  collections: { id: string; name: string }[]
+  onChange: (trigger: Trigger) => void
+  projectId: string
+  trigger: Extract<Trigger, { kind: 'record_matches' | 'field_changed' }>
+}) {
+  const body = useCollection(projectId, trigger.collectionId)
+  const fields = (body.data?.fields ?? []).filter((field) => !field.archived)
+  const views = body.data?.views ?? []
+  const field = trigger.kind === 'field_changed' ? fields.find((entry) => entry.id === trigger.field || entry.name === trigger.field) : undefined
+  const choices = field && (field.type === 'single_choice' || field.type === 'multiple_choice') ? field.options.filter((option) => !option.archived) : null
+  const to = trigger.kind === 'field_changed' ? (trigger.to ?? []) : []
+  return (
+    <>
+      <SelectField
+        id="rule-trigger-collection"
+        label="In"
+        onChange={(event) =>
+          onChange(trigger.kind === 'field_changed' ? { ...trigger, collectionId: event.target.value, field: '', to: [], viewId: null } : { ...trigger, collectionId: event.target.value, viewId: null })
+        }
+        required
+        value={trigger.collectionId}
+      >
+        <option disabled value="">
+          Choose a collection
+        </option>
+        {collections.map((collection) => (
+          <option key={collection.id} value={collection.id}>
+            {collection.name}
+          </option>
+        ))}
+      </SelectField>
+      {trigger.kind === 'field_changed' ? (
+        <>
+          <SelectField
+            id="rule-trigger-field"
+            label="Field"
+            onChange={(event) => onChange({ ...trigger, field: event.target.value, to: [] })}
+            required
+            value={field?.id ?? ''}
+          >
+            <option disabled value="">
+              Choose a field
+            </option>
+            {fields.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
+          </SelectField>
+          {choices ? (
+            <fieldset className="aw-fieldset">
+              <legend className="aw-field__label">Changes to</legend>
+              <div className="aw-rule-choices">
+                {choices.map((option) => (
+                  <Checkbox
+                    checked={to.includes(option.id) || to.includes(option.name)}
+                    key={option.id}
+                    label={option.name}
+                    onChange={(checked) =>
+                      onChange({ ...trigger, to: checked ? [...to.filter((value) => value !== option.name), option.id] : to.filter((value) => value !== option.id && value !== option.name) })
+                    }
+                  />
+                ))}
+                <p className="aw-quiet">None ticked means any change.</p>
+              </div>
+            </fieldset>
+          ) : field ? (
+            <TextField
+              hint="Left empty, any change counts."
+              id="rule-trigger-to"
+              label="Changes to"
+              onChange={(event) => onChange({ ...trigger, to: event.target.value.trim() ? [event.target.value] : [] })}
+              value={to[0] ?? ''}
+            />
+          ) : null}
+        </>
+      ) : null}
+      <SelectField
+        hint={trigger.kind === 'record_matches' ? 'It fires when a record comes into this view, not on every change while it’s there.' : 'Left out, any record counts.'}
+        id="rule-trigger-view"
+        label={trigger.kind === 'record_matches' ? 'Starts matching' : 'Only for records in'}
+        onChange={(event) => onChange({ ...trigger, viewId: event.target.value || null })}
+        required={trigger.kind === 'record_matches' && !trigger.filters?.length}
+        value={trigger.viewId ?? ''}
+      >
+        <option disabled={trigger.kind === 'record_matches' && !trigger.filters?.length} value="">
+          {trigger.kind === 'record_matches' ? (trigger.filters?.length ? 'Only its filters' : 'Choose a view') : 'Any record'}
+        </option>
+        {views.map((view) => (
+          <option key={view.id} value={view.id}>
+            {view.name}
+          </option>
+        ))}
+      </SelectField>
+    </>
   )
 }
