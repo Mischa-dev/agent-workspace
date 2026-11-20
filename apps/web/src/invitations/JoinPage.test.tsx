@@ -56,7 +56,7 @@ function renderJoin() {
       <BrowserRouter>
         <Routes>
           <Route element={<JoinPage />} path="/join" />
-          <Route element={<h1>Workspace home</h1>} path="/home" />
+          <Route element={<h1>Workspace home</h1>} path="/w/:ws/home" />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>,

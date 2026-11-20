@@ -17,9 +17,10 @@ import {
 } from './session'
 import { isTwoFactorChallenge, login, loginTwoFactor } from './login'
 import './auth.css'
+import { CURRENT_WORKSPACE, workspaceHref } from '../app/href'
 
 /** Home in the workspace used last (the server's links say `/w/-/` where they don't name one). */
-const HOME = '/w/-/home'
+const HOME = workspaceHref(CURRENT_WORKSPACE)
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')

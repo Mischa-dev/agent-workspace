@@ -4,6 +4,7 @@ import { requestJson } from '../api/client'
 import { callOp } from '../api/ops'
 import type { MessageContentV1 } from '../conversations/types'
 import { laterKeys } from './keys'
+import { CURRENT_WORKSPACE, workspaceHref } from '../app/href'
 
 export { laterKeys } from './keys'
 
@@ -82,7 +83,7 @@ function maybe(value: unknown): string | null {
 /** Only in-app paths are followed; anything else opens the Later page. */
 function inApp(value: unknown): string {
   const href = str(value)
-  return href.startsWith('/') && !href.startsWith('//') ? href : '/w/-/later'
+  return href.startsWith('/') && !href.startsWith('//') ? href : workspaceHref(CURRENT_WORKSPACE, '/later')
 }
 
 export function normalizeSavedItem(value: unknown): SavedItem | null {
