@@ -241,7 +241,7 @@ impl Operation for HistoryShow {
             }
         } else {
             super::show(
-                &crate::files::FileStore::from_config(&call.state.config),
+                &crate::files::store::Stores::of(call.state),
                 &mut connection,
                 &kind,
                 id,
@@ -362,7 +362,7 @@ impl Operation for HistoryRestore {
             space_id: call.ctx.space_id,
             workspace_id: call.ctx.workspace_id,
             actor_id: call.account_id(),
-            files: crate::files::FileStore::from_config(&call.state.config),
+            files: crate::files::store::Stores::of(call.state),
         };
         if kind == "page" {
             super::cold::warm_page(call.state, id, input.version).await?;

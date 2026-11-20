@@ -67,6 +67,34 @@ pub struct StoredBytes {
     pub length: u64,
 }
 
+/// Opens the store a row names by its id (a history payload's), for code
+/// that reads rows kept in several stores: the configured store for new
+/// writes, any other by id.
+#[derive(Clone, Copy)]
+pub struct Stores<'a> {
+    pool: &'a sqlx::PgPool,
+    config: &'a AppConfig,
+}
+
+impl<'a> Stores<'a> {
+    pub fn of(state: &'a crate::AppState) -> Self {
+        Self {
+            pool: &state.pool,
+            config: &state.config,
+        }
+    }
+
+    /// Where new payloads go.
+    pub fn configured(&self) -> FileStore {
+        FileStore::from_config(self.config)
+    }
+
+    /// The store `id` names.
+    pub async fn open(&self, id: &str) -> Result<FileStore, AppError> {
+        FileStore::resolve_with(self.pool, self.config, id).await
+    }
+}
+
 impl FileStore {
     /// Where new uploads go.
     pub fn from_config(config: &AppConfig) -> Self {
