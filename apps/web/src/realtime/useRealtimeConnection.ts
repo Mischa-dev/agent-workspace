@@ -84,9 +84,37 @@ export function useRealtimeConnection(): RealtimeContextValue {
   // What pages send goes to whichever socket is open; the controls stay the
   // same object for the provider's life.
   const send = useRef<{ controls: LiveControls }>({ controls: NO_LIVE_CONTROLS })
+  // Documents being watched live with the provider, not the socket: a page
+  // that mounts with it registers before the socket's effect runs, and every
+  // socket (each reconnect too) watches them all once it opens.
+  const [watches] = useState(() => new Map<string, Watch>())
+  const sendFrame = useRef<(frame: string) => void>(() => undefined)
   const [controls] = useState<LiveControls>(() => ({
     typing: (conversationId) => send.current.controls.typing(conversationId),
-    watch: (document, listener) => send.current.controls.watch(document, listener),
+    watch: (document, listener) => {
+      const key = documentKey(document)
+      let watch = watches.get(key)
+      if (!watch) {
+        watch = { document, count: 0, listeners: new Set() }
+        watches.set(key, watch)
+        sendFrame.current(watchFrame(document))
+      }
+      watch.count += 1
+      const own = listener ? (frame: DocumentFrame) => listener(frame) : undefined
+      if (own) watch.listeners.add(own)
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        const current = watches.get(key)
+        if (!current) return
+        if (own) current.listeners.delete(own)
+        current.count -= 1
+        if (current.count > 0) return
+        watches.delete(key)
+        sendFrame.current(unwatchFrame(current.document))
+      }
+    },
     awareness: (document, state) => send.current.controls.awareness(document, state),
   }))
 
@@ -126,7 +154,6 @@ export function useRealtimeConnection(): RealtimeContextValue {
     let resumeTimer: number | undefined
     let plannedDelay: number | undefined
     let typingTimer: number | undefined
-    const watches = new Map<string, Watch>()
     const typingSentAt = new Map<string, number>()
     const recentIds = new Set<string>()
     const recentOrder: string[] = []
@@ -213,6 +240,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
       })
 
     const sender = send.current
+    sendFrame.current = sendNow
     sender.controls = {
       typing: (conversationId) => {
         const now = Date.now()
@@ -220,30 +248,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
         typingSentAt.set(conversationId, now)
         sendNow(typingFrame(conversationId))
       },
-      watch: (document, listener) => {
-        const key = documentKey(document)
-        let watch = watches.get(key)
-        if (!watch) {
-          watch = { document, count: 0, listeners: new Set() }
-          watches.set(key, watch)
-          sendNow(watchFrame(document))
-        }
-        watch.count += 1
-        const own = listener ? (frame: DocumentFrame) => listener(frame) : undefined
-        if (own) watch.listeners.add(own)
-        let stopped = false
-        return () => {
-          if (stopped) return
-          stopped = true
-          const current = watches.get(key)
-          if (!current) return
-          if (own) current.listeners.delete(own)
-          current.count -= 1
-          if (current.count > 0) return
-          watches.delete(key)
-          sendNow(unwatchFrame(current.document))
-        }
-      },
+      watch: controls.watch,
       awareness: (document, state) => {
         if (watches.has(documentKey(document))) sendNow(awarenessFrame(document, state))
       },
@@ -597,10 +602,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
       if (typingTimer !== undefined) window.clearTimeout(typingTimer)
       stopWaitingForResume()
       sender.controls = NO_LIVE_CONTROLS
+      sendFrame.current = () => undefined
       for (const timer of invalidationTimers.values()) window.clearTimeout(timer)
       socket?.close()
     }
-  }, [queryClient, live])
+  }, [queryClient, live, watches, controls])
 
   return useMemo(
     () => ({ connection, resyncGeneration, live, controls }),

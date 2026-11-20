@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RealtimeProvider } from '../RealtimeProvider'
-import { useLiveControls, useTyping, type DocumentFrame, type LiveControls } from '../realtimeContext'
+import { useLiveControls, useTyping, useWatchDocument, type DocumentFrame, type LiveControls } from '../realtimeContext'
 
 // W1.6: what the page sends over protocol 2 (hello, counted watches,
 // throttled typing) and the ephemeral frames it keeps (typing, documents,
@@ -111,6 +111,22 @@ describe('the live connection on protocol 2', () => {
     expect(watched()).toEqual([{ type: 'watch', document: PAGE }])
     act(() => stopSecond())
     expect(watched()).toEqual([{ type: 'watch', document: PAGE }, { type: 'unwatch', document: PAGE }])
+  })
+
+  it('watches a document whose page mounts with the connection', () => {
+    function PageProbe() {
+      useWatchDocument(PAGE)
+      return null
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RealtimeProvider>
+          <PageProbe />
+        </RealtimeProvider>
+      </QueryClientProvider>,
+    )
+    act(() => latest().open())
+    expect(latest().sent.filter((frame) => frame.type === 'watch')).toEqual([{ type: 'watch', document: PAGE }])
   })
 
   it('passes a watched document’s changes and cursors to its listener', () => {
