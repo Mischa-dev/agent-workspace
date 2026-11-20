@@ -626,6 +626,7 @@ export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskU
     if (patch.assigneeActorId === null) input.clearAssignee = true
     else input.assignee = patch.assigneeActorId
   }
+  if (patch.delegateActorId !== undefined) input.delegate = patch.delegateActorId ?? 'none'
   if (patch.parentWorkItemId !== undefined) {
     if (patch.parentWorkItemId === null) input.clearParent = true
     else input.parentId = patch.parentWorkItemId
