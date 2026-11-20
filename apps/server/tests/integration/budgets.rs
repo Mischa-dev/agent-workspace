@@ -256,6 +256,15 @@ async fn nearing_a_budget_tells_whoever_set_it_once() {
                "period": "day", "softLimit": 1, "hardLimit": 10}),
     )
     .await;
+    // A second budget on the same meter that also reaches its rook: each
+    // budget gives its own notice.
+    op(
+        &world,
+        "budget_set",
+        json!({"scope": "workspace", "eachAccount": true, "meter": "messages",
+               "period": "hour", "softLimit": 2, "hardLimit": 20}),
+    )
+    .await;
     for text in ["one", "two", "three"] {
         let sent = agent_says(&world.app, rook, &general, text).await;
         assert_eq!(sent["outcome"], "ok", "{sent}");
@@ -267,7 +276,7 @@ async fn nearing_a_budget_tells_whoever_set_it_once() {
     .fetch_one(world.pool())
     .await
     .expect("warnings");
-    assert_eq!(warnings, 1);
+    assert_eq!(warnings, 2);
     world.finish().await;
 }
 
@@ -448,6 +457,36 @@ async fn a_budget_on_a_dm_stays_with_its_members() {
     .expect("a budget on the DM");
     let listed = op(&world, "budget_list", json!({})).await;
     assert!(!listed.to_string().contains(&dm), "{listed}");
+    world.finish().await;
+}
+
+/// A budget on a conversation's writes holds the calls made there, by an
+/// agent's tool as by anyone's.
+#[tokio::test]
+async fn a_conversations_write_budget_holds_calls_made_there() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("budgets_conversation_calls")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let general = channel(&world, "general").await;
+    op(
+        &world,
+        "budget_set",
+        json!({"scope": "conversation", "scopeId": general, "meter": "writes",
+               "period": "day", "hardLimit": 2}),
+    )
+    .await;
+    for text in ["one", "two"] {
+        let sent = agent_says(&world.app, rook, &general, text).await;
+        assert_eq!(sent["outcome"], "ok", "{sent}");
+    }
+    let held = agent_says(&world.app, rook, &general, "three").await;
+    assert_eq!(held["outcome"], "limit_reached", "{held}");
     world.finish().await;
 }
 

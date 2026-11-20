@@ -1445,7 +1445,14 @@ fn writes_while_unpaused_only(tool: &str) -> bool {
     !matches!(
         tool,
         "reply_release" | "reply_pass" | "mark_read" | "notification_update"
-    ) && McpServer::tools().get(tool).is_some_and(|tool| {
+    ) && writes(tool)
+}
+
+/// Whether a hand-written tool changes something: any tool not marked
+/// read-only. A write budget (A2.14) counts every one of them, including
+/// those a paused account may still make.
+fn writes(tool: &str) -> bool {
+    McpServer::tools().get(tool).is_some_and(|tool| {
         tool.annotations
             .as_ref()
             .and_then(|annotations| annotations.read_only_hint)
@@ -1459,22 +1466,29 @@ pub(crate) fn has_tool(name: &str) -> bool {
     McpServer::tools().get(name).is_some()
 }
 
-/// What the workspace's guards make of a hand-written tool's change:
-/// `None` to go on (using up the review that allowed it, if one did), or
-/// the answer when a guard stops it or holds it for review. The target is
-/// the thing the arguments name, else the space.
+/// What the workspace's guards make of a hand-written tool's change.
+enum Guarded {
+    /// Go on; with the review that allowed it, now marked used, which is
+    /// given back if the tool then fails.
+    Go { hold: Option<Uuid> },
+    /// A guard stopped it or holds it for review: the answer.
+    Answer(rmcp::model::CallToolResponse),
+}
+
+/// What the workspace's guards make of a hand-written tool's change. The
+/// target is the thing the arguments name, else the space.
 async fn guard_hand_written(
     state: &AppState,
     principal: &McpPrincipal,
     limits: Option<AgentLimits>,
     workspace: Uuid,
     request: &rmcp::model::CallToolRequestParams,
-) -> Result<Option<rmcp::model::CallToolResponse>, crate::ops::OpError> {
+) -> Result<Guarded, crate::ops::OpError> {
     let Some(tool) = McpServer::tools().get(&request.name) else {
-        return Ok(None);
+        return Ok(Guarded::Go { hold: None });
     };
     let std::borrow::Cow::Borrowed(name) = &tool.name else {
-        return Ok(None);
+        return Ok(Guarded::Go { hold: None });
     };
     let mut input = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
     // Read as the tool reads them: an id or a link to it. A conversation
@@ -1532,7 +1546,9 @@ async fn guard_hand_written(
     ))
     .await?
     {
-        crate::guards::Verdict::Allow { hold: None } => Ok(None),
+        crate::guards::Verdict::Allow { hold: None } => Ok(Guarded::Go { hold: None }),
+        // Marked used before the tool runs, so two calls can't both spend
+        // one review; given back if the tool fails (`give_back_review`).
         crate::guards::Verdict::Allow { hold: Some(hold) } => {
             let mut transaction = crate::db::scoped_tx(&state.pool)
                 .await
@@ -1542,16 +1558,16 @@ async fn guard_hand_written(
                 .commit()
                 .await
                 .map_err(|error| crate::ops::OpError::logged(name, &error.into()))?;
-            Ok(None)
+            Ok(Guarded::Go { hold: Some(hold) })
         }
-        crate::guards::Verdict::Deny { message } => Ok(Some(refusal(name, message))),
+        crate::guards::Verdict::Deny { message } => Ok(Guarded::Answer(refusal(name, message))),
         // Not made yet, in the shape `refusal` uses so it fits the tool's own
         // results: the same call goes through once a reviewer allows it.
         crate::guards::Verdict::Held { request_id } => {
             let message = "A workspace guard holds this change for review. Make the same call \
                            again once it is allowed."
                 .to_owned();
-            Ok(Some(match refusal(name, message) {
+            Ok(Guarded::Answer(match refusal(name, message) {
                 rmcp::model::CallToolResponse::Complete(mut result) => {
                     if let Some(structured) = result.structured_content.as_mut() {
                         structured["retryCategory"] = serde_json::json!("do_not_retry");
@@ -1739,6 +1755,14 @@ async fn run_tool(
         }
         return Ok(rmcp::model::CallToolResponse::Complete(result));
     }
+    // A2.15: a hand-written tool takes `context` as an operation does
+    // (`ops::dispatch::asked_for`): taken out here, so its own arguments
+    // never see it, and made the call's asker below.
+    let asked_context = request
+        .arguments
+        .as_mut()
+        .and_then(|arguments| arguments.remove("context"))
+        .filter(|context| !context.is_null());
     let Some(principal) = context_principal(&context) else {
         return McpServer::tools()
             .call(rmcp::handler::server::tool::ToolCallContext::new(
@@ -1897,20 +1921,35 @@ async fn run_tool(
     // operation does (`ops::dispatch`, which counts the operations). Before
     // the guard, so a call refused here never uses up a review's approval.
     if let Some(workspace) = acting_in {
+        // The conversation it names, read as the tool reads it (an id or a
+        // link), so a budget on that conversation holds it too.
+        let conversation = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("conversationId"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(common::parse_id);
         match Box::pin(crate::budgets::admit_call(
             &server.state.pool,
             workspace,
             Some(principal.project_id),
+            conversation,
             principal.actor_id,
-            writes_while_unpaused_only(&request.name),
+            writes(&request.name),
         ))
         .await
         {
             Ok(()) => {}
-            Err(AppError::LimitReached(refusal)) => {
+            // In the hand-written tools' own result shape, as a refusal
+            // from inside the tool would be.
+            Err(AppError::LimitReached(limit)) => {
+                let refused = common::ToolResult::<()>::LimitReached {
+                    message: limit.message.clone(),
+                    limit,
+                };
                 return Ok(rmcp::model::CallToolResponse::Complete(
                     rmcp::model::CallToolResult::structured(
-                        crate::ops::OpError::LimitReached { refusal }.to_json(),
+                        serde_json::to_value(refused).unwrap_or_default(),
                     ),
                 ));
             }
@@ -1925,6 +1964,7 @@ async fn run_tool(
     }
     // A2.27: a workspace's guards see a change by a hand-written tool too,
     // as they see an operation's (`ops::dispatch`).
+    let mut review = None;
     if writes_while_unpaused_only(&request.name)
         && let Some(workspace) = acting_in
     {
@@ -1937,8 +1977,8 @@ async fn run_tool(
         ))
         .await
         {
-            Ok(None) => {}
-            Ok(Some(answer)) => return Ok(answer),
+            Ok(Guarded::Go { hold }) => review = hold,
+            Ok(Guarded::Answer(answer)) => return Ok(answer),
             Err(error) => {
                 return Ok(refusal(&request.name, error.message().into_owned()));
             }
@@ -1957,7 +1997,7 @@ async fn run_tool(
     };
     // K1.25: every write the tool makes says which credential it came
     // through, and for a run's token, the run and who asked for it.
-    let acting = match acting_of(&state, &principal).await {
+    let mut acting = match acting_of(&state, &principal).await {
         Ok(acting) => acting,
         Err(error) => {
             tracing::error!(category = error.log_category(), "MCP acting lookup failed");
@@ -1967,11 +2007,79 @@ async fn run_tool(
             ));
         }
     };
+    // A run's credential already says who asked, which `context` doesn't
+    // change.
+    if acting.requested_by.is_none()
+        && let Some(asked) = asked_context
+    {
+        match asker_of(&state, principal.actor_id, asked).await {
+            Ok(asker) => acting.requested_by = asker,
+            Err(error) => return Ok(refusal(&request_name, error.message().into_owned())),
+        }
+    }
     let call = crate::access::acting::within(acting, call);
-    match limits {
+    let answered = match limits {
         Some(limits) => crate::tenancy::scoped(tenancy, with_agent_limits(limits, call)).await,
         None => crate::tenancy::scoped(tenancy, call).await,
+    };
+    if let Some(hold) = review
+        && !made(&answered)
+    {
+        give_back_review(&state, hold).await;
     }
+    answered
+}
+
+/// Whether a tool's answer says the change was made: no error, and an `ok`
+/// outcome when it gives one.
+fn made(answered: &Result<rmcp::model::CallToolResponse, ErrorData>) -> bool {
+    match answered {
+        Ok(rmcp::model::CallToolResponse::Complete(result)) => {
+            result.is_error != Some(true)
+                && result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|structured| structured.get("outcome"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|outcome| outcome == "ok")
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// A review a hand-written tool spent on a change it then didn't make is
+/// pending again, so the same call can use it once it succeeds.
+async fn give_back_review(state: &AppState, hold: Uuid) {
+    let given = async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        crate::guards::give_back_hold(&mut transaction, hold).await?;
+        transaction.commit().await?;
+        Ok::<(), AppError>(())
+    };
+    if let Err(error) = given.await {
+        tracing::error!(
+            category = error.log_category(),
+            "giving back a review failed"
+        );
+    }
+}
+
+/// Whom a call's `context` names as its asker (A2.15).
+async fn asker_of(
+    state: &AppState,
+    account: Uuid,
+    context: serde_json::Value,
+) -> Result<Option<Uuid>, crate::ops::OpError> {
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(|error| crate::ops::OpError::logged("context", &error.into()))?;
+    let asker = crate::replies::asker::resolve(&mut connection, account, context).await?;
+    connection
+        .commit()
+        .await
+        .map_err(|error| crate::ops::OpError::logged("context", &error.into()))?;
+    Ok(asker)
 }
 
 /// Who a call through `principal` acts for (K1.25).
@@ -2100,7 +2208,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         state: state.clone(),
     };
     // Accept the loopback names plus every configured public host, so cloud
-    // agents can reach MCP through the public hostname.
+    // agents can reach MCP through the public hostname, and the internal
+    // names an operator lists (a host program beside the server).
     let mut allowed_hosts = vec![
         "localhost".to_owned(),
         "127.0.0.1".to_owned(),
@@ -2121,6 +2230,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             allowed_hosts.push(authority.host().to_owned());
         }
     }
+    allowed_hosts.extend(state.config.mcp_hosts.iter().cloned());
     allowed_hosts.sort();
     allowed_hosts.dedup();
     let mut config = StreamableHttpServerConfig::default()

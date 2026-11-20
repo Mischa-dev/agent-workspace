@@ -477,7 +477,7 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
         // failed post doesn't count again).
         if !skip
             && let Some(until) = Box::pin(crate::budgets::admit_delivery(
-                &mut transaction,
+                &state.pool,
                 &row.event,
                 delivery.account_id,
                 &format!("delivery:{}:{}", delivery.id, row.event.position),
