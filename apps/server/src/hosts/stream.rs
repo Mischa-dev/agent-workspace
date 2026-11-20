@@ -33,6 +33,10 @@ pub async fn delta(
     let run = runs::store::get(crate::db::scoped(&state.pool), run_id)
         .await?
         .ok_or(HostError::Unauthorized)?;
+    state
+        .rate_limits
+        .check_run_stream_of(run.account_id, run.workspace_id, delta.delta.len())
+        .await?;
     if runs::RunState::terminal_keys().contains(&run.state.as_str()) {
         return Err(HostError::Invalid {
             field: "runId",
