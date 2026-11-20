@@ -4525,9 +4525,9 @@ where
     .await?)
 }
 
-/// Whether `viewer` is kept from a task's discussion (its comments
-/// conversation or one of that conversation's threads) because they don't
-/// see tasks in its space: by their role, or by the agent limit of an app
+/// Whether `viewer` is kept from a task's discussion (the comments
+/// conversation of a task, or of a record that is one, or one of its
+/// threads) because they don't see tasks in its space: by their role, or by the agent limit of an app
 /// acting for them. False for any other conversation, which the usual
 /// visibility rule decides alone.
 pub(crate) async fn task_discussion_hidden(
@@ -4543,7 +4543,10 @@ pub(crate) async fn task_discussion_hidden(
         JOIN conversations discussion
           ON discussion.id = CASE WHEN parent.kind = 'comments' THEN parent.id ELSE place.id END
         WHERE place.id = $1 AND discussion.kind = 'comments'
-          AND discussion.subject_kind = 'task'
+          AND (discussion.subject_kind = 'task'
+               -- A record of a collection that acts like a task is that task.
+               OR (discussion.subject_kind = 'record'
+                   AND EXISTS (SELECT 1 FROM work_items item WHERE item.id = discussion.subject_id)))
           AND conversation_visible_to(place.id, $2)
         "#,
     )

@@ -198,6 +198,11 @@ pub async fn update_document(
     let page = store::lock_page(&mut transaction, page_id)
         .await?
         .ok_or(AppError::NotFound("page"))?;
+    // Access was decided for the space the page was in; a move that
+    // committed before the lock leaves that decision about another space.
+    if page.project_id != project_id {
+        return Err(AppError::NotFound("page"));
+    }
     if page.archived {
         return Err(AppError::Refused {
             field: "page",

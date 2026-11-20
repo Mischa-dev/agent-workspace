@@ -98,7 +98,9 @@ pub fn router() -> Router<AppState> {
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(FIRE_KIND, |context: JobContext| async move {
         let payload: FirePayload = context.job.payload_as()?;
-        fire(&context.state, payload.run_id)
+        // Boxed: a rule's actions run whole operations, too deep a future
+        // to keep on the job's stack.
+        Box::pin(fire(&context.state, payload.run_id))
             .await
             .map_err(|error| JobError::retry(error.log_category()))
     });
@@ -229,6 +231,25 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         whiteboard_id: Option<Uuid>,
     },
+    /// Someone else comments on a task, page, sheet, whiteboard or record
+    /// (C1.28): on things of one kind (task, page, sheet, whiteboard,
+    /// record), or on this one. Takes no task conditions.
+    CommentPosted {
+        #[serde(default)]
+        thing_kind: Option<String>,
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        thing_id: Option<Uuid>,
+    },
+    /// Someone proposes a change to a page, sheet or whiteboard, of one kind
+    /// or to this one (C1.28). Takes no task conditions.
+    ProposalMade {
+        #[serde(default)]
+        thing_kind: Option<String>,
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        thing_id: Option<Uuid>,
+    },
     /// An outside service posts to an incoming hook in the project (K3.26),
     /// with a delivery whose signature checks out. Takes no task conditions;
     /// its actions can use {{hook.name}}, {{delivery.id}} and
@@ -269,6 +290,8 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "page_changed",
     "sheet_changed",
     "whiteboard_changed",
+    "comment_posted",
+    "proposal_made",
     "incoming_hook",
     "schedule",
     "capacity_window",
@@ -299,6 +322,8 @@ impl Trigger {
             Self::PageChanged { .. } => "page_changed",
             Self::SheetChanged { .. } => "sheet_changed",
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
+            Self::CommentPosted { .. } => "comment_posted",
+            Self::ProposalMade { .. } => "proposal_made",
             Self::IncomingHook { .. } => "incoming_hook",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
@@ -317,6 +342,8 @@ impl Trigger {
                 | Self::PageChanged { .. }
                 | Self::SheetChanged { .. }
                 | Self::WhiteboardChanged { .. }
+                | Self::CommentPosted { .. }
+                | Self::ProposalMade { .. }
                 | Self::IncomingHook { .. }
         )
     }
@@ -345,6 +372,21 @@ impl Trigger {
             Self::WhiteboardChanged {
                 whiteboard_id: Some(id),
             } => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+            Self::CommentPosted {
+                thing_kind: Some(kind),
+                thing_id: Some(id),
+            }
+            | Self::ProposalMade {
+                thing_kind: Some(kind),
+                thing_id: Some(id),
+            } => match kind.as_str() {
+                "page" => Some(("page", "project_pages", "archived_at", *id)),
+                "sheet" => Some(("sheet", "sheets", "archived_at", *id)),
+                "whiteboard" => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+                "task" => Some(("task", "work_items", "archived_at", *id)),
+                "record" => Some(("record", "collection_records", "archived_at", *id)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -554,6 +596,25 @@ fn normalize_name(value: &str) -> Result<String, AppError> {
     Ok(name.to_owned())
 }
 
+/// A comment or proposal trigger watches things of one of `kinds`, or one
+/// thing (which needs its kind), and takes no task conditions.
+fn check_thing_trigger(
+    conditions: &Conditions,
+    thing_kind: Option<&str>,
+    one_thing: bool,
+    kinds: &[&str],
+) -> Result<(), AppError> {
+    if !conditions.is_empty() {
+        return Err(AppError::Invalid(
+            "a comment or proposal rule has no task conditions: name the kind of thing or the one it watches instead",
+        ));
+    }
+    if !thing_kind.is_none_or(|kind| kinds.contains(&kind)) || (one_thing && thing_kind.is_none()) {
+        return Err(AppError::Validation("trigger.thingKind"));
+    }
+    Ok(())
+}
+
 /// Checks the parts of a rule that don't need the database.
 fn check_shape(
     trigger: &mut Trigger,
@@ -660,6 +721,26 @@ fn check_shape(
                 ));
             }
         }
+        // Comments go on tasks, pages, sheets, boards and records;
+        // proposals on pages, sheets and boards.
+        Trigger::CommentPosted {
+            thing_kind,
+            thing_id,
+        } => check_thing_trigger(
+            conditions,
+            thing_kind.as_deref(),
+            thing_id.is_some(),
+            &["task", "page", "sheet", "whiteboard", "record"],
+        )?,
+        Trigger::ProposalMade {
+            thing_kind,
+            thing_id,
+        } => check_thing_trigger(
+            conditions,
+            thing_kind.as_deref(),
+            thing_id.is_some(),
+            &["page", "sheet", "whiteboard"],
+        )?,
         Trigger::TaskMatches {} => {
             if conditions.is_empty() {
                 return Err(AppError::Invalid(
@@ -1952,6 +2033,8 @@ fn summary_for(event: &Event) -> String {
         ),
         "pull_request.checks_failed" => "Checks failed on a pull request".to_owned(),
         "message.created" => "A message was posted".to_owned(),
+        "comment.created" => "Someone commented".to_owned(),
+        "proposal.created" => "Someone proposed a change".to_owned(),
         "incoming_hook.received" => "A delivery came in".to_owned(),
         other => other.to_owned(),
     }
@@ -1970,6 +2053,8 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "page.updated" => &["page_changed"],
         "sheet.updated" => &["sheet_changed"],
         "whiteboard.updated" => &["whiteboard_changed"],
+        "comment.created" => &["comment_posted"],
+        "proposal.created" => &["proposal_made"],
         "incoming_hook.received" => &["incoming_hook"],
         _ => &[],
     }
@@ -2154,6 +2239,21 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             }
             Trigger::WhiteboardChanged { whiteboard_id } => {
                 whiteboard_id.is_none_or(|only| subject.whiteboard_id == Some(only))
+            }
+            Trigger::CommentPosted {
+                thing_kind,
+                thing_id,
+            }
+            | Trigger::ProposalMade {
+                thing_kind,
+                thing_id,
+            } => {
+                let on = event.thing.as_ref();
+                event.actor_id != Some(rule.owner_actor_id)
+                    && thing_kind
+                        .as_deref()
+                        .is_none_or(|kind| on.is_some_and(|thing| thing.kind == kind))
+                    && thing_id.is_none_or(|only| on.is_some_and(|thing| thing.id == only))
             }
             Trigger::IncomingHook { hook_id } => subject.hook_id == Some(*hook_id),
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
@@ -2797,7 +2897,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 return finish(pool, run_id, state_name, Some(&reason), &results).await;
             }
         };
-        let outcome = with_limits(
+        let outcome = Box::pin(with_limits(
             limits,
             run_action(
                 state,
@@ -2810,7 +2910,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 index,
                 action,
             ),
-        )
+        ))
         .await;
         results.push(match outcome {
             Ok(detail) => json!({ "kind": action.kind(), "ok": true, "detail": detail }),

@@ -114,6 +114,8 @@ pub(crate) struct World {
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
+    /// A chart of the sheet (C1.18).
+    pub(crate) sheet_chart: Uuid,
     /// A file sent with `file_message` in the channel, and a task's image.
     pub(crate) file: Uuid,
     pub(crate) file_message: String,
@@ -963,6 +965,14 @@ async fn build_workspace(
     )
     .await;
     let sheet = Uuid::parse_str(&string_at(&sheet, "/value/id")).expect("sheet id");
+    // A chart of it (C1.18).
+    let sheet_chart = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": format!("Costs{m}"), "source": "A1:B2"}),
+    )
+    .await;
+    let sheet_chart =
+        Uuid::parse_str(&string_at(&sheet_chart, "/value/chartId")).expect("chart id");
 
     let channel = create_channel(&setup, &project, "launch").await;
     let message = say(
@@ -2059,6 +2069,7 @@ async fn build_workspace(
         recurring_record,
         record,
         sheet,
+        sheet_chart,
         file,
         file_message,
         task_file,

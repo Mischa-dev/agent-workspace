@@ -1316,6 +1316,7 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
 async fn comment_writes_keep_to_what_the_writer_may_see() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
+        .project("HOME")
         .person("lena", "member")
         .person("mara", "member")
         .person("omar", "member")
@@ -1463,6 +1464,122 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
     .await
     .expect("thread status");
     assert_ne!(status_now.to_lowercase(), "resolved");
+
+    // Nate's role doesn't edit pages: he keeps no file on one (C1.33); Lena
+    // does.
+    let page = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "page_write",
+        json!({"projectId": work, "title": "Plan", "body": "Ship it."}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let page = string_at(&page, "/value/id");
+    let file = |name: &str| json!({"pageId": page, "name": name, "text": "notes"});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "page_file_upload",
+        file("nate.txt"),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "nate keeps a file: {status} {refused}"
+    );
+    let (status, kept) = op(
+        &world.people["lena"].browser,
+        "page_file_upload",
+        file("lena.txt"),
+    )
+    .await;
+    assert!(status.is_success(), "lena keeps a file: {status} {kept}");
+
+    // Nor does he move a page to another space (C1.37); Lena does.
+    let home = world.project("HOME").to_owned();
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(pool)
+            .await
+            .expect("page version");
+    let moving = json!({"pageId": page, "toSpaceId": home, "expectedVersion": version});
+    let (status, refused) = op(&world.people["nate"].browser, "page_move", moving.clone()).await;
+    assert!(
+        !status.is_success(),
+        "nate moves a page: {status} {refused}"
+    );
+    let (status, moved) = op(&world.people["lena"].browser, "page_move", moving).await;
+    assert!(status.is_success(), "lena moves a page: {status} {moved}");
+
+    // Nor does a role without tasks make tasks of a board's notes (C1.32).
+    let board = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Ideas"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = string_at(&board, "/value/whiteboard/id");
+    let drawn = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "text", "id": "idea", "x": 0, "y": 0, "text": "Try it"}]}),
+    )
+    .await;
+    assert_eq!(drawn["outcome"], "ok", "{drawn}");
+    let notes = json!({"whiteboardId": board});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "whiteboard_to_tasks",
+        notes.clone(),
+    )
+    .await;
+    assert!(!status.is_success(), "nate makes tasks: {status} {refused}");
+    let (status, made) = op(&world.people["lena"].browser, "whiteboard_to_tasks", notes).await;
+    assert!(status.is_success(), "lena makes tasks: {status} {made}");
+
+    // Asking about part of the board (C1.31): someone out of its space
+    // neither asks nor is asked; Lena asks Mara.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(world.people["omar"].actor)
+    .execute(pool)
+    .await
+    .expect("omar leaves WORK");
+    let ask = |who: Uuid| {
+        json!({"whiteboardId": board, "elementIds": ["idea"], "accountId": who,
+               "question": "Worth it?"})
+    };
+    let (status, refused) = op(
+        &world.people["omar"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "omar asks: {status} {refused}");
+    let (status, refused) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["omar"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "lena asks omar: {status} {refused}");
+    let (status, asked) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(status.is_success(), "lena asks mara: {status} {asked}");
     world.finish().await;
 }
 
@@ -2132,6 +2249,24 @@ async fn personal_sheet_views_stay_their_owners() {
     )
     .await;
     assert_eq!(body["outcome"], "ok", "lena names a range: {status} {body}");
+    // A chart (C1.18) changes the sheet for everyone too: sheets.edit.
+    let (status, body) = op(
+        nate,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nate's", "source": "A1:B2"}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate charts: {status} {body}");
+    let (status, body) = op(
+        &world.people["lena"].browser,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Lena's", "source": "Lenas"}),
+    )
+    .await;
+    assert_eq!(
+        body["outcome"], "ok",
+        "lena charts her range: {status} {body}"
+    );
     world.finish().await;
 }
 
@@ -2633,6 +2768,13 @@ async fn a_shared_page_opens_only_itself() {
         pages.push(page["id"].as_str().expect("page").to_owned());
     }
     let (plan, salaries) = (&pages[0], &pages[1]);
+    // Salaries sits inside Plan: sharing Plan doesn't tell its title.
+    sqlx::query("UPDATE project_pages SET parent_page_id = $1::uuid WHERE id = $2::uuid")
+        .bind(plan)
+        .bind(salaries)
+        .execute(world.pool())
+        .await
+        .expect("nest salaries");
     let read = |browser: &Browser, uri: String| browser.request("GET", &uri, None, Value::Null);
     let op = |browser: &Browser, name: &str, key: &str, body: Value| {
         browser.request(
@@ -2692,6 +2834,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["title"], "Plan");
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a shared page names no page inside it: {page}"
+    );
     for uri in [
         format!("/api/v1/pages/{salaries}"),
         format!("/api/v1/projects/{secret}/pages"),
@@ -2729,6 +2875,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["id"], plan.as_str());
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a linked page names no page inside it: {page}"
+    );
     let (status, _) = send(
         &world.app,
         read(&mara.browser, format!("/api/v1/pages/{salaries}")),
@@ -3636,6 +3786,99 @@ async fn channel_writes_keep_to_private_channels() {
         "{timeline}"
     );
 
+    // C1.25, C2.22: a page, a sheet row or a sticky is made only from a
+    // message its maker reads, and saying so puts a line in the channel.
+    let (status, sheet) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/sheets"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": "Plans"}),
+        ),
+    )
+    .await;
+    let sheet = sheet
+        .pointer("/sheet/id")
+        .or_else(|| sheet.pointer("/id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("lena makes a sheet: {status} {sheet}"))
+        .to_owned();
+    let (status, board) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Plans", "projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let sticky = |from: &str| {
+        json!({"whiteboardId": board, "fromMessageId": from, "saySo": true, "operations": [
+            {"op": "add", "type": "rectangle", "text": "From the channel"},
+        ]})
+    };
+    for (name, input) in [
+        ("page_make", json!({"messages": [hidden], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": hidden, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&hidden)),
+    ] {
+        let (status, refused) = op(&omar.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {refused}");
+        assert!(
+            !refused.to_string().contains("secret-plans"),
+            "{name}: {refused}"
+        );
+    }
+    let mut made_things = Vec::new();
+    for (name, input) in [
+        ("page_make", json!({"messages": [shown], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": shown, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&shown)),
+    ] {
+        let (status, made) = op(&omar.browser, name, input).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {made}");
+        made_things.push(made);
+    }
+    let cell = sqlx::query_scalar::<_, String>(
+        "SELECT cell.input FROM sheet_cells cell JOIN sheet_tabs tab ON tab.id = cell.tab_id \
+         WHERE tab.sheet_id = $1::uuid AND cell.row_number = $2",
+    )
+    .bind(&sheet)
+    .bind(
+        made_things[1]["value"]["row"]
+            .as_i64()
+            .and_then(|row| i32::try_from(row).ok())
+            .expect("row"),
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the row");
+    assert_eq!(cell, "Open plans launch day");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let said = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["system"]["thingKind"].as_str())
+        .collect::<Vec<_>>();
+    for kind in ["page", "sheet_row", "sticky"] {
+        assert!(said.contains(&kind), "a line for the {kind}: {timeline}");
+    }
     // Someone who may make tasks but not post in the channel makes one from
     // a message quietly: saySo posts nothing for them.
     let tess = &world.people["tess"];

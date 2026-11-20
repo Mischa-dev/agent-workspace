@@ -20,7 +20,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<DecisionRecord>()
         .add::<DecisionList>()
         .add::<PageTemplateList>()
-        .add::<super::make::PageMake>();
+        .add::<super::make::PageMake>()
+        .add::<super::page_files::PageFileUpload>()
+        .add::<super::page_move::PageMove>();
 }
 
 /// Record a decision.

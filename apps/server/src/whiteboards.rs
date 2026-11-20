@@ -12,16 +12,19 @@
 //! Every read checks `whiteboard_visible_to` (migration 20261017070000) and,
 //! for agents, `actor_can_access_project` on the board's project.
 
+pub mod ask;
 pub mod edit;
 pub mod elements;
 pub mod fractional;
 mod http;
 pub mod ops;
+pub mod outline;
 pub mod proposals;
 pub mod render;
 pub mod scene;
 pub mod store;
 pub mod templates;
+pub mod to_tasks;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -500,17 +503,7 @@ async fn copy_into(
     .bind(caller.actor_id)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
-        SELECT $2, file_id, mime_type, data, $3 FROM whiteboard_files WHERE whiteboard_id = $1
-        "#,
-    )
-    .bind(whiteboard_id)
-    .bind(id)
-    .bind(caller.actor_id)
-    .execute(&mut **transaction)
-    .await?;
+    store::copy_files(transaction, whiteboard_id, id, caller.actor_id).await?;
     sqlx::query(
         r#"
         UPDATE whiteboards copy
@@ -633,6 +626,13 @@ pub async fn change(
             new_project,
         )
         .await?;
+        crate::memory::page_move::follow_space(
+            transaction,
+            "whiteboard",
+            whiteboard_id,
+            new_project,
+        )
+        .await?;
     }
     let action = match (deleted, new_deleted) {
         (false, true) => "whiteboard.deleted",
@@ -683,6 +683,7 @@ pub async fn purge(
         whiteboard_id,
     )
     .await?;
+    store::remove_files(transaction, whiteboard_id, caller.actor_id).await?;
     sqlx::query("DELETE FROM whiteboards WHERE id = $1")
         .bind(whiteboard_id)
         .execute(&mut **transaction)

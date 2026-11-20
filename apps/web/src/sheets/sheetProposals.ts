@@ -5,8 +5,11 @@ import { useQuery } from '@tanstack/react-query'
 import { opQuery } from '../api/ops'
 import { cellKey } from './sheetModel'
 
-/** A cell a proposal would set: the input it read and the one proposed. */
-export type ProposedCell = { tabId: string; tab: string; row: number; column: number; before: string; after: string }
+/**
+ * A cell a proposal would set: the input it read and the one proposed.
+ * `gone` when its row or column was deleted since.
+ */
+export type ProposedCell = { tabId: string; tab: string; row: number; column: number; before: string; after: string; gone: boolean }
 
 export type SheetProposal = {
   id: string
@@ -30,7 +33,7 @@ export function proposedCells(change: unknown): ProposedCell[] {
     const row = Number(cell.row)
     const column = Number(cell.column)
     if (!Number.isInteger(row) || !Number.isInteger(column)) return []
-    return [{ tabId: text(cell.tabId), tab: text(cell.tab), row, column, before: text(cell.before), after: text(cell.after) }]
+    return [{ tabId: text(cell.tabId), tab: text(cell.tab), row, column, before: text(cell.before), after: text(cell.after), gone: cell.gone === true }]
   })
 }
 
@@ -53,6 +56,6 @@ export function useSheetProposals(sheetId: string, enabled: boolean) {
 /** The cells of one tab that a waiting proposal would set, by cell key. */
 export function proposedOn(proposals: SheetProposal[], tabId: string) {
   const marks = new Map<string, string>()
-  for (const proposal of proposals) for (const cell of proposal.cells) if (cell.tabId === tabId) marks.set(cellKey(cell.row, cell.column), cell.after)
+  for (const proposal of proposals) for (const cell of proposal.cells) if (cell.tabId === tabId && !cell.gone) marks.set(cellKey(cell.row, cell.column), cell.after)
   return marks
 }

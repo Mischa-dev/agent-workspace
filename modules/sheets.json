@@ -18,10 +18,13 @@
     "sheet_view_create": "create",
     "sheet_view_update": "change",
     "sheet_view_delete": "change",
-    "sheet_range_set": "change"
+    "sheet_range_set": "change",
+    "sheet_row_add": "change",
+    "sheet_chart_set": "change",
+    "sheet_chart_get": "describe"
   },
   "routes": ["/api/v1/projects/{project_id}/sheets*"],
-  "events": { "emits": ["sheet.updated", "sheet.version_restored", "sheet.views_changed", "sheet.ranges_changed", "sheet.proposals_changed"], "listens": [] },
+  "events": { "emits": ["sheet.updated", "sheet.version_restored", "sheet.views_changed", "sheet.ranges_changed", "sheet.charts_changed", "sheet.proposals_changed"], "listens": [] },
   "notifications": [],
   "search": ["sheets"],
   "automations": { "triggers": ["sheet_changed"], "actions": [] },
@@ -39,7 +42,7 @@
   "web": { "folder": "sheets" },
   "slots": {
     "pages": ["/projects/:projectId/sheets/*"],
-    "parts": ["area.sheets"],
+    "parts": ["area.sheets", "sheet.charts", "sheet.validation"],
     "sidebar": [],
     "home": [],
     "settings": [],

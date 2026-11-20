@@ -14,7 +14,14 @@ export type PageSummary = {
   updatedBy: string | null
   stale: boolean
   excerpt: string
+  /** The page it sits inside, if any. */
+  parentPageId: string | null
+  /** Its place among its siblings. */
+  position: number
 }
+
+/** A page named in a breadcrumb or a list of the pages inside one. */
+export type PageCrumb = { id: string; title: string }
 
 export type PageRevision = {
   version: number
@@ -46,6 +53,12 @@ export type Page = {
   archived: boolean
   stale: boolean
   revisions: PageRevision[]
+  /** The page it sits inside, if any. */
+  parentPageId: string | null
+  /** The pages it sits inside, outermost first. */
+  ancestors: PageCrumb[]
+  /** The pages inside it, in order. */
+  children: PageCrumb[]
 }
 
 export type PageInput = {
@@ -57,6 +70,8 @@ export type PageInput = {
   fromTemplateId?: string
   /** One line saying when agents should use it; an empty string stops it being a skill. */
   skillDescription?: string
+  /** Put it inside this page of its project, or back at the top (null). */
+  parentPageId?: string | null
   expectedVersion?: number
   restoreVersion?: number
   archived?: boolean

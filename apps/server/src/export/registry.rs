@@ -1227,6 +1227,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "project_pages",
                 references: &[
                     ("project_id", "projects"),
+                    ("parent_page_id", "project_pages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                 ],
@@ -1421,6 +1422,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "sheet_cleared_cells",
                 table: "sheet_cleared_cells",
                 references: &[("tab_id", "sheet_tabs")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "sheet_charts",
+                table: "sheet_charts",
+                references: &[
+                    ("space_id", "projects"),
+                    ("sheet_id", "sheets"),
+                    ("created_by_actor_id", "actors"),
+                ],
                 text_references: &[],
                 exclude: &[],
             },

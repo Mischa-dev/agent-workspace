@@ -1,0 +1,83 @@
+/* Charts (C1.18): each drawn from its cells, in the charts dialog and in pages. */
+.aw-sheet-chart__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.aw-sheet-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-sheet-chart--embed {
+  border: 0;
+  padding: 0;
+}
+
+.aw-sheet-chart__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-sheet-chart__head h3 {
+  flex: 1;
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-sheet-chart__head a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--content-fg);
+  font: var(--t-ui-strong);
+  text-decoration: none;
+}
+
+.aw-sheet-chart__source {
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+.aw-sheet-chart__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-sheet-chart__number {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: var(--space-4) 0;
+}
+
+.aw-sheet-chart__number span {
+  font: var(--t-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-sheet-chart__number figcaption {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-sheet-chart__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.aw-sheet-chart__actions {
+  display: flex;
+  gap: var(--space-1-5);
+}

@@ -5,12 +5,12 @@ import { legacyPathOf, spaceHref } from '../../app/href'
  * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
  * saved view other than the first. A sheet's range (AWD-54) is
  * `/projects/{projectId}/sheets/{sheetId}`, with `?tab=` and `?range=` (such
- * as `A1:D9`). A file of the page (C1.33), such as a pasted picture, is
+ * as `A1:D9`), or `?chart=` for one of its charts (C1.18). A file of the page (C1.33), such as a pasted picture, is
  * `/files/{fileId}`. Any other path in the app shows as a link to it.
  */
 export type EmbedTarget =
   | { kind: 'collection'; projectId: string; collectionId: string; viewId: string | null }
-  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null; name: string | null }
+  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null; name: string | null; chart: string | null }
   | { kind: 'file'; fileId: string }
   | { kind: 'link' }
 
@@ -49,6 +49,7 @@ export function embedTarget(href: string): EmbedTarget {
         tabId: url.searchParams.get('tab') || null,
         range: url.searchParams.get('range') || null,
         name: url.searchParams.get('name') || null,
+        chart: url.searchParams.get('chart') || null,
       }
     }
   } catch {
@@ -85,6 +86,12 @@ export function sheetEmbed(projectId: string, sheet: { id: string; name: string 
     href: search ? `${path}?${search}` : path,
     label: where ? `${sheet.name} · ${where}` : sheet.name,
   }
+}
+
+/** The path an embed of a sheet's chart keeps (C1.18), and its label. */
+export function sheetChartEmbed(projectId: string, sheet: { id: string; name: string }, chart: { id: string; title: string }) {
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
+  return { href: `${path}?chart=${encodeURIComponent(chart.id)}`, label: `${sheet.name} · ${chart.title}` }
 }
 
 /** The path a file of the page keeps, and its label (the file's name). */

@@ -31,9 +31,26 @@ export type SheetTab = {
   columnWidths: Record<number, number>
   /** Its conditional formats, the first that applies winning. */
   conditionalFormats: ConditionalRule[]
+  /** What its cells may hold: dropdowns, checkboxes, limits (C1.15). */
+  validations: ValidationRule[]
   /** The last row and column holding something (0 when empty). */
   rows: number
   columns: number
+}
+
+/** What a range of cells may hold (C1.15); strict ones refuse anything else. */
+export type ValidationRule = {
+  range: string
+  allow: 'list' | 'checkbox' | 'number' | 'date' | 'textLength'
+  choices?: string[]
+  min?: number
+  max?: number
+  whole?: boolean
+  from?: string
+  to?: string
+  /** Absent means strict. */
+  strict?: boolean
+  hint?: string
 }
 
 /** A conditional format: cells, when it applies, and how they look then (C1.17). */
@@ -108,7 +125,14 @@ export type SheetBody = {
   canSuggest: boolean
   /** The sheet's named ranges, by name (C1.20). */
   ranges: NamedRange[]
+  /** The sheet's charts, in order (C1.18). */
+  charts: SheetChart[]
 }
+
+/** A chart of a block of the sheet: bars, a line, a donut or one number (C1.18). */
+export type SheetChart = { id: string; title: string; style: 'bar' | 'line' | 'donut' | 'number'; source: string }
+
+const CHART_STYLES = ['bar', 'line', 'donut', 'number'] as const
 
 /** A block of one tab with a name, such as Totals for Costs!A1:B9 (C1.20). */
 export type NamedRange = { name: string; tabId: string; tab: string; range: string }
@@ -146,6 +170,8 @@ export type SheetChange =
   | { type: 'sort'; tab: string; rows: [number, number]; columns: [number, number]; by: [number, boolean][] }
   /** Replaces a tab's conditional formats. */
   | { type: 'conditionalFormats'; tab: string; rules: ConditionalRule[] }
+  /** Replaces a tab's validation rules. */
+  | { type: 'validations'; tab: string; rules: ValidationRule[] }
 
 export type ChangedCell = {
   tab: string
@@ -228,6 +254,7 @@ function normalizeTab(value: unknown): SheetTab {
     frozenRows: asNumber(raw.frozenRows, 1),
     columnWidths: widths,
     conditionalFormats: asArray(raw.conditionalFormats).filter((rule): rule is ConditionalRule => typeof asRecord(rule).range === 'string' && typeof asRecord(rule).when === 'string'),
+    validations: asArray(raw.validations).filter((rule): rule is ValidationRule => typeof asRecord(rule).range === 'string' && typeof asRecord(rule).allow === 'string'),
     rows: asNumber(raw.rows),
     columns: asNumber(raw.columns),
   }
@@ -260,6 +287,11 @@ export function normalizeBody(value: unknown): SheetBody {
       return typeof range.name === 'string' && typeof range.tabId === 'string' && typeof range.range === 'string'
         ? [{ name: range.name, tabId: range.tabId, tab: asString(range.tab), range: range.range }]
         : []
+    }),
+    charts: asArray(raw.charts).flatMap((entry) => {
+      const chart = asRecord(entry)
+      const style = CHART_STYLES.find((known) => known === chart.style) ?? 'bar'
+      return typeof chart.id === 'string' ? [{ id: chart.id, title: asString(chart.title), style, source: asString(chart.source) }] : []
     }),
   }
 }

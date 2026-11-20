@@ -21,9 +21,9 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::{
-    agent_interface::{connect_app, initialize, tool},
+    agent_interface::{connect_app, create_agent, initialize, tool},
     mcp_admin::{create_project, setup},
-    mcp_tasks::space,
+    mcp_tasks::{add_member, space},
     message_edits::add_person,
     modules::switch,
 };
@@ -386,4 +386,161 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     .await
     .expect("notifications");
     assert_eq!(fired, 3);
+}
+
+/// C1.28: a comment on a page reaches a rule watching comments on pages
+/// (someone else's, never the maker's own), and not a rule watching
+/// sheets; a proposal reaches a proposal rule; and search finds a word
+/// that is only in a sheet's cell, for members only.
+#[tokio::test]
+async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
+    let Some(setup) = setup("c128_document_events").await else {
+        return;
+    };
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL"),
+    )]))
+    .expect("configuration");
+    let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: setup.pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(64),
+        supervisors,
+    };
+    let app = &router(state.clone());
+    let workspace_space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (_, outsider) = add_person(&setup, &[&workspace_space], "olaf").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let (wren, wren_token) =
+        create_agent(app, &setup.browser, &workspace_space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let wren_session = initialize(app, &wren_token).await.expect("Wren MCP");
+
+    let page = ok(
+        call(
+            "page_write",
+            json!({"projectId": "WORK", "title": "Roadmap", "body": "Plans."}),
+        )
+        .await,
+        "page",
+    );
+    let page_id = page["value"]["page"]["id"]
+        .as_str()
+        .or_else(|| page["value"]["id"].as_str())
+        .expect("page id")
+        .to_owned();
+    ok(
+        call(
+            "sheet_write",
+            json!({"projectId": "WORK", "name": "Budget",
+                   "cells": [{"cell": "A1", "input": "Quetzalcoatl"}], "clientRequestId": "c128-sheet"}),
+        )
+        .await,
+        "sheet",
+    );
+    let refused = call(
+        "automation_write",
+        json!({"projectId": "WORK", "operation": "create", "name": "Odd",
+               "trigger": {"kind": "comment_posted", "thingKind": "dashboard"},
+               "actions": [{"kind": "notify", "recipients": "owner", "message": "x"}]}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    for (trigger, message) in [
+        (
+            json!({"kind": "comment_posted", "thingKind": "page"}),
+            "A page comment",
+        ),
+        (
+            json!({"kind": "comment_posted", "thingKind": "sheet"}),
+            "A sheet comment",
+        ),
+        (json!({"kind": "proposal_made"}), "A proposal"),
+    ] {
+        ok(
+            call(
+                "automation_write",
+                json!({"projectId": "WORK", "operation": "create", "name": "Watch",
+                       "trigger": trigger,
+                       "actions": [{"kind": "notify", "recipients": "owner", "message": message}]}),
+            )
+            .await,
+            "rule",
+        );
+    }
+    pump(&state).await;
+
+    // Wren comments on the page; the rule's maker comments too.
+    ok(
+        tool(
+            app,
+            &wren_token,
+            &wren_session,
+            "comment_create",
+            json!({"thing": {"kind": "page", "id": page_id}, "text": "Looks right to me."}),
+        )
+        .await,
+        "Wren's comment",
+    );
+    ok(
+        call(
+            "comment_create",
+            json!({"thing": {"kind": "page", "id": page_id}, "text": "Thanks."}),
+        )
+        .await,
+        "the owner's comment",
+    );
+    pump(&state).await;
+    let fired = sqlx::query_scalar::<_, Value>(
+        "SELECT detail FROM notifications WHERE kind = 'automation' ORDER BY created_at",
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("notifications");
+    let texts = fired.iter().map(Value::to_string).collect::<Vec<_>>();
+    assert_eq!(fired.len(), 1, "{texts:#?}");
+    assert!(texts[0].contains("A page comment"), "{texts:#?}");
+    let logged = sqlx::query_scalar::<_, Value>(
+        "SELECT payload FROM events WHERE type = 'comment.created' AND thing_id = $1::uuid",
+    )
+    .bind(&page_id)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("comment events");
+    assert_eq!(logged.len(), 2, "{logged:?}");
+    assert!(
+        !logged
+            .iter()
+            .any(|payload| payload.to_string().contains("Looks right")),
+        "{logged:?}"
+    );
+
+    // Search finds the word in the sheet's cell for a member, not for
+    // someone outside the project.
+    let found = call("search", json!({"query": "Quetzalcoatl"})).await;
+    assert!(
+        found.to_string().contains("Budget"),
+        "the member finds the sheet: {found}"
+    );
+    let outsider_app = connect_app(app, &outsider, "Olaf's script", "full").await;
+    let outsider_session = initialize(app, &outsider_app).await.expect("outsider MCP");
+    let hidden = tool(
+        app,
+        &outsider_app,
+        &outsider_session,
+        "search",
+        json!({"query": "Quetzalcoatl"}),
+    )
+    .await;
+    assert!(!hidden.to_string().contains("Budget"), "{hidden}");
 }

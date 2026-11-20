@@ -25,6 +25,7 @@
     "triage_rule_list": "query",
     "triage_rule_set": "change",
     "task_create_many": "create",
+    "whiteboard_to_tasks": "create",
     "task_update_many": "change",
     "task_archive": "change",
     "task_restore": "change",

@@ -156,6 +156,8 @@ export function SheetViewDialog({
   const [filters, setFilters] = useState<FilterDraft[]>(
     view?.filters.filter((filter) => filter.op !== 'oneOf').map((filter) => ({ column: filter.column, op: filter.op, value: filter.value == null ? '' : String(filter.value) })) ?? [],
   )
+  // Pick-from-a-list filters (made from a column's menu) aren't edited here; saving keeps them.
+  const listFilters = view?.filters.filter((filter) => filter.op === 'oneOf') ?? []
   const [sortColumn, setSortColumn] = useState(view?.sort[0]?.column ?? '')
   const [descending, setDescending] = useState(view?.sort[0]?.descending ?? false)
   const [hidden, setHidden] = useState(view?.hiddenColumns.join(', ') ?? '')
@@ -173,11 +175,14 @@ export function SheetViewDialog({
     if (hiddenColumns.some((letter) => !columnNumber(letter))) return setProblem('Name hidden columns by their letters, such as C, E.')
     const body: Required<Pick<OpInput<'sheet_view_create'>, 'name' | 'filters' | 'sort' | 'hiddenColumns'>> = {
       name: name.trim(),
-      filters: filters.map((filter) => ({
-        column: filter.column,
-        op: filter.op as SheetView['filters'][number]['op'],
-        ...(NO_VALUE.has(filter.op) ? {} : { value: filter.value.trim() !== '' && Number.isFinite(Number(filter.value)) ? Number(filter.value) : filter.value }),
-      })),
+      filters: [
+        ...filters.map((filter) => ({
+          column: filter.column,
+          op: filter.op as SheetView['filters'][number]['op'],
+          ...(NO_VALUE.has(filter.op) ? {} : { value: filter.value.trim() !== '' && Number.isFinite(Number(filter.value)) ? Number(filter.value) : filter.value }),
+        })),
+        ...listFilters,
+      ],
       sort: sortColumn ? [{ column: sortColumn, descending }] : [],
       hiddenColumns,
     }

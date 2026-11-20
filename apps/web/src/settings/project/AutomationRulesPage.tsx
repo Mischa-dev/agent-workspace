@@ -93,6 +93,10 @@ function describeTrigger(trigger: Trigger): string {
       return trigger.sheetId ? 'When this sheet changes' : 'When a sheet changes'
     case 'whiteboard_changed':
       return trigger.whiteboardId ? 'When this whiteboard changes' : 'When a whiteboard changes'
+    case 'comment_posted':
+      return trigger.thingId ? `When someone comments on this ${trigger.thingKind ?? 'thing'}` : trigger.thingKind ? `When someone comments on a ${trigger.thingKind}` : 'When someone comments'
+    case 'proposal_made':
+      return trigger.thingId ? `When someone proposes a change to this ${trigger.thingKind ?? 'thing'}` : trigger.thingKind ? `When someone proposes a change to a ${trigger.thingKind}` : 'When someone proposes a change'
     case 'incoming_hook':
       return 'When a delivery comes in on an incoming hook'
   }

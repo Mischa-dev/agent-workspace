@@ -52,11 +52,19 @@ const LEFT_OUT: &[(&str, &str)] = &[
 ];
 
 /// Columns an import is declared to write differently, each with why.
-const REWRITTEN: &[(&str, &str, &str)] = &[(
-    "links",
-    "created_at",
-    "a link read from text is made again from the text as it arrives",
-)];
+const REWRITTEN: &[(&str, &str, &str)] = &[
+    (
+        "links",
+        "created_at",
+        "a link read from text is made again from the text as it arrives",
+    ),
+    (
+        "files",
+        "storage_key",
+        "a file kept by its content (C1.29, shared by the rows holding the same \
+         bytes) arrives with the bytes under a key of its own",
+    ),
+];
 
 /// What the database says about how to compare one table: its primary key,
 /// its generated columns (worked out again, never carried), and its

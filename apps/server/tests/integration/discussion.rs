@@ -924,6 +924,177 @@ async fn a_boards_discussion_moves_with_it() {
     assert_eq!(after["value"]["threads"][0]["messageCount"], 3, "{after}");
 }
 
+/// C1.31: asking an agent about three stickies starts a thread anchored to
+/// them, with a picture of the three, and asks the agent to reply there.
+/// Someone outside the board's space can't be asked, and someone who can't
+/// see the board can't ask.
+#[tokio::test]
+async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("OTHER")
+        .person("lena", "member")
+        .person("nina", "member")
+        .agent("rook", "member")
+        .build("d2_board_ask")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let lena = &world.people["lena"];
+    let nina = &world.people["nina"];
+    let rook = &world.agents["rook"];
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(nina.actor)
+    .execute(pool)
+    .await
+    .expect("nina leaves WORK");
+
+    let (_, board) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_create",
+        json!({
+            "title": "Ideas",
+            "projectId": work,
+            "operations": [
+                {"op": "add", "type": "rectangle", "id": "one", "text": "Faster sync", "x": 0},
+                {"op": "add", "type": "rectangle", "id": "two", "text": "Dark mode", "x": 200},
+                {"op": "add", "type": "rectangle", "id": "three", "text": "Offline", "x": 400},
+                {"op": "add", "type": "rectangle", "id": "four", "text": "Not this", "x": 900},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let ask = |who: Uuid| {
+        json!({
+            "whiteboardId": board,
+            "elementIds": ["one", "two", "three"],
+            "accountId": who,
+            "question": "Which of these first?",
+        })
+    };
+
+    // Nina can't see the board; Lena can't ask someone outside its space.
+    let (_, refused) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(rook.actor),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let (_, refused) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(nina.actor),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let mut missing = ask(rook.actor);
+    missing["elementIds"] = json!(["one", "gone"]);
+    let (_, refused) = op(app, &lena.browser, workspace, "whiteboard_ask", missing).await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+
+    let (status, asked) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_ask",
+        ask(rook.actor),
+    )
+    .await;
+    assert!(status.is_success(), "{asked}");
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    let thread = Uuid::parse_str(asked["value"]["threadId"].as_str().expect("thread")).expect("id");
+    let message =
+        Uuid::parse_str(asked["value"]["messageId"].as_str().expect("message")).expect("id");
+    let file = Uuid::parse_str(asked["value"]["fileId"].as_str().expect("file")).expect("id");
+
+    // The thread is about the three stickies.
+    let anchor = sqlx::query_scalar::<_, Value>(
+        "SELECT anchor FROM conversations WHERE id = $1 AND kind = 'thread'",
+    )
+    .bind(thread)
+    .fetch_one(pool)
+    .await
+    .expect("anchor");
+    assert_eq!(anchor["kind"], "elements", "{anchor}");
+    assert_eq!(
+        anchor["elementIds"],
+        json!(["one", "three", "two"]),
+        "{anchor}"
+    );
+
+    // The question carries the picture, sent with the message in the thread.
+    let (conversation, on_message, content_type) =
+        sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(
+            "SELECT conversation_id, message_id, content_type FROM files WHERE id = $1",
+        )
+        .bind(file)
+        .fetch_one(pool)
+        .await
+        .expect("picture");
+    assert_eq!(conversation, thread);
+    assert_eq!(on_message, Some(message));
+    assert_eq!(content_type, "image/png");
+
+    // Rook is asked to reply in that thread.
+    let requests = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM reply_requests WHERE message_id = $1 AND agent_actor_id = $2",
+    )
+    .bind(message)
+    .bind(rook.actor)
+    .fetch_one(pool)
+    .await
+    .expect("requests");
+    assert_eq!(requests, 1);
+
+    // A retry after a lost answer gets the same question and picture back,
+    // and keeps no second picture.
+    let keyed = || {
+        send(
+            app,
+            lena.browser.request(
+                "POST",
+                &format!("/api/v2/w/{workspace}/ops/whiteboard_ask"),
+                Some("ask-retry-1"),
+                ask(rook.actor),
+            ),
+        )
+    };
+    let (_, first) = keyed().await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let (_, again) = keyed().await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["messageId"], first["value"]["messageId"]);
+    assert_eq!(again["value"]["fileId"], first["value"]["fileId"]);
+    let pictures = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM files WHERE uploaded_by_actor_id = $1 AND name = 'selection.png'",
+    )
+    .bind(lena.actor)
+    .fetch_one(pool)
+    .await
+    .expect("pictures");
+    assert_eq!(pictures, 2, "one for each question, none for the retry");
+}
+
 /// A task's discussion (its comments, their threads and their files) stays
 /// with whoever sees tasks: an app whose agent limit keeps tasks from it
 /// can't list it, read it or fetch its files, though its person can.
@@ -981,6 +1152,37 @@ async fn task_discussions_keep_the_task_limit() {
     assert!(read.to_string().contains("Trace attached"), "{read}");
     let fetched = call("file_read", json!({"fileId": file})).await;
     assert_eq!(fetched["outcome"], "ok", "{fetched}");
+    // A record of a collection that acts like a task is that task.
+    let chores = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Chores", "actsLikeTask": true}),
+    )
+    .await;
+    assert_eq!(chores["outcome"], "ok", "{chores}");
+    let chore = call(
+        "task_create",
+        json!({"projectId": "WORK", "collection": "Chores", "title": "Water the plants", "clientRequestId": "limit-chore"}),
+    )
+    .await;
+    let chore = chore["value"]["workItemId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{chore}"))
+        .to_owned();
+    let noted = call(
+        "comment_create",
+        json!({"thing": {"kind": "record", "id": chore}, "text": "Plants watered"}),
+    )
+    .await;
+    assert_eq!(noted["outcome"], "ok", "{noted}");
+    let chore_comments = call(
+        "comment_list",
+        json!({"thing": {"kind": "record", "id": chore}}),
+    )
+    .await;
+    let chore_conversation = chore_comments["value"]["conversationId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{chore_comments}"))
+        .to_owned();
 
     // Keep tasks from the person's apps: the same reads find nothing.
     sqlx::query(
@@ -1011,5 +1213,295 @@ async fn task_discussions_keep_the_task_limit() {
     )
     .await;
     assert_ne!(posted["outcome"], "ok", "{posted}");
+    let chore_comments = call(
+        "comment_list",
+        json!({"thing": {"kind": "record", "id": chore}}),
+    )
+    .await;
+    assert_ne!(chore_comments["outcome"], "ok", "{chore_comments}");
+    let read = call(
+        "conversation_read",
+        json!({"conversationId": chore_conversation}),
+    )
+    .await;
+    assert!(!read.to_string().contains("Plants watered"), "{read}");
+    world.finish().await;
+}
+
+/// C1.35: every document kind gets every document service. For a page, a
+/// sheet and a whiteboard alike: a comment that mentions an agent asks it; a
+/// role that only suggests makes a proposal, and accepting it applies; a
+/// change undoes; an old version restores; the change is in the event log;
+/// search finds the thing; and someone outside its space gets nothing.
+#[tokio::test]
+async fn every_document_kind_gets_every_service() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("omar", "member")
+        .agent("ed", "member")
+        .agent("sug", "member")
+        .agent("rook", "member")
+        .custom_role(
+            "Suggester",
+            &[
+                "projects.view",
+                "pages.suggest",
+                "sheets.suggest",
+                "whiteboards.suggest",
+            ],
+        )
+        .build("c1_35_document_contract")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let ed = &world.agents["ed"];
+    let sug = &world.agents["sug"];
+    let rook = &world.agents["rook"];
+    let omar = &world.people["omar"];
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Suggester"]).expect("role"))
+    .bind(work)
+    .bind(sug.actor)
+    .execute(pool)
+    .await
+    .expect("sug only suggests");
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(omar.actor)
+    .execute(pool)
+    .await
+    .expect("omar is outside WORK");
+    let as_ed = |name: &'static str, arguments: Value| async move {
+        ed.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let as_sug = |name: &'static str, arguments: Value| async move {
+        sug.call(app, Call::Tool { name, arguments }).await.1
+    };
+
+    // The three kinds, each holding "Alpha" and named for search.
+    let page = as_ed(
+        "page_write",
+        json!({"projectId": "WORK", "title": "Quillpage", "body": "Alpha"}),
+    )
+    .await;
+    let sheet = as_ed(
+        "sheet_write",
+        json!({"projectId": "WORK", "name": "Quillsheet", "cells": [{"cell": "A1", "input": "Alpha"}],
+               "clientRequestId": "contract-sheet"}),
+    )
+    .await;
+    let board = as_ed(
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Quillboard", "operations": [
+            {"op": "add", "type": "rectangle", "id": "one", "text": "Alpha"},
+        ]}),
+    )
+    .await;
+    let things = [
+        (
+            "page",
+            page["value"]["id"].as_str().map(str::to_owned),
+            "Quillpage",
+        ),
+        (
+            "sheet",
+            sheet["value"]["id"].as_str().map(str::to_owned),
+            "Quillsheet",
+        ),
+        (
+            "whiteboard",
+            board["value"]["whiteboard"]["id"]
+                .as_str()
+                .map(str::to_owned),
+            "Quillboard",
+        ),
+    ];
+    let read = |kind: &'static str, id: String| async move {
+        match kind {
+            "page" => as_ed("page_get", json!({"pageId": id})).await,
+            "sheet" => {
+                as_ed(
+                    "sheet_read",
+                    json!({"projectId": "WORK", "sheet": id, "range": "A1:A1"}),
+                )
+                .await
+            }
+            _ => as_ed("whiteboard_read", json!({"whiteboardId": id})).await,
+        }
+    };
+    let version_of = |kind: &'static str, body: &Value| match kind {
+        "page" => body["value"]["version"].as_i64(),
+        "sheet" => body["value"]["sheet"]["revision"].as_i64(),
+        _ => body["value"]["sceneSeq"].as_i64(),
+    };
+
+    for (kind, id, title) in things {
+        let id = id.unwrap_or_else(|| panic!("ed makes a {kind}: {page} {sheet} {board}"));
+        let thing = json!({"kind": kind, "id": id});
+        // The version that holds "Alpha", to restore at the end. A board
+        // keeps the scene from before each editing session, so its first
+        // version comes with the first change.
+        let made = as_ed("history_list", json!({"thing": id})).await;
+        let alpha = made["value"]["entries"][0]["version"].as_i64();
+
+        // A comment that mentions an agent asks it.
+        let (status, commented) = op(
+            app,
+            &world.owner.browser,
+            workspace,
+            "comment_create",
+            json!({"thing": thing, "content": mention(rook.actor, "Look at this ")}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {commented}");
+        let heard = mentioned_events(app, pool, rook).await;
+        assert!(
+            heard.iter().any(|(_, _, heard)| *heard == id),
+            "{kind}: rook is asked: {heard:?}"
+        );
+
+        // A suggest-only role proposes; accepting applies.
+        let proposed = match kind {
+            "page" => as_sug("page_write", json!({"pageId": id, "body": "Beta"})).await,
+            "sheet" => {
+                as_sug(
+                    "sheet_write",
+                    json!({"projectId": "WORK", "sheet": id, "cells": [{"cell": "A1", "input": "Beta"}],
+                           "clientRequestId": "contract-propose"}),
+                )
+                .await
+            }
+            _ => {
+                as_sug(
+                    "whiteboard_update_elements",
+                    json!({"whiteboardId": id, "operations": [{"op": "update", "id": "one", "text": "Beta"}]}),
+                )
+                .await
+            }
+        };
+        assert_eq!(proposed["outcome"], "ok", "{kind}: {proposed}");
+        let proposal = proposed["value"]["proposalId"]
+            .as_str()
+            .or_else(|| proposed["value"]["suggestion"]["suggestionId"].as_str())
+            .unwrap_or_else(|| panic!("{kind}: a proposal: {proposed}"))
+            .to_owned();
+        assert!(!read(kind, id.clone()).await.to_string().contains("Beta"));
+        let accepted = as_ed(
+            "proposal_decide",
+            json!({"proposalId": proposal, "decision": "accept",
+                   "clientRequestId": format!("contract-accept-{kind}")}),
+        )
+        .await;
+        assert_eq!(accepted["outcome"], "ok", "{kind}: {accepted}");
+        assert!(
+            read(kind, id.clone()).await.to_string().contains("Beta"),
+            "{kind}: accepted"
+        );
+
+        // Ed's own change undoes in one step.
+        let changed = match kind {
+            "page" => as_ed("page_write", json!({"pageId": id, "body": "Gamma"})).await,
+            "sheet" => {
+                as_ed(
+                    "sheet_write",
+                    json!({"projectId": "WORK", "sheet": id, "cells": [{"cell": "A1", "input": "Gamma"}],
+                           "clientRequestId": "contract-change"}),
+                )
+                .await
+            }
+            _ => {
+                as_ed(
+                    "whiteboard_update_elements",
+                    json!({"whiteboardId": id, "operations": [{"op": "update", "id": "one", "text": "Gamma"}]}),
+                )
+                .await
+            }
+        };
+        assert_eq!(changed["outcome"], "ok", "{kind}: {changed}");
+        let changes = as_ed("change_list", json!({"thingKind": kind, "thingId": id})).await;
+        let last = changes["value"]["changes"][0]["id"].clone();
+        assert!(last.is_string(), "{kind}: {changes}");
+        let undone = as_ed(
+            "change_undo",
+            json!({"changeSetId": last, "clientRequestId": format!("contract-undo-{kind}")}),
+        )
+        .await;
+        assert_eq!(undone["outcome"], "ok", "{kind}: {undone}");
+        let now = read(kind, id.clone()).await;
+        assert!(
+            !now.to_string().contains("Gamma") && now.to_string().contains("Beta"),
+            "{kind}: undone: {now}"
+        );
+
+        // The version that held "Alpha" restores.
+        let history = as_ed("history_list", json!({"thing": id})).await;
+        let alpha = alpha
+            .or_else(|| {
+                history["value"]["entries"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|entry| entry["version"].as_i64())
+                    .min()
+            })
+            .unwrap_or_else(|| panic!("{kind}: a version with Alpha: {history}"));
+        let at = version_of(kind, &now).unwrap_or_else(|| panic!("{kind}: a version: {now}"));
+        let restored = as_ed(
+            "history_restore",
+            json!({"thing": id, "version": alpha, "expectedVersion": at,
+                   "clientRequestId": format!("contract-restore-{kind}")}),
+        )
+        .await;
+        assert_eq!(restored["outcome"], "ok", "{kind}: {restored}");
+        let now = read(kind, id.clone()).await.to_string();
+        assert!(
+            now.contains("Alpha") && !now.contains("Beta"),
+            "{kind}: restored: {now}"
+        );
+
+        // The change is in the event log, and search finds the thing.
+        agent_workspace_server::events::catch_up(pool)
+            .await
+            .expect("sequence events");
+        let logged = sqlx::query_scalar::<_, Vec<String>>(
+            "SELECT COALESCE(array_agg(DISTINCT type), '{}') FROM events WHERE thing_id = $1::uuid",
+        )
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .expect("events");
+        assert!(
+            logged.iter().any(|kind_of| kind_of.starts_with(kind)),
+            "{kind}: {logged:?}"
+        );
+        let found = as_ed("search", json!({"query": title})).await;
+        assert!(found.to_string().contains(&id), "{kind}: {found}");
+
+        // Someone outside the space gets nothing.
+        for (name, input) in [
+            ("comment_list", json!({"thing": thing})),
+            ("history_list", json!({"thing": id})),
+            ("change_list", json!({"thingKind": kind, "thingId": id})),
+            (
+                "comment_create",
+                json!({"thing": thing, "text": "Let me in"}),
+            ),
+        ] {
+            let (status, refused) = op(app, &omar.browser, workspace, name, input).await;
+            assert!(!status.is_success(), "{kind} {name}: {refused}");
+            assert!(
+                !refused.to_string().contains(title),
+                "{kind} {name}: {refused}"
+            );
+        }
+    }
     world.finish().await;
 }

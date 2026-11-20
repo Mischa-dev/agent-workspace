@@ -578,6 +578,12 @@
   {
     "kind": "create",
     "module": "pages",
+    "name": "page_file_upload",
+    "title": "Keep a file on a page"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
     "name": "page_make",
     "title": "Make a page from messages or blocks"
   },
@@ -830,8 +836,20 @@
   {
     "kind": "change",
     "module": "sheets",
+    "name": "sheet_chart_set",
+    "title": "Chart a sheet range"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
     "name": "sheet_range_set",
     "title": "Name a sheet range"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_row_add",
+    "title": "Add a sheet row"
   },
   {
     "kind": "create",
@@ -1124,6 +1142,12 @@
   {
     "kind": "create",
     "module": "whiteboards",
+    "name": "whiteboard_ask",
+    "title": "Ask about part of a board"
+  },
+  {
+    "kind": "create",
+    "module": "whiteboards",
     "name": "whiteboard_create",
     "title": "Create whiteboard"
   },
@@ -1144,6 +1168,12 @@
     "module": "whiteboards",
     "name": "whiteboard_propose",
     "title": "Propose a whiteboard change"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "whiteboard_to_tasks",
+    "title": "Make tasks from a board's notes"
   },
   {
     "kind": "change",

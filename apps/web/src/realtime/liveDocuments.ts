@@ -54,9 +54,9 @@ export function discussionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload
   return pageId ? { pageId } : null
 }
 
-/** A sheet's cells, tabs or named ranges changed (AWD-54, C1.20): its open tab and the list refetch. */
+/** A sheet's cells, tabs, named ranges or charts changed (AWD-54, C1.20, C1.18): its open tab and the list refetch. */
 export function sheetChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): { sheetId: string } | null {
-  if (event.type !== 'sheet.updated' && event.type !== 'sheet.ranges_changed') return null
+  if (event.type !== 'sheet.updated' && event.type !== 'sheet.ranges_changed' && event.type !== 'sheet.charts_changed') return null
   const sheetId = uuid(field(event.payload, 'sheetId', 'sheet_id'))
   return sheetId ? { sheetId } : null
 }
@@ -176,6 +176,10 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
       void queryClient.invalidateQueries({ predicate: (query) => isCommentSummary(query.queryKey, sheet.sheetId) })
       // A dashboard tile charting it reads it again (C1.20).
       void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') && chartsSheet(query.state.data, sheet.sheetId) })
+      // Its charts, in the grid and in pages, read their cells again (C1.18).
+      void queryClient.invalidateQueries({
+        predicate: (query) => isOpKey(query.queryKey, 'sheet_chart_get') && (query.queryKey[3] as { sheetId?: unknown } | undefined)?.sheetId === sheet.sheetId,
+      })
     })
     return
   }
