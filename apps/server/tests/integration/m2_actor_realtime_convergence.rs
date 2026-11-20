@@ -88,7 +88,7 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     let (stop_log, log) = crate::support::live::follow_log(&pool, &realtime, None).await;
 
     let base_url = format!("http://{address}");
-    let websocket_url = format!("ws://{address}/api/v1/realtime");
+    let websocket_url = format!("ws://{address}/api/v1/realtime?v=2");
     let client = reqwest::Client::new();
     let mut actor_a_socket = connect(&websocket_url, &fixture.actor_a).await;
     let mut actor_b_socket = connect(&websocket_url, &fixture.actor_b).await;
@@ -593,6 +593,7 @@ fn sidebar_thread(sidebar: &Value, conversation_id: Uuid) -> &Value {
 }
 
 async fn connect(websocket_url: &str, actor: &ActorSession) -> TestSocket {
+    use futures_util::SinkExt;
     let mut request = websocket_url
         .into_client_request()
         .expect("construct WebSocket request");
@@ -603,47 +604,88 @@ async fn connect(websocket_url: &str, actor: &ActorSession) -> TestSocket {
         COOKIE,
         HeaderValue::from_str(&actor.cookie_header()).expect("valid synthetic Cookie"),
     );
-    let (socket, response) = connect_async(request)
+    let (mut socket, response) = connect_async(request)
         .await
         .expect("authenticated WebSocket upgrade");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    // Protocol 2 starts with `hello`; the server answers `ready`.
     socket
+        .send(Message::Text(r#"{"type":"hello"}"#.into()))
+        .await
+        .expect("hello");
+    loop {
+        let frame = timeout(Duration::from_secs(3), socket.next())
+            .await
+            .expect("ready deadline")
+            .expect("open WebSocket stream")
+            .expect("valid WebSocket message");
+        if let Message::Text(text) = frame {
+            let frame: Value = serde_json::from_str(text.as_str()).expect("frame");
+            if frame["type"] == "ready" {
+                return socket;
+            }
+        }
+    }
+}
+
+/// What a socket said next, passing presence, typing and access frames by.
+#[derive(Debug)]
+enum Next {
+    /// A durable event's envelope.
+    Event(Value),
+    /// Anything else that isn't a frame: a close, the end, an error.
+    Other(Option<Result<Message, WebSocketError>>),
+    /// Nothing in time.
+    Quiet,
+}
+
+async fn next(socket: &mut TestSocket, within: Duration) -> Next {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match tokio::time::timeout_at(deadline, socket.next()).await {
+            Err(_) => return Next::Quiet,
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(text.as_str()).expect("frame");
+                if frame["type"] == "event" {
+                    return Next::Event(frame["event"].clone());
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+            Ok(other) => return Next::Other(other),
+        }
+    }
 }
 
 async fn receive_event(socket: &mut TestSocket) -> Value {
-    let delivered = timeout(Duration::from_secs(3), socket.next())
-        .await
-        .expect("realtime event deadline")
-        .expect("open WebSocket stream")
-        .expect("valid WebSocket message");
-    let Message::Text(delivered) = delivered else {
-        panic!("expected a realtime text event, got {delivered:?}");
-    };
-    serde_json::from_str(delivered.as_str()).expect("decode realtime event")
+    match next(socket, Duration::from_secs(3)).await {
+        Next::Event(event) => event,
+        other => panic!("expected a realtime event, got {other:?}"),
+    }
 }
 
 async fn assert_no_delivery(socket: &mut TestSocket, description: &str) {
-    match timeout(Duration::from_millis(400), socket.next()).await {
-        Err(_) => {}
-        Ok(other) => panic!("unexpected delivery for {description}: {other:?}"),
+    match next(socket, Duration::from_millis(400)).await {
+        Next::Quiet => {}
+        other => panic!("unexpected delivery for {description}: {other:?}"),
     }
 }
 
 async fn assert_closed_or_suppressed(socket: &mut TestSocket, description: &str) {
-    match timeout(Duration::from_millis(500), socket.next()).await {
-        Err(_) | Ok(None) | Ok(Some(Ok(Message::Close(_)))) => {}
-        Ok(Some(Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed))) => {}
-        Ok(other) => panic!("revoked {description} still received realtime data: {other:?}"),
+    match next(socket, Duration::from_millis(500)).await {
+        Next::Quiet | Next::Other(None | Some(Ok(Message::Close(_)))) => {}
+        Next::Other(Some(Err(
+            WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed,
+        ))) => {}
+        other => panic!("revoked {description} still received realtime data: {other:?}"),
     }
 }
 
 async fn assert_socket_closed(socket: &mut TestSocket, description: &str) {
-    let closed = timeout(Duration::from_secs(2), socket.next())
-        .await
-        .expect("session revocation close deadline");
-    match closed {
-        None | Some(Ok(Message::Close(_))) => {}
-        Some(Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed)) => {}
+    match next(socket, Duration::from_secs(2)).await {
+        Next::Other(None | Some(Ok(Message::Close(_)))) => {}
+        Next::Other(Some(Err(
+            WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed,
+        ))) => {}
         other => panic!("{description} did not close the WebSocket: {other:?}"),
     }
 }

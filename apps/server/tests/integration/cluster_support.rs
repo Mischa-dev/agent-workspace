@@ -131,31 +131,25 @@ impl Instance {
         }
     }
 
-    /// A browser's realtime socket on this instance.
+    /// A browser's realtime socket on this instance, past `ready` (protocol
+    /// 2, the only one since K5.15; no resume).
     pub(crate) async fn socket(&self, browser: &Browser) -> Socket {
-        use tokio_tungstenite::tungstenite::{
-            client::IntoClientRequest,
-            http::{
-                HeaderValue,
-                header::{COOKIE, ORIGIN},
-            },
-        };
-        let url = format!(
-            "{}/api/v1/realtime",
-            self.base.replacen("http://", "ws://", 1)
-        );
-        let mut request = url.into_client_request().expect("socket request");
-        request
-            .headers_mut()
-            .insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:3100"));
-        request.headers_mut().insert(
-            COOKIE,
-            HeaderValue::from_str(&browser.cookie).expect("cookie"),
-        );
-        tokio_tungstenite::connect_async(request)
-            .await
-            .expect("socket")
-            .0
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let mut socket = self.socket_v2(browser, None).await;
+        loop {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                .await
+                .expect("ready deadline")
+                .expect("open socket")
+                .expect("valid frame");
+            if let Message::Text(text) = frame {
+                let frame: serde_json::Value = serde_json::from_str(&text).expect("frame");
+                if frame["type"] == "ready" {
+                    return socket;
+                }
+            }
+        }
     }
 
     /// A browser's protocol 2 socket on this instance (K5.9), having said

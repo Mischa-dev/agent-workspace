@@ -634,6 +634,10 @@ async fn frame_of(
             Frame::Json(frame) if frame["type"] == kind || frame["kind"] == kind => {
                 return Some(frame);
             }
+            // A durable event, inside protocol 2's `event` frame.
+            Frame::Json(frame) if frame["type"] == "event" && frame["event"]["type"] == kind => {
+                return Some(frame["event"].clone());
+            }
             Frame::Json(_) => {}
             Frame::Closed | Frame::Nothing => return None,
         }
@@ -818,8 +822,8 @@ async fn private_conversation_events_stay_private_on_both() {
         let mut heard_public = false;
         while let Frame::Json(frame) = next_frame(socket, Duration::from_secs(2)).await {
             assert!(!frame.to_string().contains(&group), "Rook heard {frame}");
-            if frame["type"] == "conversation.message.created"
-                && frame["conversationId"] == channel.to_string()
+            if frame["event"]["type"] == "conversation.message.created"
+                && frame["event"]["conversationId"] == channel.to_string()
             {
                 heard_public = true;
                 break;
@@ -878,15 +882,11 @@ async fn streamed_text_crosses_instances() {
         },
     )
     .await;
-    let frame = frame_of(&mut on_b, "message.delta", Duration::from_secs(2))
+    let frame = frame_of(&mut on_b, "stream.delta", Duration::from_secs(2))
         .await
         .expect("the delta reached B's socket");
-    assert_eq!(
-        frame["payload"]["message_id"],
-        message.to_string(),
-        "{frame}"
-    );
-    assert_eq!(frame["payload"]["delta"], "Hel", "{frame}");
+    assert_eq!(frame["messageId"], message.to_string(), "{frame}");
+    assert_eq!(frame["delta"], "Hel", "{frame}");
     cluster.finish().await;
 }
 
@@ -1408,7 +1408,7 @@ async fn removed_member_stops_hearing_at_once() {
     assert!(
         !heard
             .iter()
-            .any(|frame| frame["conversationId"] == channel.to_string()),
+            .any(|frame| frame["event"]["conversationId"] == channel.to_string()),
         "Mara heard the project she left: {heard:?}"
     );
     cluster.finish().await;
@@ -1454,8 +1454,8 @@ async fn added_to_private_conversation_starts_hearing() {
     let heard = heard_until(&mut mara_on_b, channel).await;
     assert!(
         heard.iter().any(|frame| {
-            frame["type"] == "conversation.message.created"
-                && frame["conversationId"] == group.to_string()
+            frame["event"]["type"] == "conversation.message.created"
+                && frame["event"]["conversationId"] == group.to_string()
         }),
         "Mara never heard the group she was added to: {heard:?}"
     );
