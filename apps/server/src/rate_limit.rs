@@ -76,6 +76,20 @@ pub static MCP_AUTH: Bucket = exact("mcp.auth", 600, MINUTE);
 /// can't flood one.
 pub static MODULE_PANELS: Bucket = chunked("modules.panels", 120, MINUTE, 10);
 pub static RUN_REPORTS: Bucket = chunked("runs.reports", 100, Duration::from_secs(5), 5);
+/// A run's streamed reply (A1.17), per run credential: kept apart from
+/// [`MCP_AUTH`] so live words never starve the run's own tool calls. Hosts
+/// gather words for a moment, so 20 a second is room to spare.
+pub static RUN_STREAMS: Bucket = exact("runs.stream", 1200, MINUTE);
+/// A run's streamed reply, per agent account: a host can fetch its run's
+/// start again for a fresh credential, so the per-credential budget alone
+/// doesn't hold a run back. One account's runs share 20 pieces a second.
+pub static RUN_STREAM_ACCOUNTS: Bucket = exact("runs.stream.account", 1200, MINUTE);
+/// The streamed words one workspace's runs send, in bytes: 2 MiB a minute
+/// is dozens of runs answering at once, and caps what one workspace's hosts
+/// put through the live connections everyone shares.
+pub const RUN_STREAM_BYTES_PER_MINUTE: u32 = 2 * 1024 * 1024;
+pub static RUN_STREAM_BYTES: Bucket =
+    exact("runs.stream.bytes", RUN_STREAM_BYTES_PER_MINUTE, MINUTE);
 /// Tokens that didn't resolve, across every caller. Valid tokens never
 /// spend it; while it's spent, only tokens that authenticated lately are
 /// looked up.
@@ -383,10 +397,45 @@ impl RateLimiters {
             .await
     }
 
+    /// [`Self::check_mcp_auth`] for a piece of a run's streamed reply,
+    /// charged to its own budget.
+    pub async fn check_run_stream(&self, untrusted_token: &str) -> Result<(), AppError> {
+        self.check_token(&RUN_STREAMS, untrusted_token).await
+    }
+
+    /// Once the credential named its run: the piece is charged to the run's
+    /// agent and its bytes to the run's workspace, whichever credential of
+    /// the run sent it.
+    pub async fn check_run_stream_of(
+        &self,
+        account_id: Uuid,
+        workspace_id: Uuid,
+        bytes: usize,
+    ) -> Result<(), AppError> {
+        self.limits
+            .check(&RUN_STREAM_ACCOUNTS, LimitKey::Account(account_id))
+            .await?;
+        self.limits
+            .check_cost(
+                &RUN_STREAM_BYTES,
+                LimitKey::Workspace(workspace_id),
+                u32::try_from(bytes).unwrap_or(u32::MAX).max(1),
+            )
+            .await
+    }
+
     /// Before a bearer token is looked up: charged to the token. While
     /// tokens that didn't resolve have spent the shared budget, only a token
     /// that authenticated lately is looked up.
     pub async fn check_mcp_auth(&self, untrusted_token: &str) -> Result<(), AppError> {
+        self.check_token(&MCP_AUTH, untrusted_token).await
+    }
+
+    async fn check_token(
+        &self,
+        bucket: &'static Bucket,
+        untrusted_token: &str,
+    ) -> Result<(), AppError> {
         let key = digest(untrusted_token);
         if let Some(retry_after) = self
             .limits
@@ -399,7 +448,7 @@ impl RateLimiters {
         {
             return Err(AppError::rate_limited(retry_after));
         }
-        self.limits.check(&MCP_AUTH, LimitKey::Secret(&key)).await
+        self.limits.check(bucket, LimitKey::Secret(&key)).await
     }
 
     /// A bearer token that didn't resolve.
@@ -760,6 +809,9 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&MCP_AUTH, LimitScope::Credential),
     (&MODULE_PANELS, LimitScope::Account),
     (&RUN_REPORTS, LimitScope::Account),
+    (&RUN_STREAMS, LimitScope::Credential),
+    (&RUN_STREAM_ACCOUNTS, LimitScope::Account),
+    (&RUN_STREAM_BYTES, LimitScope::Workspace),
     (&MCP_AUTH_FAILURES, LimitScope::ServerFailuresOnly),
     (&OAUTH_CEREMONIES, LimitScope::Client),
     (&OAUTH_CEREMONY_SENDERS, LimitScope::Address),

@@ -421,6 +421,19 @@ impl RunReporter {
         read(response)
     }
 
+    /// Words of the agent's reply as they arrive (see [`crate::StreamDelta`]).
+    pub async fn stream(&self, delta: &crate::StreamDelta) -> Result<(), ClientError> {
+        let response = self
+            .send_as_agent(
+                "POST",
+                &format!("/api/v1/host/runs/{}/stream", self.run_id),
+                Vec::new(),
+                Some(json_body(delta)?),
+            )
+            .await?;
+        read::<Value>(response).map(drop)
+    }
+
     /// Tokens used, under a key of the host's own.
     pub async fn usage(
         &self,

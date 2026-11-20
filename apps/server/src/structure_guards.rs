@@ -173,6 +173,13 @@ pub(crate) const RULES: &[Rule] = &[
         count: listen_outside_wake,
     },
     Rule {
+        id: "server_runs_agents",
+        agents_rule: "A1 guard G10, \"The server does not run agents\" (the built-in host \
+                      does, in `crates/builtin-host`, started from `hosts/builtin/`)",
+        ceiling: SERVER_RUNS_AGENTS_CEILING,
+        count: server_runs_agents,
+    },
+    Rule {
         id: "transactions_across_calls",
         agents_rule: "rule 14, \"Built for cheap hosting\" (no transaction held across a \
                       network call)",
@@ -194,8 +201,8 @@ const ACCOUNT_KIND_CHECKS_CEILING: usize = 192;
 const RUST_ROLE_CHECKS_CEILING: usize = 36;
 const ACCESS_BYPASSES_CEILING: usize = 67;
 const ACCOUNT_KIND_STRINGS_CEILING: usize = 48;
-const AGENT_RUNS_SQL_CEILING: usize = 111;
-const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 6;
+const AGENT_RUNS_SQL_CEILING: usize = 105;
+const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 5;
 const CONVERSATION_INSERTS_CEILING: usize = 6;
 const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
@@ -223,6 +230,8 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // across the provider calls on purpose, so removal can't race attachment
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
+// A1.17 (G10): set to today's total when the guard landed.
+const SERVER_RUNS_AGENTS_CEILING: usize = 62;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is
@@ -500,6 +509,28 @@ pub(crate) fn process_state(source: &str) -> usize {
 /// it).
 pub(crate) fn background_spawns(source: &str) -> usize {
     in_code(source, |line| line.matches("tokio::spawn(").count())
+}
+
+/// The server reaching into what runs agents (A1 guard G10): the harness
+/// layer (`crate::provider`, or a `provider::` path brought in by a `use`),
+/// the worktree code (`git_runtime`) or a child process (`Command::new`).
+/// The embedded host's spawn point (`hosts/builtin/`) and the harness layer
+/// itself are left out by [`counts`].
+pub(crate) fn server_runs_agents(source: &str) -> usize {
+    in_code(source, |line| {
+        let bare_provider_paths = line
+            .match_indices("provider::")
+            .filter(|(index, _)| {
+                !line[..*index].bytes().next_back().is_some_and(|byte| {
+                    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
+                })
+            })
+            .count();
+        line.matches("crate::provider").count()
+            + bare_provider_paths
+            + line.matches("git_runtime").count()
+            + line.matches("Command::new(").count()
+    })
 }
 
 /// Provider names in core strings. The adapters themselves (`provider/`,
@@ -781,6 +812,13 @@ fn exempt(rule: &str, path: &str) -> bool {
         }
         // The address module is where links are built (rule 13).
         "hand_built_links" => path == "addresses.rs" || path.starts_with("addresses/"),
+        // The embedded host's spawn point and the harness layer it drives
+        // (A1 guard G10).
+        "server_runs_agents" => {
+            path.starts_with("hosts/builtin/")
+                || path.starts_with("provider/")
+                || path == "provider.rs"
+        }
         // The one listener (K5.4); its own connection, never the pool's.
         "listen_outside_wake" => path == "realtime/wake.rs",
         _ => false,
@@ -1038,6 +1076,20 @@ mod tests {
             eprintln!("hint: {hint}");
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// A1 guard G10: the built-in host never depends on the server; the
+    /// server gives it what it needs through its traits and the protocol.
+    #[test]
+    fn the_built_in_host_does_not_depend_on_the_server() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/builtin-host/Cargo.toml");
+        let manifest =
+            std::fs::read_to_string(manifest).expect("read the built-in host's manifest");
+        assert!(
+            !manifest.contains("agent-workspace-server"),
+            "crates/builtin-host must not depend on the server crate"
+        );
     }
 
     /// C1.2: a thread is made only by `conversations/threads.rs` (and the

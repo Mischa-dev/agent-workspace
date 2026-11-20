@@ -4,7 +4,7 @@
 //! carried, as any host reports. The built-in host's own step names
 //! (`command_started`, `run_failed`, ...) travel in `payload.step`.
 
-use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter};
+use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter, StreamDelta};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
@@ -44,6 +44,12 @@ fn unavailable(error: ClientError) -> AppError {
 }
 
 impl RunReports {
+    /// The client the reports go through, for the host's other calls made
+    /// while the run goes (its plan windows).
+    pub fn client(&self) -> &HostClient {
+        &self.client
+    }
+
     /// The reports of the run `start_command_id` started.
     pub async fn for_start(
         client: HostClient,
@@ -205,18 +211,27 @@ impl RunReports {
         Ok(())
     }
 
-    /// Tokens a turn used.
-    pub async fn usage(
-        &self,
-        report_key: &str,
-        model: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-    ) -> Result<(), AppError> {
+    /// Tokens a turn used, and what the harness says they cost (US dollars)
+    /// when it does; the server prices the rest from the workspace's
+    /// catalog. `report_key` is the same on a retry.
+    pub async fn usage(&self, report_key: &str, usage: &Usage<'_>) -> Result<(), AppError> {
+        let mut fields = json!({
+            "reportKey": report_key,
+            "model": usage.model,
+            "inputTokens": usage.input_tokens,
+            "outputTokens": usage.output_tokens,
+            "cachedInputTokens": usage.cached_input_tokens,
+        });
+        if let Some(cost) = usage
+            .cost_usd
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        {
+            fields["cost"] = json!(cost);
+            fields["currency"] = json!("USD");
+        }
         self.call(
             "run_usage_report",
-            json!({"reportKey": report_key, "model": model,
-                   "inputTokens": input_tokens, "outputTokens": output_tokens}),
+            fields,
             &format!(
                 "usage-{}",
                 short(&format!("{}-{report_key}", self.run_id.simple()))
@@ -225,6 +240,33 @@ impl RunReports {
         .await?;
         Ok(())
     }
+}
+
+impl RunReports {
+    /// Words of the reply as they arrive, shown live and never stored. A
+    /// piece that isn't taken is gone; the finished reply still arrives.
+    pub async fn stream(&self, stream_id: Uuid, delta: String) -> Result<(), AppError> {
+        let delta = StreamDelta { stream_id, delta };
+        let reporter = self.reporter.lock().await.clone();
+        match reporter.stream(&delta).await {
+            Err(ClientError::Refused(401, _)) => {
+                let fresh = Self::fresh(&self.client, self.run_id, self.start_command_id).await?;
+                *self.reporter.lock().await = fresh.clone();
+                fresh.stream(&delta).await.map_err(unavailable)
+            }
+            other => other.map_err(unavailable),
+        }
+    }
+}
+
+/// One turn's tokens on one model.
+#[derive(Clone, Copy, Debug)]
+pub struct Usage<'a> {
+    pub model: &'a str,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cost_usd: Option<f64>,
 }
 
 /// The idempotency key of a batch of a run's activities: it names them, so

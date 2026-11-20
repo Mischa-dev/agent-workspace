@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/agents/register", post(register_route))
         .route("/api/v1/host/runs", post(adopt_route))
         .route("/api/v1/host/runs/{run_id}/model", post(model_route))
+        .route("/api/v1/host/runs/{run_id}/stream", post(stream_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
         .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
@@ -223,11 +224,20 @@ async fn heartbeat_route(
 /// A1.24: the plan windows of the accounts the host described.
 async fn windows_route(
     State(state): State<AppState>,
+    builtin: Option<Extension<BuiltinCaller>>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<super::windows::WindowsReport>,
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
+    use super::windows::{Reporter, report};
+    if builtin.is_some() {
+        protocol_header(&headers)?;
+        // The built-in host, calling in process, about accounts of every
+        // workspace.
+        crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
+        return Ok(Json(report(&state, Reporter::Builtin, request).await?));
+    }
     let host = host_caller(&state, &headers).await?;
-    Ok(Json(super::windows::report(&state, &host, request).await?))
+    Ok(Json(report(&state, Reporter::Host(&host), request).await?))
 }
 
 /// A2.26: a run the host started itself, adopted once.
@@ -266,6 +276,28 @@ async fn model_route(
     match crate::tenancy::system("hosts.protocol", turn).await {
         Ok(reply) => Json(reply).into_response(),
         Err(refusal) => refusal.into_response(),
+    }
+}
+
+/// A1.17: a run's reply as it arrives, shown live and never stored.
+async fn stream_route(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+    ApiJson(delta): ApiJson<agent_workspace_host_protocol::StreamDelta>,
+) -> Result<(StatusCode, Json<Value>), HostError> {
+    let token = bearer(&headers).ok_or(HostError::Unauthorized)?;
+    state.rate_limits.check_run_stream(token).await?;
+    // The run's credential is read before its account is known, as the
+    // other host calls read theirs.
+    let delta = super::stream::delta(&state, token, run_id, delta);
+    match crate::tenancy::system("hosts.protocol", delta).await {
+        Ok(()) => Ok((StatusCode::ACCEPTED, Json(json!({})))),
+        Err(HostError::Unauthorized) => {
+            state.rate_limits.note_mcp_auth_failure().await;
+            Err(HostError::Unauthorized)
+        }
+        Err(error) => Err(error),
     }
 }
 

@@ -15,47 +15,6 @@ pub const MAX_MESSAGE_WORK_ITEM_REFERENCES: usize = 32;
 /// person who can see the conversation (notifications.rs).
 pub const EVERYONE_MENTION_PATTERN: &str = r"(^|[^[:alnum:]_@])@(everyone|here)($|[^[:alnum:]_])";
 
-/// Incrementally validates provider-authored plain text against the same
-/// boundary used for durable Message content. A fragment is checked before it
-/// is appended, so rejected output is never exposed through realtime or later
-/// persisted by a caller using this buffer.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct PlainTextMessageBuffer {
-    text: String,
-    scalar_values: usize,
-}
-
-impl PlainTextMessageBuffer {
-    pub fn push(&mut self, fragment: &str) -> Result<(), MessageContentError> {
-        if fragment.chars().any(unsupported_control_character) {
-            return Err(MessageContentError::UnsupportedControlCharacter);
-        }
-        let scalar_values = self
-            .scalar_values
-            .checked_add(fragment.chars().count())
-            .ok_or(MessageContentError::TextTooLong)?;
-        if scalar_values > MAX_MESSAGE_TEXT_CHARACTERS {
-            return Err(MessageContentError::TextTooLong);
-        }
-
-        self.text.push_str(fragment);
-        self.scalar_values = scalar_values;
-        Ok(())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.text
-    }
-
-    pub fn scalar_values(&self) -> usize {
-        self.scalar_values
-    }
-
-    pub fn into_validated(self) -> Result<ValidatedMessageContent, MessageContentError> {
-        MessageContent::from_plain_text(self.text)
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MessageContent {
@@ -353,7 +312,7 @@ fn valid_actor_handle(handle: &str) -> bool {
 mod tests {
     use super::{
         MAX_MESSAGE_MENTIONS, MAX_MESSAGE_NODES, MAX_MESSAGE_TEXT_CHARACTERS, MessageContent,
-        MessageContentError, MessageNode, PlainTextMessageBuffer,
+        MessageContentError, MessageNode,
     };
     use uuid::Uuid;
 
@@ -580,25 +539,5 @@ mod tests {
             MessageContent::from_plain_text(format!("{exact}🙂")),
             Err(MessageContentError::TextTooLong)
         );
-    }
-
-    #[test]
-    fn streaming_buffer_rejects_a_fragment_before_mutating_safe_text() {
-        let mut buffer = PlainTextMessageBuffer::default();
-        buffer.push("safe\n").expect("safe provider fragment");
-        let accepted = buffer.as_str().to_owned();
-
-        assert_eq!(
-            buffer.push("unsafe\u{0000}"),
-            Err(MessageContentError::UnsupportedControlCharacter)
-        );
-        assert_eq!(buffer.as_str(), accepted);
-
-        buffer
-            .push(&"x".repeat(MAX_MESSAGE_TEXT_CHARACTERS - buffer.scalar_values()))
-            .expect("fill exact provider boundary");
-        assert_eq!(buffer.scalar_values(), MAX_MESSAGE_TEXT_CHARACTERS);
-        assert_eq!(buffer.push("🙂"), Err(MessageContentError::TextTooLong));
-        assert_eq!(buffer.scalar_values(), MAX_MESSAGE_TEXT_CHARACTERS);
     }
 }

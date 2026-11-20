@@ -79,7 +79,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
         &[
             "server.rs",
             "scheduler.rs",
-            "recovery.rs",
+            "hosts/builtin/recovery.rs",
+            "hosts/builtin/report.rs",
             "launch.rs",
             "runs/liveness.rs",
             "runs/usage.rs",

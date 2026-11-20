@@ -1421,6 +1421,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/runs/{run_id}/model",
         HostCredential
     ),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/runs/{run_id}/stream",
+        HostCredential
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),

@@ -7,14 +7,15 @@ use uuid::Uuid;
 
 use std::sync::Arc;
 
+use agent_workspace_builtin_host::runtime::turn;
+
 use crate::{
     AppState,
     domain::RunState,
     error::AppError,
     git_runtime::worktree_is_dirty,
     hosts::builtin::report::{self, RunReports},
-    message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
-    realtime::RealtimeEvent,
+    message_content::{MessageContent, MessageContentError, ValidatedMessageContent},
 };
 
 pub mod catalog;
@@ -26,11 +27,11 @@ pub use agent_workspace_builtin_host::harness::{
     host, manifest, run_config, secret_fd,
 };
 
+use adapter::RecoveredTurn;
 pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
     ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
-use adapter::{HarnessAnswer, HarnessEvent, HarnessRequest, ItemKind, RecoveredTurn, RequestKind};
 pub use ceremonies::{LoginCeremonyError, LoginCeremonySnapshot, LoginReservation};
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
 pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
@@ -43,15 +44,7 @@ pub struct StartedProviderRun {
     pub provider_thread_id: String,
 }
 
-#[derive(Debug)]
-pub(crate) enum ProviderRecovery {
-    Completed { message: String },
-    Resumed { latest_turn_status: String },
-    UnboundTurn,
-    MismatchedTurn,
-    RejectedMessage,
-    Unavailable,
-}
+pub(crate) use agent_workspace_builtin_host::runtime::recovery::HarnessRecovery as ProviderRecovery;
 
 /// The provider account behind an execution profile, and the adapter that
 /// runs it.
@@ -200,7 +193,6 @@ const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 pub async fn start_run(
     state: &AppState,
     reports: Arc<RunReports>,
-    project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
     execution_profile_id: Uuid,
@@ -373,9 +365,7 @@ pub async fn start_run(
         state,
         reports,
         provider,
-        project_id,
         run_id,
-        conversation_id,
         provider_thread_id.clone(),
         turn_id,
     );
@@ -386,40 +376,42 @@ pub async fn start_run(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_drive(
     state: &AppState,
     reports: Arc<RunReports>,
     provider: Box<dyn HarnessSession>,
-    project_id: Uuid,
     run_id: Uuid,
-    conversation_id: Uuid,
     thread_for_task: String,
     turn_id: String,
 ) {
-    let background_state = state.clone();
+    let host = BuiltinTurns {
+        state: state.clone(),
+        reports,
+    };
     // The turn outlives the request or job that started it, and its scope.
     tokio::spawn(crate::tenancy::system("runs.host", async move {
-        if let Err(error) = drive_turn(
-            background_state.clone(),
-            Arc::clone(&reports),
-            provider,
-            project_id,
+        // The model a turn's tokens were on when the harness doesn't say.
+        let model =
+            crate::runs::usage::builtin_scope_of(crate::db::scoped(&host.state.pool), run_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|scope| scope.model);
+        let turn = turn::Turn {
             run_id,
-            conversation_id,
-            thread_for_task,
+            provider_thread_id: thread_for_task,
             turn_id,
-        )
-        .await
-        {
+            model,
+        };
+        if let Err(error) = turn::drive(&host, &host.reports, provider, turn).await {
             tracing::error!(
                 error_category = error.log_category(),
                 %run_id,
                 "agent turn failed"
             );
             fail_run_reliably(
-                &background_state,
-                &reports,
+                &host.state,
+                &host.reports,
                 run_id,
                 "The agent's turn failed. The worktree was preserved.",
             )
@@ -428,22 +420,73 @@ fn spawn_drive(
     }));
 }
 
+/// The built-in host's own record of its runs, for the turn engine: their
+/// detail rows, worktrees and sessions, kept in this server's database until
+/// the host has a store of its own (A1.17 phase B).
+struct BuiltinTurns {
+    state: AppState,
+    reports: Arc<RunReports>,
+}
+
+impl turn::TurnHost for BuiltinTurns {
+    type Error = AppError;
+
+    fn harnesses(&self) -> &agent_workspace_builtin_host::harness::registry::SupervisorRegistry {
+        &self.state.supervisors
+    }
+
+    async fn phase(&self, run_id: Uuid) -> Result<turn::RunPhase, AppError> {
+        Ok(
+            match crate::runs::builtin::state_of(crate::db::scoped(&self.state.pool), run_id)
+                .await?
+            {
+                None => turn::RunPhase::Gone,
+                Some(RunState::Interrupted) => turn::RunPhase::Interrupted,
+                Some(state) if state.is_terminal() => turn::RunPhase::Ended,
+                Some(_) => turn::RunPhase::Going,
+            },
+        )
+    }
+
+    async fn blocked(&self, run_id: Uuid) -> Result<(), AppError> {
+        let mut transaction = crate::db::scoped_tx(&self.state.pool).await?;
+        crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Blocked, None)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn go_on(&self, run_id: Uuid) -> Result<(), AppError> {
+        crate::hosts::builtin::driver::go_on(&self.state, &self.reports, run_id).await
+    }
+
+    async fn stop_unanswered(&self, run_id: Uuid, approval: bool) -> Result<(), AppError> {
+        crate::hosts::builtin::driver::stop_unanswered(&self.state, &self.reports, run_id, approval)
+            .await
+    }
+
+    async fn fail(&self, run_id: Uuid, reason: &'static str) -> Result<(), AppError> {
+        fail_run(&self.state, &self.reports, run_id, reason).await
+    }
+
+    async fn complete(&self, run_id: Uuid, reply: &str) -> Result<(), AppError> {
+        complete_run(&self.state, &self.reports, run_id, reply, None).await
+    }
+}
+
 /// After a restart, a turn still running where it runs (a cloud task) is
 /// followed again instead of being interrupted. Returns whether it was.
 pub(crate) async fn follow_recovered_run(
     state: &AppState,
-    fence: crate::recovery::HostFence<'_>,
+    fence: crate::hosts::builtin::recovery::HostFence<'_>,
     run_id: Uuid,
     worktree: PathBuf,
 ) -> Result<bool, AppError> {
-    let Some((project_id, conversation_id, provider_thread_id, execution_profile_id, turn_id)) =
-        sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, String)>(
+    let Some((provider_thread_id, execution_profile_id, turn_id)) =
+        sqlx::query_as::<_, (String, Uuid, String)>(
             r#"
-            SELECT c.project_id, ar.conversation_id, ps.provider_thread_id,
-                   ar.execution_profile_id, ar.provider_turn_id
-            -- visibility: the run worker reads its own run's conversation
+            SELECT ps.provider_thread_id, ar.execution_profile_id, ar.provider_turn_id
             FROM agent_runs ar
-            JOIN conversations c ON c.id = ar.conversation_id
             JOIN provider_sessions ps ON ps.id = ar.provider_session_id
             WHERE ar.id = $1 AND ar.provider_turn_id IS NOT NULL
             "#,
@@ -483,7 +526,7 @@ pub(crate) async fn follow_recovered_run(
     }
     let reports = Arc::new(report::open(state, run_id).await?);
     // Following took a while: take the run back only while the host is ours.
-    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
+    let mut transaction = crate::hosts::builtin::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
     reports.moved("working", None).await?;
@@ -491,9 +534,7 @@ pub(crate) async fn follow_recovered_run(
         state,
         reports,
         provider,
-        project_id,
         run_id,
-        conversation_id,
         provider_thread_id,
         turn_id,
     );
@@ -677,7 +718,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
 
 pub(crate) async fn complete_recovered_run(
     state: &AppState,
-    fence: crate::recovery::HostFence<'_>,
+    fence: crate::hosts::builtin::recovery::HostFence<'_>,
     run_id: Uuid,
     message: &str,
     previous_state: &str,
@@ -697,7 +738,7 @@ pub(crate) async fn complete_recovered_run(
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let reports = report::open(state, run_id).await?;
-    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
+    let mut transaction = crate::hosts::builtin::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
     if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
@@ -722,298 +763,6 @@ struct RecoveryCompletion<'a> {
     previous_state: &'a str,
     worktree_state: &'a str,
     dirty: bool,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn drive_turn(
-    state: AppState,
-    reports: Arc<RunReports>,
-    mut provider: Box<dyn HarnessSession>,
-    project_id: Uuid,
-    run_id: Uuid,
-    conversation_id: Uuid,
-    provider_thread_id: String,
-    turn_id: String,
-) -> Result<(), AppError> {
-    // Losing the built-in host's lease stops this turn like a shutdown does:
-    // the run stays as it is for the next holder to recover (K5.3).
-    let _active = state.supervisors.turn_started();
-    let lease_lost = state.supervisors.host_lease_lost();
-    let stopping = || state.supervisors.is_shutting_down() || lease_lost.is_cancelled();
-    let mut message = PlainTextMessageBuffer::default();
-    let message_stream_id = Uuid::now_v7();
-    loop {
-        tokio::select! {
-            event = provider.next_event() => {
-                let event = match event {
-                    Ok(event) => event,
-                    Err(error) => {
-                        if !stopping() {
-                            sleep(Duration::from_millis(100)).await;
-                        }
-                        if stopping() {
-                            provider.shutdown().await;
-                            return Ok(());
-                        }
-                        return Err(provider_error(run_id, "read event", error));
-                    }
-                };
-                match event {
-                    HarnessEvent::Request(request) => handle_provider_request(
-                        &state,
-                        &reports,
-                        &mut provider,
-                        run_id,
-                        request,
-                        &lease_lost,
-                    ).await?,
-                    HarnessEvent::MessageDelta(delta) => {
-                        if let Err(error) = message.push(&delta) {
-                            provider.shutdown().await;
-                            return Err(provider_message_error(run_id, error));
-                        }
-                        // To the conversation's sockets on every instance (K5.5).
-                        crate::realtime::ephemeral::stream_delta(&state, RealtimeEvent {
-                            event_id: Uuid::now_v7(),
-                            kind: "message.delta",
-                            project_id,
-                            conversation_id: Some(conversation_id),
-                            payload: json!({
-                                "message_id": message_stream_id,
-                                "agent_run_id": run_id,
-                                "delta": delta
-                            }),
-                        }).await;
-                    }
-                    HarnessEvent::ItemStarted(event)
-                        if event.kind == ItemKind::CommandExecution => {
-                        record_step(&reports, &event, "command_started", true).await?;
-                    }
-                    HarnessEvent::ItemCompleted(event)
-                        if event.kind == ItemKind::CommandExecution => {
-                        record_step(&reports, &event, "command_completed", true).await?;
-                    }
-                    HarnessEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
-                        record_step(&reports, &event, "file_change", true).await?;
-                    }
-                    HarnessEvent::ItemCompleted(event)
-                        if event.kind == ItemKind::Other && event.detail.tool.is_some() => {
-                        record_step(&reports, &event, "tool_used", false).await?;
-                    }
-                    HarnessEvent::TurnCompleted { completed } => {
-                        if !completed {
-                            return Err(AppError::Conflict(
-                                "provider",
-                                "the agent's turn did not complete successfully",
-                            ));
-                        }
-                        complete_run(
-                            &state,
-                            &reports,
-                            run_id,
-                            message.as_str(),
-                            None,
-                        ).await?;
-                        return Ok(());
-                    }
-                    HarnessEvent::Error => {
-                        return Err(AppError::Conflict("provider", "the harness reported an error"));
-                    }
-                    HarnessEvent::UsageUpdated(report) => {
-                        crate::usage::record_run_report(&state, provider.account_id(), report).await;
-                    }
-                    HarnessEvent::TokensUsed(usage) => {
-                        crate::run_log::record_tokens(&state, run_id, usage).await;
-                    }
-                    HarnessEvent::Note(text) => {
-                        if !text.trim().is_empty() {
-                            let key = format!("note:{}", Uuid::now_v7());
-                            reports.step(
-                                &key,
-                                "agent_note",
-                                &crate::run_log::cap(&crate::run_log::redact(text.trim()), 160),
-                                crate::run_log::note_payload(&text),
-                                false,
-                            ).await?;
-                        }
-                    }
-                    HarnessEvent::Plan(items) => {
-                        let items = items
-                            .iter()
-                            .map(|item| json!({
-                                "title": crate::run_log::cap(&crate::run_log::redact(&item.title), 500),
-                                "status": item.status,
-                            }))
-                            .collect::<Vec<_>>();
-                        let key = format!("plan:{}", Uuid::now_v7());
-                        reports.step(&key, "plan", "The plan.", json!({ "items": items }), false).await?;
-                    }
-                    HarnessEvent::ItemStarted(_)
-                    | HarnessEvent::ItemCompleted(_)
-                    | HarnessEvent::Ignored => {}
-                }
-            }
-            // Stop arrives as a wake on the control channel from whichever
-            // server took it (`hosts::builtin::transition`); the check every
-            // second is the safety net for a lost wake or no listener.
-            () = stop_wake(&state) => {
-                if stopping() {
-                    provider.shutdown().await;
-                    return Ok(());
-                }
-                if provider.is_stopping() {
-                    provider.shutdown().await;
-                    fail_run(
-                        &state,
-                        &reports,
-                        run_id,
-                        "The account this run used was signed out. Its worktree was kept.",
-                    ).await?;
-                    return Ok(());
-                }
-                let run_state = sqlx::query_scalar::<_, String>(
-                    "SELECT state FROM agent_runs WHERE id = $1",
-                )
-                .bind(run_id)
-                .fetch_one(crate::db::scoped(&state.pool))
-                .await?;
-                if run_state == "interrupted" {
-                    let _ = provider.interrupt_turn(&provider_thread_id, &turn_id).await;
-                    return Ok(());
-                }
-            }
-            () = state.supervisors.shutdown_requested() => {
-                provider.shutdown().await;
-                return Ok(());
-            }
-            () = lease_lost.cancelled() => {
-                provider.shutdown().await;
-                return Ok(());
-            }
-        }
-    }
-}
-
-/// Wait until a stopped run should be looked at: a wake on the control
-/// channel, or a second at most.
-async fn stop_wake(state: &AppState) {
-    tokio::select! {
-        () = sleep(Duration::from_secs(1)) => {}
-        () = state.supervisors.lease_released() => {}
-    }
-}
-
-async fn handle_provider_request(
-    state: &AppState,
-    reports: &RunReports,
-    provider: &mut Box<dyn HarnessSession>,
-    run_id: Uuid,
-    request: HarnessRequest,
-    lease_lost: &tokio_util::sync::CancellationToken,
-) -> Result<(), AppError> {
-    if request.kind == RequestKind::Unsupported {
-        provider
-            .answer(request, HarnessAnswer::Deny)
-            .await
-            .map_err(|error| {
-                provider_error(run_id, "reject unsupported provider request", error)
-            })?;
-        return Ok(());
-    }
-    let approval = request.kind == RequestKind::Approval;
-    let options = request
-        .options
-        .iter()
-        .map(|option| (option.id.clone(), option.label.clone()))
-        .collect::<Vec<_>>();
-    // A1.14, A1.16: the ask is an `interrupt` the run reports, which opens
-    // a request; whoever may answer it is told.
-    let asked = crate::hosts::builtin::requests::interrupt(
-        &request.durable_id,
-        if approval {
-            crate::hosts::builtin::requests::Ask::Approval
-        } else {
-            crate::hosts::builtin::requests::Ask::Question
-        },
-        &request.summary,
-        &options,
-    );
-    // Raised first: a run shown blocked always has what it waits on.
-    let request_id = reports.raise(asked).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Blocked, None).await?;
-    transaction.commit().await?;
-
-    // The answer comes to the host as an `answer` command; the driver reads
-    // it with the run's credential. The wake on the control channel is the
-    // prompt; the one-second check is the safety net.
-    loop {
-        tokio::select! {
-            () = sleep(Duration::from_secs(1)) => {}
-            () = state.supervisors.lease_released() => {}
-            () = lease_lost.cancelled() => {}
-        }
-        if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
-            let _ = provider.answer(request, HarnessAnswer::Deny).await;
-            provider.shutdown().await;
-            return Ok(());
-        }
-        if provider.is_stopping() {
-            let _ = provider.answer(request, HarnessAnswer::Deny).await;
-            provider.shutdown().await;
-            fail_run(
-                state,
-                reports,
-                run_id,
-                "The account this run used was signed out. Its worktree was kept.",
-            )
-            .await?;
-            return Ok(());
-        }
-        use crate::hosts::builtin::requests::Outcome;
-        let stopped = crate::runs::builtin::state_of(crate::db::scoped(&state.pool), run_id)
-            .await?
-            .is_none_or(|state| state == RunState::Interrupted);
-        let outcome = if stopped {
-            Outcome::Interrupted
-        } else {
-            reports.outcome(request_id).await?
-        };
-        let answer = match outcome {
-            Outcome::Waiting => continue,
-            Outcome::Interrupted => {
-                provider
-                    .answer(request, HarnessAnswer::Deny)
-                    .await
-                    .map_err(|error| {
-                        provider_error(run_id, "decline interrupted request", error)
-                    })?;
-                return Ok(());
-            }
-            Outcome::Approve => HarnessAnswer::Approve,
-            Outcome::Deny => HarnessAnswer::Deny,
-            Outcome::Text(text) => HarnessAnswer::Text(text),
-        };
-        // An approval denied, or a request nobody answered, stops the run.
-        if matches!(answer, HarnessAnswer::Deny) {
-            crate::hosts::builtin::driver::stop_unanswered(state, reports, run_id, approval)
-                .await?;
-        } else {
-            crate::hosts::builtin::driver::go_on(state, reports, run_id).await?;
-            if crate::runs::builtin::state_of(crate::db::scoped(&state.pool), run_id)
-                .await?
-                .is_none_or(|state| state.is_terminal())
-            {
-                let _ = provider.answer(request, HarnessAnswer::Deny).await;
-                return Ok(());
-            }
-        }
-        provider
-            .answer(request, answer)
-            .await
-            .map_err(|error| provider_error(run_id, "answer provider request", error))?;
-        return Ok(());
-    }
 }
 
 async fn complete_run(
@@ -1115,39 +864,6 @@ async fn complete_run(
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
     transaction.commit().await?;
     Ok(())
-}
-
-/// Reports one step of a run with its redacted detail, and the tests its
-/// output reported as a step of their own.
-async fn record_step(
-    reports: &RunReports,
-    item: &crate::provider::adapter::HarnessItem,
-    kind: &str,
-    in_thread: bool,
-) -> Result<(), AppError> {
-    let payload = crate::run_log::item_payload(item);
-    let summary = crate::run_log::step_summary(kind, &item.detail);
-    let tests = payload.get("tests").cloned();
-    let mut steps = vec![report::activity(
-        &item.key, kind, &summary, payload, in_thread,
-    )];
-    if let (Some(tests), "command_completed") = (tests, kind) {
-        let passed = tests["passed"].as_u64().unwrap_or(0);
-        let failed = tests["failed"].as_u64().unwrap_or(0);
-        let summary = if failed == 0 {
-            format!("Tests passed: {passed}")
-        } else {
-            format!("Tests failed: {failed} of {}", passed + failed)
-        };
-        steps.push(report::activity(
-            &format!("{}:tests", item.key),
-            "test_result",
-            &summary,
-            json!({ "tests": tests, "command": item.detail.command.as_deref().map(|command| crate::run_log::cap(&crate::run_log::redact(command), 2_000)) }),
-            false,
-        ));
-    }
-    Ok(reports.activities(steps).await?)
 }
 
 /// Attempts at failing a run whose turn failed before leaving it to
@@ -1273,12 +989,19 @@ fn provider_error(run_id: Uuid, operation: &'static str, error: impl std::fmt::D
 fn validated_worker_message(
     message: &str,
 ) -> Result<Option<ValidatedMessageContent>, MessageContentError> {
-    let mut buffer = PlainTextMessageBuffer::default();
-    buffer.push(message)?;
-    if buffer.as_str().trim().is_empty() {
-        return Ok(None);
+    // Only blanks is no message at all, unless a blank is a control
+    // character a message refuses.
+    if message.trim().is_empty() {
+        return if message
+            .chars()
+            .all(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+        {
+            Ok(None)
+        } else {
+            Err(MessageContentError::UnsupportedControlCharacter)
+        };
     }
-    buffer.into_validated().map(Some)
+    MessageContent::from_plain_text(message).map(Some)
 }
 
 fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError {
@@ -1297,6 +1020,14 @@ mod tests {
     };
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
     use crate::provider::adapter::RecoveredTurn;
+
+    #[test]
+    fn a_streamed_reply_is_bounded_as_a_message_is() {
+        assert_eq!(
+            agent_workspace_builtin_host::runtime::reply::MAX_REPLY_CHARACTERS,
+            MAX_MESSAGE_TEXT_CHARACTERS
+        );
+    }
 
     #[test]
     fn worker_messages_share_unicode_and_control_boundaries() {

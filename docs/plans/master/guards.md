@@ -24,6 +24,7 @@ the last column are not separate guards: those slices point here and extend this
 | `conversation_inserts`, `message_inserts`, `task_core_updates`, `direct_tool_calls` | 4 | P0.26 | C1.2 (threads only in `conversations/threads.rs`), K2.6 (`call_tool_direct`) | C1 guards 1, 2; K2 guard 3 |
 | `task_view_code` | 4 | T1.1 | T1.39 | T1 guard 1 |
 | `process_state`, `background_spawns` | 5 | P0.26 | K5.1 (adds `broadcast::channel`, `tokio::fs`, reason and bound per entry) | K5 guard 2 (`process_local.rs`) |
+| `server_runs_agents` | A1 G10 | A1.17 | A1.17 step (c) (the server stops depending on `crates/builtin-host`) | A1 G10 |
 | `session_advisory_locks`, `pooler_safe_sql`, `listen_outside_wake`, `transactions_across_calls` | 14 | K5.17 (planned for K5.2; built with K5.17's transaction scan) | K5; A2 for the WorkOS agent binding (`auth/workos/agents.rs`, 3) | K5 guard 3; R24 rule 3 |
 | `nothing_per_workspace` (10,000 idle workspaces) | 14 | H1 (its R24 slice) | H1 | R24 rule 6 |
 | `link_tables`, `comment_tables` | 6 | P0.26 | K3.21, C1.3 | K3 guard 4; C1 guard 2 |

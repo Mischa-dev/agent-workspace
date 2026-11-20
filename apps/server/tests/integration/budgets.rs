@@ -451,3 +451,69 @@ async fn a_budget_on_a_dm_stays_with_its_members() {
     assert!(!listed.to_string().contains(&dm), "{listed}");
     world.finish().await;
 }
+
+/// A2.14 on the built-in host: a new built-in run is refused once its
+/// agent's hard budget on what runs use is spent, as a run on any other
+/// host is.
+#[tokio::test]
+async fn a_spent_run_budget_refuses_a_built_in_run_too() {
+    let Some(world) = crate::support::two_workspaces::two_workspaces("budgets_builtin").await
+    else {
+        return;
+    };
+    let (worker, account, workspace, space, conversation) =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Uuid)>(
+            "SELECT run.execution_worker_id, worker.actor_id, project.organization_id, \
+                    project.id, run.conversation_id \
+             FROM agent_runs run \
+             JOIN execution_workers worker ON worker.id = run.execution_worker_id \
+             JOIN projects project ON project.id = worker.project_id \
+             WHERE run.id = $1",
+        )
+        .bind(world.a.run)
+        .fetch_one(&world.pool)
+        .await
+        .expect("the built-in run's agent");
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
+                                   period, hard_limit, set_by_actor_id) \
+         VALUES ($1, $2, 'account', $3, false, 'reported_tokens', 'day', 0, $3)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(account)
+    .execute(&world.pool)
+    .await
+    .expect("a spent budget");
+    // The built-in host opens runs of every workspace, as its scheduler does.
+    let refused = agent_workspace_server::tenancy::system("runs.host", async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+            .await
+            .expect("transaction");
+        agent_workspace_server::runs::builtin::open(
+            &mut transaction,
+            &agent_workspace_server::runs::builtin::NewBuiltinRun {
+                id: Uuid::now_v7(),
+                project_id: space,
+                execution_worker_id: worker,
+                prompt: "Another go",
+                from_request: false,
+                conversation_id: conversation,
+                requested_by: account,
+                sponsored_by: None,
+                predecessor_run_id: None,
+                settings: &json!({}),
+            },
+        )
+        .await
+    })
+    .await;
+    assert!(
+        matches!(
+            refused,
+            Err(agent_workspace_server::error::AppError::LimitReached(_))
+        ),
+        "{refused:?}"
+    );
+    world.finish().await;
+}
