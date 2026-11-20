@@ -45,6 +45,7 @@ docker build -f deploy/container/Containerfile -t agent-workspace .
 ```
 
 from the repository root. The image carries the server, the built web app,
-`/app/NOTICE` and `/app/THIRD-PARTY-NOTICES`. The `Image` workflow builds it
+`/app/NOTICE`, `/app/THIRD-PARTY-NOTICES` (Rust crates) and
+`/app/THIRD-PARTY-NOTICES-WEB` (web packages), each with its licence. The `Image` workflow builds it
 for amd64 and arm64 on a release tag (and on demand), starts it with this
 Compose file to check it gets ready, and on a tag publishes it.

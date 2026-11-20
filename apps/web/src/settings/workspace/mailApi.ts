@@ -56,6 +56,8 @@ export type ServerStatus = {
   /** The event log: events waiting for a position, and events a consumer parked. Older servers leave it out. */
   eventLog?: { waiting: number; oldestWaitingSeconds: number; parked: number }
   instances?: ServerInstance[]
+  /** A release newer than this build, when the release feed names one. */
+  newerRelease?: { version: string; notesUrl: string | null }
 }
 
 /** A server process sharing the database: what it does and the leases it holds. */

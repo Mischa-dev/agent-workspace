@@ -86,8 +86,17 @@ jobs:
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y --no-install-recommends postgresql-client-18 age
           pg_dump --version
+      # The service's own role is a superuser, and row rules never bind a
+      # superuser: the checks connect as a plain role instead, as the server
+      # does, so the tests prove every query keeps to its workspace (H1.63).
+      - name: A database role bound by row rules
+        run: |
+          psql -d "${CI_DATABASE_BASE}/postgres" -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE aw_app LOGIN PASSWORD 'aw_app' CREATEDB NOSUPERUSER NOBYPASSRLS" \
+            -c "GRANT pg_signal_backend TO aw_app"
       - name: Checks
         env:
+          CI_DATABASE_BASE: postgres://aw_app:aw_app@127.0.0.1:5432
           AREAS: ${{ steps.changes.outputs.areas || 'rust,web' }}
           # The budget step prints each asset limit's change against this.
           BUDGET_BASE_SHA: ${{ github.event.pull_request.base.sha }}

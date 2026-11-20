@@ -135,7 +135,9 @@ async fn host_caller(state: &AppState, headers: &HeaderMap) -> Result<HostRow, H
     let token = bearer(headers).ok_or(HostError::Unauthorized)?;
     state.rate_limits.check_mcp_auth(token).await?;
     protocol_header(headers)?;
-    protocol::authenticate(&state.pool, token).await
+    let host = protocol::authenticate(&state.pool, token).await?;
+    crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
+    Ok(host)
 }
 
 /// The host a call about one command comes from: the caller's own, or, for
@@ -150,6 +152,9 @@ async fn command_caller(
         return host_caller(state, headers).await;
     }
     protocol_header(headers)?;
+    // The built-in host, calling in process: its commands are of every
+    // workspace, as any host's are.
+    crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
     let mut transaction = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(AppError::from)?;
@@ -171,6 +176,19 @@ async fn command_caller(
 }
 
 async fn enrol_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<protocol::EnrolRequest>,
+) -> Result<(StatusCode, Json<protocol::Enrolled>), HostError> {
+    // The one-time code, not a session, names the workspace: it is known only once the code is read.
+    crate::tenancy::system(
+        "hosts.protocol",
+        Box::pin(enrol_route_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn enrol_route_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<protocol::EnrolRequest>,
@@ -213,6 +231,9 @@ async fn windows_route(
     use super::windows::{Reporter, report};
     if builtin.is_some() {
         protocol_header(&headers)?;
+        // The built-in host, calling in process, about accounts of every
+        // workspace.
+        crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
         return Ok(Json(report(&state, Reporter::Builtin, request).await?));
     }
     let host = host_caller(&state, &headers).await?;
@@ -249,7 +270,10 @@ async fn model_route(
     if let Err(error) = state.rate_limits.check_mcp_auth(token).await {
         return error.into_response();
     }
-    match super::builtin::assistant::model_turn(&state, token, run_id, turn).await {
+    // The run's credential is read before its account is known, as the
+    // other host calls read theirs.
+    let turn = super::builtin::assistant::model_turn(&state, token, run_id, turn);
+    match crate::tenancy::system("hosts.protocol", turn).await {
         Ok(reply) => Json(reply).into_response(),
         Err(refusal) => refusal.into_response(),
     }
@@ -264,7 +288,10 @@ async fn stream_route(
 ) -> Result<(StatusCode, Json<Value>), HostError> {
     let token = bearer(&headers).ok_or(HostError::Unauthorized)?;
     state.rate_limits.check_run_stream(token).await?;
-    match super::stream::delta(&state, token, run_id, delta).await {
+    // The run's credential is read before its account is known, as the
+    // other host calls read theirs.
+    let delta = super::stream::delta(&state, token, run_id, delta);
+    match crate::tenancy::system("hosts.protocol", delta).await {
         Ok(()) => Ok((StatusCode::ACCEPTED, Json(json!({})))),
         Err(HostError::Unauthorized) => {
             state.rate_limits.note_mcp_auth_failure().await;
@@ -326,6 +353,7 @@ async fn commands_route(
         // A1.16: the built-in host, for every workspace at once; it reads
         // in process and never waits here.
         protocol_header(&headers)?;
+        crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
         let after = query.after.unwrap_or(0).max(0);
         return Ok(Json(commands::due_builtin(&state.pool, after).await?).into_response());
     }
@@ -365,9 +393,13 @@ fn command_stream(
                 if tokio::time::Instant::now() >= until {
                     return None;
                 }
-                let listed = commands::long_poll(&state.pool, &host, after, 15)
-                    .await
-                    .ok()?;
+                // Polled outside the request that opened it.
+                let listed = crate::tenancy::system(
+                    "hosts.protocol",
+                    commands::long_poll(&state.pool, &host, after, 15),
+                )
+                .await
+                .ok()?;
                 after = listed.next;
                 // Popped from the end, so queued newest first.
                 queued = listed

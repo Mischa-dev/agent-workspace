@@ -67,3 +67,15 @@
 .aw-meters__bar--near > span {
   background: var(--warning);
 }
+
+.aw-meters__limitform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.aw-meters__limitform .aw-field {
+  min-width: 8rem;
+}

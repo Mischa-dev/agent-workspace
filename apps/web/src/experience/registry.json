@@ -313,6 +313,13 @@
       "default": true
     },
     {
+      "id": "talk.typing",
+      "group": "talk",
+      "label": "Who is typing",
+      "description": "A line under the messages saying who is writing one now.",
+      "default": true
+    },
+    {
       "id": "talk.channel_memory",
       "group": "talk",
       "label": "Channel memory",
@@ -465,6 +472,13 @@
       "label": "Budgets",
       "description": "Limits on what an agent may use, on its card in settings.",
       "default": true
+    },
+    {
+      "id": "workspace.spend_limits",
+      "group": "workspace",
+      "label": "Spending limits",
+      "description": "Limits on what each account, space and conversation may spend, under Usage in settings.",
+      "default": true
     }
   ],
   "nouns": [
@@ -515,6 +529,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -557,6 +572,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -616,6 +632,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "workspace.my_work"
@@ -649,6 +666,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -695,6 +713,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -737,6 +756,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -785,6 +805,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -825,6 +846,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -873,6 +895,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -928,6 +951,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -960,6 +984,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",

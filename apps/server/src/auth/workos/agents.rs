@@ -889,12 +889,19 @@ mod tests {
         let seed = crate::seed::dev_seed(&pool, &app_config)
             .await
             .expect("WorkOS agent test operation");
-        let agent = crate::external_agents::provision(
-            &pool,
-            seed.project_id,
-            seed.human_actor_id,
-            "Test Agent",
-            "test_agent",
+        // Provisioned as the seeded person would, inside their scope.
+        let agent = crate::tenancy::scoped(
+            crate::tenancy::Tenancy::Member {
+                account: seed.human_actor_id,
+                workspaces: Some(vec![seed.organization_id]),
+            },
+            crate::external_agents::provision(
+                &pool,
+                seed.project_id,
+                seed.human_actor_id,
+                "Test Agent",
+                "test_agent",
+            ),
         )
         .await
         .expect("WorkOS agent test operation");
@@ -924,7 +931,7 @@ mod tests {
         };
         let mut token: Claims =
             serde_json::from_value(claims()).expect("WorkOS agent test operation");
-        let principal = grant(&state, &config, &token)
+        let principal = crate::tenancy::system("auth.credential", grant(&state, &config, &token))
             .await
             .expect("WorkOS agent test operation")
             .expect("WorkOS agent test operation");
@@ -933,7 +940,7 @@ mod tests {
         assert!(!principal.has_scope("events"));
         token.permissions = vec!["workspace:read".into()];
         assert!(
-            !grant(&state, &config, &token)
+            !crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .expect("WorkOS agent test operation")
@@ -941,7 +948,7 @@ mod tests {
         );
         token.permissions.clear();
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_none()
@@ -949,7 +956,7 @@ mod tests {
         token.permissions = vec!["workspace:read".into()];
         token.org_id = "org_wrong".into();
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_none()
@@ -960,7 +967,7 @@ mod tests {
             .await
             .expect("WorkOS agent test operation");
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_none()
@@ -977,7 +984,7 @@ mod tests {
             .await
             .expect("WorkOS agent test operation");
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_some()
@@ -993,7 +1000,7 @@ mod tests {
             .await
             .expect("WorkOS agent test operation");
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_none()
@@ -1009,7 +1016,7 @@ mod tests {
             .await
             .expect("WorkOS agent test operation");
         assert!(
-            grant(&state, &config, &token)
+            crate::tenancy::system("auth.credential", grant(&state, &config, &token))
                 .await
                 .expect("WorkOS agent test operation")
                 .is_none()

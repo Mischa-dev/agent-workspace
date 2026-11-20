@@ -45,26 +45,31 @@ vi.mock('../repositories/api', () => ({
 vi.mock('../projects/useRememberProjectLocation', () => ({
   useRememberProjectLocation: vi.fn(),
 }))
-vi.mock('./hooks', () => ({
-  useAssignableActors: vi.fn(),
-  useNamedActors: vi.fn(() => ({ data: [] })),
-  useCreateAcceptanceCriterion: vi.fn(),
-  useCreateWorkItem: vi.fn(),
-  useCreateWorkItemComment: vi.fn(),
-  useRemoveAcceptanceCriterion: vi.fn(),
-  useSetWorkItemArchived: vi.fn(),
-  useSetWorkItemPrimaryRepository: vi.fn(),
-  useSetWorkItemRepositoryLink: vi.fn(),
-  useSetWorkItemThreadLink: vi.fn(),
-  useUpdateAcceptanceCriterion: vi.fn(),
-  useUpdateWorkItem: vi.fn(),
-  useWorkItem: vi.fn(),
-  useWorkItems: vi.fn(),
-  useWorkItemWorkflow: vi.fn(),
-  useTaskFiles: vi.fn(),
-  taskFilesKey: vi.fn(),
-  useWorkItemTimeline: vi.fn(),
-}))
+vi.mock('./hooks', () => {
+  const useUpdateWorkItem = vi.fn()
+  return {
+    // Online, the queueable edit is the same save.
+    useQueueWorkItemUpdate: (...args: unknown[]) => useUpdateWorkItem(...args),
+    useAssignableActors: vi.fn(),
+    useNamedActors: vi.fn(() => ({ data: [] })),
+    useCreateAcceptanceCriterion: vi.fn(),
+    useCreateWorkItem: vi.fn(),
+    useCreateWorkItemComment: vi.fn(),
+    useRemoveAcceptanceCriterion: vi.fn(),
+    useSetWorkItemArchived: vi.fn(),
+    useSetWorkItemPrimaryRepository: vi.fn(),
+    useSetWorkItemRepositoryLink: vi.fn(),
+    useSetWorkItemThreadLink: vi.fn(),
+    useUpdateAcceptanceCriterion: vi.fn(),
+    useUpdateWorkItem,
+    useWorkItem: vi.fn(),
+    useWorkItems: vi.fn(),
+    useWorkItemWorkflow: vi.fn(),
+    useTaskFiles: vi.fn(),
+    taskFilesKey: vi.fn(),
+    useWorkItemTimeline: vi.fn(),
+  }
+})
 vi.mock('../launch/hooks', () => ({ useCreateLaunches: vi.fn(), useLaunchPlan: vi.fn() }))
 vi.mock('../projects/ProjectContextDrawer', () => ({
   ProjectContextDrawer: () => null,
@@ -434,9 +439,9 @@ describe('Work Item detail', () => {
     const prompt = [
       'Use the Agent Workspace MCP server.',
       `Project ID: ${projectId}`,
-      `Project URL: http://127.0.0.1:3100/projects/${projectId}`,
+      `Project URL: http://127.0.0.1:3100/w/-/s/${projectId}`,
       `Task ID: ${workItemId}`,
-      `Task URL: http://127.0.0.1:3100/projects/${projectId}/work-items/${workItemId}`,
+      `Task URL: http://127.0.0.1:3100/w/-/s/${projectId}/tasks/${workItemId}`,
       'Task key: AW-1',
       'Load the task and its project instructions through MCP before changing anything.',
       'Work in the repository matched by this Git origin. Set the task to In Progress only when meaningful work begins.',

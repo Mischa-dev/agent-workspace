@@ -24,7 +24,6 @@
 pub mod http;
 pub mod image;
 pub mod link;
-pub mod links;
 pub mod migrate;
 pub mod object;
 pub mod ops;
@@ -40,7 +39,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-pub use store::FileStore;
+pub use store::{FileStore, Readers};
 
 use crate::{
     AppState,
@@ -388,6 +387,8 @@ pub(crate) enum Destination {
     Conversation {
         project_id: Uuid,
         conversation_id: Uuid,
+        /// A DM or group (or a thread in one): only its members read it.
+        members_only: bool,
     },
     /// A task's own file, attached at once, or (`for_comment`) for a comment
     /// on it, attached when the comment is posted.
@@ -412,6 +413,27 @@ impl Destination {
             Self::Conversation { project_id, .. }
             | Self::Task { project_id, .. }
             | Self::Thing { project_id, .. } => project_id,
+        }
+    }
+
+    /// Who reads a file kept here, which decides the store it may go in.
+    pub(crate) fn readers(self) -> Readers {
+        match self {
+            Self::Conversation {
+                members_only: true, ..
+            } => Readers::Members,
+            Self::Conversation { .. } | Self::Task { .. } | Self::Thing { .. } => {
+                Readers::Workspace
+            }
+        }
+    }
+
+    /// For a message in `conversation`, as the caller locked it.
+    pub(crate) fn conversation(conversation: &crate::conversations::ConversationAccessRow) -> Self {
+        Self::Conversation {
+            project_id: conversation.place(),
+            conversation_id: conversation.id,
+            members_only: matches!(conversation.effective_kind(), "dm" | "group"),
         }
     }
 }
@@ -611,7 +633,7 @@ pub(crate) async fn store_upload(
     upload: Upload,
 ) -> Result<FileRow, AppError> {
     let prepared = prepare_upload(upload).await?;
-    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let staged = stage_prepared(state, destination, prepared).await?;
     let mut transaction = match crate::db::scoped_tx(&state.pool).await {
         Ok(transaction) => transaction,
         Err(error) => {
@@ -711,15 +733,16 @@ impl StagedUpload {
     }
 }
 
-/// Writes a prepared upload's bytes for a file in `project_id`, outside any
+/// Writes a prepared upload's bytes for a file in `destination`, outside any
 /// transaction: a full workspace or disk refuses first. Pair it with
 /// [`store_prepared`], or [`abandon_staged`] when no row will follow.
 pub(crate) async fn stage_prepared(
     state: &AppState,
-    project_id: Uuid,
+    destination: Destination,
     prepared: PreparedUpload,
 ) -> Result<StagedUpload, AppError> {
-    let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
+    let organization_id =
+        organization_of(crate::db::scoped(&state.pool), destination.project_id()).await?;
     let PreparedUpload {
         name,
         bytes,
@@ -742,7 +765,13 @@ pub(crate) async fn stage_prepared(
             0,
         )
         .await?;
-        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+        FileStore::for_uploads(
+            state,
+            &mut transaction,
+            organization_id,
+            destination.readers(),
+        )
+        .await?
     };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
@@ -901,7 +930,13 @@ pub(crate) async fn store_body(
             0,
         )
         .await?;
-        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+        FileStore::for_uploads(
+            state,
+            &mut transaction,
+            organization_id,
+            destination.readers(),
+        )
+        .await?
     };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
@@ -1167,7 +1202,11 @@ pub(crate) async fn require_room(
         crate::metering::Ask::new(organization_id, "storage_bytes", incoming_i64),
     )
     .await?;
+    // The watermark is the server's, so it counts every workspace's files:
+    // this one read is widened server-wide in the transaction in hand (a
+    // second connection could wait on a pool this caller already holds).
     // Link preview pictures live in the file store too, so they count.
+    let own_scope = crate::tenancy::widen_to_system(&mut *connection, "files.quota").await?;
     let all_bytes = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COALESCE(sum(bytes), 0)::bigint FROM (
@@ -1180,6 +1219,7 @@ pub(crate) async fn require_room(
     )
     .fetch_one(&mut *connection)
     .await?;
+    crate::tenancy::restore(&mut *connection, &own_scope).await?;
     let config = &state.config;
     // A fresh install may not have made its data folder yet.
     tokio::fs::create_dir_all(&config.data_root)
@@ -1506,6 +1546,11 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 /// Removes uploads nobody sent within a day, then deletes the bytes of
 /// removed files (and link preview images nothing shows any more).
 pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
+    // Removes unattached files in every workspace.
+    crate::tenancy::system("files.sweep", Box::pin(cleanup_here(state))).await
+}
+
+async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     sqlx::query(
         r#"
         UPDATE files SET removed_at = now(), removed_by_actor_id = uploaded_by_actor_id
@@ -1580,6 +1625,15 @@ pub(crate) async fn sweep_pending_objects(
     state: &AppState,
     store: &FileStore,
 ) -> Result<u64, AppError> {
+    // Removes unfinished uploads in every workspace.
+    crate::tenancy::system(
+        "files.sweep",
+        Box::pin(sweep_pending_objects_here(state, store)),
+    )
+    .await
+}
+
+async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Result<u64, AppError> {
     let due = sqlx::query_scalar::<_, String>(
         r#"
         SELECT storage_key FROM file_objects_pending

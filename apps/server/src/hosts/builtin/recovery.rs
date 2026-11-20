@@ -27,7 +27,12 @@ use crate::{
 /// completion is provable. Any ambiguous state terminates as interrupted while
 /// retaining the exact worktree.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
-    recovery::recover_runs(&Recovery { state, fence: None }).await
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(recovery::recover_runs(&Recovery { state, fence: None })),
+    )
+    .await
 }
 
 /// The built-in host's lease that recovery's writes are fenced by, so a
@@ -57,21 +62,37 @@ pub async fn reconcile_owned(
     cluster: &Cluster,
     lease: &Lease,
 ) -> Result<(), AppError> {
-    recovery::take_over(&Recovery {
-        state,
-        fence: Some((cluster, lease)),
-    })
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(recovery::take_over(&Recovery {
+            state,
+            fence: Some((cluster, lease)),
+        })),
+    )
     .await
 }
 
 pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {
-    recovery::inspect_worktrees(&Recovery { state, fence: None }).await
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(recovery::inspect_worktrees(&Recovery {
+            state,
+            fence: None,
+        })),
+    )
+    .await
 }
 
 /// What finished runs still asked for is withdrawn (their finish withdraws
 /// it; this catches any a crash left open).
 pub async fn withdraw_finished_run_requests(state: &AppState) -> Result<u64, AppError> {
-    Recovery { state, fence: None }.withdraw_requests().await
+    // Recovers runs of every workspace.
+    crate::tenancy::system("runs.host", async {
+        Recovery { state, fence: None }.withdraw_requests().await
+    })
+    .await
 }
 
 /// The built-in host's rows, as recovery reads and writes them.

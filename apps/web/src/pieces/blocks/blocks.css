@@ -1,0 +1,166 @@
+/* Panel blocks (W1.25): a module's panel drawn with the app's pieces. The
+   panel is its own container (`.aw-piece`), so a panel in a narrow slot
+   stacks the way it does on a phone. */
+
+.aw-blocks {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-block {
+  min-width: 0;
+}
+
+.aw-block__section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-block__heading {
+  margin: 0;
+  color: var(--content-fg);
+  font: var(--t-heading);
+}
+
+.aw-block__text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.aw-block__text.is-muted,
+.aw-block--unknown {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-block--unknown {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-block__text code {
+  font: var(--t-code-sm);
+}
+
+.aw-block__error {
+  display: block;
+}
+
+.aw-block__cancel {
+  margin-top: var(--space-2);
+}
+
+.aw-block__more {
+  margin-top: var(--space-2);
+}
+
+/* A list row that asks the module for something reads as a title, not a button. */
+.aw-block__rowbutton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.aw-block__rowbutton:hover {
+  text-decoration: underline;
+}
+
+td > .aw-block__rowbutton {
+  color: var(--link);
+  font-weight: var(--weight-medium);
+}
+
+.aw-block__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.aw-block__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-block__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-block__dot {
+  flex: none;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--content-fg-muted);
+}
+
+.aw-block__dot.is-success {
+  background: var(--success);
+}
+
+.aw-block__dot.is-agent {
+  background: var(--agent-working);
+}
+
+.aw-block__dot.is-warning {
+  background: var(--warning);
+}
+
+.aw-block__dot.is-danger {
+  background: var(--danger);
+}
+
+.aw-block__statustext {
+  display: grid;
+  flex: 1 1 12rem;
+  min-width: 0;
+  font: var(--t-ui);
+}
+
+.aw-block__detail {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-block__progress {
+  flex: 0 1 16rem;
+  min-width: 8rem;
+  height: var(--space-1-5);
+  accent-color: var(--accent);
+}
+
+.aw-block__figure {
+  margin: 0;
+  color: var(--content-fg);
+  font: var(--t-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-block__unit {
+  color: var(--content-fg-muted);
+  font: var(--t-ui);
+}
+
+.aw-block__number {
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-block__chart {
+  margin: 0;
+  min-width: 18rem;
+}
+
+.aw-block__caption {
+  margin-bottom: var(--space-1);
+  color: var(--content-fg-muted);
+  font: var(--t-caption-strong);
+}

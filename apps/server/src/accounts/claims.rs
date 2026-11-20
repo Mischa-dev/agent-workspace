@@ -259,6 +259,19 @@ struct ClaimRow {
 async fn accept_claim(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ApiJson(request): ApiJson<AcceptClaimRequest>,
+) -> Result<Response, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(accept_claim_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn accept_claim_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<AcceptClaimRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));

@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import type { Repository } from '../repositories/api'
 
 export type GitHubInstallationRepository = {
@@ -56,14 +57,12 @@ export function getGitHubStatus(projectId: string) {
   )
 }
 
-export function syncGitHubInstallation(
+export async function syncGitHubInstallation(
   projectId: string,
   input: { installationId: number; repositoryIds: string[] },
 ) {
-  return requestJson<GitHubStatus>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/sync`,
-    { method: 'POST', json: input },
-  )
+  await callOp('github_installation_link', { projectId, installationId: input.installationId, repositories: input.repositoryIds })
+  return getGitHubStatus(projectId)
 }
 
 export function getGitHubAutomationSettings(projectId: string) {
@@ -72,7 +71,7 @@ export function getGitHubAutomationSettings(projectId: string) {
   )
 }
 
-export function updateGitHubAutomationSettings(
+export async function updateGitHubAutomationSettings(
   projectId: string,
   input: {
     expectedVersion: number
@@ -80,10 +79,12 @@ export function updateGitHubAutomationSettings(
     pullRequestMergeEnabled: boolean
   },
 ) {
-  return requestJson<GitHubAutomationSettings>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/automation`,
-    { method: 'PUT', idempotencyKey: crypto.randomUUID(), json: input },
+  await callOp(
+    'github_automation_update',
+    { projectId, pullRequestOpen: input.pullRequestOpenEnabled, pullRequestMerge: input.pullRequestMergeEnabled },
+    { expectedVersion: input.expectedVersion },
   )
+  return getGitHubAutomationSettings(projectId)
 }
 
 // ---------------------------------------------------------------------------

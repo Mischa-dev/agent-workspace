@@ -20,11 +20,17 @@ use std::{
 use chrono::{DateTime, Utc};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use super::upkeep::FACT_DAYS;
-use crate::{AppState, error::AppError, files::store::FileStore, jobs::JobRegistry};
+use crate::{
+    AppState,
+    error::AppError,
+    files::store::{FileStore, Readers},
+    jobs::JobRegistry,
+};
 
 pub const ARCHIVE_KIND: &str = "events.archive";
 
@@ -37,6 +43,8 @@ const ROWS_PER_FILE: i64 = 20_000;
 const FILES_PER_RUN: usize = 50;
 /// The largest file a reader fetches back.
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// The most a cold file may unpack to.
+const MAX_UNPACKED_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// The log with the archived rows a reader has loaded, for a query's FROM.
 /// Rows retention hasn't deleted yet are in both: the live one wins.
@@ -55,6 +63,8 @@ pub struct Archive {
     pub last_at: DateTime<Utc>,
     pub store_id: String,
     pub object_key: String,
+    pub byte_size: i64,
+    pub sha256: Vec<u8>,
 }
 
 /// Write every due workspace's old facts to files, a bounded number per
@@ -98,6 +108,17 @@ pub async fn archive_due(state: &AppState) -> Result<usize, AppError> {
 /// Write one file of `workspace`'s facts older than `days`, from where its
 /// last file ended. Returns whether there was anything to write.
 pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Result<bool, AppError> {
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        Box::pin(archive_once_here(state, workspace, days)),
+    )
+    .await
+}
+
+async fn archive_once_here(state: &AppState, workspace: Uuid, days: i32) -> Result<bool, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let through = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT max(last_position) FROM event_archives WHERE workspace_id = $1",
@@ -139,7 +160,8 @@ pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Resul
     let mut things = rows.iter().filter_map(|row| row.2).collect::<Vec<_>>();
     things.sort_unstable();
     things.dedup();
-    let store = FileStore::for_uploads(state, &mut connection, workspace).await?;
+    let store =
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Workspace).await?;
     connection.commit().await?;
 
     let mut lines = Vec::new();
@@ -162,9 +184,9 @@ pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Resul
         r#"
         INSERT INTO event_archives (
             id, workspace_id, first_position, last_position, first_at, last_at,
-            row_count, thing_ids, store_id, object_key
+            row_count, thing_ids, store_id, object_key, byte_size, sha256
         )
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
         -- Another run got there first: its file stands, this one goes.
         WHERE NOT EXISTS (SELECT 1 FROM event_archives
                           WHERE workspace_id = $2 AND last_position >= $3)
@@ -180,6 +202,8 @@ pub async fn archive_once(state: &AppState, workspace: Uuid, days: i32) -> Resul
     .bind(&things)
     .bind(store.id())
     .bind(&key)
+    .bind(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
+    .bind(Sha256::digest(&bytes).to_vec())
     .execute(&mut *transaction)
     .await?
     .rows_affected();
@@ -203,7 +227,7 @@ pub async fn reaching_back(
     Ok(sqlx::query_as::<_, Archive>(
         r#"
         SELECT id, first_position, last_position, row_count, first_at, last_at,
-               store_id, object_key
+               store_id, object_key, byte_size, sha256
         FROM event_archives
         WHERE workspace_id = $1
           AND ($2::uuid IS NULL OR thing_ids @> ARRAY[$2::uuid])
@@ -224,15 +248,20 @@ pub async fn reaching_back(
 /// transaction.
 pub async fn fetch(state: &AppState, archive: &Archive) -> Result<Vec<Value>, AppError> {
     let store = FileStore::resolve(state, &archive.store_id).await?;
-    let bytes = store.read_all(&archive.object_key, MAX_FILE_BYTES).await?;
-    gunzip(&bytes)?
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            serde_json::from_slice(line)
-                .map_err(|_| AppError::Internal("an archived log file is damaged"))
-        })
-        .collect()
+    read_cold(
+        &store,
+        &archive.object_key,
+        archive.byte_size,
+        &archive.sha256,
+    )
+    .await?
+    .split(|byte| *byte == b'\n')
+    .filter(|line| !line.is_empty())
+    .map(|line| {
+        serde_json::from_slice(line)
+            .map_err(|_| AppError::Internal("an archived log file is damaged"))
+    })
+    .collect()
 }
 
 /// Puts fetched rows where [`WITH_ARCHIVED`] reads them, for the rest of
@@ -261,11 +290,42 @@ pub(crate) fn gzip(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
         .map_err(|_| AppError::Internal("an archive could not be compressed"))
 }
 
+/// Reads a cold file back only as it was written: exactly its recorded
+/// size from the store, its SHA-256 checked, then unpacked under
+/// [`MAX_UNPACKED_BYTES`]. A store that serves anything else is refused.
+pub(crate) async fn read_cold(
+    store: &FileStore,
+    key: &str,
+    byte_size: i64,
+    sha256: &[u8],
+) -> Result<Vec<u8>, AppError> {
+    let size = u64::try_from(byte_size)
+        .ok()
+        .filter(|size| *size <= MAX_FILE_BYTES)
+        .ok_or(AppError::Internal("an archive is damaged"))?;
+    let bytes = store.read_all(key, size).await?;
+    if u64::try_from(bytes.len()).ok() != Some(size) || Sha256::digest(&bytes).as_slice() != sha256
+    {
+        return Err(AppError::Internal("an archive is damaged"));
+    }
+    gunzip(&bytes)
+}
+
+/// Unpacks a cold file, refusing one that unpacks past
+/// [`MAX_UNPACKED_BYTES`].
 pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    gunzip_within(bytes, MAX_UNPACKED_BYTES)
+}
+
+fn gunzip_within(bytes: &[u8], limit: u64) -> Result<Vec<u8>, AppError> {
     let mut text = Vec::new();
     GzDecoder::new(bytes)
+        .take(limit + 1)
         .read_to_end(&mut text)
         .map_err(|_| AppError::Internal("an archive is damaged"))?;
+    if u64::try_from(text.len()).unwrap_or(u64::MAX) > limit {
+        return Err(AppError::Internal("an archive unpacks past its limit"));
+    }
     Ok(text)
 }
 
@@ -275,4 +335,20 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         Ok(())
     });
     registry.every(ARCHIVE_KIND, Duration::from_secs(6 * 60 * 60));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_that_unpacks_past_its_limit_is_refused() {
+        let packed = gzip(&[b'a'; 4096]).expect("gzip");
+        assert_eq!(gunzip_within(&packed, 4096).expect("fits").len(), 4096);
+        assert!(
+            gunzip_within(&packed, 4095).is_err(),
+            "one byte over is refused"
+        );
+        assert!(gunzip(b"not gzip").is_err(), "damaged input is refused");
+    }
 }

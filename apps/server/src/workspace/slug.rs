@@ -234,7 +234,7 @@ async fn by_slug_http(
 ) -> Result<Json<BySlugView>, AppError> {
     let caller = principal.caller()?;
     let slug = slug.trim().to_ascii_lowercase();
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     if RESERVED.contains(&slug.as_str()) || !well_formed(&slug) {
         return Err(AppError::NotFound("workspace"));
     }

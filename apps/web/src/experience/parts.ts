@@ -44,6 +44,7 @@ export const PART_IDS = [
   'channel.details',
   'talk.sidebar_sections',
   'talk.replies',
+  'talk.typing',
   'talk.channel_memory',
   'thing.comments',
   'page.live_editing',
@@ -66,6 +67,7 @@ export const PART_IDS = [
   'workspace.runs',
   'workspace.hosts',
   'workspace.budgets',
+  'workspace.spend_limits',
 ] as const
 
 export type PartId = (typeof PART_IDS)[number]

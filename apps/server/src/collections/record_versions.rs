@@ -148,6 +148,19 @@ pub async fn restore(
     let Some(collection) = super::lock(transaction, space_id, collection_id).await? else {
         return Ok(Restored::NotFound);
     };
+    // A two-way relation's pair locks come before the record's row lock,
+    // as in `records::write`: an edit from the other side holds the pair and
+    // then waits for this record.
+    let definitions = super::field_definitions(transaction, space_id, collection.id, true).await?;
+    let ids = definitions
+        .iter()
+        .map(|field| field.id.to_string())
+        .collect::<Vec<_>>();
+    super::relations::lock_pairs(
+        transaction,
+        super::relations::pair_locks(space_id, &definitions, ids.iter().map(String::as_str)),
+    )
+    .await?;
     let now = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM collection_records WHERE id = $1 FOR UPDATE",
     )
@@ -167,7 +180,6 @@ pub async fn restore(
             "That version is how the record is now.".to_owned(),
         ));
     }
-    let definitions = super::field_definitions(transaction, space_id, collection.id, true).await?;
     let written = records::write(
         transaction,
         space_id,

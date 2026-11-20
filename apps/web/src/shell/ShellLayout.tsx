@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { Outlet, useMatches } from 'react-router-dom'
 
+import RouteReadyMarks from '../app/routeReady'
 import type { RouteHandle } from '../app/routes'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
@@ -66,6 +67,8 @@ export function ShellLayout() {
       <ShellFrame {...presence} space={route.space} user={session.user}>
         {outlet}
       </ShellFrame>
+      {/* Each page's time to content, for the speed test and telemetry (W1.33). */}
+      <RouteReadyMarks />
     </ShellPresenceContext.Provider>
   )
 }

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
 import { queryKeys } from '../../api/queryKeys'
+import { ListPiece } from '../../pieces/ListPiece'
 import { listRepositories } from '../../repositories/api'
 import {
   Banner,
@@ -503,27 +504,31 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
               ; those use the default.
             </p>
           ))}
-          <ul aria-label="Rows to import" className="aw-mywork__list">
-            {preview.rows.map((row) => (
-              <li className="aw-mywork__row" key={row.index}>
-                <Checkbox
-                  checked={!row.skip}
-                  disabled={Boolean(row.skip && row.skip !== 'Left out')}
-                  label={<span className={row.parent !== null ? 'aw-import__child' : undefined}>{row.title || '(no title)'}</span>}
-                  onChange={(checked) =>
-                    setOption({ excludedRows: checked ? [...excluded].filter((index) => index !== row.index) : [...excluded, row.index] })
-                  }
-                />
-                <span className="aw-mywork__meta">
-                  {row.skip && row.skip !== 'Left out' ? <StatusChip>{row.skip}</StatusChip> : null}
-                  {row.status ? <span>{row.status}</span> : null}
-                  {row.labels.length ? <span>{row.labels.join(', ')}</span> : null}
-                  {row.milestone ? <span>{row.milestone}</span> : null}
-                  {row.dueDate ? <span>Due {dueDate(row.dueDate)}</span> : null}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <ListPiece
+            aside={(row) => (
+              <>
+                {row.skip && row.skip !== 'Left out' ? <StatusChip>{row.skip}</StatusChip> : null}
+                {row.status ? <span>{row.status}</span> : null}
+                {row.labels.length ? <span>{row.labels.join(', ')}</span> : null}
+                {row.milestone ? <span>{row.milestone}</span> : null}
+                {row.dueDate ? <span>Due {dueDate(row.dueDate)}</span> : null}
+              </>
+            )}
+            density="compact"
+            itemKey={(row) => String(row.index)}
+            items={preview.rows}
+            label="Rows to import"
+            title={(row) => (
+              <Checkbox
+                checked={!row.skip}
+                disabled={Boolean(row.skip && row.skip !== 'Left out')}
+                label={<span className={row.parent !== null ? 'aw-import__child' : undefined}>{row.title || '(no title)'}</span>}
+                onChange={(checked) =>
+                  setOption({ excludedRows: checked ? [...excluded].filter((index) => index !== row.index) : [...excluded, row.index] })
+                }
+              />
+            )}
+          />
           {preview.total > preview.rowsShown ? (
             <p className="aw-mywork__none">
               Showing the first {preview.rowsShown.toLocaleString()} of {preview.total.toLocaleString()}.

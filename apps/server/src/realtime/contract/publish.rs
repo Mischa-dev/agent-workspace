@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use super::{
     live::{Publish, PublishBody, SIGNATURE_HEADER},
@@ -83,9 +84,22 @@ fn stale_audiences(route: &Route) -> Vec<Audience> {
     audiences
 }
 
+/// The session a `session.revoked` signal says was signed out.
+fn session_revoked(event: &LoggedEvent) -> Option<Uuid> {
+    (event.event_type == crate::events::catalog::SESSION_REVOKED.name)
+        .then(|| event.payload.get("sessionId")?.as_str()?.parse().ok())
+        .flatten()
+}
+
 /// What a logged event publishes: its frame for its audiences, then, when
 /// it changes who may hear what, `ticket.stale` for those it may change.
 pub(crate) fn of_logged(event: &LoggedEvent) -> Vec<Publish> {
+    if let Some(session) = session_revoked(event) {
+        return vec![Publish::Revoke {
+            session,
+            position: Some(event.position),
+        }];
+    }
     if let Some(account) = access_changed(event) {
         return vec![Publish::Stale {
             audiences: vec![Audience::Account(account)],
@@ -171,7 +185,10 @@ pub(crate) fn of_ephemeral(frame: &EphemeralFrame) -> Vec<Publish> {
             frame: wire::stream_delta(*conversation, payload),
         }],
         EphemeralFrame::SessionRevoked { session } => {
-            vec![Publish::Revoke { session: *session }]
+            vec![Publish::Revoke {
+                session: *session,
+                position: None,
+            }]
         }
         // Each watcher drops its own connection's cursor by `connection`.
         EphemeralFrame::Awareness {

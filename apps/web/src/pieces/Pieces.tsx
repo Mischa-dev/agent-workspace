@@ -6,6 +6,7 @@ import type { FieldValue, Piece, Thing, ThingDecl } from '../modules/contract'
 import { fieldOf, fieldText, isLink, isMoment, rawValue, words } from './fields'
 import type { FormField, FormValues } from './formFields'
 import { FormPiece } from './FormPiece'
+import { ListPiece as Rows } from './ListPiece'
 import { Markdown } from '../ui/markdown'
 import './pieces.css'
 
@@ -184,21 +185,26 @@ function Empty({ decl }: { decl: ThingDecl }) {
 
 function ListPiece({ decl, label, piece, things }: PieceProps) {
   if (!things.length) return <Empty decl={decl} />
+  const grouped = groups(piece, decl, things)
   return (
     <section aria-label={label}>
-      {groups(piece, decl, things).map((group) => (
+      {grouped.map((group) => (
         <div className="aw-piece__group" key={group.key}>
           {group.title ? <h3 className="aw-piece__group-title">{group.title}</h3> : null}
-          <ul className="aw-piece__rows">
-            {group.things.map((thing) => (
-              // Each row can be linked to, as #<kind>-<id>.
-              <li className="aw-piece__row" id={`${thing.kind}-${thing.id}`} key={thing.id}>
-                <ThingTitle thing={thing} />
+          <Rows
+            itemKey={(thing) => thing.id}
+            items={group.things}
+            label={group.title || label}
+            meta={(thing) => (
+              <>
                 <Meta decl={decl} piece={piece} summaries={false} thing={thing} />
                 <Summaries decl={decl} piece={piece} thing={thing} />
-              </li>
-            ))}
-          </ul>
+              </>
+            )}
+            // Each row can be linked to, as #<kind>-<id>.
+            rowId={(thing) => `${thing.kind}-${thing.id}`}
+            title={(thing) => <ThingTitle thing={thing} />}
+          />
         </div>
       ))}
     </section>

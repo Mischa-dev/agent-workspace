@@ -718,10 +718,7 @@ impl Operation for RunActivityReport {
                 space_id: call.ctx.space_id,
                 direct: None,
             };
-            let mut connection = call
-                .state
-                .pool
-                .acquire()
+            let mut connection = crate::db::scoped_tx(&call.state.pool)
                 .await
                 .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
             access_shim::check(

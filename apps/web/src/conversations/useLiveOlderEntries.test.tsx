@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createLiveStore, type LiveState } from '../realtime/liveStore'
-import { RealtimeContext, type RealtimeContextValue } from '../realtime/realtimeContext'
+import { NO_LIVE_CONTROLS, RealtimeContext, type RealtimeContextValue } from '../realtime/realtimeContext'
 import { normalizeTimelinePage } from './api'
 import type { MessageUpdates } from './liveMessages'
 import type { ConversationTimelineEntry } from './types'
@@ -47,6 +47,7 @@ let realtime: RealtimeContextValue = {
   connection: 'live',
   resyncGeneration: 1,
   live: createLiveStore(),
+  controls: NO_LIVE_CONTROLS,
 }
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -75,7 +76,7 @@ describe('live older timeline pages', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
-    realtime = { connection: 'live', resyncGeneration: 1, live: createLiveStore() }
+    realtime = { connection: 'live', resyncGeneration: 1, live: createLiveStore(), controls: NO_LIVE_CONTROLS }
   })
 
   it('keeps a removal after its live event expires even when the message fetch fails', async () => {

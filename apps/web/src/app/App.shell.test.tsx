@@ -204,7 +204,7 @@ describe('App shell and Project navigation', () => {
     expect(window.location.pathname).toBe(
       `/w/mischa/s/${projectAId}/threads/${threadId}`,
     )
-  })
+  }, 20_000) // Two full starts and a sign-in: the one test here that needs longer than the default.
 
   it('serializes a navigation conflict retry with the newest expected version', async () => {
     const projectCId = '019fb600-0000-7000-8000-000000000088'

@@ -2059,9 +2059,12 @@ async fn sql_permission_helpers_hold_to_the_base_role() {
     let allowing = |actor: Uuid, permission: Permission| {
         let pool = setup.pool.clone();
         async move {
-            projects_allowing(&pool, actor, &[project], permission)
-                .await
-                .expect("projects allowing")
+            crate::support::as_member(
+                actor,
+                projects_allowing(&pool, actor, &[project], permission),
+            )
+            .await
+            .expect("projects allowing")
         }
     };
     assert_eq!(allowing(member, Permission::TasksEdit).await, vec![project]);

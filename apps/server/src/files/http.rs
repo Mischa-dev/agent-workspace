@@ -49,7 +49,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/files/{id}", get(describe).delete(remove))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
-        .route("/api/v1/files/links/{token}", get(super::links::open_link))
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +91,7 @@ async fn upload_to_conversation(
         via_grant_id: None,
         run_id: None,
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -107,10 +106,7 @@ async fn upload_to_conversation(
     let row = store_body(
         &state,
         principal.actor_id,
-        Destination::Conversation {
-            project_id: conversation.place(),
-            conversation_id: conversation.id,
-        },
+        Destination::conversation(&conversation),
         query.name,
         declared_type(&headers),
         body,
@@ -134,7 +130,7 @@ async fn upload_to_task(
         Some("comment") => true,
         Some(_) => return Err(AppError::Validation("for")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
@@ -243,7 +239,7 @@ async fn remove(
         file_id,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // H1.24: the route layer refuses a closed workspace; this holds it open
     // until the removal commits.
     crate::workspace::lifecycle::hold_open_for_space(
@@ -290,7 +286,7 @@ async fn content(
         let store = FileStore::resolve(&state, &row.store_id).await?;
         if let Some(url) = store.presign_get(
             &row.storage_key,
-            super::links::DEFAULT_TTL,
+            super::link::DEFAULT_TTL,
             served_content_type(&row),
             &content_disposition(&row.name, true),
         )? {

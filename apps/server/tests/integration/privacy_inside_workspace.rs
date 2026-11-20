@@ -3134,6 +3134,47 @@ async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
         .await;
         assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
     }
+
+    // A group's file is read by its members only: it is marked so and can
+    // never name a workspace's own bucket.
+    let ana = &world.people["ana"];
+    let file = upload(
+        &world.app,
+        &ana.browser,
+        &format!("/api/v1/conversations/{secret}/files?name=plan.txt"),
+        "text/plain",
+        b"the plan".to_vec(),
+    )
+    .await;
+    let pool = &world.state.pool;
+    let (members_only, store) = sqlx::query_as::<_, (bool, String)>(
+        "SELECT members_only, store_id FROM files WHERE id = $1",
+    )
+    .bind(file)
+    .fetch_one(pool)
+    .await
+    .expect("the group's file");
+    assert!(members_only, "a group's file is for its members");
+    assert!(!store.starts_with("ws-"), "{store}");
+    let forced = sqlx::query("UPDATE files SET members_only = false WHERE id = $1")
+        .bind(file)
+        .execute(pool)
+        .await;
+    assert!(forced.is_ok());
+    let still = sqlx::query_scalar::<_, bool>("SELECT members_only FROM files WHERE id = $1")
+        .bind(file)
+        .fetch_one(pool)
+        .await
+        .expect("members only");
+    assert!(still, "the conversation decides, not the writer");
+    let into_bucket = sqlx::query("UPDATE files SET store_id = 'ws-0123' WHERE id = $1")
+        .bind(file)
+        .execute(pool)
+        .await;
+    assert!(
+        into_bucket.is_err(),
+        "a group's file can't name a workspace's bucket"
+    );
     world.finish().await;
 }
 
@@ -3320,7 +3361,7 @@ async fn an_export_is_for_its_requester_alone() {
     .await;
     assert_eq!(started["outcome"], "ok", "{status} {started}");
     let id = started["value"]["id"].as_str().expect("id").to_owned();
-    agent_workspace_server::export::transfer::run_export(&world.state, id.parse().expect("uuid"))
+    crate::support::run_export(&world.state, id.parse().expect("uuid"))
         .await
         .expect("export runs");
     for (op, body) in [
@@ -3762,6 +3803,53 @@ async fn channel_writes_keep_to_private_channels() {
             .expect("topic");
     assert_eq!(topic, None);
 
+    world.finish().await;
+}
+
+/// H1.27: only someone who may manage settings lists or sets budgets, and
+/// never on a direct conversation they aren't in.
+#[tokio::test]
+async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .dm("ana", "lena")
+        .build("privacy_spend_limits")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let lena = &world.people["lena"];
+    for (op, body) in [
+        ("budget_list", json!({})),
+        (
+            "budget_set",
+            json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 5}),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let secret = world.conversations["ana+lena"].clone();
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("budget_set"),
+            Some("owner-secret-limit"),
+            json!({"scope": "conversation", "scopeId": secret, "meter": "messages",
+                   "period": "minute", "eachAccount": true, "hardLimit": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
     world.finish().await;
 }
 

@@ -71,7 +71,9 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
             tool(
                 "collection_write",
                 json!({"projectId": "WORK", "collection": "Pages",
-                       "fields": [{"name": "Review date", "type": "date"}]}),
+                       "fields": [{"name": "Review date", "type": "date"},
+                                  {"name": "Heading", "type": "formula",
+                                   "formula": "\"# \" & {Title}"}]}),
             ),
         )
         .await;
@@ -171,6 +173,11 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
     assert_eq!(ids(&due), vec![pages[2].clone()], "{due}");
     assert_eq!(
         due["value"]["records"][0]["title"], "Gamma, reviewed",
+        "{due}"
+    );
+    // What's worked out from the title follows the rename.
+    assert_eq!(
+        due["value"]["records"][0]["fields"]["Heading"], "# Gamma, reviewed",
         "{due}"
     );
 

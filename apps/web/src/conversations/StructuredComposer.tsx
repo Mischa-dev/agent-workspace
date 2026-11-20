@@ -66,6 +66,7 @@ import { opQuery } from '../api/ops'
 import type { GroupView } from '../api/generated/operations'
 import { shownStatus, useStatuses } from '../status/api'
 import { StatusText } from '../status/StatusText'
+import { useLiveControls } from '../realtime/realtimeContext'
 import '../styles/conversation.css'
 
 type StructuredComposerProps = {
@@ -239,6 +240,7 @@ function ComposerBox({
   const wrapRef = useRef<HTMLDivElement & HTMLFormElement>(null)
   // A conversation's own composer (it keeps a draft) lifts the toasts above it.
   useToastOffset(wrapRef, Boolean(draftKey), Boolean(disabledReason))
+  const liveControls = useLiveControls()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const uploads = useUploads(upload)
   const [dragging, setDragging] = useState(false)
@@ -955,6 +957,8 @@ function ComposerBox({
           onBlur={() => window.setTimeout(closeSuggestions, 120)}
           onChange={(event) => {
             setText(event.target.value)
+            // Others in the conversation see that someone is typing (W1.6).
+            if (outbox?.kind === 'message' && event.target.value.trim()) liveControls.typing(outbox.conversationId)
             setSlashClosed(false)
             setSlashActive(0)
             updateTrigger(event.target.value, event.target.selectionStart ?? event.target.value.length)

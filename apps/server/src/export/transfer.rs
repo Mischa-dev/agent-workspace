@@ -29,6 +29,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -39,7 +40,7 @@ use crate::{
     auth::AuthenticatedActor,
     error::{ApiPath, AppError},
     events::{self, Audience, NewEvent, catalog},
-    files::store::FileStore,
+    files::store::{FileStore, Readers},
     jobs::{JobError, JobRegistry, NewJob},
     policy::Permission,
     spaces::SpaceKind,
@@ -298,7 +299,7 @@ async fn store_archive(
 ) -> Result<(), AppError> {
     let store = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        FileStore::for_uploads(state, &mut connection, workspace).await?
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
     };
     let key = format!("{}/exports/{}.awx", workspace.simple(), transfer.simple());
     let file = tokio::fs::File::open(path)
@@ -336,9 +337,14 @@ struct Written {
 /// A stored file to copy into the archive once.
 struct Blob {
     sha256: String,
+    size: i64,
     store_id: String,
     key: String,
 }
+
+/// How long a file's store may go quiet mid-file before the export
+/// gives up on it.
+const BLOB_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn options(compress: bool) -> SimpleFileOptions {
     SimpleFileOptions::default()
@@ -354,6 +360,23 @@ fn zip_error<E>(_: E) -> AppError {
     AppError::Internal("the export archive could not be written")
 }
 
+/// Whether the snapshot holds a page version kept in cold storage whose
+/// body `cold` lacks.
+async fn cold_missing(
+    snapshot: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    cold: &HashMap<(Uuid, i64), String>,
+) -> Result<bool, AppError> {
+    let kept = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT page_id, version::bigint FROM project_page_revisions \
+         WHERE workspace_id = $1 AND body IS NULL",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *snapshot)
+    .await?;
+    Ok(kept.iter().any(|key| !cold.contains_key(key)))
+}
+
 /// Writes the whole archive to `path`.
 async fn write_archive(
     state: &AppState,
@@ -361,15 +384,34 @@ async fn write_archive(
     path: &Path,
 ) -> Result<Written, AppError> {
     // Before the snapshot: bodies of page versions kept in cold storage
-    // (K3.25), so every version leaves whole.
-    let cold = crate::history::cold::cold_page_bodies(state, workspace).await?;
+    // (K3.25), so every version leaves whole. A version archived after they
+    // were read and before the snapshot would leave without its body: the
+    // snapshot checks it has every one, and they are read again if not.
+    let (cold, mut snapshot) = {
+        let mut tries = 0;
+        loop {
+            let cold = crate::history::cold::cold_page_bodies(state, workspace).await?;
+            let mut snapshot = crate::db::scoped_snapshot(&state.pool).await?;
+            if !cold_missing(&mut snapshot, workspace, &cold).await? {
+                break (cold, snapshot);
+            }
+            snapshot.rollback().await?;
+            tries += 1;
+            if tries == 3 {
+                return Err(AppError::Conflict(
+                    "export",
+                    "page history kept moving to cold storage; try again",
+                ));
+            }
+        }
+    };
     let file = std::fs::File::create(path)
         .map_err(|_| AppError::Internal("the export file could not be made"))?;
     let mut zip = ZipWriter::new(file);
     let mut counts = BTreeMap::new();
     let (blobs, slug) = {
-        let mut snapshot = crate::db::scoped_snapshot(&state.pool).await?;
         let hidden = not_spaces(&mut snapshot, workspace).await?;
+        let left_out = left_out(&mut snapshot, workspace, &hidden).await?;
         let header = workspace_entry(&mut snapshot, workspace).await?;
         write_json(&mut zip, "workspace/workspace.json", &header)?;
         let slug = header["slug"].clone();
@@ -394,6 +436,7 @@ async fn write_archive(
                     },
                     workspace,
                     &hidden,
+                    &left_out,
                     &cold,
                 )
                 .await?;
@@ -408,7 +451,7 @@ async fn write_archive(
         if !skipped.is_empty() {
             counts.insert("skipped".to_owned(), json!(skipped));
         }
-        let (index, blobs) = files_index(&mut snapshot, workspace, &hidden).await?;
+        let (index, blobs) = files_index(&mut snapshot, workspace, &hidden, &left_out).await?;
         counts.insert("files".to_owned(), json!(index.len()));
         write_lines(&mut zip, "files/index.jsonl", index.iter())?;
         let (secrets, connections) = needs(&mut snapshot, workspace).await?;
@@ -424,12 +467,33 @@ async fn write_archive(
         let stored = store.get(&blob.key).await?;
         zip.start_file(format!("files/blobs/{}", blob.sha256), options(false))
             .map_err(zip_error)?;
+        // Taken only as recorded: at most the file's size, its digest
+        // checked, and a store that goes quiet is given up on. A store a
+        // workspace set can serve anything; the archive gets only the
+        // bytes the file row vouches for.
+        let size = u64::try_from(blob.size).unwrap_or(0);
+        let mut read = 0_u64;
+        let mut digest = Sha256::new();
         let mut stream = stored.body.into_data_stream();
-        while let Some(chunk) = stream.next().await {
+        loop {
+            let next = tokio::time::timeout(BLOB_IDLE, stream.next())
+                .await
+                .map_err(|_| AppError::Internal("a file's store stopped sending"))?;
+            let Some(chunk) = next else { break };
             let chunk = chunk.map_err(|_| AppError::Internal("a file could not be read"))?;
-            bytes += chunk.len() as u64;
+            read += chunk.len() as u64;
+            if read > size {
+                return Err(AppError::Internal(
+                    "a stored file is bigger than its record",
+                ));
+            }
+            digest.update(&chunk);
             zip.write_all(&chunk).map_err(zip_error)?;
         }
+        if read != size || hex::encode(digest.finalize()) != blob.sha256 {
+            return Err(AppError::Internal("a stored file doesn't match its record"));
+        }
+        bytes += read;
     }
     let manifest = json!({
         "format": FORMAT,
@@ -532,7 +596,16 @@ const HIDDEN: &str = r#"
         WHERE project_id = ANY(NOT_SPACES)
            OR (kind IN ('dm', 'group')
                AND (workspace_id = $1
-                    OR project_id IN (SELECT id FROM projects WHERE organization_id = $1)))
+                    OR project_id IN (SELECT id FROM projects WHERE organization_id = $1)
+                    -- in no workspace: one with a member of this workspace,
+                    -- whose rows here may name it
+                    OR (workspace_id = direct_scope_id()
+                        AND EXISTS (
+                            SELECT 1 FROM conversation_members member
+                            JOIN organization_memberships workspace_member
+                              ON workspace_member.actor_id = member.actor_id
+                             AND workspace_member.organization_id = $1
+                            WHERE member.conversation_id = conversations.id))))
         UNION
         SELECT child.id FROM conversations child
         JOIN direct ON child.parent_channel_id = direct.id
@@ -580,6 +653,8 @@ async fn accounts(
                jsonb_strip_nulls(jsonb_build_object(
                    'id', actor.id,
                    'kind', actor.account_kind,
+                   -- an agent that runs on a profile keeps its memberships' worker role
+                   'profile', actor.kind = 'execution_worker', -- // kind-check: mechanical (how the account runs)
                    'displayName', COALESCE(profile.display_name, person.display_name),
                    'handle', profile.handle,
                    'ownedByThisWorkspace', actor.owner_workspace_id = $1,
@@ -589,12 +664,20 @@ async fn accounts(
                                  ORDER BY email.address)
                               FROM user_email_addresses email
                               WHERE email.user_id = person.id)))
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
+        FROM actors actor
         LEFT JOIN users person ON person.actor_id = actor.id
         LEFT JOIN organization_actor_profiles profile
           ON profile.organization_id = $1 AND profile.actor_id = actor.id
-        WHERE membership.organization_id = $1
+        WHERE actor.id IN (
+            SELECT actor_id FROM organization_memberships WHERE organization_id = $1
+            -- a space's worker, unlisted in the workspace (K1.5), travels
+            -- with its seat; its machine is set up again after import
+            UNION
+            SELECT seat.actor_id FROM project_memberships seat
+            JOIN projects space ON space.id = seat.project_id
+            JOIN actors worker ON worker.id = seat.actor_id
+            WHERE space.organization_id = $1
+              AND worker.kind = 'execution_worker') -- // kind-check: mechanical (how the account runs)
         ORDER BY actor.id
         "#,
     )
@@ -655,6 +738,153 @@ async fn naming_columns(
     Ok(columns)
 }
 
+/// Rows left out of an export because a row they point at is (R20, to
+/// any depth): a run in a DM is left out by its conversation, and its
+/// activities, usage and requests by their run. Worked out once per
+/// snapshot, from every exported table's single-column foreign keys.
+struct LeftOut {
+    /// Every left-out row's id, the hidden conversations and messages
+    /// included.
+    ids: Vec<Uuid>,
+    /// Each table's foreign key columns that point at a table rows were
+    /// left out of.
+    pointing: HashMap<String, Vec<String>>,
+    /// Exported tables with an `id` column.
+    with_id: HashSet<String>,
+}
+
+impl LeftOut {
+    /// ` AND (...) IS NOT TRUE` for a table: none of its rows' foreign keys may
+    /// name a left-out row, nor may its own id be one. The ids are at
+    /// parameter `$<parameter>`.
+    fn filter(&self, table: &str, parameter: u8) -> String {
+        let mut tests = Vec::new();
+        if self.with_id.contains(table) {
+            tests.push(format!("t.id = ANY(${parameter})"));
+        }
+        for column in self.pointing.get(table).into_iter().flatten() {
+            tests.push(format!("t.{} = ANY(${parameter})", plain(column)));
+        }
+        if tests.is_empty() {
+            String::new()
+        } else {
+            // A null foreign key names nothing: `IS NOT TRUE` keeps the
+            // row, where `NOT (NULL)` would drop it.
+            format!(" AND ({}) IS NOT TRUE", tests.join(" OR "))
+        }
+    }
+}
+
+/// Works out [`LeftOut`]: starting from the hidden conversations and
+/// messages, any row whose foreign key names a left-out row is left out
+/// too, until nothing more is.
+async fn left_out(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    not_spaces: &[Uuid],
+) -> Result<LeftOut, AppError> {
+    let mut ids =
+        sqlx::query_scalar::<_, Uuid>(&format!("{}SELECT id FROM hidden", with_hidden(2)))
+            .bind(workspace)
+            .bind(not_spaces)
+            .fetch_all(&mut *connection)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+    // Each foreign key's column that names its target's id (a key with
+    // more columns, such as a run's space and conversation, by the one
+    // pointing at the id), so each step can ask one table at a time.
+    let keys = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT DISTINCT child.relname::text, column_name.attname::text, parent.relname::text
+        FROM pg_constraint constraint_row
+        CROSS JOIN LATERAL unnest(constraint_row.conkey, constraint_row.confkey)
+            AS pair(child_column, parent_column)
+        JOIN pg_class child ON child.oid = constraint_row.conrelid
+        JOIN pg_class parent ON parent.oid = constraint_row.confrelid
+        JOIN pg_namespace space ON space.oid = child.relnamespace
+        JOIN pg_attribute column_name
+          ON column_name.attrelid = child.oid AND column_name.attnum = pair.child_column
+        JOIN pg_attribute target
+          ON target.attrelid = parent.oid AND target.attnum = pair.parent_column
+        WHERE constraint_row.contype = 'f' AND target.attname = 'id'
+          AND space.nspname = current_schema()
+          AND column_name.atttypid = 'uuid'::regtype
+        ORDER BY 1, 2, 3
+        "#,
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    let exported = DECLARATIONS
+        .iter()
+        .flat_map(|declaration| declaration.kinds.iter())
+        .filter_map(|kind| tables::tenant_column(kind.table).map(|column| (kind.table, column)))
+        .collect::<HashMap<_, _>>();
+    let mut tables_left_out: HashSet<String> = ["conversations", "messages", "projects"]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+    let with_id = sqlx::query_scalar::<_, String>(
+        "SELECT table_name::text FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND column_name = 'id' AND data_type = 'uuid'",
+    )
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .filter(|table| exported.contains_key(table.as_str()))
+    .collect::<HashSet<_>>();
+    // Each round reaches one level further; the chain from a DM down is
+    // short, and a round that finds nothing new ends it.
+    for _ in 0..8 {
+        let mut found = false;
+        for (child, column, parent) in &keys {
+            if !tables_left_out.contains(parent) {
+                continue;
+            }
+            let Some(tenant) = exported.get(child.as_str()) else {
+                continue;
+            };
+            if !with_id.contains(child) {
+                continue;
+            }
+            let current = ids.iter().copied().collect::<Vec<_>>();
+            let reached = sqlx::query_scalar::<_, Uuid>(&format!(
+                "SELECT t.id FROM {} t WHERE t.{} = $1 AND t.{} = ANY($2)",
+                plain(child),
+                identifier(tenant),
+                plain(column)
+            ))
+            .bind(workspace)
+            .bind(&current)
+            .fetch_all(&mut *connection)
+            .await?;
+            for id in reached {
+                if ids.insert(id) {
+                    found = true;
+                    tables_left_out.insert(child.clone());
+                }
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    let mut pointing: HashMap<String, Vec<String>> = HashMap::new();
+    for (child, column, parent) in &keys {
+        if tables_left_out.contains(parent) && exported.contains_key(child.as_str()) {
+            pointing
+                .entry(child.clone())
+                .or_default()
+                .push(column.clone());
+        }
+    }
+    Ok(LeftOut {
+        ids: ids.into_iter().collect(),
+        pointing,
+        with_id,
+    })
+}
+
 /// One declared kind and the column that names its workspace.
 struct Kind<'a> {
     declaration: &'a ExportDecl,
@@ -675,11 +905,13 @@ async fn write_kind(
     }: Kind<'_>,
     workspace: Uuid,
     not_spaces: &[Uuid],
+    left_out: &LeftOut,
     cold: &HashMap<(Uuid, i64), String>,
 ) -> Result<usize, AppError> {
     let table = identifier(kind.table);
     let column = identifier(column);
     let naming = naming_columns(connection, kind).await?;
+    let parents = left_out.filter(kind.table, 4);
     let (with, hidden) = if naming.is_empty() {
         (String::new(), String::new())
     } else {
@@ -699,13 +931,14 @@ async fn write_kind(
         .map(|column| (*column).to_owned())
         .collect::<Vec<_>>();
     let sql = format!(
-        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden} \
+        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden}{parents} \
          ORDER BY to_jsonb(t)->>'created_at', to_jsonb(t)->>'id'"
     );
     let mut rows = sqlx::query_scalar::<_, Value>(&sql)
         .bind(workspace)
         .bind(&excluded)
         .bind(not_spaces)
+        .bind(&left_out.ids)
         .fetch(&mut *connection);
     let name = format!("things/{}/{}.jsonl", declaration.module, kind.kind);
     let mut started = false;
@@ -719,9 +952,11 @@ async fn write_kind(
                     .unwrap_or_default(),
                 data["version"].as_i64().unwrap_or_default(),
             );
-            if let Some(body) = cold.get(&key) {
-                data["body"] = Value::String(body.clone());
-            }
+            // `write_archive` checked the snapshot has every cold body.
+            let body = cold
+                .get(&key)
+                .ok_or(AppError::Internal("a cold page version has no body"))?;
+            data["body"] = Value::String(body.clone());
         }
         if !started {
             zip.start_file(&name, options(true)).map_err(zip_error)?;
@@ -757,7 +992,9 @@ async fn files_index(
     connection: &mut PgConnection,
     workspace: Uuid,
     not_spaces: &[Uuid],
+    left_out: &LeftOut,
 ) -> Result<(Vec<Value>, Vec<Blob>), AppError> {
+    let parents = left_out.filter("files", 3);
     let rows = sqlx::query_as::<_, (Uuid, String, i64, String, String, String)>(&format!(
         r#"
         {}
@@ -768,12 +1005,15 @@ async fn files_index(
           AND file.blob_deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM hidden h
                           WHERE h.id IN (file.conversation_id, file.message_id, file.project_id))
+          {}
         ORDER BY file.id
         "#,
-        with_hidden(2)
+        with_hidden(2),
+        parents.replace("t.", "file.")
     ))
     .bind(workspace)
     .bind(not_spaces)
+    .bind(&left_out.ids)
     .fetch_all(&mut *connection)
     .await?;
     let mut seen = HashSet::new();
@@ -787,6 +1027,7 @@ async fn files_index(
         if seen.insert(sha256.clone()) {
             blobs.push(Blob {
                 sha256,
+                size,
                 store_id,
                 key,
             });

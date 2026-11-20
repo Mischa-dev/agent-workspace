@@ -96,7 +96,22 @@ function ServerDetails({ status }: { status: ServerStatus }) {
       <Section id="server-build-heading" title="Running">
         <DetailList
           items={[
-            { label: 'Version', value: status.version },
+            {
+              label: 'Version',
+              value: status.newerRelease ? (
+                <>
+                  {status.version} ({status.newerRelease.notesUrl ? (
+                    <a href={status.newerRelease.notesUrl} rel="noreferrer" target="_blank">
+                      {status.newerRelease.version} is out
+                    </a>
+                  ) : (
+                    `${status.newerRelease.version} is out`
+                  )})
+                </>
+              ) : (
+                status.version
+              ),
+            },
             { label: 'Commit', value: status.commit === 'dev' ? 'Development build' : <code>{status.commit.slice(0, 12)}</code> },
             { label: 'Environment', value: status.environment },
             { label: 'Address', value: status.publicOrigin },
