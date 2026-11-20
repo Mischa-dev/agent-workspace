@@ -161,6 +161,7 @@ async fn form_from_written(
         fields.push(FormField {
             field: field.id,
             required: asked.required,
+            show_if: None,
         });
     }
     Ok(Ok(FormConfig {
@@ -168,6 +169,7 @@ async fn form_from_written(
         fields,
         thanks: written.thanks.clone().unwrap_or_default(),
         daily_limit: written.daily_limit,
+        ..Default::default()
     }))
 }
 

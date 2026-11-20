@@ -240,6 +240,11 @@
     "title": "Retire custom emoji"
   },
   {
+    "kind": "change",
+    "name": "cycle_set",
+    "title": "Set up cycles"
+  },
+  {
     "kind": "create",
     "name": "dashboard_create",
     "title": "Make a dashboard"
@@ -253,6 +258,51 @@
     "kind": "change",
     "name": "dashboard_update",
     "title": "Change a dashboard"
+  },
+  {
+    "kind": "create",
+    "name": "data_connection_create",
+    "title": "Connect outside data"
+  },
+  {
+    "kind": "change",
+    "name": "data_connection_delete",
+    "title": "Remove an outside data connection"
+  },
+  {
+    "kind": "change",
+    "name": "data_connection_update",
+    "title": "Change an outside data connection"
+  },
+  {
+    "kind": "create",
+    "name": "data_query_create",
+    "title": "Save an outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_delete",
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_review",
+    "title": "Review a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_run",
+    "title": "Run a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_share",
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "kind": "change",
+    "name": "data_query_update",
+    "title": "Change a saved outside data query"
   },
   {
     "kind": "create",
@@ -318,6 +368,21 @@
     "kind": "change",
     "name": "follow_set",
     "title": "Follow"
+  },
+  {
+    "kind": "create",
+    "name": "form_answer_send",
+    "title": "Answer a form"
+  },
+  {
+    "kind": "create",
+    "name": "form_create",
+    "title": "Create a form"
+  },
+  {
+    "kind": "change",
+    "name": "form_update",
+    "title": "Change a form"
   },
   {
     "kind": "change",
@@ -406,6 +471,11 @@
   },
   {
     "kind": "create",
+    "name": "initiative_create",
+    "title": "Create an initiative"
+  },
+  {
+    "kind": "create",
     "name": "invite_link_create",
     "title": "Make an invitation link"
   },
@@ -473,6 +543,11 @@
     "kind": "create",
     "name": "milestone_create",
     "title": "Create milestone"
+  },
+  {
+    "kind": "change",
+    "name": "milestone_reorder",
+    "title": "Reorder milestones"
   },
   {
     "kind": "change",
@@ -556,6 +631,16 @@
   },
   {
     "kind": "change",
+    "name": "project_status_set",
+    "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "name": "project_update_create",
+    "title": "Post a project update"
+  },
+  {
+    "kind": "change",
     "name": "proposal_decide",
     "title": "Decide a proposal"
   },
@@ -581,8 +666,38 @@
   },
   {
     "kind": "create",
+    "name": "record_template_create",
+    "title": "Create a record template"
+  },
+  {
+    "kind": "change",
+    "name": "record_template_update",
+    "title": "Change a record template"
+  },
+  {
+    "kind": "change",
+    "name": "record_update",
+    "title": "Update a record"
+  },
+  {
+    "kind": "create",
     "name": "recurring_create",
     "title": "Schedule a template"
+  },
+  {
+    "kind": "create",
+    "name": "recurring_record_create",
+    "title": "Make records on a schedule"
+  },
+  {
+    "kind": "change",
+    "name": "recurring_record_delete",
+    "title": "Stop a recurring record"
+  },
+  {
+    "kind": "change",
+    "name": "recurring_record_update",
+    "title": "Change a recurring record"
   },
   {
     "kind": "change",
@@ -953,6 +1068,21 @@
     "kind": "change",
     "name": "thread_update",
     "title": "Update thread"
+  },
+  {
+    "kind": "change",
+    "name": "triage_decide",
+    "title": "Triage tasks"
+  },
+  {
+    "kind": "change",
+    "name": "triage_enable",
+    "title": "Turn on triage"
+  },
+  {
+    "kind": "change",
+    "name": "triage_rule_set",
+    "title": "Write a triage rule"
   },
   {
     "kind": "create",

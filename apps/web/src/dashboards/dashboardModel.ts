@@ -5,9 +5,10 @@ import { projectAreaHref } from '../projects/locations'
 export const dashboardsHref = (projectId: string) => projectAreaHref(projectId, 'dashboards')
 export const dashboardHref = (projectId: string, id: string) => projectAreaHref(projectId, 'dashboards', id)
 
-/** Where a tile leads: a view tile's collection, opened on its view; a sheet tile's sheet. */
-export function tileHref(projectId: string, tile: Pick<TileEntry, 'collection' | 'view' | 'sheet'>) {
+/** Where a tile leads: a view tile's collection, opened on its view; a sheet tile's sheet; a query tile's query. */
+export function tileHref(projectId: string, tile: Pick<TileEntry, 'collection' | 'view' | 'sheet' | 'query'>) {
   if (tile.sheet) return projectAreaHref(projectId, 'sheets', tile.sheet)
+  if (tile.query) return projectAreaHref(projectId, 'dashboards', 'data', { query: tile.query })
   return tile.collection ? projectAreaHref(projectId, 'collections', tile.collection, tile.view ? { view: tile.view } : undefined) : null
 }
 
@@ -26,7 +27,8 @@ export function tileInputs(tiles: readonly TileEntry[]): TileInput[] {
     text: tile.kind === 'text' ? tile.text : null,
     sheet: tile.kind === 'sheet' ? (tile.sheet ?? null) : null,
     range: tile.kind === 'sheet' ? tile.range : null,
-    style: tile.kind === 'sheet' ? (tile.style ?? null) : null,
+    query: tile.kind === 'query' ? (tile.query ?? null) : null,
+    style: tile.kind === 'sheet' || tile.kind === 'query' ? (tile.style ?? null) : null,
     width: tile.width,
     height: tile.height,
   }))

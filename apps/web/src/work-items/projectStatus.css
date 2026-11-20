@@ -1,0 +1,32 @@
+/* T1.43: a project's status on its home, and its latest update in a line. */
+.aw-project-status {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-project-status__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-project-status__fact,
+.aw-project-update__meta {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-project-status__empty {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-project-update {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}

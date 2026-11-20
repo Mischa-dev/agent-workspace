@@ -4,8 +4,8 @@
 //! What a kind can't do yet says so with a reason, never silently.
 //!
 //! Adapters at the start: pages and whiteboards (list, show, restore),
-//! messages (list, show), records and tasks (list); sheets (list, show,
-//! restore) since C1.13. C1 fills the rest (record and task field revert).
+//! messages (list, show), tasks (list); sheets (list, show, restore) since
+//! C1.13; records (list, show, restore) since T1.41.
 
 pub mod cold;
 pub mod ops;
@@ -60,10 +60,13 @@ pub const ADAPTERS: &[Adapter] = &[
         show: Support::Yes,
         restore: Support::Not("an edit is the restore: edit the message"),
     },
+    // T1.41: a record's changes keep the values they replaced, so a
+    // version is now with every later change taken back
+    // (`collections::record_versions`).
     Adapter {
         kind: "record",
-        show: Support::Not("a record's history keeps each change, not whole versions"),
-        restore: Support::Not("reverting a record's fields comes later"),
+        show: Support::Yes,
+        restore: Support::Yes,
     },
     Adapter {
         kind: "task",
@@ -125,6 +128,8 @@ pub struct HistoryEntry {
     pub actor: Option<String>,
     /// The connected app they acted through, when it shows.
     pub via: Option<String>,
+    /// Who accepted it, when it was someone's proposal (T1.41).
+    pub accepted_by: Option<String>,
     /// In a few words: "Edited", "Restored version 3", "Edited 4 cells".
     pub summary: String,
     /// Keys of what changed ("title", "body", a field id, a cell).
@@ -156,6 +161,7 @@ fn list_sql(kind: &str) -> Option<String> {
         "page" => format!(
             r#"
             SELECT version, {at} AS at, actor_id, via_oauth_grant_id AS via_id,
+                   NULL::uuid AS accepted_by_id,
                    COALESCE(note, CASE WHEN version = 1 THEN 'Created' ELSE 'Edited' END) AS summary,
                    array_remove(ARRAY[
                        CASE WHEN title IS DISTINCT FROM lag(title) OVER w THEN 'title' END,
@@ -176,7 +182,7 @@ fn list_sql(kind: &str) -> Option<String> {
         "whiteboard" => format!(
             r#"
             SELECT revision::bigint AS version, {at} AS at, actor_id,
-                   via_oauth_grant_id AS via_id,
+                   via_oauth_grant_id AS via_id, NULL::uuid AS accepted_by_id,
                    COALESCE(note, 'Saved ' || element_count || ' elements') AS summary,
                    ARRAY['scene'] AS changed
             FROM whiteboard_revisions WHERE whiteboard_id = $1
@@ -187,6 +193,7 @@ fn list_sql(kind: &str) -> Option<String> {
             r#"
             SELECT revision::bigint AS version, {at} AS at,
                    written_by_actor_id AS actor_id, via_oauth_grant_id AS via_id,
+                   NULL::uuid AS accepted_by_id,
                    CASE WHEN redacted_at IS NOT NULL THEN 'Removed'
                         WHEN revision = 1 THEN 'Written' ELSE 'Edited' END AS summary,
                    ARRAY['text'] AS changed
@@ -197,6 +204,7 @@ fn list_sql(kind: &str) -> Option<String> {
         "record" => format!(
             r#"
             SELECT version, {at} AS at, actor_id, via_oauth_grant_id AS via_id,
+                   accepted_by_actor_id AS accepted_by_id,
                    initcap(replace(action, '_', ' ')) AS summary,
                    ARRAY(SELECT change->>'field'
                          FROM jsonb_array_elements(
@@ -211,7 +219,7 @@ fn list_sql(kind: &str) -> Option<String> {
             r#"
             SELECT entry.sequence AS version, {at} AS at,
                    COALESCE(activity.actor_id, comment.author_actor_id) AS actor_id,
-                   NULL::uuid AS via_id,
+                   NULL::uuid AS via_id, NULL::uuid AS accepted_by_id,
                    CASE WHEN entry.message_id IS NOT NULL THEN 'Commented'
                         ELSE initcap(replace(COALESCE(activity.kind, entry.kind), '_', ' ')) END
                        AS summary,
@@ -229,6 +237,7 @@ fn list_sql(kind: &str) -> Option<String> {
         "sheet" => format!(
             r#"
             SELECT revision AS version, {at} AS at, actor_id, via_oauth_grant_id AS via_id,
+                   NULL::uuid AS accepted_by_id,
                    CASE WHEN summary ? 'restoredRevision'
                         THEN 'Restored revision ' || (summary->>'restoredRevision')
                         WHEN summary ? 'created' THEN 'Created'
@@ -250,7 +259,13 @@ fn list_sql(kind: &str) -> Option<String> {
     };
     Some(format!(
         r#"
-        SELECT h.version, h.at, h.actor_id, h.summary, h.changed, {WHO}
+        SELECT h.version, h.at, h.actor_id, h.summary, h.changed, {WHO},
+               (SELECT COALESCE(profile.display_name, account.display_name)
+                  FROM actors accepter
+                  LEFT JOIN organization_actor_profiles profile
+                    ON profile.organization_id = $4 AND profile.actor_id = accepter.id
+                  LEFT JOIN users account ON account.actor_id = accepter.id
+                 WHERE accepter.id = h.accepted_by_id) AS accepted_by
         FROM ({rows}) h
         WHERE $2::bigint IS NULL OR h.version < $2
         ORDER BY h.version DESC

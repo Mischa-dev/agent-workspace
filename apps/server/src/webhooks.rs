@@ -17,16 +17,18 @@ use crate::{
     events::{self, Subject},
 };
 
-/// Whether `owner` can see what the event is about right now.
+/// Whether `owner` can see what the event is about right now, through
+/// `connection` when they act through an agent connection.
 pub(crate) async fn visible_to(
     pool: &PgPool,
     owner: Uuid,
+    connection: Option<Uuid>,
     project_id: Uuid,
     subject: &Subject,
 ) -> Result<bool, AppError> {
     let seen = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT actor_can_access_project($1, NULL, $2)
+        SELECT actor_can_access_project($1, $7, $2)
            AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
            AND ($4::uuid IS NULL OR pull_request_visible_to($4, $1))
            AND ($5::uuid IS NULL OR EXISTS (
@@ -62,6 +64,7 @@ pub(crate) async fn visible_to(
     .bind(subject.pull_request_id)
     .bind(subject.work_item_id)
     .bind(subject.record_id)
+    .bind(connection)
     .fetch_one(crate::db::scoped(pool))
     .await?;
     if !seen {

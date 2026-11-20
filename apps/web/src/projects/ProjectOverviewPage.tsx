@@ -47,6 +47,7 @@ import '../styles/pages.css'
 // The project's whiteboards and the New channel dialog load in their own small chunks.
 const ProjectWhiteboards = lazy(() => import('./ProjectWhiteboards'))
 const ChannelCreator = lazy(() => import('../shell/ChannelCreator'))
+const ProjectStatus = lazy(() => import('../work-items/ProjectStatus'))
 
 const RECENT_WORK = { limit: 5 }
 const SHOWN = 5
@@ -97,6 +98,11 @@ export function ProjectOverviewPage() {
         {project.data.archivedAt && <ArchivedBanner project={project.data} />}
         <div className="aw-overview">
           <div className="aw-overview__column">
+            {experience.shows('area.tasks') && experience.shows('workspace.project_updates') ? (
+              <Suspense fallback={null}>
+                <ProjectStatus projectId={project.data.id} />
+              </Suspense>
+            ) : null}
             <NeedsYouHere base={base} project={project.data} />
             {experience.shows('area.chat') ? <Channels base={base} project={project.data} /> : null}
           </div>
