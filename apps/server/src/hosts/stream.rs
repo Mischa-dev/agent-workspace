@@ -24,19 +24,21 @@ pub async fn delta(
         .await?
         .filter(|holder| holder.run_id == Some(run_id))
         .ok_or(HostError::Unauthorized)?;
+    let run = runs::store::get(crate::db::scoped(&state.pool), run_id)
+        .await?
+        .ok_or(HostError::Unauthorized)?;
+    // Charged before anything else is checked, so a piece refused below
+    // still spends the run's agent's and workspace's budgets.
+    state
+        .rate_limits
+        .check_run_stream_of(run.account_id, run.workspace_id, delta.delta.len())
+        .await?;
     if delta.delta.is_empty() || delta.delta.len() > MAX_STREAM_DELTA_BYTES {
         return Err(HostError::Invalid {
             field: "delta",
             message: format!("Send 1 to {MAX_STREAM_DELTA_BYTES} bytes at a time."),
         });
     }
-    let run = runs::store::get(crate::db::scoped(&state.pool), run_id)
-        .await?
-        .ok_or(HostError::Unauthorized)?;
-    state
-        .rate_limits
-        .check_run_stream_of(run.account_id, run.workspace_id, delta.delta.len())
-        .await?;
     if runs::RunState::terminal_keys().contains(&run.state.as_str()) {
         return Err(HostError::Invalid {
             field: "runId",
