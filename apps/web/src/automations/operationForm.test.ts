@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import catalog from '../api/generated/catalog.json'
 import type { OpenApiDocument } from './api'
 import { AUTOMATION_OPERATIONS, operationFields, operationFormValues, operationInput, operationInputSchema } from './operationForm'
 
@@ -67,6 +68,7 @@ describe('an operation as a rule action', () => {
 
   it('offers only operations the registry marks for automations, never reads or rules themselves', () => {
     expect(AUTOMATION_OPERATIONS.length).toBeGreaterThan(0)
-    expect(AUTOMATION_OPERATIONS.every((entry) => entry.automation && entry.kind !== 'query' && !entry.name.startsWith('automation_'))).toBe(true)
+    const marked = new Map((catalog as { name: string; automation: boolean }[]).map((entry) => [entry.name, entry.automation]))
+    expect(AUTOMATION_OPERATIONS.every((entry) => marked.get(entry.name) && entry.kind !== 'query' && !entry.name.startsWith('automation_'))).toBe(true)
   })
 })
