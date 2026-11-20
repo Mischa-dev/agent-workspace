@@ -232,11 +232,14 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     .await
     .expect("jobs");
     assert_eq!(queued, 1, "one queued run covers every change");
-    agent_workspace_server::collections::computed::recompute_collection(
-        &setup.pool,
-        project_id.parse::<Uuid>().expect("project"),
-        collection.parse::<Uuid>().expect("collection"),
-        None,
+    crate::support::as_job(
+        setup.organization_id,
+        agent_workspace_server::collections::computed::recompute_collection(
+            &setup.pool,
+            project_id.parse::<Uuid>().expect("project"),
+            collection.parse::<Uuid>().expect("collection"),
+            None,
+        ),
     )
     .await
     .expect("recompute");

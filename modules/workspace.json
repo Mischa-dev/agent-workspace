@@ -174,7 +174,7 @@
   ],
   "events": {
     "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "budgets.changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "follows.changed", "group.changed", "link.created", "link.deleted",
-      "saved_searches.changed", "space.archived", "space.created", "space.member.changed", "space.restored", "space.updated", "theme.changed",
+      "saved_searches.changed", "session.revoked", "space.archived", "space.created", "space.member.changed", "space.restored", "space.updated", "theme.changed",
       "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed", "workspace_themes.changed"],
     "listens": []
   },
@@ -204,7 +204,7 @@
       "/design-system/pieces",
       "*"
     ],
-    "parts": ["tech.ids", "thing.activity", "page.references"],
+    "parts": ["tech.ids", "thing.activity", "page.references", "workspace.spend_limits"],
     "sidebar": ["rail.home", "rail.search", "rail.settings", "home.home"],
     "home": ["setup"],
     "settings": [

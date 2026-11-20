@@ -543,6 +543,7 @@ async fn conformance(name: &str, target: Target) {
     .expect("the channel's message");
 
     // Signing out closes the session's connections.
+    let kept = ticket(&world, &owner).await;
     let (status, _) = api
         .send(owner.request("POST", "/api/v1/auth/logout", None, Value::Null))
         .await;
@@ -554,6 +555,19 @@ async fn conformance(name: &str, target: Target) {
         }
     };
     assert!(matches!(closed, Frame::Closed(Some(4401))), "{closed:?}");
+    // A ticket cut before signing out opens nothing afterwards, on whichever
+    // instance it lands: the sign-out is in the log, not one process.
+    let mut late = open(&world, kept["ticket"].as_str().expect("ticket")).await;
+    let refused = loop {
+        match next(&mut late, WAIT).await {
+            Frame::Json(frame) => assert_ne!(frame["type"], "event", "{frame}"),
+            other => break other,
+        }
+    };
+    assert!(
+        matches!(refused, Frame::Closed(Some(4401 | 1012))),
+        "{refused:?}"
+    );
     world.cluster.finish().await;
 }
 

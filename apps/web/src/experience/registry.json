@@ -472,6 +472,13 @@
       "label": "Budgets",
       "description": "Limits on what an agent may use, on its card in settings.",
       "default": true
+    },
+    {
+      "id": "workspace.spend_limits",
+      "group": "workspace",
+      "label": "Spending limits",
+      "description": "Limits on what each account, space and conversation may spend, under Usage in settings.",
+      "default": true
     }
   ],
   "nouns": [

@@ -559,7 +559,7 @@ async fn create_project(
                 conversation_id: None,
                 page_id: None,
             },
-            href: Target::space(project_id, Place::Home).legacy_path(),
+            href: Target::space(project_id, Place::Home).href(),
             context_drawer_open: false,
             filters: serde_json::json!({}),
             pinned: false,
@@ -1362,7 +1362,7 @@ fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<St
             .ok_or(AppError::Internal("stored Project navigation location")),
         _ => Err(AppError::Internal("stored Project navigation location")),
     }
-    .map(|place| Target::space(project_id, place).legacy_path())
+    .map(|place| Target::space(project_id, place).href())
 }
 
 async fn validate_navigation_location(
@@ -1615,7 +1615,7 @@ mod tests {
                 },
             )
             .expect("thread href"),
-            format!("/projects/{project_id}/threads/{conversation_id}")
+            format!("/w/-/s/{project_id}/threads/{conversation_id}")
         );
         assert!(
             navigation_href(
@@ -1638,7 +1638,7 @@ mod tests {
                 },
             )
             .expect("channel href"),
-            format!("/projects/{project_id}/channels/{conversation_id}")
+            format!("/w/-/s/{project_id}/chat/{conversation_id}")
         );
         assert_eq!(
             navigation_href(
@@ -1650,7 +1650,7 @@ mod tests {
                 },
             )
             .expect("Work Items href"),
-            format!("/projects/{project_id}/work-items")
+            format!("/w/-/s/{project_id}/tasks")
         );
         let page_id = Uuid::now_v7();
         let place = |kind: &str, page_id: Option<Uuid>| {
@@ -1665,21 +1665,21 @@ mod tests {
         };
         assert_eq!(
             place("page", Some(page_id)).expect("page href"),
-            format!("/projects/{project_id}/pages/{page_id}")
+            format!("/w/-/s/{project_id}/pages/{page_id}")
         );
         assert!(place("page", None).is_err());
         assert!(place("pages", Some(page_id)).is_err());
         assert_eq!(
             place("planning", None).expect("planning href"),
-            format!("/projects/{project_id}/next")
+            format!("/w/-/s/{project_id}/planning/next")
         );
         assert_eq!(
             place("runs", None).expect("runs href"),
-            format!("/projects/{project_id}/launches")
+            format!("/w/-/s/{project_id}/runs")
         );
         assert_eq!(
             place("settings", None).expect("settings href"),
-            format!("/projects/{project_id}")
+            format!("/w/-/s/{project_id}")
         );
         assert!(place("somewhere", None).is_err());
     }

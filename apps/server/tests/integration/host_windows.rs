@@ -108,17 +108,23 @@ async fn a_host_reports_the_windows_of_accounts_it_described_and_alerts_fire_onc
     // The rules fire once this cycle, however often the host reports.
     let state = state_on(&setup.pool);
     assert_eq!(
-        usage::alerts::evaluate(&state, account, Utc::now())
-            .await
-            .expect("evaluate"),
+        crate::support::as_job(
+            setup.organization_id,
+            usage::alerts::evaluate(&state, account, Utc::now()),
+        )
+        .await
+        .expect("evaluate"),
         1
     );
     let (status, _) = report(&host, "main", 63).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        usage::alerts::evaluate(&state, account, Utc::now())
-            .await
-            .expect("evaluate again"),
+        crate::support::as_job(
+            setup.organization_id,
+            usage::alerts::evaluate(&state, account, Utc::now()),
+        )
+        .await
+        .expect("evaluate again"),
         0,
         "an alert fires once a cycle"
     );

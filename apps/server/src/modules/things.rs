@@ -129,6 +129,12 @@ impl ThingRow {
                     .path_in(connection, workspace, &Target::Whiteboard(self.id))
                     .await
             }
+            (None, Some(workspace)) => {
+                linker
+                    .legacy_in_workspace(connection, workspace, &legacy)
+                    .await
+            }
+            _ if linker.addresses().names_workspace() => Ok(crate::addresses::anywhere(&legacy)),
             _ => Ok(legacy),
         }
     }

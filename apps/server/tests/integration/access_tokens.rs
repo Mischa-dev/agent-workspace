@@ -34,10 +34,18 @@ async fn issue(
     world: &super::support::world::Workspace,
     request: ScopedTokenRequest,
 ) -> Result<String, AppError> {
-    let mut transaction = scoped_tx(world.pool()).await.expect("begin");
-    let issued = tokens::issue_scoped(&mut transaction, request).await?;
-    transaction.commit().await.expect("commit");
-    Ok(issued.token)
+    // As the server issues one: in the token's workspace, for its account.
+    let scope = agent_workspace_server::tenancy::Tenancy::Workspace {
+        account: Some(request.account_id),
+        workspace: request.workspace_id,
+    };
+    agent_workspace_server::tenancy::scoped(scope, async {
+        let mut transaction = scoped_tx(world.pool()).await.expect("begin");
+        let issued = tokens::issue_scoped(&mut transaction, request).await?;
+        transaction.commit().await.expect("commit");
+        Ok(issued.token)
+    })
+    .await
 }
 
 #[tokio::test]
@@ -171,9 +179,12 @@ async fn a_narrow_token_holds_only_what_it_was_given() {
     .fetch_one(pool)
     .await
     .expect("token row");
-    let mut transaction = scoped_tx(pool).await.expect("begin");
-    assert!(tokens::revoke(&mut transaction, id).await.expect("revoke"));
-    transaction.commit().await.expect("commit");
+    super::support::as_member(rook.actor, async {
+        let mut transaction = scoped_tx(pool).await.expect("begin");
+        assert!(tokens::revoke(&mut transaction, id).await.expect("revoke"));
+        transaction.commit().await.expect("commit");
+    })
+    .await;
     assert!(
         initialize(&world.app, &whole).await.is_none(),
         "a revoked token still works"
@@ -262,37 +273,40 @@ async fn a_token_carries_who_asked_and_holds_to_them() {
         agent_workspace_server::policy::ActorKind::ExternalAgent,
     );
     caller.connection_id = Some(rook.connection);
-    let mut connection = scoped_tx(pool).await.expect("begin");
-    let create = Permission::from_key("tasks.create").expect("key");
-    let own = agent_workspace_server::access::holding(
-        &mut connection,
-        &caller,
-        agent_workspace_server::access::Scope::Space(work),
-    )
-    .await
-    .expect("holding")
-    .expect("in the space");
-    assert!(own.permissions.contains(create));
-    caller.requested_by = Some(vic);
-    let for_vic = agent_workspace_server::access::holding(
-        &mut connection,
-        &caller,
-        agent_workspace_server::access::Scope::Space(work),
-    )
-    .await
-    .expect("holding")
-    .expect("in the space");
-    assert!(!for_vic.permissions.contains(create));
-    caller.requested_by = Some(lena);
-    let for_lena = agent_workspace_server::access::holding(
-        &mut connection,
-        &caller,
-        agent_workspace_server::access::Scope::Space(work),
-    )
-    .await
-    .expect("holding")
-    .expect("in the space");
-    assert!(for_lena.permissions.contains(create));
-    drop(connection);
+    super::support::as_member(rook.actor, async {
+        let mut connection = scoped_tx(pool).await.expect("begin");
+        let create = Permission::from_key("tasks.create").expect("key");
+        let own = agent_workspace_server::access::holding(
+            &mut connection,
+            &caller,
+            agent_workspace_server::access::Scope::Space(work),
+        )
+        .await
+        .expect("holding")
+        .expect("in the space");
+        assert!(own.permissions.contains(create));
+        caller.requested_by = Some(vic);
+        let for_vic = agent_workspace_server::access::holding(
+            &mut connection,
+            &caller,
+            agent_workspace_server::access::Scope::Space(work),
+        )
+        .await
+        .expect("holding")
+        .expect("in the space");
+        assert!(!for_vic.permissions.contains(create));
+        caller.requested_by = Some(lena);
+        let for_lena = agent_workspace_server::access::holding(
+            &mut connection,
+            &caller,
+            agent_workspace_server::access::Scope::Space(work),
+        )
+        .await
+        .expect("holding")
+        .expect("in the space");
+        assert!(for_lena.permissions.contains(create));
+        drop(connection);
+    })
+    .await;
     world.finish().await;
 }

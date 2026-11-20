@@ -432,7 +432,17 @@ pub(crate) async fn respond_with_established_session(
     if let Some(rotated_session_id) = established.rotated_from_session_id {
         crate::realtime::ephemeral::revoke_session(state, rotated_session_id).await;
     }
-    let response = session_response(state, Some(&established.principal)).await?;
+    // The new session's own account, looked up afresh: a sign-in arrives
+    // anonymous, and an invitation or a new workspace may have just added
+    // a membership the request's scope hasn't seen.
+    let response = crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Member {
+            account: established.principal.actor_id,
+            workspaces: None,
+        },
+        session_response(state, Some(&established.principal)),
+    )
+    .await?;
     let mut response_headers = HeaderMap::new();
     append_cookie(
         &mut response_headers,

@@ -592,23 +592,27 @@ async fn spaces_start_from_their_shape_once() {
 
     // The same shape again: nothing new.
     let space = Uuid::parse_str(&team).expect("space id");
-    let mut tx = agent_workspace_server::db::scoped_tx(world.pool())
+    let again = super::support::as_member(world.owner.actor, async {
+        let mut tx = agent_workspace_server::db::scoped_tx(world.pool())
+            .await
+            .expect("transaction");
+        let again = shape::apply(
+            &mut tx,
+            Writer {
+                actor_id: world.owner.actor,
+                actor_kind: ActorKind::Human,
+                via_grant_id: None,
+                confined_project: None,
+            },
+            space,
+            &shape::builtin(SpaceKind::Team),
+        )
         .await
-        .expect("transaction");
-    let again = shape::apply(
-        &mut tx,
-        Writer {
-            actor_id: world.owner.actor,
-            actor_kind: ActorKind::Human,
-            via_grant_id: None,
-            confined_project: None,
-        },
-        space,
-        &shape::builtin(SpaceKind::Team),
-    )
-    .await
-    .expect("apply again");
-    tx.commit().await.expect("commit");
+        .expect("apply again");
+        tx.commit().await.expect("commit");
+        again
+    })
+    .await;
     assert_eq!(again, shape::Made::default());
     assert_eq!(contents(team).await.1.len(), 1);
 

@@ -1904,26 +1904,56 @@ impl McpServer {
     }
 }
 
-#[tool_handler(router = Self::tools())]
-impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_prompts()
-                .enable_tasks()
-                .build(),
-        )
-        .with_server_info(Implementation::new("agent-workspace", "0.7.0"))
-        .with_instructions(SERVER_INSTRUCTIONS)
+/// The scope a tool call runs in. The MCP transport serves each session on
+/// its own task, so the request's scope doesn't reach the handler; the
+/// caller's account, carried with the request, does.
+async fn tool_scope(
+    state: &AppState,
+    context: &RequestContext<RoleServer>,
+) -> Result<crate::tenancy::Tenancy, ErrorData> {
+    match context_principal(context) {
+        Some(principal) => principal_scope(state, &principal)
+            .await
+            .map_err(|_| ErrorData::internal_error("the caller's scope wasn't read", None)),
+        None => Ok(crate::tenancy::Tenancy::Anonymous),
     }
+}
 
+/// The scope a credential's account works in: its own workspaces, or for a
+/// run's credential (no membership of its own) its run's workspace.
+async fn principal_scope(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<crate::tenancy::Tenancy, AppError> {
+    if !principal.is_run_credential() {
+        return Ok(crate::tenancy::Tenancy::Member {
+            account: principal.actor_id,
+            workspaces: None,
+        });
+    }
+    let space = principal.project_id;
+    let workspace = crate::tenancy::system(
+        "auth.credential",
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(space)
+                .fetch_one(connection)
+                .await
+        }),
+    )
+    .await?;
+    Ok(crate::tenancy::Tenancy::Workspace {
+        account: Some(principal.actor_id),
+        workspace,
+    })
+}
+
+impl McpServer {
     /// The tools the caller's roles let them use (AWD-74): an agent sees
     /// only what it can call. The list differs per caller, so it's cached
     /// only by them.
-    async fn list_tools(
+    async fn list_tools_here(
         &self,
-        _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = Self::tools().list_all();
@@ -1969,13 +1999,41 @@ impl ServerHandler for McpServer {
         .with_ttl_ms(LIST_TTL_MS)
         .with_cache_scope(CacheScope::Private))
     }
+}
+
+#[tool_handler(router = Self::tools())]
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(Implementation::new("agent-workspace", "0.7.0"))
+        .with_instructions(SERVER_INSTRUCTIONS)
+    }
+
+    /// The tools the caller's roles let them use (AWD-74): an agent sees
+    /// only what it can call. The list differs per caller, so it's cached
+    /// only by them.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let scope = tool_scope(&self.state, &context).await?;
+        crate::tenancy::scoped(scope, self.list_tools_here(context)).await
+    }
 
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
-        run_tool(self, request, context).await
+        let scope = tool_scope(&self.state, &context).await?;
+        crate::tenancy::scoped(scope, run_tool(self, request, context)).await
     }
 
     /// K2.21: one of the caller's long calls (`ops::long`), from any
@@ -2052,16 +2110,22 @@ async fn own_task(
     let unknown = || ErrorData::invalid_params("There is no task with that id.", None);
     let principal = context_principal(context).ok_or_else(unknown)?;
     let id = Uuid::parse_str(task_id).map_err(|_| unknown())?;
-    let caller = crate::ops::mcp::caller_of(state, &principal)
-        .await
-        .map_err(|_| {
-            ErrorData::internal_error("Couldn't read the task just now. Try again.", None)
-        })?;
-    let found = if cancel {
-        crate::ops::long::cancel(state, &caller, id).await
-    } else {
-        crate::ops::long::read(state, &caller, id).await
-    };
+    // Like a tool call, in the caller's own scope.
+    let scope = tool_scope(state, context).await?;
+    let found = crate::tenancy::scoped(
+        scope,
+        Box::pin(async {
+            let caller = crate::ops::mcp::caller_of(state, &principal)
+                .await
+                .map_err(|_| AppError::Internal("read the caller"))?;
+            if cancel {
+                crate::ops::long::cancel(state, &caller, id).await
+            } else {
+                crate::ops::long::read(state, &caller, id).await
+            }
+        }),
+    )
+    .await;
     match found {
         Ok(Some(task)) => Ok(task),
         Ok(None) => Err(unknown()),
@@ -3543,9 +3607,12 @@ async fn log_refused_bearer(state: &AppState, headers: &HeaderMap) {
         return;
     };
     let reason = if token.starts_with("aw_oauth_") {
-        oauth::rejected_access_token_reason(state, token)
-            .await
-            .unwrap_or("could not be checked")
+        crate::tenancy::system(
+            "auth.credential",
+            oauth::rejected_access_token_reason(state, token),
+        )
+        .await
+        .unwrap_or("could not be checked")
     } else {
         "not a current credential"
     };
@@ -3578,7 +3645,24 @@ fn unauthorized_response(state: &AppState, had_token: bool) -> Response {
     response
 }
 
+/// The account a request's bearer credential names, if it still may use
+/// it. The credential is looked up before its account is known, so the
+/// lookup runs server-wide (`auth.credential`): the row its digest names
+/// says whose it is, and the lookup checks that account's standing. The
+/// rest of the request then runs in that account's scope.
 pub(crate) async fn resolve_bearer_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<McpPrincipal>, AppError> {
+    let principal =
+        crate::tenancy::system("auth.credential", bearer_principal(state, headers)).await?;
+    if let Some(principal) = &principal {
+        crate::tenancy::signed_in_as(principal_scope(state, principal).await?);
+    }
+    Ok(principal)
+}
+
+async fn bearer_principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<McpPrincipal>, AppError> {
@@ -3825,7 +3909,12 @@ pub async fn issue_credential(
     pool: &sqlx::PgPool,
     command: IssueCredentialCommand,
 ) -> Result<IssuedCredential, AppError> {
-    issue_credential_as(pool, command, CredentialIssuer::HostCli).await
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        issue_credential_as(pool, command, CredentialIssuer::HostCli),
+    )
+    .await
 }
 
 pub async fn issue_credential_as(
@@ -3917,6 +4006,23 @@ pub async fn revoke_credential(
     credential_id: Uuid,
     expected_version: i64,
 ) -> Result<CredentialMetadata, AppError> {
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(revoke_credential_here(
+            pool,
+            credential_id,
+            expected_version,
+        )),
+    )
+    .await
+}
+
+async fn revoke_credential_here(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+) -> Result<CredentialMetadata, AppError> {
     revoke_credential_as(
         pool,
         credential_id,
@@ -3970,6 +4076,25 @@ pub async fn revoke_credential_as(
 }
 
 pub async fn replace_credential(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+    expires_in_days: u16,
+) -> Result<IssuedCredential, AppError> {
+    // The host command line, before any account's scope is known.
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(replace_credential_here(
+            pool,
+            credential_id,
+            expected_version,
+            expires_in_days,
+        )),
+    )
+    .await
+}
+
+async fn replace_credential_here(
     pool: &sqlx::PgPool,
     credential_id: Uuid,
     expected_version: i64,

@@ -52,9 +52,10 @@ pub async fn connect(config: &crate::config::AppConfig) -> Result<PgPool, sqlx::
 
 /// Begins a transaction in the current tenancy scope.
 ///
-/// With no scope at all (a background loop not yet given one), the
-/// transaction carries none: in observe mode that is allowed, and the call
-/// site is logged once and counted.
+/// Every scoped transaction is strict (H1.63): row rules refuse tenant rows
+/// outside its scope. With no scope at all (a background loop not yet given
+/// one) it sees no tenant rows, and the call site is logged once and
+/// counted.
 #[track_caller]
 pub fn scoped_tx(
     pool: &PgPool,
@@ -84,21 +85,23 @@ async fn begin_scoped(
 ) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     let tenancy = tenancy::resolved(pool).await?;
     crate::metrics::tenancy_transaction(tenancy.as_ref().map_or("unscoped", Tenancy::kind));
+    // Strict (H1.63): row rules refuse every tenant row outside the scope,
+    // and a transaction with no scope at all sees none.
     match tenancy {
         Some(tenancy) => {
             pool.begin_with(format!(
-                "BEGIN{mode}; SELECT set_config('app.tenancy', '{}', true)",
+                "BEGIN{mode}; SELECT set_config('app.tenancy', '{}', true), \
+                 set_config('app.tenancy_strict', 'on', true)",
                 tenancy.setting()
             ))
             .await
         }
         None => {
             observe_unscoped(caller);
-            if mode.is_empty() {
-                pool.begin().await
-            } else {
-                pool.begin_with(format!("BEGIN{mode}")).await
-            }
+            pool.begin_with(format!(
+                "BEGIN{mode}; SELECT set_config('app.tenancy_strict', 'on', true)"
+            ))
+            .await
         }
     }
 }

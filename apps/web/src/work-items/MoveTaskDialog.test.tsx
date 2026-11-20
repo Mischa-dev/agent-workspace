@@ -92,7 +92,7 @@ vi.mock('./moveApi', async (importOriginal) => ({
 }))
 
 const done: MoveDone = {
-  moved: [{ from: 'SRC-1', to: 'DST-1', id: 'new-root', title: 'Root', url: 'http://localhost/projects/dst/work-items/new-root' }],
+  moved: [{ from: 'SRC-1', to: 'DST-1', id: 'new-root', title: 'Root', url: 'http://localhost/w/-/s/dst/tasks/new-root' }],
   created: true,
   leftBehind: 2,
 }
@@ -224,7 +224,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
     })
     expect(key).toMatch(/[0-9a-f-]{36}/)
     // Both projects' tasks are read again, and the new task opens.
-    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/w/-/s/dst/tasks/new-root'))
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project', 'src', 'work-items'] })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project', 'dst', 'work-items'] })
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -266,7 +266,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
     // Each attempt is the very same request.
     expect(calls()[1]).toEqual(calls()[0])
     expect(calls()[2]).toEqual(calls()[0])
-    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/w/-/s/dst/tasks/new-root'))
   })
 
   it('after a lost answer that turns out refused, starts over', async () => {
@@ -422,7 +422,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
     await screen.findByRole('heading', { name: 'Moving SRC-1 to DST…' })
     expect(moveTask).toHaveBeenCalledTimes(1)
     await act(async () => answer(done))
-    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/w/-/s/dst/tasks/new-root'))
     expect(moveTask).toHaveBeenCalledTimes(1)
   })
 
@@ -462,7 +462,7 @@ describe('MoveTaskDialog (AWD-102)', () => {
     await screen.findByRole('heading', { name: 'SRC-1 moved to DST-1' })
     expect(screen.getByTestId('where').textContent).toBe('/projects/src/work-items/root')
     fireEvent.click(screen.getByRole('button', { name: 'Open DST-1' }))
-    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/dst/work-items/new-root'))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/w/-/s/dst/tasks/new-root'))
     expect(moveTask).toHaveBeenCalledTimes(1)
   })
 

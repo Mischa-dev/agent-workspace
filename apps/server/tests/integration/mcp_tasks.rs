@@ -204,7 +204,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         created["value"]["url"]
             .as_str()
             .expect("url")
-            .ends_with(&format!("/projects/{work}/work-items/{offline}")),
+            .ends_with(&format!("/w/-/s/{work}/tasks/{offline}")),
         "{created}"
     );
     let after = side_effects(&setup).await;

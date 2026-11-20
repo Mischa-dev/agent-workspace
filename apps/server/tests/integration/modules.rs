@@ -678,7 +678,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     // It links where DM threads open, not to the Channels page.
     assert_eq!(
         shown["value"]["thing"]["href"],
-        format!("/messages/{dm}?thread={dm_thread}"),
+        format!("/w/-/dm/{dm}?thread={dm_thread}"),
         "{shown}"
     );
     // And the thread tools stay listed for DMs; creating a channel doesn't.
@@ -713,7 +713,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         .to_owned();
     let in_group = say(&setup, &setup.browser, &group, "awd75-g1", text("Plans?")).await;
     let group_thread = start_thread(&setup, &group, &in_group, "awd75-gt").await;
-    let group_href = format!("/messages/{group}?thread={group_thread}");
+    let group_href = format!("/w/-/dm/{group}?thread={group_thread}");
     let opened = call("thing_open", json!({"kind": "thread", "id": group_thread})).await;
     assert_eq!(opened["value"]["thing"]["href"], group_href, "{opened}");
     let created = call(

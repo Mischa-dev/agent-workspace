@@ -72,7 +72,7 @@ test('a task moves to another project after a private preview and one confirmati
   await move.click()
 
   // The new task opens; the original stays archived with every value.
-  await page.waitForURL(new RegExp(`/projects/${target.id}/work-items/[0-9a-f-]+$`))
+  await page.waitForURL(new RegExp(`/s/${target.id}/tasks/[0-9a-f-]+$`))
   const newId = page.url().split('/').pop() ?? ''
   const moved = (await (await request.get(`/api/v1/projects/${target.id}/work-items/${newId}`)).json()) as {
     fieldValues: Record<string, unknown>

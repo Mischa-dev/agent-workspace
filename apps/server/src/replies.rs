@@ -1444,6 +1444,11 @@ pub async fn round(state: &AppState) {
 }
 
 async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
+    // Expires reply leases in every workspace.
+    crate::tenancy::system("replies.sweep", Box::pin(expire_leases_here(pool))).await
+}
+
+async fn expire_leases_here(pool: &PgPool) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let expired = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
@@ -1470,6 +1475,11 @@ async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
 /// conversation shows it, and the people who manage the account and can see
 /// the conversation hear about it once an hour at most.
 pub async fn mark_unresponsive(pool: &PgPool) -> Result<(), AppError> {
+    // Marks unresponsive agents in every workspace.
+    crate::tenancy::system("replies.sweep", Box::pin(mark_unresponsive_here(pool))).await
+}
+
+async fn mark_unresponsive_here(pool: &PgPool) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let lapsed = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
         r#"

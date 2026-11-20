@@ -1,7 +1,8 @@
 //! K3.26: incoming webhooks start automations. The silent, costly
 //! failures: a retried delivery that runs a rule twice, a forged one that
 //! runs it at all, a body that leaks into the log, and a secret that is
-//! shown twice or to someone who may not manage automations.
+//! shown twice or to someone who may not manage automations, and a hook
+//! that keeps every body it is sent.
 
 use agent_workspace_server::{
     incoming_hooks::{DELIVERY_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, sign},
@@ -206,6 +207,32 @@ async fn a_signed_delivery_runs_its_rule_once_and_a_forged_one_never() {
     assert_eq!(recent.len(), 2, "{listed}");
     assert!(!listed.to_string().contains(&secret), "{listed}");
     assert!(!listed.to_string().contains("overdue-marker"), "{listed}");
+
+    // The body it took is held against the hook and the workspace's
+    // storage; a hook that holds all it keeps answers 429 and stores nothing.
+    let held = sqlx::query_as::<_, (i32, i64)>(
+        "SELECT held_deliveries, held_bytes FROM incoming_hooks WHERE id = $1::uuid",
+    )
+    .bind(&hook)
+    .fetch_one(pool)
+    .await
+    .expect("held");
+    assert_eq!(held, (1, body.len() as i64));
+    sqlx::query("UPDATE incoming_hooks SET held_deliveries = 50000 WHERE id = $1::uuid")
+        .bind(&hook)
+        .execute(pool)
+        .await
+        .expect("fill the hook");
+    let (status, answer) = deliver(app, &hook, &secret, "evt-4", body).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{answer}");
+    assert_eq!(answer["reason"], "hook_full", "{answer}");
+    let stored = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM incoming_hook_deliveries WHERE delivery_key = 'evt-4'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("stored");
+    assert_eq!(stored, 0, "a full hook stores nothing");
 
     // Deleted, its address stops taking deliveries.
     let deleted = call(

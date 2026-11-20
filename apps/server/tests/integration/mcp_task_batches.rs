@@ -236,7 +236,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
         assert!(
             task["url"]
                 .as_str()
-                .is_some_and(|url| url.contains("/work-items/")),
+                .is_some_and(|url| url.contains("/tasks/")),
             "{task}"
         );
     }

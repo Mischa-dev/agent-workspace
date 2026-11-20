@@ -52,6 +52,14 @@ pub async fn clean_deliveries(
     pool: &PgPool,
     apply: bool,
 ) -> Result<DeliveryRetentionResult, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system("retention", Box::pin(clean_deliveries_here(pool, apply))).await
+}
+
+async fn clean_deliveries_here(
+    pool: &PgPool,
+    apply: bool,
+) -> Result<DeliveryRetentionResult, AppError> {
     let count = format!(
         "SELECT count(*) FROM deliveries \
          WHERE state <> 'pending' AND created_at < now() - interval '{DELIVERY_KEEP}'"
@@ -117,6 +125,19 @@ pub async fn lock_repository_retention(
 }
 
 pub async fn clean_worktrees(
+    pool: &PgPool,
+    data_root: &Path,
+    apply: bool,
+) -> Result<WorktreeRetentionResult, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system(
+        "retention",
+        Box::pin(clean_worktrees_here(pool, data_root, apply)),
+    )
+    .await
+}
+
+async fn clean_worktrees_here(
     pool: &PgPool,
     data_root: &Path,
     apply: bool,
@@ -343,6 +364,11 @@ pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
 /// true` runs, under the same advisory lock so the two never overlap.
 /// Returns how many rows changed.
 pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
+    // Retention runs over every workspace.
+    crate::tenancy::system("retention", Box::pin(clean_database_windows_here(pool))).await
+}
+
+async fn clean_database_windows_here(pool: &PgPool) -> Result<i64, AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(470127786, 1)")
         .execute(&mut *transaction)
@@ -360,7 +386,8 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
         completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1),
         stopped_instances AS (DELETE FROM server_instances WHERE coalesce(stopped_at, heartbeat_at) <= now() - interval '7 days' RETURNING 1),
         old_ended_mcp_sessions AS (DELETE FROM mcp_ended_sessions WHERE ended_at <= now() - interval '30 days' RETURNING 1),
-        old_incoming_hook_deliveries AS (DELETE FROM incoming_hook_deliveries WHERE received_at <= now() - interval '30 days' RETURNING 1),
+        old_incoming_hook_deliveries AS (DELETE FROM incoming_hook_deliveries WHERE received_at <= now() - interval '30 days' RETURNING hook_id, octet_length(body) AS body_bytes),
+        released_hook_holds AS (UPDATE incoming_hooks hook SET held_deliveries = greatest(hook.held_deliveries - cleared.deliveries, 0), held_bytes = greatest(hook.held_bytes - cleared.bytes, 0) FROM (SELECT hook_id, count(body_bytes)::integer AS deliveries, COALESCE(sum(body_bytes), 0)::bigint AS bytes FROM old_incoming_hook_deliveries GROUP BY hook_id) cleared WHERE hook.id = cleared.hook_id RETURNING 1),
         finished_operation_tasks AS (DELETE FROM operation_tasks WHERE finished_at <= now() - interval '7 days' RETURNING 1)
         SELECT (SELECT count(*) FROM expired_idempotency)
              + (SELECT count(*) FROM expired_invitations)

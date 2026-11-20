@@ -151,6 +151,11 @@ pub trait Operation: Send + Sync + 'static {
     const DESCRIPTION: &'static str;
     /// Event kinds a write emits (K3), for triggers and docs.
     const EMITS: &'static [&'static str] = &[];
+    /// Reads or writes the caller's other workspaces too (an account's own
+    /// standing across them, such as joining another one): its
+    /// transaction's scope is every workspace the caller belongs to, not
+    /// only the one it is called in.
+    const ACROSS_WORKSPACES: bool = false;
 
     type Input: DeserializeOwned + Serialize + JsonSchema + Targeted + Send + 'static;
     type Output: Serialize + JsonSchema + Send + 'static;

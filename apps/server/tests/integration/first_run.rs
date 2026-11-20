@@ -208,7 +208,9 @@ async fn the_first_person_sets_up_once_and_imports_only_for_themselves() {
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(&state, export).await.expect("export");
+    crate::support::run_export(&state, export)
+        .await
+        .expect("export");
     let response = router
         .clone()
         .oneshot(browser.request(

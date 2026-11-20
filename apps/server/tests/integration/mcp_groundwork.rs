@@ -57,7 +57,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         created["value"]["url"]
             .as_str()
             .expect("url")
-            .ends_with(&format!("/projects/{project}/work-items/{task}")),
+            .ends_with(&format!("/w/-/s/{project}/tasks/{task}")),
         "{created}"
     );
     let replay = tool(

@@ -72,6 +72,19 @@ pub(crate) async fn receipt_http(
     headers: HeaderMap,
     Json(request): Json<ReceiptRequest>,
 ) -> Result<StatusCode, AppError> {
+    // The receipt itself names the push it is for; the service worker has no session.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(receipt_http_here(State(state), headers, Json(request))),
+    )
+    .await
+}
+
+async fn receipt_http_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ReceiptRequest>,
+) -> Result<StatusCode, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     let opened = match request.event.as_str() {
         "shown" => false,

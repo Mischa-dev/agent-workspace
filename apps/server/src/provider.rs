@@ -398,7 +398,8 @@ fn spawn_drive(
     turn_id: String,
 ) {
     let background_state = state.clone();
-    tokio::spawn(async move {
+    // The turn outlives the request or job that started it, and its scope.
+    tokio::spawn(crate::tenancy::system("runs.host", async move {
         if let Err(error) = drive_turn(
             background_state.clone(),
             Arc::clone(&reports),
@@ -424,7 +425,7 @@ fn spawn_drive(
             )
             .await;
         }
-    });
+    }));
 }
 
 /// After a restart, a turn still running where it runs (a cloud task) is

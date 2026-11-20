@@ -570,6 +570,24 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .fetch_one(&t.pool)
     .await
     .expect("default connection at home in A");
+    // Past its date the deletion has begun (its own buckets go first), so
+    // it can no longer be kept.
+    sqlx::query(
+        "UPDATE organizations SET delete_after = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(a.organization)
+    .execute(&t.pool)
+    .await
+    .expect("due");
+    let (status, body) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_delete_cancel",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let deleted = lifecycle::delete_now(&t.state, a.organization, true)
         .await
         .expect("delete")
