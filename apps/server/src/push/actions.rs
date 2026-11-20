@@ -296,7 +296,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
             r#"
         SELECT t.id, t.actor_id, t.notification_id, t.request_id, t.actions, t.used_action
         FROM notification_action_tokens t
-        JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human'
+        JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human' -- // kind-check: mechanical (push actions answer from a person's device)
         JOIN users u ON u.actor_id = t.actor_id AND u.status = 'active'
         JOIN organization_memberships om
           ON om.organization_id = t.organization_id AND om.actor_id = t.actor_id AND om.enabled

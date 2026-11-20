@@ -490,8 +490,10 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await
     .expect("B's owner");
     let host_account = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+         VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
     )
+    .bind(a.organization)
     .fetch_one(&t.pool)
     .await
     .expect("host account");

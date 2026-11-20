@@ -106,6 +106,7 @@ struct ProjectAccessRow {
     project_archived: bool,
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -141,18 +142,9 @@ const ACCESS_COLUMNS: &str = r#"
             COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled,
             -- K1.27: what the account's groups are given in the space, as
             -- `holding::load` adds them.
-            CASE WHEN conversation.project_id IS NOT NULL THEN ARRAY(
-                SELECT DISTINCT granted.key
-                FROM role_grants grant_row
-                JOIN account_groups grp
-                  ON grp.id = grant_row.group_id AND grp.archived_at IS NULL
-                JOIN account_group_members group_member
-                  ON group_member.group_id = grant_row.group_id
-                 AND group_member.account_id = $2
-                CROSS JOIN LATERAL unnest(workspace_role_permissions(grant_row.role_id))
-                    AS granted(key)
-                WHERE grant_row.space_id = conversation.project_id
-            ) END AS group_permissions
+            CASE WHEN conversation.project_id IS NOT NULL
+                 THEN space_group_permissions($2, conversation.project_id)
+            END AS group_permissions
 "#;
 
 const ACCESS_FROM: &str = r#"
@@ -1061,6 +1053,7 @@ async fn list_channels(
         &principal,
         &access.membership_role,
         access.membership_role_permissions.as_deref(),
+        access.membership_group_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -3875,6 +3868,7 @@ async fn project_conversation_sidebar(
         &principal,
         &access.membership_role,
         access.membership_role_permissions.as_deref(),
+        access.membership_group_permissions.as_deref(),
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
@@ -4015,6 +4009,7 @@ async fn authorized_project(
             project.archived_at IS NOT NULL AS project_archived,
             membership.role AS membership_role,
             workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+            space_group_permissions($2, project.id) AS membership_group_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -4036,6 +4031,7 @@ async fn authorized_project(
         principal,
         &row.membership_role,
         row.membership_role_permissions.as_deref(),
+        row.membership_group_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -4056,6 +4052,7 @@ async fn lock_project_access(
             project.archived_at IS NOT NULL AS project_archived,
             membership.role AS membership_role,
             workspace_role_permissions(membership.role_id) AS membership_role_permissions,
+            space_group_permissions($2, project.id) AS membership_group_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -4078,6 +4075,7 @@ async fn lock_project_access(
         principal,
         &row.membership_role,
         row.membership_role_permissions.as_deref(),
+        row.membership_group_permissions.as_deref(),
         row.membership_enabled,
         row.project_id,
         action,
@@ -4322,6 +4320,7 @@ fn require_policy(
     principal: &AuthenticatedActor,
     role: &str,
     role_permissions: Option<&[String]>,
+    groups: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
@@ -4330,6 +4329,7 @@ fn require_policy(
         principal,
         role,
         role_permissions,
+        groups,
         enabled,
         project_id,
         action,
@@ -4348,6 +4348,7 @@ fn policy_allows(
     principal: &AuthenticatedActor,
     role: &str,
     role_permissions: Option<&[String]>,
+    groups: Option<&[String]>,
     enabled: bool,
     project_id: Uuid,
     action: Action,
@@ -4355,7 +4356,8 @@ fn policy_allows(
     Ok(crate::access::membership_allows(
         principal.actor_id,
         project_id,
-        RoleGrant::stored(role, role_permissions)?,
+        RoleGrant::stored(role, role_permissions)?
+            .with_groups(crate::access::group_permissions(groups)),
         enabled,
         action.permission(),
     ))
@@ -4854,6 +4856,7 @@ async fn fetch_run_projection(
             principal,
             &conversation.membership_role,
             conversation.membership_role_permissions.as_deref(),
+            conversation.group_permissions.as_deref(),
             conversation.membership_enabled,
             conversation.place(),
             Action::RunInterrupt,
@@ -4877,6 +4880,7 @@ async fn fetch_run_projection(
                 principal,
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
+                conversation.group_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.place(),
                 Action::WorkerInvoke,
@@ -4889,6 +4893,7 @@ async fn fetch_run_projection(
                 principal,
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
+                conversation.group_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.place(),
                 Action::RepositoryPublish,
@@ -4902,6 +4907,7 @@ async fn fetch_run_projection(
                 principal,
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
+                conversation.group_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.place(),
                 Action::PullRequestCreate,
@@ -4913,6 +4919,7 @@ async fn fetch_run_projection(
                 principal,
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
+                conversation.group_permissions.as_deref(),
                 conversation.membership_enabled,
                 conversation.place(),
                 Action::PullRequestRefresh,

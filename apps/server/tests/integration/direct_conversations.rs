@@ -456,11 +456,6 @@ async fn agent_dm_permissions_follow_role() {
 
 async fn add_agent(pool: &PgPool, space_id: Uuid, name: &str, handle: &str) -> Uuid {
     let actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'external_agent')")
-        .bind(actor_id)
-        .execute(pool)
-        .await
-        .expect("insert agent");
     // DMs live in no space: an agent is reached through its workspace.
     let organization_id = if space_id == agent_workspace_server::spaces::DIRECT {
         sqlx::query_scalar::<_, Uuid>(
@@ -476,6 +471,14 @@ async fn add_agent(pool: &PgPool, space_id: Uuid, name: &str, handle: &str) -> U
             .await
             .expect("the space's workspace")
     };
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) VALUES ($1, 'external_agent', $2)",
+    )
+    .bind(actor_id)
+    .bind(organization_id)
+    .execute(pool)
+    .await
+    .expect("insert agent");
     sqlx::query(
         "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
     )

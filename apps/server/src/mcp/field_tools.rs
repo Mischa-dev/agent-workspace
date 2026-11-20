@@ -230,7 +230,8 @@ pub(crate) async fn field_write(
         if !role_allows(
             principal,
             project_id,
-            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref())
+                .with_groups(membership.group_permissions.clone()),
             Action::WorkflowManage,
         ) {
             return Ok(ToolResult::denied(MANAGERS_MESSAGE));
