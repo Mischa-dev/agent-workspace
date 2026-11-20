@@ -2661,13 +2661,13 @@ async fn run_tool(
     if writes_while_unpaused_only(&request.name)
         && let Some(workspace) = acting_in
     {
-        match guard_hand_written(
+        match Box::pin(guard_hand_written(
             &server.state,
             &principal,
             limits.clone(),
             workspace,
             &request,
-        )
+        ))
         .await
         {
             Ok(None) => {}

@@ -33,6 +33,11 @@ retries = 1
 # triggers that give it its space and roles, then counts two idle windows:
 # three to four minutes alone, by size, and a minute before each window
 # for PostgreSQL's statistics to land. Ten minutes too; no retry.
+#
+# The lifecycle test digests every table's rows of the second workspace
+# before and after deleting the first (the isolation sweep's ids, against
+# every table with an id): about a minute alone, and over four minutes on a
+# loaded runner at the end of the run. Slow by size; ten minutes, no retry.
 [[profile.ci.overrides]]
-filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another) | test(=idle_cost::ten_thousand_quiet_workspaces_cost_what_one_does)"
+filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another) | test(=idle_cost::ten_thousand_quiet_workspaces_cost_what_one_does) | test(=workspace_lifecycle::a_workspace_is_suspended_kept_and_deleted_without_touching_another)"
 slow-timeout = { period = "60s", terminate-after = 10 }
