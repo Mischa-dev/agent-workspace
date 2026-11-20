@@ -1,0 +1,25 @@
+Draft patch — PR #128 DNS timeout (CONFIRMED, verdicts.md item 43). webhook_client awaited lookup_host with no bound; WEBHOOK_TIMEOUT only applied to the reqwest client built after resolution, so a stalled resolver blocks the sequential reply worker (holding FOR UPDATE delivery rows). Wraps the lookup in tokio::time::timeout(WEBHOOK_TIMEOUT, ...), mirroring outbound.rs's bounded resolve. Uncompiled in the authoring sandbox; run cargo check before landing.
+
+diff --git a/apps/server/src/replies.rs b/apps/server/src/replies.rs
+index 475ebf8..7834188 100644
+--- a/apps/server/src/replies.rs
++++ b/apps/server/src/replies.rs
+@@ -1608,10 +1608,14 @@ pub(crate) async fn webhook_client(
+     let port = url
+         .port_or_known_default()
+         .ok_or("the webhook URL is unsafe")?;
+-    let addresses = tokio::net::lookup_host((host.as_str(), port))
+-        .await
+-        .map_err(|_| "the webhook host could not be resolved")?
+-        .collect::<Vec<_>>();
++    let addresses = tokio::time::timeout(
++        WEBHOOK_TIMEOUT,
++        tokio::net::lookup_host((host.as_str(), port)),
++    )
++    .await
++    .map_err(|_| "the webhook host could not be resolved")?
++    .map_err(|_| "the webhook host could not be resolved")?
++    .collect::<Vec<_>>();
+     if addresses.is_empty()
+         || !trusted
+             && addresses.iter().any(|address| match address.ip() {

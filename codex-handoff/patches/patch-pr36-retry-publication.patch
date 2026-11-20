@@ -1,0 +1,15 @@
+Draft patch — PR #36 retry publication (CONFIRMED, verdicts.md item 36). The retry workspace-reuse UPDATE set only state='active', leaving the predecessor's published_commit in place; create_pull_request gates only on published_commit IS NOT NULL and would use the predecessor's commit as the retry run's PR head. Clears published_commit/published_at/published_by_actor_id/publish_failure_category on reuse (the 0022 publication shape constraint requires the first three to be nulled together), so publication must be re-earned by the retry run. Uncompiled in the authoring sandbox; run cargo check + scheduler tests before landing.
+
+diff --git a/apps/server/src/scheduler.rs b/apps/server/src/scheduler.rs
+index 04c2f3a..5d0c19e 100644
+--- a/apps/server/src/scheduler.rs
++++ b/apps/server/src/scheduler.rs
+@@ -522,7 +522,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
+                 crate::retention::lock_repository_retention(&mut transaction, run.repository_id)
+                     .await?;
+                 let claimed = sqlx::query(
+-                    "UPDATE repository_workspaces SET state = 'active', updated_at = now() WHERE id = $1 AND state = 'retained'",
++                    "UPDATE repository_workspaces SET state = 'active', published_commit = NULL, published_at = NULL, published_by_actor_id = NULL, publish_failure_category = NULL, updated_at = now() WHERE id = $1 AND state = 'retained'",
+                 )
+                 .bind(workspace_id)
+                 .execute(&mut *transaction)
