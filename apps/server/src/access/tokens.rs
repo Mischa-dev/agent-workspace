@@ -246,6 +246,9 @@ pub struct Holder {
     /// token reaches what that connection reaches, no more.
     pub connection_id: Option<Uuid>,
     pub scopes: Vec<String>,
+    /// Whether it was narrowed to listed spaces, rather than reaching every
+    /// space of the account in its workspace.
+    pub listed_spaces: bool,
     token_digest: Vec<u8>,
 }
 
@@ -263,6 +266,7 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
         SELECT token.id AS token_id, token.account_id, account.kind AS account_kind,
                token.workspace_id, token.space_id, token.run_id,
                host.name AS host_name, token.token_digest, token.scopes,
+               token.spaces IS NOT NULL AS listed_spaces,
                (SELECT connection.id FROM external_agent_connections connection
                 JOIN projects home ON home.id = connection.project_id
                 WHERE connection.actor_id = token.account_id AND connection.status = 'active'

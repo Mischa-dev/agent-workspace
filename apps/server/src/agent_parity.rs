@@ -191,6 +191,7 @@ mod tests {
             "/api/v1/client-errors",
             Plumbing("browser error reports"),
         ),
+        (Post, "/api/v1/auth/oidc/link", Plumbing("sign-in")),
         (
             Post,
             "/api/v1/client-timings",
@@ -316,6 +317,21 @@ mod tests {
             Put,
             "/api/v1/account/default-workspace",
             Person("a person's own account"),
+        ),
+        (
+            Post,
+            "/api/v1/setup",
+            Plumbing("first run, before any account"),
+        ),
+        (
+            Post,
+            "/api/v1/setup/workspace",
+            Plumbing("first run, before any account"),
+        ),
+        (
+            Post,
+            "/api/v1/setup/import",
+            Plumbing("first run, before any account"),
         ),
         (Post, "/api/v1/auth/login", Plumbing("sign-in")),
         (Post, "/api/v1/auth/logout", Plumbing("sign-in")),
@@ -929,6 +945,26 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/billing/webhook",
+            Plumbing("the billing provider's own deliveries"),
+        ),
+        (
+            Post,
+            "/api/v1/incoming-hooks/{hook_id}",
+            Plumbing("another service's signed deliveries to an incoming hook"),
+        ),
+        (
+            Post,
+            "/live/v1/publish",
+            Plumbing("the server's own signed publishes to a separate live service"),
+        ),
+        (
+            Post,
+            "/internal/work/tick",
+            Plumbing("the operator's scheduler driving background work"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/invitations",
             Tool("invitation_create"),
         ),
@@ -1063,6 +1099,18 @@ mod tests {
             Post,
             "/api/v1/host/commands/{command_id}/ack",
             Plumbing("a host acknowledging a command, with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/runs",
+            Plumbing("a host handing over a run it started itself, with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/runs/{run_id}/model",
+            Plumbing(
+                "a built-in assistant run asking for its next model turn, with its own credential",
+            ),
         ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),

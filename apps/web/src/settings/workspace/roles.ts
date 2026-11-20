@@ -81,6 +81,7 @@ export const PERMISSION_KEYS = [
   'channels.browse',
   'channels.create_private',
   'channels.mention_everyone',
+  'workspace.export',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]

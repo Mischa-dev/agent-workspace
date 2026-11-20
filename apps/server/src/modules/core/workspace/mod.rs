@@ -16,6 +16,7 @@ impl CoreModule for Module {
         module.operations(crate::packages::ops::register_ops);
         module.operations(crate::packages::directory_ops::register_ops);
         module.operations(crate::statuses::ops::register_ops);
+        module.operations(crate::follows::ops::register_ops);
         module.operations(crate::profiles::ops::register_ops);
         module.operations(crate::groups::ops::register_ops);
         module.operations(crate::search::ops::register_ops);
@@ -33,6 +34,12 @@ impl CoreModule for Module {
         module.operations(crate::modules::connected::files::register_ops);
         module.routes(crate::modules::connected::http::router);
         module.operations(crate::history::ops::register_ops);
+        module.operations(crate::events::activity::register_ops);
+        module.operations(crate::links::ops::register_ops);
+        module.operations(crate::files::ops::register_ops);
+        module.operations(crate::export::ops::register_ops);
+        module.operations(crate::metering::ops::register_ops);
+        module.routes(crate::export::transfer::router);
         module.operations(crate::accounts::claims::register_ops);
         module.routes(crate::accounts::claims::router);
         module.operations(crate::accounts::credential_ops::register_ops);

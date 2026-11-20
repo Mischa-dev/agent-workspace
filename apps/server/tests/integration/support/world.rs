@@ -105,6 +105,16 @@ impl Workspace {
             .unwrap_or_else(|| panic!("no project {key}"))
     }
 
+    /// The app again on the same database, with one more configuration
+    /// value (such as a secrets keyring).
+    pub(crate) fn rebuilt_with(
+        &self,
+        key: &str,
+        value: impl Into<String>,
+    ) -> (axum::Router, AppState) {
+        app(&self.db).with(key, value).build()
+    }
+
     /// Drops the workspace's database.
     pub(crate) async fn finish(self) {
         drop(self.app);

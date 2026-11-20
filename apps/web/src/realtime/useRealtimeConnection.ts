@@ -15,6 +15,7 @@ import {
   type ReactionUpdates,
 } from '../conversations/liveMessages'
 import { cacheContext, RECONNECT, SELF_HANDLED, type Touch } from './handlers'
+import { loadTouchTable } from './handlers/load'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
 import { modulesChanged } from './moduleSwitches'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
@@ -100,7 +101,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const context = cacheContext(queryClient)
     // What each event makes stale loads with the connection, not the first
     // paint; an event that beats it waits for it.
-    const touchTable = import('./handlers/table')
+    const touchTable = loadTouchTable()
 
     // Each touch refetches once per burst (handlers/index.ts).
     const invalidate = (touches: readonly Touch[]) => {

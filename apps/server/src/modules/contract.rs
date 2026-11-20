@@ -69,16 +69,19 @@ pub enum LinkKind {
     MadeFrom,
     RelatesTo,
     Duplicates,
+    /// Shows the other inside itself: a page embedding a sheet or a board.
+    Embeds,
 }
 
 impl LinkKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::PartOf,
         Self::Blocks,
         Self::About,
         Self::MadeFrom,
         Self::RelatesTo,
         Self::Duplicates,
+        Self::Embeds,
     ];
 
     pub fn key(self) -> &'static str {
@@ -89,6 +92,7 @@ impl LinkKind {
             Self::MadeFrom => "made_from",
             Self::RelatesTo => "relates_to",
             Self::Duplicates => "duplicates",
+            Self::Embeds => "embeds",
         }
     }
 
@@ -101,6 +105,7 @@ impl LinkKind {
             Self::MadeFrom => ("Made from", "Made into"),
             Self::RelatesTo => ("Related to", "Related to"),
             Self::Duplicates => ("Duplicates", "Duplicated by"),
+            Self::Embeds => ("Embeds", "Embedded in"),
         }
     }
 }

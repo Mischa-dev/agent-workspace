@@ -252,6 +252,9 @@ pub(super) struct ConversationRow {
     project_id: Uuid,
     project_name: String,
     direct: bool,
+    /// The workspace a DM or group is kept in (the direct scope for a
+    /// personal one), for a credential's limit.
+    workspace_id: Uuid,
     parent_id: Option<Uuid>,
     parent_name: Option<String>,
     parent_kind: Option<String>,
@@ -429,6 +432,10 @@ pub(super) struct ConversationOpenValue {
     /// Pages, decisions and messages pinned here: what's true for this
     /// conversation right now.
     pub pinned: Vec<PinItem>,
+    /// This channel's or thread's memory page, with its first lines: read
+    /// it before acting here, and keep it current with memory_page_set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::memory::memory_pages::MemoryPointer>,
     pub highest_sequence: i64,
     pub last_read_sequence: i64,
     pub unread_count: i64,
@@ -632,6 +639,7 @@ pub(super) async fn list_rows(
                COALESCE(conversation.project_id, direct_scope_id()) AS project_id,
                COALESCE(project.name, 'Messages') AS project_name,
                conversation.project_id IS NULL AS direct,
+               conversation.workspace_id,
                parent.id AS parent_id, parent.name AS parent_name, parent.kind AS parent_kind,
                conversation.thread_status, conversation.thread_outcome,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
@@ -709,6 +717,20 @@ pub(super) async fn list_rows(
     .bind(limit)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // A DM or group is in no space, so a credential's limit can't narrow
+    // it by `projects`: a kept one follows its workspace's limit, as
+    // opening it would (`access::direct_grant_allows`).
+    let rows = rows
+        .into_iter()
+        .filter(|row| {
+            !row.direct
+                || !crate::policy::agent_limit_hides_direct(
+                    viewer,
+                    row.workspace_id,
+                    crate::policy::Permission::ProjectsView,
+                )
+        })
+        .collect::<Vec<_>>();
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
     let summary = crate::db::scoped_one(&state.pool, async |connection| {
         crate::read_state::unread_by_conversation(
@@ -932,9 +954,17 @@ pub(super) async fn conversation_open(
         if arguments.mark_read.unwrap_or(false) && principal.can_write() {
             mark(state, principal, &conversation, highest).await?;
         }
+        let memory = crate::memory::memory_pages::pointer_from_pool(
+            &state.pool,
+            crate::memory::memory_pages::MemoryFor::Conversation,
+            conversation.id,
+            principal.actor_id,
+        )
+        .await;
         Ok::<_, AppError>(ToolResult::ok(ConversationOpenValue {
             conversation: detail,
             pinned,
+            memory,
             highest_sequence: highest,
             last_read_sequence: last_read,
             unread_count,
@@ -1902,10 +1932,12 @@ pub(super) async fn conversation_start(
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>(),
-                Err(person) => {
+                Err(unresolved) => {
                     return Ok(ToolResult::invalid(
                         "people",
-                        format!("{person} isn't someone you can message. Try people_search."),
+                        unresolved.explain(|person| {
+                            format!("{person} isn't someone you can message. Try people_search.")
+                        }),
                     ));
                 }
             };

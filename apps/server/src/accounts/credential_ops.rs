@@ -45,11 +45,62 @@ async fn may_manage_secrets(
             Err(_) => return Err(OpError::not_found("That account")),
         }
     }
-    if caller.limits.is_some() || caller.via_grant_id.is_some() {
+    // A short-lived token never makes a lasting secret, which would outlive
+    // the token and the secret it came from.
+    let through_token = match caller.credential_id {
+        Some(credential) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM access_tokens WHERE id = $1)",
+        )
+        .bind(credential)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(AppError::from)?,
+        None => false,
+    };
+    if through_token || caller.limits.is_some() || caller.via_grant_id.is_some() {
         return Err(OpError::Denied {
             reason: crate::ops::DenyReason::Delegation,
             message: "Secrets are made and changed with the account's own sign-in or secret, \
                       not through an app or a short-lived token."
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+/// A caller signed in with a secret made for one workspace (not account-wide)
+/// makes and rotates only secrets for that workspace that aren't
+/// account-wide either: a narrow secret never mints a wider one. An agent's
+/// secret reaches through its connection, so its workspace is the bound.
+async fn no_wider_than_caller(
+    connection: &mut PgConnection,
+    caller: &Caller,
+    reach: CredentialReach,
+    workspace: Uuid,
+) -> Result<(), OpError> {
+    let Some(credential) = caller.credential_id else {
+        return Ok(());
+    };
+    let calling = sqlx::query_as::<_, (String, Uuid)>(
+        "SELECT credential.reach, project.organization_id FROM account_credentials credential \
+         JOIN projects project ON project.id = credential.project_id \
+         WHERE credential.id = $1",
+    )
+    .bind(credential)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(AppError::from)?;
+    let Some((calling_reach, home)) = calling else {
+        return Ok(());
+    };
+    if calling_reach == CredentialReach::Account.stored() {
+        return Ok(());
+    }
+    if reach != CredentialReach::Space || home != workspace {
+        return Err(OpError::Denied {
+            reason: crate::ops::DenyReason::Delegation,
+            message: "A secret made for one workspace makes and rotates only secrets for that \
+                      workspace. Sign in to make a wider one."
                 .into(),
         });
     }
@@ -242,6 +293,8 @@ impl Operation for CredentialCreate {
         .fetch_one(&mut **tx)
         .await
         .map_err(AppError::from)?;
+        let reach = input.reach.unwrap_or(CredentialReach::Space);
+        no_wider_than_caller(tx, &caller, reach, workspace_id).await?;
         let (connection_id, scopes) = match connection {
             Some((id, scopes)) => (Some(id), scopes),
             None if signs_in => {
@@ -272,7 +325,7 @@ impl Operation for CredentialCreate {
                 home_space,
                 client_name: &input.name,
                 scopes,
-                reach: input.reach.unwrap_or(CredentialReach::Space),
+                reach,
                 days: input.days.unwrap_or(DEFAULT_DAYS),
                 connection_id,
                 created_by: caller.account_id,
@@ -340,6 +393,18 @@ impl Operation for CredentialRotate {
         let caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
         let old = managed_secret(tx, &caller, input.credential.id()).await?;
+        let old_reach = if old.reach == CredentialReach::Account.stored() {
+            CredentialReach::Account
+        } else {
+            CredentialReach::Space
+        };
+        let old_workspace =
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(old.space_id)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(AppError::from)?;
+        no_wider_than_caller(tx, &caller, old_reach, old_workspace).await?;
         if old.replaced_by.is_some() || old.status != "active" {
             return Err(OpError::invalid(
                 "credential",

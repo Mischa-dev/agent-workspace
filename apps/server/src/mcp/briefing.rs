@@ -181,12 +181,20 @@ pub(crate) async fn briefing(
               AND entry.sequence > COALESCE(read_state.highest_seen_sequence, 0)
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $1)
+              -- A DM or group follows the credential's limit by the
+              -- workspace it is kept in.
+              AND ($3::uuid[] IS NULL OR message.project_id IS NOT NULL
+                   OR conversation.workspace_id = ANY($3))
             ORDER BY message.created_at DESC
             LIMIT 20
             "#,
         )
         .bind(principal.actor_id)
         .bind(&talk_projects)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            principal.actor_id,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let unread = list_rows(
@@ -466,6 +474,10 @@ pub(crate) struct ProjectOverview {
     /// The project's guide page: how this project works. Read it first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide: Option<GuidePage>,
+    /// The project's memory page, with its first lines: durable facts for
+    /// anyone working here. Keep it current with memory_page_set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::memory::memory_pages::MemoryPointer>,
     /// Skills: instructions for a kind of work, each with when to use it.
     /// Load the ones that fit your work with skill_get.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -818,7 +830,15 @@ pub(crate) async fn project_open(
         };
         let repositories = if on("code") { repositories } else { Vec::new() };
         let modules_off = modules.off().map(|module| module.id.clone()).collect();
+        let memory = crate::memory::memory_pages::pointer_from_pool(
+            &state.pool,
+            crate::memory::memory_pages::MemoryFor::Space,
+            project_id,
+            principal.actor_id,
+        )
+        .await;
         Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
+            memory,
             project: ProjectHeader {
                 id: project_id.to_string(),
                 key,

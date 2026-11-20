@@ -638,7 +638,10 @@ pub struct Offer {
     #[schemars(with = "String")]
     pub host_id: Uuid,
     pub host_name: String,
-    /// The offer as the host wrote it: `{id, title, summary?, start}`.
+    /// The offer as the host wrote it: `{id, title, summary?, start}`. The
+    /// built-in assistant's says `unavailable` (what to set first) when the
+    /// workspace has no model yet, and `start.adds` when choosing it adds
+    /// the agent at once.
     #[schemars(with = "serde_json::Map<String, Value>")]
     pub offer: Value,
 }
@@ -684,20 +687,27 @@ impl Operation for AgentOfferList {
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
-        let offers = hosts
-            .iter()
-            .flat_map(|host| {
-                host.offers
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|offer| Offer {
-                        host_id: host.id,
-                        host_name: host.name.clone(),
-                        offer: offer.clone(),
-                    })
-            })
-            .collect();
+        // A1.25: the built-in host's assistant, ready or saying what to set.
+        let builtin = super::builtin::assistant::builtin_host_id(tx, workspace_id).await?;
+        let mut offers: Vec<Offer> = Vec::new();
+        if let Some(host_id) = builtin {
+            offers.push(Offer {
+                host_id,
+                host_name: "This server".to_owned(),
+                offer: super::builtin::assistant::offer(call.state, workspace_id).await?,
+            });
+        }
+        offers.extend(hosts.iter().flat_map(|host| {
+            host.offers
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|offer| Offer {
+                    host_id: host.id,
+                    host_name: host.name.clone(),
+                    offer: offer.clone(),
+                })
+        }));
         Ok(OffersView { offers })
     }
 }
@@ -744,6 +754,14 @@ pub struct AgentOfferStartInput {
     pub host: IdRef,
     /// The offer's id, as the host published it.
     pub offer_id: String,
+    /// For an offer that adds the agent at once (the built-in assistant):
+    /// its name here. Default: the offer's title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// For an offer that adds the agent at once: its role here. Default:
+    /// the workspace's role for new agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<IdRef>,
 }
 
 impl Targeted for AgentOfferStartInput {
@@ -755,9 +773,15 @@ impl Targeted for AgentOfferStartInput {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OfferStarted {
-    /// The command the host was sent; read it with agent_action_get.
-    #[schemars(with = "String")]
-    pub command_id: Uuid,
+    /// The command the host was sent; read it with agent_action_get. None
+    /// when the offer added the agent at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub command_id: Option<Uuid>,
+    /// The agent's account, when the offer added it at once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub account_id: Option<Uuid>,
     /// The host's page to carry on at, when the offer names one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<String>,
@@ -787,6 +811,15 @@ impl Operation for AgentOfferStart {
     ) -> Result<OfferStarted, OpError> {
         let workspace_id = call.ctx.workspace_id;
         let caller = call.account_id();
+        if input.offer_id == super::builtin::assistant::OFFER_ID {
+            let builtin = {
+                let tx = call.tx().await?;
+                super::builtin::assistant::builtin_host_id(tx, workspace_id).await?
+            };
+            if builtin == Some(input.host.id()) {
+                return add_assistant(call, input).await;
+            }
+        }
         let tx = call.tx().await?;
         let host = offering_host(tx, input.host.id(), workspace_id, caller)
             .await?
@@ -825,11 +858,84 @@ impl Operation for AgentOfferStart {
         };
         call.audit_target("host", host.id, json!({"offer": offer["id"]}));
         Ok(OfferStarted {
-            command_id: command.id,
+            command_id: Some(command.id),
+            account_id: None,
             page: offer_page(&host, &offer, command.id),
             panel,
         })
     }
+}
+
+/// A1.25: add the built-in assistant now, by the person who chose it (who
+/// holds `agents.create`): its account, membership with the role they
+/// picked, and its binding to the built-in host, as an approved proposal.
+async fn add_assistant(
+    call: &mut OpCall<'_>,
+    input: AgentOfferStartInput,
+) -> Result<OfferStarted, OpError> {
+    use super::builtin::assistant;
+    let workspace_id = call.ctx.workspace_id;
+    if let Some(message) = assistant::unavailable(call.state, workspace_id).await? {
+        return Err(OpError::Invalid {
+            field: "offerId".into(),
+            message: message.into(),
+        });
+    }
+    let name = match input.name.as_deref() {
+        Some(name) => one_line(name, 80).ok_or_else(|| {
+            OpError::invalid("name", "Give it a name: one line of at most 80 characters.")
+        })?,
+        None => assistant::DEFAULT_NAME.to_owned(),
+    };
+    let caller = call.ctx.caller.clone();
+    let tx = call.tx().await?;
+    let host_id = assistant::builtin_host_id(tx, workspace_id)
+        .await?
+        .ok_or_else(|| OpError::not_found("That host"))?;
+    let wanted =
+        crate::workspace::normalize_handle(&name).unwrap_or_else(|_| "assistant".to_owned());
+    let handle = assistant::free_handle(tx, workspace_id, &wanted).await?;
+    let proposal_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_proposals (
+            id, workspace_id, host_id, host_agent_ref, display_name, handle, summary,
+            asked_account_id, client_request_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind(proposal_id)
+    .bind(workspace_id)
+    .bind(host_id)
+    .bind(assistant::agent_ref(proposal_id))
+    .bind(&name)
+    .bind(&handle)
+    .bind(assistant::SUMMARY)
+    .bind(caller.account_id)
+    .bind(proposal_id.to_string())
+    .execute(&mut **tx)
+    .await
+    .map_err(AppError::from)?;
+    let proposal = decide(
+        tx,
+        &caller,
+        proposal_id,
+        workspace_id,
+        true,
+        input.role_id.map(IdRef::id),
+    )
+    .await?;
+    call.audit_target(
+        "agent_proposal",
+        proposal.id,
+        json!({"status": proposal.status, "offer": assistant::OFFER_ID}),
+    );
+    Ok(OfferStarted {
+        command_id: None,
+        account_id: proposal.account_id,
+        page: None,
+    })
 }
 
 /// Who ran an action: only they read its reply.

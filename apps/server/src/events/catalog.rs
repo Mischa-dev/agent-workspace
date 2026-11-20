@@ -233,6 +233,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     None,
     "Someone's saved searches changed",
 );
+pub static FOLLOWS_CHANGED: EventType = signal(
+    "follows.changed",
+    "workspace",
+    None,
+    "What someone follows changed",
+);
 pub static INBOX_VIEWS_CHANGED: EventType = signal(
     "inbox_views.changed",
     "inbox",
@@ -551,6 +557,31 @@ pub static PULL_REQUEST_CLOSED: EventType = fact(
 )
 .automatable();
 
+// --- automations -----------------------------------------------------------
+/// An outside service's delivery to an incoming hook checked out (K3.26).
+/// The payload holds the delivery's id; the body stays in its record.
+pub static INCOMING_HOOK_RECEIVED: EventType = fact(
+    "incoming_hook.received",
+    "automations",
+    Some("incoming_hook"),
+    "An incoming hook received a delivery",
+)
+.automatable();
+
+// --- links (K3.15) ---------------------------------------------------------
+pub static LINK_CREATED: EventType = fact(
+    "link.created",
+    "workspace",
+    None,
+    "Someone linked two things",
+);
+pub static LINK_DELETED: EventType = fact(
+    "link.deleted",
+    "workspace",
+    None,
+    "Someone took a link away",
+);
+
 // --- spaces (today's projects) ---------------------------------------------
 pub static SPACE_CREATED: EventType = fact(
     "space.created",
@@ -632,6 +663,24 @@ pub static FILE_REMOVED: EventType = fact(
     Some("file"),
     "A file was removed",
 );
+pub static FILE_UPLOAD_STARTED: EventType = signal(
+    "file.upload_started",
+    "workspace",
+    None,
+    "Someone started a direct upload to the file store",
+);
+pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
+    "workspace.file_store_changed",
+    "workspace",
+    None,
+    "The workspace's own file bucket was set or stopped",
+);
+pub static WORKSPACE_TRANSFER_CHANGED: EventType = fact(
+    "workspace.transfer_changed",
+    "workspace",
+    Some("workspace_transfer"),
+    "A workspace export or import moved on",
+);
 pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
     "account.status_changed",
     "workspace",
@@ -697,6 +746,12 @@ pub static WORKSPACE_THEMES_CHANGED: EventType = signal(
     None,
     "A theme the workspace offers changed",
 );
+pub static GUARDS_CHANGED: EventType = signal(
+    "guards.changed",
+    "agents",
+    None,
+    "A workspace's guards changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -754,6 +809,15 @@ pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
     "Who manages an agent or app changed",
 )
 .legacy(&["account.managers.changed"]);
+/// Who may read what changed for an account (K5.8): staged by triggers
+/// on memberships, whatever wrote them, so live connections work out what
+/// they hear again.
+pub static ACCOUNT_ACCESS_CHANGED: EventType = signal(
+    "account.access_changed",
+    "workspace",
+    None,
+    "What someone may see changed",
+);
 pub static ACCOUNT_REF_CHANGED: EventType = signal(
     "account.ref_changed",
     "agents",
@@ -792,6 +856,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &FOLLOWS_CHANGED,
         &INBOX_VIEWS_CHANGED,
         &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
@@ -840,6 +905,9 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_CHECKS_PASSED,
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
+        &INCOMING_HOOK_RECEIVED,
+        &LINK_CREATED,
+        &LINK_DELETED,
         &SPACE_CREATED,
         &SPACE_UPDATED,
         &SPACE_ARCHIVED,
@@ -857,11 +925,15 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,
+        &FILE_UPLOAD_STARTED,
+        &WORKSPACE_FILE_STORE_CHANGED,
+        &WORKSPACE_TRANSFER_CHANGED,
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
         &THEME_CHANGED,
         &WORKSPACE_THEMES_CHANGED,
+        &GUARDS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,
@@ -873,6 +945,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONNECTION_PUSH_DISABLED,
         &CONNECTION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
+        &ACCOUNT_ACCESS_CHANGED,
         &ACCOUNT_REF_CHANGED,
         &THING_SHARE_CHANGED,
         &GROUP_CHANGED,
@@ -935,7 +1008,10 @@ mod tests {
     /// The triggers of K3.8 stage events by name in SQL; each is here.
     #[test]
     fn every_type_a_trigger_stages_is_in_the_catalogue() {
-        let sql = include_str!("../../migrations/20261114194000_events_for_quiet_writes.sql");
+        let sql = concat!(
+            include_str!("../../migrations/20261114194000_events_for_quiet_writes.sql"),
+            include_str!("../../migrations/20261117140000_access_changed_signal.sql"),
+        );
         let mut found = 0;
         for piece in sql.split('\'') {
             let dotted = piece.split('.').count() >= 2

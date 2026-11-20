@@ -138,7 +138,21 @@ const ACCESS_COLUMNS: &str = r#"
                  THEN direct_permissions(conversation.id, $2)
                  ELSE workspace_role_permissions(membership.role_id)
             END AS membership_role_permissions,
-            COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled
+            COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled,
+            -- K1.27: what the account's groups are given in the space, as
+            -- `holding::load` adds them.
+            CASE WHEN conversation.project_id IS NOT NULL THEN ARRAY(
+                SELECT DISTINCT granted.key
+                FROM role_grants grant_row
+                JOIN account_groups grp
+                  ON grp.id = grant_row.group_id AND grp.archived_at IS NULL
+                JOIN account_group_members group_member
+                  ON group_member.group_id = grant_row.group_id
+                 AND group_member.account_id = $2
+                CROSS JOIN LATERAL unnest(workspace_role_permissions(grant_row.role_id))
+                    AS granted(key)
+                WHERE grant_row.space_id = conversation.project_id
+            ) END AS group_permissions
 "#;
 
 const ACCESS_FROM: &str = r#"
@@ -184,6 +198,10 @@ pub(crate) struct ConversationAccessRow {
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
     membership_enabled: bool,
+    /// What the account's groups are given in the space (K1.27); read with
+    /// `ACCESS_COLUMNS`, none elsewhere.
+    #[sqlx(default)]
+    group_permissions: Option<Vec<String>>,
 }
 
 impl ConversationAccessRow {
@@ -243,7 +261,7 @@ impl ConversationAccessRow {
             Some(space) => crate::access::membership_allows(
                 actor_id,
                 space,
-                grant,
+                grant.with_groups(self.groups()),
                 self.membership_enabled,
                 permission,
             ),
@@ -255,6 +273,15 @@ impl ConversationAccessRow {
 }
 
 impl ConversationAccessRow {
+    /// What the account's groups are given in the conversation's space.
+    fn groups(&self) -> crate::policy::PermissionSet {
+        self.group_permissions
+            .as_deref()
+            .map_or(crate::policy::PermissionSet::EMPTY, |keys| {
+                crate::policy::PermissionSet::from_keys(keys)
+            })
+    }
+
     /// [`Self::allows`] for an account speaking as one of its runs, in the
     /// run's space (`runs::say`): a run hands a worker membership what its
     /// agent says there.
@@ -2289,7 +2316,9 @@ pub(crate) async fn append_message_command_with(
         &mentioned_actor_ids,
     )
     .await?;
-    replies::ask_for_replies(
+    // Boxed: asking for replies can start runs, and every send path (an
+    // automation's too) would otherwise carry all of it on its stack.
+    Box::pin(replies::ask_for_replies(
         &mut transaction,
         replies::NewMessage {
             project_id: conversation.place(),
@@ -2300,7 +2329,7 @@ pub(crate) async fn append_message_command_with(
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &mentioned_actor_ids,
         },
-    )
+    ))
     .await?;
     if let Some(mcp) = actor.mcp_credential {
         sqlx::query(
@@ -2581,11 +2610,12 @@ pub(crate) async fn lock_message_conversation(
     // Sent as a run (`runs::say`): the run is the proof, it names the space,
     // and a run's agent needs no workspace membership of its own (a worker
     // on the built-in host has none), though a disabled one still refuses.
-    let run_space = match actor.run_id {
-        Some(run_id) => {
-            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
-        }
-        None => None,
+    let (run_space, run_direct) = match actor.run_id {
+        Some(run_id) => (
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?,
+            crate::runs::store::direct_of_own(&mut **transaction, actor.actor_id, run_id).await?,
+        ),
+        None => (None, None),
     };
     let access_from = if actor.run_id.is_some() {
         let relaxed = ACCESS_FROM.replace(
@@ -2617,8 +2647,13 @@ pub(crate) async fn lock_message_conversation(
                     OR
                     ($4::boolean AND actor.kind = 'external_agent') -- // kind-check: mechanical (signed in through an agent connection)
                     OR
-                    -- A run's agent, in the run's space (`runs::say`).
+                    -- A run's agent, in the run's space (`runs::say`), or
+                    -- in the DM or group (no space) the run answers.
                     ($4::boolean IS NULL AND $5::uuid = conversation.project_id)
+                    OR
+                    ($4::boolean IS NULL AND $6::uuid IS NOT NULL
+                     AND conversation.project_id IS NULL
+                     AND $6 IN (conversation.id, conversation.parent_channel_id))
                 ))
         FOR UPDATE OF conversation
         "#,
@@ -2628,6 +2663,7 @@ pub(crate) async fn lock_message_conversation(
     .bind(&actor.actor_kind)
     .bind(mcp_checked)
     .bind(run_space)
+    .bind(run_direct)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
@@ -2637,7 +2673,7 @@ pub(crate) async fn lock_message_conversation(
         Action::MessageSend => crate::discussion::subject_kind_of(transaction, row.id).await?,
         _ => None,
     };
-    let allowed = if actor.run_id.is_some() {
+    let allowed = if actor.run_id.is_some() && row.project_id.is_some() {
         row.allows_for_run(actor.actor_id, action)?
     } else if let Some(kind) = discussed {
         row.allows_permission(actor.actor_id, kind.comment_permission())?

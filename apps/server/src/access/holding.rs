@@ -84,12 +84,14 @@ pub async fn load_direct(
     if let Some(limits) = &caller.limits {
         // A kept DM follows its workspace's limit; a personal one what the
         // limit allows in any workspace.
+        // A kept DM in a workspace the limit doesn't reach isn't reached.
         let limit = match limits.organizations.get(&workspace_id) {
             Some(limit) => *limit,
-            None => limits
+            None if workspace_id == crate::spaces::DIRECT => limits
                 .organizations
                 .values()
                 .fold(PermissionSet::EMPTY, |all, limit| all.union(*limit)),
+            None => return Ok(None),
         };
         permissions = permissions.intersect(limit);
     }
@@ -267,6 +269,19 @@ async fn load_with(
     let Some(row) = row else {
         return Ok(None);
     };
+    // A credential's limits name everywhere it reaches (a token: its
+    // workspace and its spaces; an app: the account's memberships).
+    // Anywhere else it holds nothing, not even for a call that needs no
+    // permission.
+    if let Some(limits) = &caller.limits {
+        let reached = match scope {
+            Scope::Space(space) => limits.projects.contains_key(&space),
+            Scope::Workspace(workspace) => limits.organizations.contains_key(&workspace),
+        };
+        if !reached {
+            return Ok(None);
+        }
+    }
     let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
     // A worker membership holds nothing of its own: it acts only within
     // what a run delegates (the role's tier, not the account's kind).

@@ -60,6 +60,28 @@ pub(super) async fn schema_before(
     Some((pool, full, root))
 }
 
+/// On a schema held before plans (H1.25), today's workspace creation writes
+/// tables it doesn't have yet, so the demo workspace is made in that
+/// schema's own shape first and the dev seed adopts it.
+pub(super) async fn demo_workspace_for_an_older_schema(pool: &PgPool) {
+    let current =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('workspace_plans') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .expect("schema");
+    if current {
+        return;
+    }
+    sqlx::query(
+        "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Demo Workspace', 'demo-workspace') \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect("older schema's workspace");
+}
+
 pub(super) async fn seed(pool: &PgPool, root: &tempfile::TempDir) -> DevSeed {
     let config = AppConfig::from_values(&BTreeMap::from([
         (
@@ -73,6 +95,7 @@ pub(super) async fn seed(pool: &PgPool, root: &tempfile::TempDir) -> DevSeed {
         ),
     ]))
     .expect("development config");
+    demo_workspace_for_an_older_schema(pool).await;
     let seed = dev_seed(pool, &config).await.expect("seed");
     sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
         .bind(seed.execution_profile_id)

@@ -1226,11 +1226,8 @@ pub(crate) async fn caller_reach(
         else {
             return Ok((PermissionSet::EMPTY, Some(AgentLimits::default())));
         };
-        // A token narrowed to nothing holds what the account holds through
-        // its connection or its home space, as its secret would.
-        if scope.permissions.is_none() && !scope.listed_spaces {
-            return Ok((reach, limits));
-        }
+        // Kept to the token's workspace and spaces, whoever holds it, even
+        // when it narrows nothing else.
         let (reach, limits) = scope.narrow(principal.actor_id, reach, limits.as_ref());
         return Ok((reach, Some(limits)));
     }
@@ -2636,13 +2633,23 @@ pub(crate) async fn resolve_bearer_principal(
             client_name: holder
                 .host_name
                 .unwrap_or_else(|| "access token".to_owned()),
-            scopes: vec!["read".to_owned(), "write".to_owned()],
+            // What the token was given (an exchange can leave out write),
+            // never more.
+            scopes: holder
+                .scopes
+                .iter()
+                .filter(|scope| matches!(scope.as_str(), "read" | "write"))
+                .cloned()
+                .collect(),
             authentication_class: if holder.run_id.is_some() {
                 RUN_TOKEN_CLASS
             } else {
                 ACCESS_TOKEN_CLASS
             },
-            account_wide: false,
+            // A token narrowed to listed spaces stays in its home space; one
+            // that reaches the account's spaces in its workspace isn't held
+            // to one, and `caller_reach` keeps it in that workspace.
+            account_wide: !holder.listed_spaces && holder.run_id.is_none(),
             project_explicit: false,
             workspace_id: None,
         }));

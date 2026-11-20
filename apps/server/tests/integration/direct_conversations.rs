@@ -1553,3 +1553,356 @@ async fn conversation_visibility_timings() {
     }
     world.finish().await;
 }
+
+/// Across two workspaces: a handle two accounts go by names nobody, a token
+/// for one workspace doesn't find the other's kept DMs in search, and a
+/// decision made from a DM pins there.
+#[tokio::test]
+async fn handles_tokens_and_pins_hold_across_workspaces() {
+    use super::support::{
+        app::{initialize, send, tool},
+        world::WorldBuilder,
+    };
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .person("cal", "member")
+        .agent("dex", "member")
+        .build("dm_across_workspaces")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let (ana, ben, cal) = (
+        &world.people["ana"],
+        &world.people["ben"],
+        &world.people["cal"],
+    );
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Harbour', $2)")
+        .bind(second)
+        .bind(format!("harbour-{}", second.simple()))
+        .execute(pool)
+        .await
+        .expect("second workspace");
+    for actor in [ana.actor, ben.actor] {
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(second)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("joins the second workspace");
+    }
+    sqlx::query(
+        "INSERT INTO settings (id, organization_id, scope, key, value) VALUES ($1, $2, 'workspace', 'messages.direct_messages', '\"kept\"')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(second)
+    .execute(pool)
+    .await
+    .expect("keep DMs");
+    let open = async |body: Value| {
+        let (status, dm) = send(
+            &world.app,
+            ana.browser
+                .request("POST", "/api/v1/direct/dms", None, body),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {dm}");
+        dm["conversation"]["id"].as_str().expect("id").to_owned()
+    };
+    let personal = open(json!({"actorId": ben.actor})).await;
+    let kept = open(json!({"actorId": ben.actor, "workspaceId": second})).await;
+    assert_ne!(personal, kept);
+    let say = async |dm: &str, word: &str| {
+        let (status, sent) = send(
+            &world.app,
+            ana.browser.request(
+                "POST",
+                &format!("/api/v1/conversations/{dm}/messages"),
+                Some(word),
+                json!({ "content": text_content(word) }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{sent}");
+    };
+    let personal_word = format!("personalword{}", Uuid::now_v7().simple());
+    let kept_word = format!("keptword{}", Uuid::now_v7().simple());
+    say(&personal, &personal_word).await;
+    say(&kept, &kept_word).await;
+    // Ben mentions Ana in the kept DM.
+    let (status, mentioned) = send(
+        &world.app,
+        ben.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{kept}/messages"),
+            Some("ben-mentions-ana"),
+            json!({ "content": {"version": 1, "nodes": [
+                {"type": "mention", "actorId": ana.actor},
+                {"type": "text", "text": " kept mention"}
+            ]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{mentioned}");
+
+    // Ana's account-wide token for the first workspace.
+    let (status, made) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/credential_create", world.organization),
+            Some("ana-account"),
+            json!({"name": "account", "space": world.project("WORK"), "reach": "account"}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let secret = made["value"]["secret"].as_str().expect("secret");
+    let (status, exchanged) = send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(
+                serde_urlencoded::to_string([
+                    ("grant_type", "client_credentials"),
+                    ("client_secret", secret),
+                ])
+                .expect("form"),
+            ))
+            .expect("token request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exchanged}");
+    let token = exchanged["access_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let session = initialize(&world.app, &token).await.expect("session");
+    let call = async |name: &str, arguments: Value| {
+        tool(&world.app, &token, &session, name, arguments).await
+    };
+
+    // Search finds the personal DM, never the second workspace's kept one.
+    let found = |answer: &Value| answer["value"]["results"].as_array().map_or(0, Vec::len);
+    let personal_hits = call("search", json!({"query": personal_word})).await;
+    assert_eq!(found(&personal_hits), 1, "{personal_hits}");
+    let kept_hits = call("search", json!({"query": kept_word})).await;
+    assert_eq!(
+        found(&kept_hits),
+        0,
+        "a token found another workspace's DM: {kept_hits}"
+    );
+
+    // Ben goes by "cal" in the second workspace, cal by "cal" in the first:
+    // "@cal" names nobody for sure, so nothing is sent.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, 'Ben', 'cal') \
+         ON CONFLICT (organization_id, actor_id) DO UPDATE SET handle = 'cal'",
+    )
+    .bind(second)
+    .bind(ben.actor)
+    .execute(pool)
+    .await
+    .expect("ben goes by cal there");
+    let handle_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(DISTINCT actor_id) FROM organization_actor_profiles WHERE lower(handle) = 'cal'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("handles");
+    assert_eq!(handle_rows, 2, "two accounts go by cal");
+    let ambiguous = call(
+        "conversation_start",
+        json!({"people": ["@cal"], "text": "for cal"}),
+    )
+    .await;
+    assert_ne!(ambiguous["outcome"], "ok", "{ambiguous}");
+    assert!(
+        ambiguous.to_string().contains("More than one account"),
+        "{ambiguous}"
+    );
+    let by_id = call(
+        "conversation_start",
+        json!({"people": [cal.actor.to_string()], "text": "for cal"}),
+    )
+    .await;
+    assert_eq!(by_id["outcome"], "ok", "{by_id}");
+
+    // Listing conversations shows the personal DM, never the second
+    // workspace's kept one.
+    let listed = call("conversation_list", json!({"kind": "dm", "limit": 50})).await;
+    let listed_ids = listed["value"]["conversations"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(listed_ids.contains(&personal), "{listed}");
+    assert!(
+        !listed_ids.contains(&kept),
+        "a token listed another workspace's DM: {listed}"
+    );
+
+    // Nor can it open the kept DM with a call that needs no permission.
+    let files = call("conversation_file_list", json!({"conversationId": kept})).await;
+    assert_ne!(
+        files["outcome"], "ok",
+        "a token listed another workspace's DM's files: {files}"
+    );
+
+    // A token for the second workspace sends a file in the kept DM; the
+    // first workspace's token can't read it, alone or by its message.
+    let (status, exchanged_second) = send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(
+                serde_urlencoded::to_string([
+                    ("grant_type", "client_credentials"),
+                    ("client_secret", secret),
+                    ("workspace", second.to_string().as_str()),
+                ])
+                .expect("form"),
+            ))
+            .expect("token request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exchanged_second}");
+    let second_token = exchanged_second["access_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let second_session = initialize(&world.app, &second_token)
+        .await
+        .expect("session");
+    let upload = tool(
+        &world.app,
+        &second_token,
+        &second_session,
+        "file_upload",
+        json!({"conversationId": kept, "name": "kept.txt", "text": "kept file"}),
+    )
+    .await;
+    assert_eq!(upload["outcome"], "ok", "{upload}");
+    let kept_file = upload["value"]["fileId"].as_str().expect("file").to_owned();
+    let posted = tool(
+        &world.app,
+        &second_token,
+        &second_session,
+        "message_send",
+        json!({"conversationId": kept, "text": "a file", "clientRequestId": "kept-file",
+               "attachmentIds": [kept_file]}),
+    )
+    .await;
+    assert!(
+        matches!(posted["outcome"].as_str(), Some("ok" | "applied")),
+        "{posted}"
+    );
+    let read_file = call("file_read", json!({"fileId": kept_file})).await;
+    assert_ne!(
+        read_file["outcome"], "ok",
+        "a token read another workspace's DM file: {read_file}"
+    );
+    assert!(!read_file.to_string().contains("kept file"), "{read_file}");
+
+    // Saving a DM message leaves Later readable for an account-wide token.
+    let personal_message: Uuid = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at LIMIT 1",
+    )
+    .bind(personal.parse::<Uuid>().expect("dm"))
+    .fetch_one(pool)
+    .await
+    .expect("personal message");
+    let saved = call("later_save", json!({"messageId": personal_message})).await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    let later = call("later_list", json!({})).await;
+    assert_eq!(later["outcome"], "ok", "{later}");
+
+    // Nor does the briefing bring the kept DM's mention.
+    let briefing = call("briefing", json!({})).await;
+    assert_eq!(briefing["outcome"], "ok", "{briefing}");
+    assert!(
+        !briefing.to_string().contains(&kept),
+        "a token's briefing named another workspace's DM: {briefing}"
+    );
+
+    // The token is for the first workspace: the second's groups (a call
+    // that needs no permission) stay out of its reach.
+    let elsewhere = call("group_list", json!({"workspace": second.to_string()})).await;
+    assert_ne!(elsewhere["outcome"], "ok", "{elsewhere}");
+    let at_home = call(
+        "group_list",
+        json!({"workspace": world.organization.to_string()}),
+    )
+    .await;
+    assert_eq!(at_home["outcome"], "ok", "{at_home}");
+
+    // A decision made from the personal DM pins there.
+    let decided = call(
+        "decision_record",
+        json!({"conversationId": personal, "title": "Ship on Friday", "pin": true}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "ok", "{decided}");
+    let pinned = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM conversation_pins WHERE conversation_id = $1::uuid AND target_kind = 'decision')",
+    )
+    .bind(&personal)
+    .fetch_one(pool)
+    .await
+    .expect("pins");
+    assert!(pinned, "the decision is pinned in the DM");
+
+    // An agent's secret made for one space never makes a wider one.
+    let dex = &world.agents["dex"];
+    let narrow_secret = dex.token.clone();
+    let narrow_call = async |name: &str, arguments: Value| {
+        let (_, answer) = send(
+            &world.app,
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v2/w/{}/ops/{name}", world.organization))
+                .header(header::AUTHORIZATION, format!("Bearer {narrow_secret}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    "idempotency-key",
+                    format!("narrow-{name}-{}", Uuid::now_v7()),
+                )
+                .body(Body::from(arguments.to_string()))
+                .expect("op request"),
+        )
+        .await;
+        answer
+    };
+    let wider = narrow_call(
+        "credential_create",
+        json!({"name": "wider", "space": world.project("WORK"), "reach": "account"}),
+    )
+    .await;
+    assert_ne!(
+        wider["outcome"], "ok",
+        "a space's secret made an account-wide one: {wider}"
+    );
+    let same = narrow_call(
+        "credential_create",
+        json!({"name": "same", "space": world.project("WORK")}),
+    )
+    .await;
+    assert_eq!(same["outcome"], "ok", "{same}");
+
+    world.finish().await;
+}

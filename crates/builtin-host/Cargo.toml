@@ -7,6 +7,7 @@ publish = false
 description = "The built-in host: the harness adapters, run worktrees and account homes that run agents on this machine."
 
 [dependencies]
+agent-workspace-host-protocol = { version = "0.0.1", path = "../host-protocol" }
 agent-workspace-redaction = { version = "0.0.1", path = "../redaction" }
 base64 = "0.22.1"
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }

@@ -17,6 +17,7 @@ impl CoreModule for Module {
         module.operations(crate::memory::ops::register_ops);
         module.operations(crate::memory::page_ops::register_ops);
         module.operations(crate::access::sharing::register_ops);
+        module.operations(crate::memory::memory_pages::register_ops);
         module.operations(crate::proposals::ops::register_ops);
         module.operations(crate::change_sets::ops::register_ops);
         module.id_route(IdRoute {

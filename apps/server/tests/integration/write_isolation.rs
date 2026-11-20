@@ -341,6 +341,32 @@ const CAPABILITY: &str = "the secret token in the request is the permission; it 
 
 /// Mutating routes this suite deliberately doesn't call, and why.
 const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "POST /api/v1/setup",
+        "first run (H1.14): only while nobody has an account, with the server's setup code; \
+         no workspace exists to reach; covered in first_run",
+    ),
+    (
+        "POST /api/v1/setup/import",
+        "first run (H1.14): only the account that made the first account to import, before \
+         any workspace exists; covered in first_run",
+    ),
+    (
+        "POST /api/v1/setup/workspace",
+        "first run (H1.14): only the account that made the first account to import, before \
+         any workspace exists; covered in first_run",
+    ),
+    (
+        "POST /internal/work/tick",
+        "runs the server's own due work across every workspace (K5.18), for an outside timer \
+         holding the operator's tick token; no session or workspace reaches it; covered in \
+         cluster::ticks_drive_work_with_the_loop_off",
+    ),
+    (
+        "POST /live/v1/publish",
+        "frames signed by the server's own live key (K5.19), routed by the audiences the \
+         database side named; no session reaches it; covered in live_contract",
+    ),
     ("PUT /api/v1/account/appearance", OWN_ACCOUNT),
     ("DELETE /api/v1/account/email", OWN_ACCOUNT),
     ("PUT /api/v1/account/email", OWN_ACCOUNT),
@@ -362,9 +388,26 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
     (
+        "POST /api/v1/incoming-hooks/{hook_id}",
+        "an outside service's signed delivery to one hook, with no session: the hook's own \
+         secret decides, and a rule naming another workspace's hook is refused \
+         (automation_write below; tests/integration/incoming_hooks.rs)",
+    ),
+    (
         "POST /api/v1/host/commands/{command_id}/ack",
         "a host answering one of its own commands with its own token; another host's \
          command is not found (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/runs",
+        "a host's own call with its own token, adopting a run it started for an agent bound \
+         to it, in the workspace that owns it; any other agent is refused \
+         (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/runs/{run_id}/model",
+        "a run's own credential asking for its next model turn; any run but its own, and any \
+         but the built-in assistant's, is refused (tests/integration/a1_host_protocol.rs)",
     ),
     (
         "POST /api/v1/host/describe",
@@ -399,6 +442,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login/two-factor", SIGN_IN),
     ("POST /api/v1/auth/logout", SIGN_IN),
+    ("POST /api/v1/auth/oidc/link", SIGN_IN),
     ("POST /api/v1/auth/password-reset", SIGN_IN),
     ("POST /api/v1/auth/password-reset/complete", SIGN_IN),
     ("POST /api/v1/auth/password-reset/inspect", SIGN_IN),
@@ -409,6 +453,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "POST /api/v1/client-errors",
         "browser error reports: counted in process metrics, never stored with a \
          workspace, and takes no ID",
+    ),
+    (
+        "POST /api/v1/billing/webhook",
+        "the billing provider's own signed delivery, with no session; it applies only what \
+         the provider says of the subscription it names (tests/integration/billing.rs)",
     ),
     (
         "POST /api/v1/client-timings",
@@ -512,6 +561,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connection_secret_rotate",
     "connection_test",
     "connection_update",
+    "conversation_agent_settings_set",
     "conversation_continue",
     "credential_create",
     "credential_revoke",
@@ -545,6 +595,16 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "invite_link_revoke",
     "layout_preset_create",
     "layout_preset_update",
+    "incoming_hook_create",
+    "incoming_hook_delete",
+    "thing_link",
+    "thing_unlink",
+    "file_upload_start",
+    "file_upload_finish",
+    "workspace_store_set",
+    "workspace_store_revoke",
+    "workspace_export_start",
+    "layout_preset_write",
     "label_create",
     "label_update",
     "field_create",
@@ -574,6 +634,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "later_update",
     "schedule_create",
     "schedule_update",
+    "follow_set",
+    "guard_set",
+    "memory_page_set",
     "request_create",
     "request_respond",
     "request_cancel",
@@ -6530,6 +6593,41 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"scheduleId": ax.schedule, "note": "Net moved"}),
             vec![json!({"scheduleId": bx.schedule, "cancel": true})],
         ),
+        // A2.9: following what one can see in A; B's page and task aren't
+        // found from A.
+        mcp_case(
+            "follow_set",
+            json!({"kind": "page", "id": a.page}),
+            vec![
+                json!({"kind": "page", "id": b.page}),
+                json!({"kind": "task", "id": b.task}),
+            ],
+        ),
+        // A2.9: ambient mode in A's channel for an account there; B's
+        // channel isn't found, and B's agent isn't one A can ask.
+        mcp_case(
+            "conversation_agent_settings_set",
+            json!({"conversation": a.channel, "account": a.agent, "ambient": false}),
+            vec![json!({"conversation": b.channel, "account": a.agent, "ambient": true})],
+        )
+        .rejecting(vec![
+            json!({"conversation": a.channel, "account": b.agent, "ambient": true}),
+        ]),
+        // A2.27: a guard in A, or in A's space; B's space isn't found.
+        mcp_case(
+            "guard_set",
+            json!({"name": "Net guard", "action": "deny", "terms": ["zq-net-guard"]}),
+            vec![json!({"space": b.project, "name": "Net guard", "action": "deny"})],
+        ),
+        // A2.16: memory of A's channel or space; B's aren't found from A.
+        mcp_case(
+            "memory_page_set",
+            json!({"conversation": a.channel, "body": "Net memory"}),
+            vec![
+                json!({"conversation": b.channel, "body": "Net memory"}),
+                json!({"space": b.project, "body": "Net memory"}),
+            ],
+        ),
         // C2.15: an agent's status is set by those who manage it; B's agent
         // isn't A's to set.
         mcp_case(
@@ -7887,6 +7985,77 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"thing": a.page, "version": 1, "expectedVersion": version("project_pages", &a.page)}),
             vec![json!({"thing": b.page, "version": 1, "expectedVersion": 1})],
         ),
+        // K3.15: links by hand, from one thing to another, never across
+        // workspaces from either end.
+        mcp_case(
+            "thing_link",
+            json!({"from": a.page, "to": a.whiteboard, "kind": "about"}),
+            vec![json!({"from": b.page, "to": b.whiteboard, "kind": "about"})],
+        )
+        .rejecting(vec![
+            json!({"from": a.page, "to": b.whiteboard, "kind": "about"}),
+            json!({"from": a.page, "to": b.task, "kind": "relates_to"}),
+        ]),
+        mcp_case(
+            "thing_unlink",
+            json!({"from": a.page, "to": a.whiteboard, "kind": "about"}),
+            vec![json!({"from": b.page, "to": b.whiteboard, "kind": "about"})],
+        )
+        .rejecting(vec![json!({"from": a.page, "to": b.whiteboard, "kind": "about"})]),
+        // K5.20: direct uploads go only where the caller may post, and a
+        // workspace's own bucket is set only in the caller's workspace.
+        mcp_case(
+            "file_upload_start",
+            json!({"conversationId": a.channel, "name": "a.txt", "size": 1,
+                   "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+            vec![
+                json!({"conversationId": b.channel, "name": "a.txt", "size": 1,
+                       "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+                json!({"taskId": b.task, "name": "a.txt", "size": 1,
+                       "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+            ],
+        )
+        .without_own("files are kept on disk here, so a direct upload is unavailable; files_links.rs covers it"),
+        mcp_case(
+            "file_upload_finish",
+            json!({}),
+            vec![json!({"uploadId": b.task})],
+        )
+        .without_own("needs an object store; files_links.rs covers finishing"),
+        mcp_case(
+            "workspace_store_set",
+            json!({}),
+            vec![json!({"workspace": b.organization, "endpoint": "https://s3.example.com",
+                        "bucket": "net", "region": "us-east-1", "accessKeyId": "a",
+                        "secretAccessKey": "b"})],
+        )
+        .without_own("needs a bucket to probe; files_links.rs covers setting one"),
+        mcp_case(
+            "workspace_store_revoke",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        ),
+        // H1.9: an export starts in the caller's own workspace only.
+        mcp_case(
+            "workspace_export_start",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        ),
+        // K3.26: incoming hooks, made and deleted in a space.
+        mcp_case(
+            "incoming_hook_create",
+            json!({"projectId": a.project, "name": "Net hook"}),
+            vec![json!({"projectId": b.project, "name": "Net hook"})],
+        ),
+        mcp_case(
+            "incoming_hook_delete",
+            json!({"projectId": a.project, "hookId": a.incoming_hook}),
+            vec![json!({"projectId": b.project, "hookId": b.incoming_hook})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "hookId": b.incoming_hook}),
+        ])
+        .last(),
         // Decisions and planning
         mcp_case(
             "decision_record",
@@ -8059,12 +8228,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
             })],
         )
-        .rejecting(vec![json!({
-            "projectId": a.project,
-            "name": "Net mcp rule b",
-            "trigger": {"kind": "task_created"},
-            "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-        })]),
+        .rejecting(vec![
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp rule b",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
+            }),
+            // K3.26: B's incoming hook can't start A's rule.
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp rule c",
+                "trigger": {"kind": "incoming_hook", "hookId": b.incoming_hook},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            }),
+        ]),
         mcp_case(
             "automation_update",
             json!({"projectId": a.project, "ruleId": a.rule, "name": "Net mcp rule renamed", "expectedVersion": version("automation_rules", a.rule)}),

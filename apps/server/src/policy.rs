@@ -262,6 +262,19 @@ impl RoleGrant {
     pub const fn permissions(self) -> PermissionSet {
         self.permissions
     }
+
+    /// The grant with what the account's groups are given in the same
+    /// space added (K1.27). A worker's membership takes nothing from them:
+    /// it acts only through its run.
+    pub fn with_groups(self, groups: PermissionSet) -> Self {
+        if self.role == MembershipRole::Worker {
+            return self;
+        }
+        Self {
+            role: self.role,
+            permissions: self.permissions.union(groups),
+        }
+    }
 }
 
 impl MembershipRole {
@@ -360,10 +373,14 @@ pub fn agent_limit_hides_direct(
         .try_with(|limits| {
             (limits.actor_id == actor_id).then(|| match limits.organizations.get(&workspace_id) {
                 Some(limit) => !limit.contains(permission),
-                None => !limits
+                // A personal DM, in no workspace, follows what the limit
+                // allows in any; a kept one in a workspace the limit doesn't
+                // name holds nothing.
+                None if workspace_id == crate::spaces::DIRECT => !limits
                     .organizations
                     .values()
                     .any(|limit| limit.contains(permission)),
+                None => true,
             })
         })
         .ok()
@@ -375,6 +392,30 @@ pub fn agent_limit_hides_direct(
 /// `permission` in (every other project allows nothing). None outside such
 /// a call, meaning no limit applies. For queries that can't filter rows in
 /// Rust, such as counts.
+/// While an app or token acts for `actor_id`, the workspaces whose DMs and
+/// groups its limit leaves `permission` in, with the direct scope (personal
+/// ones) when it allows it in any, as `agent_limit_hides_direct` decides one
+/// at a time; `None` outside such a call. For list SQL over DMs.
+pub fn agent_limit_direct_workspaces(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| {
+                let mut allowed = limits
+                    .organizations
+                    .iter()
+                    .filter(|(_, allowed)| allowed.contains(permission))
+                    .map(|(workspace, _)| *workspace)
+                    .collect::<Vec<_>>();
+                if !allowed.is_empty() {
+                    allowed.push(crate::spaces::DIRECT);
+                }
+                allowed
+            })
+        })
+        .ok()
+        .flatten()
+}
+
 pub fn agent_limit_projects_allowing(actor_id: Uuid, permission: Permission) -> Option<Vec<Uuid>> {
     AGENT_LIMITS
         .try_with(|limits| {
@@ -1221,10 +1262,7 @@ mod tests {
             .collect::<Vec<_>>();
         indexes.sort_unstable();
         assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
-        assert_eq!(
-            Permission::ChannelsMentionEveryone as usize,
-            PERMISSIONS.len() - 1
-        );
+        assert_eq!(Permission::WorkspaceExport as usize, PERMISSIONS.len() - 1);
         for info in PERMISSIONS {
             assert_eq!(Permission::from_key(info.key), Some(info.permission));
             assert_eq!(info.permission.info().key, info.key);

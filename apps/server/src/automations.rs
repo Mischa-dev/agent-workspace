@@ -202,6 +202,14 @@ pub enum Trigger {
         #[serde(default)]
         event_type: Option<String>,
     },
+    /// An outside service posts to an incoming hook in the project (K3.26),
+    /// with a delivery whose signature checks out. Takes no task conditions;
+    /// its actions can use {{hook.name}}, {{delivery.id}} and
+    /// {{delivery.text}} (the body, cut short).
+    IncomingHook {
+        #[schemars(with = "String")]
+        hook_id: Uuid,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -233,6 +241,7 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "sheet_changed",
     "whiteboard_changed",
     "module_event",
+    "incoming_hook",
     "schedule",
     "capacity_window",
 ];
@@ -261,6 +270,7 @@ impl Trigger {
             Self::SheetChanged { .. } => "sheet_changed",
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
             Self::ModuleEvent { .. } => "module_event",
+            Self::IncomingHook { .. } => "incoming_hook",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
@@ -277,6 +287,7 @@ impl Trigger {
                 | Self::SheetChanged { .. }
                 | Self::WhiteboardChanged { .. }
                 | Self::ModuleEvent { .. }
+                | Self::IncomingHook { .. }
         )
     }
 
@@ -570,7 +581,8 @@ fn check_shape(
         }
         Trigger::PageChanged { .. }
         | Trigger::SheetChanged { .. }
-        | Trigger::WhiteboardChanged { .. } => {
+        | Trigger::WhiteboardChanged { .. }
+        | Trigger::IncomingHook { .. } => {
             if !conditions.is_empty() {
                 return Err(AppError::Invalid(
                     "a page, sheet or board rule has no task conditions: name the one it watches instead",
@@ -996,6 +1008,11 @@ async fn check_references(
         if !found {
             return Err(AppError::NotFound(kind));
         }
+    }
+    if let Trigger::IncomingHook { hook_id } = trigger
+        && !crate::incoming_hooks::exists_in(pool, project_id, *hook_id).await?
+    {
+        return Err(AppError::NotFound("incoming hook"));
     }
     let mut conversations = Vec::new();
     if let Trigger::MessagePosted {
@@ -1784,6 +1801,7 @@ fn summary_for(event: &Event) -> String {
             "A connected module sent {}",
             event.subject.state.as_deref().unwrap_or("an event")
         ),
+        "incoming_hook.received" => "A delivery came in".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -1802,6 +1820,7 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "sheet.updated" => &["sheet_changed"],
         "whiteboard.updated" => &["whiteboard_changed"],
         "module.event" => &["module_event"],
+        "incoming_hook.received" => &["incoming_hook"],
         _ => &[],
     }
 }
@@ -1978,6 +1997,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             Trigger::ModuleEvent { event_type } => event_type
                 .as_deref()
                 .is_none_or(|only| subject.state.as_deref() == Some(only)),
+            Trigger::IncomingHook { hook_id } => subject.hook_id == Some(*hook_id),
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
         if !wanted {
@@ -2759,6 +2779,21 @@ impl Context {
             let text = |key: &str| document[key].as_str().unwrap_or_default().to_owned();
             variables.push((title, text("title")));
             variables.push((url, text("url")));
+        }
+        // An incoming hook's delivery (K3.26): read live from its record,
+        // in the rule's own project, never from the event.
+        if let (Some(hook_id), Some(delivery_id)) = (subject.hook_id, subject.delivery_id)
+            && let Some(delivery) = crate::incoming_hooks::delivery_for_rule(
+                &state.pool,
+                rule.project_id,
+                hook_id,
+                delivery_id,
+            )
+            .await?
+        {
+            variables.push(("hook.name", delivery.hook_name));
+            variables.push(("delivery.id", delivery.key));
+            variables.push(("delivery.text", delivery.text));
         }
         if let Some(run_state) = &subject.state
             && subject.agent_run_id.is_some()

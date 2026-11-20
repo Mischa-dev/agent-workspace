@@ -969,7 +969,7 @@ pub(crate) async fn open_blockers(
         SELECT blocker.id, blocker.project_id,
                project.project_key || '-' || blocker.number::text AS key,
                blocker.title
-        FROM work_item_dependencies dependency
+        FROM task_dependencies dependency
         JOIN task_rows blocker
           ON blocker.project_id = dependency.blocking_project_id
          AND blocker.id = dependency.blocking_work_item_id
@@ -2874,6 +2874,10 @@ pub(crate) struct TagPayload {
     /// limit the launch keeps (checked in the job and again at drain).
     #[serde(default)]
     pub made_through_app: bool,
+    /// Where a run for a DM or group (in no space, K4.17) is launched: the
+    /// space its decisions are kept in (`memory::direct_home_space`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<Uuid>,
 }
 
 /// A person tagged an agent backed by a harness, or any agent a host runs
@@ -2886,7 +2890,26 @@ pub(crate) async fn queue_tag_launches(
     conversation_id: Uuid,
     message_id: Uuid,
     mentioned_actor_ids: &[Uuid],
+    hosts_only: bool,
 ) -> Result<(), AppError> {
+    let author =
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(message_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    // A DM or group is in no space (K4.17): its run is launched in the
+    // space the author's decisions from it are kept in.
+    let direct = project_id == crate::spaces::DIRECT;
+    let project_id = if direct {
+        match crate::memory::direct_home_space(transaction, author, conversation_id).await? {
+            Some(space) => space,
+            None => return Ok(()),
+        }
+    } else {
+        project_id
+    };
+    // An agent a host runs (A1.25: the built-in host's assistant too), or,
+    // unless `hosts_only` (a DM or group), a built-in worker.
     let workers = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT actor.id
@@ -2899,12 +2922,13 @@ pub(crate) async fn queue_tag_launches(
           AND actor.status = 'active'
           AND actor.id = ANY($2)
           AND conversation_visible_to($3, actor.id)
-          AND ((actor.kind = 'execution_worker' AND worker.id IS NOT NULL) -- // kind-check: mechanical (a profile agent runs on its worker)
+          AND ((NOT $4 AND actor.kind = 'execution_worker' AND worker.id IS NOT NULL) -- // kind-check: mechanical (a profile agent runs on its worker)
                OR EXISTS (
                    SELECT 1 FROM host_agents binding
                    JOIN hosts host ON host.id = binding.host_id
                    WHERE binding.account_id = actor.id AND binding.status = 'active'
-                     AND host.status <> 'revoked' AND NOT host.builtin))
+                     AND host.status <> 'revoked'
+                     AND (NOT host.builtin OR starts_with(binding.host_agent_ref, $5))))
         ORDER BY actor.id
         LIMIT 1
         "#,
@@ -2912,6 +2936,8 @@ pub(crate) async fn queue_tag_launches(
     .bind(project_id)
     .bind(mentioned_actor_ids)
     .bind(conversation_id)
+    .bind(hosts_only)
+    .bind(crate::hosts::builtin::assistant::AGENT_REF_PREFIX)
     .fetch_all(&mut **transaction)
     .await?;
     let Some(worker_actor_id) = workers.first() else {
@@ -2920,11 +2946,6 @@ pub(crate) async fn queue_tag_launches(
     // This runs inside the call that sent the message: an author's app whose
     // agent limit leaves out "start runs" doesn't launch one by tagging, as
     // the launch job later runs without that limit.
-    let author =
-        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
-            .bind(message_id)
-            .fetch_one(&mut **transaction)
-            .await?;
     if crate::access::limit_hides(author, project_id, crate::policy::Permission::RunsLaunch) {
         return Ok(());
     }
@@ -2947,6 +2968,7 @@ pub(crate) async fn queue_tag_launches(
                 message_id,
                 worker_actor_id: *worker_actor_id,
                 made_through_app,
+                space_id: direct.then_some(project_id),
             })
             .unique(format!("launch.tag:{message_id}"))
             .max_attempts(3),
@@ -2970,18 +2992,20 @@ struct TagMessage {
 async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), AppError> {
     let Some(message) = sqlx::query_as::<_, TagMessage>(
         r#"
-        SELECT message.project_id, project.organization_id, message.conversation_id,
+        SELECT project.id AS project_id, project.organization_id, message.conversation_id,
                conversation.kind AS conversation_kind, message.author_actor_id,
                actor.kind AS author_kind, message.plain_text,
                message.removed_at IS NOT NULL AS removed
         FROM messages message
         JOIN conversations conversation ON conversation.id = message.conversation_id
-        JOIN projects project ON project.id = message.project_id
+        -- A DM or group's run is in the space the tag chose for it.
+        JOIN projects project ON project.id = COALESCE(message.project_id, $2)
         JOIN actors actor ON actor.id = message.author_actor_id
         WHERE message.id = $1
         "#,
     )
     .bind(payload.message_id)
+    .bind(payload.space_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
@@ -3043,6 +3067,9 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         message.conversation_id
     } else if message.conversation_kind == "channel" {
         thread_under(state, &caller, &message, payload.message_id).await?
+    } else if matches!(message.conversation_kind.as_str(), "dm" | "group") {
+        // A1.25: a DM to an agent a host runs is answered where it was said.
+        message.conversation_id
     } else {
         return Ok(());
     };

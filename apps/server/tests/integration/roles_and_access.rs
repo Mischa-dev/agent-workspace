@@ -3031,15 +3031,12 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     let blocker = owner_task(&setup, &other, "Hidden blocker").await;
     sqlx::query(
         r#"
-        INSERT INTO work_item_dependencies (
-            project_id, blocked_work_item_id, blocking_project_id, blocking_work_item_id,
-            created_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin,
+                           created_by_account_id)
+        SELECT workspace_id, $2, $1, 'blocks', 'explicit', $3 FROM things WHERE id = $2
         "#,
     )
-    .bind(work.parse::<Uuid>().expect("project"))
     .bind(blocked)
-    .bind(other.parse::<Uuid>().expect("project"))
     .bind(blocker)
     .bind(bea)
     .execute(&setup.pool)

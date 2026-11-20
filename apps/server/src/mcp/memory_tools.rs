@@ -637,6 +637,9 @@ pub(crate) async fn page_write(
     };
     let result = async {
         let project_id = principal.project_id;
+        if let (Some(page_id), Some(version)) = (page_id, input.restore_version) {
+            crate::history::cold::warm_page(state, page_id, version).await?;
+        }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Making a page needs edit or edit-own (it will be theirs); changing
         // one is decided below, once its maker is known.
@@ -1447,7 +1450,7 @@ pub(crate) async fn page_edit(
         {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
+        let Some(page) = store::lock_page_for(&mut transaction, page_id, principal.actor_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
         if page.project_id != project_id {

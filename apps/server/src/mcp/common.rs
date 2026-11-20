@@ -199,7 +199,7 @@ pub(super) async fn accessible_project_ids_in(
     if let Some(project_id) = confined_project(principal) {
         return Ok(vec![project_id]);
     }
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    let reachable = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
         FROM projects project
@@ -223,7 +223,21 @@ pub(super) async fn accessible_project_ids_in(
     .bind(principal.external_agent_connection_id)
     .bind(principal.workspace_id)
     .fetch_all(executor)
-    .await?)
+    .await?;
+    // A credential's limit (a token's workspace and spaces, an app's
+    // delegation) keeps the spaces it doesn't reach out; DMs and groups are
+    // narrowed row by row, by the workspace each is kept in.
+    Ok(reachable
+        .into_iter()
+        .filter(|space| {
+            *space == crate::spaces::DIRECT
+                || !crate::access::limit_hides(
+                    principal.actor_id,
+                    *space,
+                    crate::policy::Permission::ProjectsView,
+                )
+        })
+        .collect())
 }
 
 /// The Projects a tool call should look at: the one it named, or every
@@ -769,21 +783,43 @@ fn is_handle_character(value: char) -> bool {
     value.is_ascii_alphanumeric() || value == '_' || value == '-'
 }
 
+/// Why a name given for a DM or group didn't resolve to one account.
+pub(super) enum Unresolved {
+    /// Nobody the caller may name goes by it.
+    Unknown(String),
+    /// Different accounts go by it in the caller's workspaces, so it names
+    /// nobody for sure: the caller gives an account id instead.
+    Ambiguous(String),
+}
+
+impl Unresolved {
+    /// The reply for a name that didn't resolve, `unknown` saying what an
+    /// unknown name means for this tool.
+    pub(super) fn explain(&self, unknown: impl FnOnce(&str) -> String) -> String {
+        match self {
+            Self::Unknown(person) => unknown(person),
+            Self::Ambiguous(person) => format!(
+                "More than one account goes by {person} in your workspaces. Name them by their account id (people_search shows it)."
+            ),
+        }
+    }
+}
+
 /// People and agents by actor ID or @handle whom `caller` may name in a DM
 /// or group: active accounts in a workspace the caller is an enabled member
 /// of, by the handle they go by in one of those. Returns the first one
-/// that isn't.
+/// that isn't, or that names different accounts in different workspaces.
 pub(super) async fn resolve_direct_people(
     state: &AppState,
     caller: Uuid,
     people: &[String],
-) -> Result<Result<Vec<Uuid>, String>, AppError> {
+) -> Result<Result<Vec<Uuid>, Unresolved>, AppError> {
     let mut resolved = Vec::new();
     for person in people {
         let person = person.trim();
         let found = sqlx::query_scalar::<_, Uuid>(
             r#"
-            SELECT actor.id
+            SELECT DISTINCT actor.id
             FROM actors actor
             JOIN organization_memberships theirs
               ON theirs.actor_id = actor.id AND theirs.enabled
@@ -796,17 +832,18 @@ pub(super) async fn resolve_direct_people(
             WHERE actor.status = 'active'
               AND (actor.id::text = lower($2) OR lower(profile.handle) = lower($3))
             ORDER BY actor.id
-            LIMIT 1
+            LIMIT 2
             "#,
         )
         .bind(caller)
         .bind(person)
         .bind(person.trim_start_matches('@'))
-        .fetch_optional(crate::db::scoped(&state.pool))
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
-        match found {
-            Some(actor_id) => resolved.push(actor_id),
-            None => return Ok(Err(person.to_owned())),
+        match found.as_slice() {
+            [actor_id] => resolved.push(*actor_id),
+            [] => return Ok(Err(Unresolved::Unknown(person.to_owned()))),
+            _ => return Ok(Err(Unresolved::Ambiguous(person.to_owned()))),
         }
     }
     Ok(Ok(resolved))

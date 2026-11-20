@@ -178,6 +178,7 @@ const PAGES_SQL: &str = r#"
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
     WHERE page.id = ANY($1) AND page.project_id = ANY($2) AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
 "#;
 
 const DECISIONS_SQL: &str = r#"
@@ -482,189 +483,6 @@ pub async fn get(
     Ok(resolve(connection, viewer, kind, &[id]).await?.pop())
 }
 
-#[derive(Debug, FromRow)]
-struct LinkRow {
-    link: String,
-    direction: String,
-    other_kind: String,
-    other_id: Uuid,
-}
-
-/// The links stored for each kind, as (link kind, direction, other kind,
-/// other id). `$1` is the thing.
-fn links_sql(kind: &str) -> Option<&'static str> {
-    Some(match kind {
-        "task" => {
-            r#"
-            SELECT 'part_of' AS link, 'outgoing' AS direction, 'task' AS other_kind,
-                   parent_work_item_id AS other_id
-            FROM task_rows WHERE id = $1 AND parent_work_item_id IS NOT NULL
-            UNION ALL
-            SELECT 'part_of', 'incoming', 'task', id
-            FROM task_rows WHERE parent_work_item_id = $1 AND archived_at IS NULL
-            UNION ALL
-            SELECT 'blocks', 'outgoing', 'task', blocked_work_item_id
-            FROM work_item_dependencies WHERE blocking_work_item_id = $1
-            UNION ALL
-            SELECT 'blocks', 'incoming', 'task', blocking_work_item_id
-            FROM work_item_dependencies WHERE blocked_work_item_id = $1
-            UNION ALL
-            SELECT kind, 'outgoing', 'task', other_work_item_id
-            FROM work_item_relations WHERE work_item_id = $1
-            UNION ALL
-            SELECT kind, 'incoming', 'task', work_item_id
-            FROM work_item_relations WHERE other_work_item_id = $1
-            UNION ALL
-            SELECT 'about', 'outgoing',
-                   CASE target_kind WHEN 'conversation' THEN 'conversation' ELSE target_kind END,
-                   target_id
-            FROM work_item_links
-            WHERE work_item_id = $1 AND target_kind IN ('page', 'decision', 'conversation')
-            UNION ALL
-            SELECT 'about', 'outgoing', 'conversation', conversation_id
-            FROM work_item_conversation_links WHERE work_item_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
-            FROM whiteboard_links WHERE target_kind = 'work_item' AND target_id = $1
-            UNION ALL
-            -- A message naming the task links its conversation, or, for a
-            -- comment, the thing it's on (each link is resolved for the viewer).
-            -- visibility: ids only, each resolved with the viewer's access
-            SELECT DISTINCT 'about', 'incoming',
-                   CASE WHEN COALESCE(parent.kind, place.kind) = 'comments'
-                        THEN COALESCE(parent.subject_kind, place.subject_kind)
-                        ELSE 'conversation' END,
-                   CASE WHEN COALESCE(parent.kind, place.kind) = 'comments'
-                        THEN COALESCE(parent.subject_id, place.subject_id)
-                        ELSE message.conversation_id END
-            FROM message_work_item_references reference
-            JOIN messages message ON message.id = reference.message_id
-            JOIN conversations place ON place.id = message.conversation_id
-            LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
-            WHERE reference.work_item_id = $1 AND message.removed_at IS NULL
-              AND COALESCE(parent.subject_id, place.subject_id) IS DISTINCT FROM $1
-            UNION ALL
-            SELECT 'about', 'incoming', thing_kind, thing_id
-            FROM thing_references WHERE target_id = $1 AND target_kind = 'task'
-            UNION ALL
-            SELECT 'about', 'outgoing', target_kind, target_id
-            FROM thing_references WHERE thing_id = $1 AND thing_kind = 'task'
-            UNION ALL
-            -- The tasks the task's comments name.
-            SELECT DISTINCT 'about', 'outgoing', 'task', reference.work_item_id
-            FROM conversations comments
-            JOIN conversations place
-              ON place.id = comments.id OR place.parent_channel_id = comments.id
-            JOIN messages message ON message.conversation_id = place.id
-            JOIN message_work_item_references reference ON reference.message_id = message.id
-            WHERE comments.kind = 'comments' AND comments.subject_kind = 'task'
-              AND comments.subject_id = $1 AND message.removed_at IS NULL
-              AND reference.work_item_id <> $1
-            "#
-        }
-        "page" | "decision" => {
-            r#"
-            SELECT 'about' AS link, 'incoming' AS direction, 'task' AS other_kind,
-                   work_item_id AS other_id
-            FROM work_item_links WHERE target_kind IN ('page', 'decision') AND target_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', 'whiteboard', whiteboard_id
-            FROM whiteboard_links WHERE target_kind = 'page' AND target_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', thing_kind, thing_id
-            FROM thing_references WHERE target_id = $1 AND target_kind = 'page'
-            UNION ALL
-            SELECT 'about', 'outgoing', target_kind, target_id
-            FROM thing_references WHERE thing_id = $1 AND thing_kind = 'page'
-            "#
-        }
-        "whiteboard" => {
-            r#"
-            SELECT 'about' AS link, 'outgoing' AS direction,
-                   CASE target_kind WHEN 'work_item' THEN 'task' ELSE target_kind END AS other_kind,
-                   target_id AS other_id
-            FROM whiteboard_links WHERE whiteboard_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', thing_kind, thing_id
-            FROM thing_references WHERE target_id = $1 AND target_kind = 'whiteboard'
-            "#
-        }
-        "thread" | "channel" | "conversation" => {
-            r#"
-            SELECT 'about' AS link, 'incoming' AS direction, 'task' AS other_kind,
-                   work_item_id AS other_id
-            FROM work_item_conversation_links WHERE conversation_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', 'task', work_item_id
-            FROM work_item_links WHERE target_kind = 'conversation' AND target_id = $1
-            UNION ALL
-            SELECT 'about', 'incoming', thing_kind, thing_id
-            FROM thing_references
-            WHERE target_id = $1 AND target_kind IN ('thread', 'channel', 'conversation')
-            "#
-        }
-        "project" => {
-            r#"
-            SELECT 'about' AS link, 'incoming' AS direction, 'whiteboard' AS other_kind,
-                   whiteboard_id AS other_id
-            FROM whiteboard_links WHERE target_kind = 'project' AND target_id = $1
-            "#
-        }
-        // Sheets and collections (K3.10) are linked to only from text, until
-        // K3.12's link store.
-        "sheet" | "collection" => {
-            r#"
-            SELECT 'about' AS link, 'incoming' AS direction, thing_kind AS other_kind,
-                   thing_id AS other_id
-            FROM thing_references
-            WHERE target_id = $1 AND target_kind IN ('sheet', 'collection')
-            "#
-        }
-        // What a record's link fields point at (AWD-110), and where it's
-        // linked from (AWD-112).
-        "record" => {
-            r#"
-            SELECT 'about' AS link, 'incoming' AS direction, thing_kind AS other_kind,
-                   thing_id AS other_id
-            FROM thing_references WHERE target_id = $1 AND target_kind = 'record'
-            UNION ALL
-            SELECT 'about' AS link, 'outgoing' AS direction,
-                   definition.config->>'target' AS other_kind,
-                   (record.field_values->>definition.id::text)::uuid AS other_id
-            FROM collection_records record
-            JOIN field_definitions definition
-              ON definition.project_id = record.project_id
-             AND definition.collection_id = record.collection_id
-             AND definition.field_type = 'link' AND definition.archived_at IS NULL
-            WHERE record.id = $1
-              AND definition.config->>'target' IN ('task', 'page', 'record')
-              AND record.field_values->>definition.id::text ~ '^[0-9a-fA-F-]{36}$'
-            "#
-        }
-        _ => return None,
-    })
-}
-
-/// Records (and tasks, whose records share their IDs) whose link fields
-/// point at a task, page or another record (AWD-110): read apart
-/// from `links_sql`, so a thing's stored links and these change on their own.
-/// `$1` is the thing, `$2` its kind.
-const RECORDS_LINKING_SQL: &str = r#"
-    SELECT 'about' AS link, 'incoming' AS direction,
-           CASE WHEN collection.acts_like_task THEN 'task' ELSE 'record' END AS other_kind,
-           record.id AS other_id
-    FROM field_definitions definition
-    JOIN collections collection ON collection.id = definition.collection_id
-    JOIN collection_records record
-      ON record.project_id = definition.project_id
-     AND record.collection_id = definition.collection_id
-    WHERE definition.field_type = 'link' AND definition.archived_at IS NULL
-      AND definition.config->>'target' = $2
-      AND record.field_values->>definition.id::text = $1::text
-      AND record.archived_at IS NULL
-    LIMIT 200
-"#;
-
 fn link_kind(key: &str) -> Option<LinkKind> {
     LinkKind::ALL.into_iter().find(|kind| kind.key() == key)
 }
@@ -676,28 +494,10 @@ pub async fn links(
     viewer: &Viewer<'_>,
     thing: &Thing,
 ) -> Result<Vec<ThingLink>, AppError> {
-    let Some(sql) = links_sql(&thing.kind) else {
+    if !KINDS.contains(&thing.kind.as_str()) {
         return Ok(Vec::new());
-    };
-    let mut rows = sqlx::query_as::<_, LinkRow>(sql)
-        .bind(thing.id)
-        .fetch_all(&mut *connection)
-        .await?;
-    if matches!(thing.kind.as_str(), "task" | "page" | "record") {
-        rows.extend(
-            sqlx::query_as::<_, LinkRow>(RECORDS_LINKING_SQL)
-                .bind(thing.id)
-                .bind(&thing.kind)
-                .fetch_all(&mut *connection)
-                .await?,
-        );
     }
-    let mut seen = BTreeSet::new();
-    let rows = rows
-        .into_iter()
-        .filter(|row| seen.insert((row.link.clone(), row.direction.clone(), row.other_id)))
-        .take(MAX_LINKS)
-        .collect::<Vec<_>>();
+    let rows = crate::links::for_thing(connection, thing.id, MAX_LINKS).await?;
     // Each linked thing follows the modules of its own project (the viewer's
     // role there narrowing them), not the thing it's linked from: resolve
     // them all, then keep those whose module is on where they are. One across
@@ -769,7 +569,6 @@ mod tests {
         for kind in super::KINDS {
             assert!(super::manifest::thing_decl(kind).is_some(), "{kind}");
             assert!(super::resolver(kind).is_some(), "{kind}");
-            assert!(super::links_sql(kind).is_some(), "{kind}");
         }
     }
 
@@ -782,7 +581,7 @@ mod tests {
         // onto the wrong placeholders.
         let expected = [
             ("task", 2),
-            ("page", 2),
+            ("page", 3),
             ("decision", 3),
             ("whiteboard", 3),
             ("thread", 3),

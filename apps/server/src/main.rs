@@ -139,7 +139,15 @@ async fn main() -> anyhow::Result<()> {
         }
         Ok::<_, anyhow::Error>(())
     };
-    while_starting(&mut starting, migrate).await?;
+    // Serving, only `work` migrates: an `api` or `live` instance starts cold
+    // and answers "not ready" until the schema is its release's (K5.18).
+    // Every command migrates first; `migrate` does nothing else.
+    let serving = std::env::args().nth(1).is_none();
+    if !serving || config.roles.work {
+        while_starting(&mut starting, migrate).await?;
+    } else {
+        drop(migrate);
+    }
     if let Some(starting) = &starting {
         let _ = starting.step.send("starting");
     }
@@ -222,6 +230,98 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::to_string_pretty(
                     &serde_json::json!({ "workspaceId": workspace, "done": command })
                 )?
+            );
+            return Ok(());
+        }
+        Some("workspace-import") => {
+            // H1.10: a workspace from an export archive on this server's
+            // disk, owned by an account here. `--resume <transfer>` goes on
+            // with one that stopped.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["file", "owner-login", "slug", "resume"])?;
+            let state = agent_workspace_server::AppState {
+                config: Arc::clone(&config),
+                pool: pool.clone(),
+                rate_limits: agent_workspace_server::rate_limit::RateLimiters::for_config(&config),
+                realtime: agent_workspace_server::realtime::RealtimeHub::new(256),
+                supervisors: agent_workspace_server::provider::SupervisorRegistry::new(&config)
+                    .context("configure provider supervisors")?,
+            };
+            use agent_workspace_server::export::import;
+            let transfer = match options.get("resume") {
+                Some(resume) => Uuid::parse_str(resume).context("--resume is a transfer's id")?,
+                None => {
+                    let owner =
+                        import::account_by_login(&pool, required_option(&options, "owner-login")?)
+                            .await
+                            .context("find the owner")?;
+                    let path = std::path::PathBuf::from(required_option(&options, "file")?);
+                    let started = import::start_import(
+                        &state,
+                        import::StartImport {
+                            path: &path,
+                            owner,
+                            slug: options.get("slug").cloned(),
+                        },
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                    println!("{}", serde_json::to_string_pretty(&started)?);
+                    started.transfer.id
+                }
+            };
+            let finished = import::run_import(&state, transfer, import::RunLimits::default())
+                .await
+                .context("import the workspace")?;
+            if !finished {
+                bail!(
+                    "another process is importing this archive; run again with --resume {transfer} later"
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "transfer": transfer, "done": true })
+                )?
+            );
+            return Ok(());
+        }
+        Some("files-move") => {
+            // K5.13: copy every file (or one workspace's) to another store.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["to", "workspace-id"])?;
+            let workspace = options
+                .get("workspace-id")
+                .map(|value| uuid::Uuid::parse_str(value))
+                .transpose()
+                .context("--workspace-id is a workspace's id")?;
+            let queued = agent_workspace_server::files::migrate::start(
+                &pool,
+                &config,
+                required_option(&options, "to")?,
+                workspace,
+            )
+            .await
+            .context("start moving files")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "queued": matches!(queued, agent_workspace_server::jobs::Enqueued::Created(_)),
+                    "note": "the move runs as background jobs on a running server, 100 files at a time"
+                }))?
+            );
+            return Ok(());
+        }
+        Some("files-prune-source") => {
+            // K5.13: delete the old copies of files a move copied.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &[])?;
+            let pruned = agent_workspace_server::files::migrate::prune_sources(&pool, &config)
+                .await
+                .context("delete moved files' old copies")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "pruned": pruned }))?
             );
             return Ok(());
         }
@@ -417,6 +517,20 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&issued)?);
             return Ok(());
         }
+        Some("setup-code") => {
+            // H1.14: a fresh first-run code in this process's data root,
+            // for when the first one is on a process that's gone.
+            reject_unknown_options(&parse_options(arguments)?, &[])?;
+            let path = agent_workspace_server::setup::issue_here(&pool, &config)
+                .await
+                .context("issue a setup code")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "setupCodeFile": path }))?
+            );
+            return Ok(());
+        }
+        Some("migrate") => return Ok(()),
         Some(_) => bail!("unknown command"),
         None => {}
     }
@@ -430,6 +544,38 @@ async fn main() -> anyhow::Result<()> {
             path = %created.display(),
             "created a new secrets keyring; back this file up apart from database dumps"
         );
+    }
+
+    // New workspaces start on the free plan when hosted, else on the
+    // self-hosted plan, which limits nothing (H1.25).
+    if config.roles.work {
+        agent_workspace_server::metering::set_default_plan(
+            &pool,
+            config.profile == agent_workspace_server::config::Profile::Hosted,
+        )
+        .await
+        .context("set the default plan")?;
+    }
+    // First run in the browser (H1.14): while nobody has an account, a
+    // setup code waits in the data root. Only its file's path is logged.
+    if config.roles.work {
+        match agent_workspace_server::setup::prepare(&pool, &config)
+            .await
+            .context("prepare first-run setup")?
+        {
+            agent_workspace_server::setup::Prepared::Waiting(path) => tracing::warn!(
+                path = %path.display(),
+                "nobody has an account yet: open the app in a browser and enter the setup code \
+                 from this file (in the container: docker compose exec app cat {})",
+                path.display()
+            ),
+            agent_workspace_server::setup::Prepared::Elsewhere => tracing::warn!(
+                "nobody has an account yet, and another server process holds the setup code; \
+                 run `agent-workspace-server setup-code` here for a new one"
+            ),
+            agent_workspace_server::setup::Prepared::Done
+            | agent_workspace_server::setup::Prepared::Claimed => {}
+        }
     }
 
     let server = while_starting(&mut starting, Server::build(Arc::clone(&config), pool)).await?;

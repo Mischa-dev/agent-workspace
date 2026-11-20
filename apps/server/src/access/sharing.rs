@@ -176,6 +176,24 @@ async fn shares(
     Ok(view)
 }
 
+/// `thing.share_changed`, heard by the thing's space (ids only), in the
+/// change's transaction.
+async fn share_changed(call: &mut OpCall<'_>, kind: ThingKind, id: Uuid) -> Result<(), OpError> {
+    let (workspace_id, space_id) = located(call)?;
+    let by = call.ctx.caller.account_id;
+    let event = crate::events::NewEvent::thing(
+        &crate::events::catalog::THING_SHARE_CHANGED,
+        space_id,
+        kind.key(),
+        id,
+    )
+    .workspace(workspace_id)
+    .actor(by);
+    let tx = call.tx().await?;
+    crate::events::emit(tx, event).await?;
+    Ok(())
+}
+
 fn located(call: &OpCall<'_>) -> Result<(Uuid, Uuid), OpError> {
     Ok((
         call.ctx.workspace_id,
@@ -280,6 +298,7 @@ impl Operation for ThingShare {
         .await
         .map_err(AppError::from)?;
         call.audit_target(kind.key(), id, json!({ "sharedWith": account }));
+        share_changed(call, kind, id).await?;
         let tx = call.tx().await?;
         Ok(shares(tx, kind, id).await?)
     }
@@ -355,6 +374,7 @@ impl Operation for ThingUnshare {
             return Err(OpError::not_found("That share"));
         }
         call.audit_target(kind.key(), id, json!({ "unshared": value }));
+        share_changed(call, kind, id).await?;
         let tx = call.tx().await?;
         Ok(shares(tx, kind, id).await?)
     }
@@ -473,6 +493,7 @@ impl Operation for ThingLinkCreate {
         .map_err(AppError::from)?;
         // The audit row names the link, never its secret.
         call.audit_target(kind.key(), id, json!({ "link": link_id }));
+        share_changed(call, kind, id).await?;
         Ok(ThingLinkView {
             id: link_id,
             token: Some(token),

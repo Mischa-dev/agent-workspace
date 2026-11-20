@@ -61,8 +61,11 @@ pub struct ClientConfig {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignIn {
-    /// `password`, and `workos` and `google` when configured.
+    /// `password`, and `workos`, `google` and `oidc` when configured.
     pub methods: Vec<&'static str>,
+    /// What the OpenID Connect button calls the issuer, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,10 +86,16 @@ impl ClientConfig {
                 methods.push("google");
             }
         }
+        if config.oidc.is_some() {
+            methods.push("oidc");
+        }
         Self {
             api_origin: config.public_origin.clone().filter(|_| from_other_origin),
             live_origin: config.live_origin.clone(),
-            sign_in: SignIn { methods },
+            sign_in: SignIn {
+                methods,
+                oidc_name: config.oidc.as_ref().map(|oidc| oidc.name.clone()),
+            },
             signup: if config
                 .workos
                 .as_ref()

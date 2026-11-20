@@ -70,7 +70,8 @@
       }
     })
     var text = typeof custom.document.css === 'string' ? custom.document.css : ''
-    if (!/[\\<]|url\(|@import|@font-face|@namespace|image-set\(|image\(|src\(/i.test(text)) css = text
+    // Comments are checked out, as the editor and the server check them.
+    if (!/[\\<]|url\(|@import|@font-face|@namespace|image-set\(|image\(|src\(/i.test(text.replace(/\/\*[\s\S]*?(\*\/|$)/g, ''))) css = text
   } else {
     var overrides = saved.overrides && typeof saved.overrides === 'object' ? saved.overrides : {}
     Object.keys(overrides).forEach(function (slot) {

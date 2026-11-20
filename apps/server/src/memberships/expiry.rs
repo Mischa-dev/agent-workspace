@@ -171,6 +171,22 @@ impl Operation for WorkspaceMemberUpdate {
         if crate::access::tier::stored_owner(&role) && expires_at.is_some() {
             return Err(OpError::invalid("account", "An owner's membership lasts."));
         }
+        // A membership that ends is a removal on a timer: only someone who
+        // may remove this member now may set one (an admin can't end
+        // another admin's).
+        if expires_at.is_some() {
+            let standing = crate::workspace::standing_of(tx, caller, workspace, true).await?;
+            let tier = crate::policy::MembershipRole::parse(&role)
+                .ok_or(AppError::Internal("stored workspace role"))?;
+            if !crate::workspace::member_capabilities(standing, false, tier, false, true).remove {
+                return Err(OpError::Denied {
+                    reason: crate::ops::DenyReason::Rule,
+                    message: "Only someone who may remove this member can set when their \
+                              membership ends."
+                        .into(),
+                });
+            }
+        }
         let view = sqlx::query_as::<_, WorkspaceMemberView>(
             "UPDATE organization_memberships SET expires_at = $3, version = version + 1, \
                  updated_at = now() \

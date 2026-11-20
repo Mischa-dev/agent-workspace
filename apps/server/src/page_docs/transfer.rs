@@ -95,7 +95,7 @@ pub async fn export_page(
 ) -> Result<Response, AppError> {
     let format = format_of(Some(query.format.as_deref().unwrap_or("markdown")), None)
         .ok_or(AppError::Validation("format"))?;
-    let project_id = page_project(&state.pool, page_id).await?;
+    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
     project_access(
         &state.pool,
         principal.actor_id,

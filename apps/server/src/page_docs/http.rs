@@ -31,6 +31,9 @@ use crate::{
 /// The largest request the updates route takes: a change at its largest, in
 /// base64, with room for the state vector.
 pub const MAX_UPDATE_REQUEST_BYTES: usize = 3 * 1024 * 1024;
+/// The largest change (base64) sent to a page's watchers directly; the bus
+/// carries at most a few kilobytes per notification.
+const MAX_WATCHER_UPDATE_BYTES: usize = 6_000;
 /// The largest state vector a browser may send, in bytes.
 const MAX_STATE_VECTOR_BYTES: usize = 256 * 1024;
 
@@ -98,7 +101,7 @@ async fn page_access(
     page_id: Uuid,
     action: Action,
 ) -> Result<Uuid, AppError> {
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     memory::project_access(&state.pool, principal.actor_id, project_id, action)
         .await
         .map_err(|_| AppError::NotFound("page"))?;
@@ -182,7 +185,7 @@ pub async fn update_document(
     let writer = memory::browser_writer(&principal)?;
     let update = decode(&request.update, store::MAX_UPDATE_BYTES, "update")?;
     let since = decode(&request.state_vector, MAX_STATE_VECTOR_BYTES, "stateVector")?;
-    let project_id = memory::page_project(&state.pool, page_id).await?;
+    let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     memory::project_access(
         &mut *transaction,
@@ -249,6 +252,24 @@ pub async fn update_document(
         .await?;
     }
     transaction.commit().await?;
+    // The fast path (K5.10): the change itself to the page's watchers on
+    // every instance, so they apply it without a sync. Too big for the bus,
+    // or lost, they sync on `page.updated` as before.
+    if request.update.len() <= MAX_WATCHER_UPDATE_BYTES {
+        crate::realtime::ephemeral::publish(
+            &state,
+            crate::realtime::ephemeral::EphemeralFrame::DocumentUpdate {
+                document: crate::realtime::documents::DocumentRef {
+                    kind: crate::realtime::documents::DocumentKind::Page,
+                    id: page_id,
+                },
+                generation: stored.generation,
+                version,
+                update: request.update.clone(),
+            },
+        )
+        .await;
+    }
     Ok(Json(SyncResponse {
         status: "synced",
         generation: stored.generation,

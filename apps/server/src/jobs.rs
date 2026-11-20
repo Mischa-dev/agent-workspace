@@ -373,6 +373,7 @@ pub fn default_registry() -> JobRegistry {
     crate::requests::register_jobs(&mut registry);
     crate::hosts::commands::register_jobs(&mut registry);
     crate::hosts::a2a::register_jobs(&mut registry);
+    crate::hosts::builtin::assistant::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);
     crate::work_items::imports::register_jobs(&mut registry);
     crate::collections::computed::register_jobs(&mut registry);
@@ -393,6 +394,9 @@ pub fn default_registry() -> JobRegistry {
     crate::statuses::register_jobs(&mut registry);
     crate::memberships::expiry::register_jobs(&mut registry);
     crate::drafts::register_jobs(&mut registry);
+    crate::history::cold::register_jobs(&mut registry);
+    crate::export::transfer::register_jobs(&mut registry);
+    crate::export::import::register_jobs(&mut registry);
     crate::scheduled_messages::register_jobs(&mut registry);
     crate::password_reset::register_jobs(&mut registry);
     crate::limits::register_jobs(&mut registry);
@@ -524,6 +528,58 @@ pub async fn run_due(
         execute(state, registry, job, options.lease, None).await;
         count += 1;
     }
+}
+
+/// What one round of the queue did (K5.18).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct QueueRound {
+    pub ran: usize,
+    /// Jobs were still due when the round stopped.
+    pub more: bool,
+}
+
+/// One bounded round of the queue for the tick (K5.18): the recurring jobs
+/// queued, then every due job that isn't the built-in host's, up to
+/// `concurrency` at once, claimed until `deadline`. A job already running
+/// at the deadline finishes; nothing new is claimed after it.
+pub async fn run_round(
+    state: &AppState,
+    registry: &JobRegistry,
+    concurrency: usize,
+    deadline: Instant,
+) -> Result<QueueRound, AppError> {
+    ensure_recurring(&state.pool, registry).await?;
+    let kinds = registry
+        .kinds()
+        .into_iter()
+        .filter(|kind| !registry.host_kinds.contains(kind))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let options = WorkerOptions::default();
+    let mut round = QueueRound::default();
+    while Instant::now() < deadline {
+        let jobs = claim(&state.pool, &kinds, concurrency.max(1), &options).await?;
+        if jobs.is_empty() {
+            return Ok(round);
+        }
+        round.ran += jobs.len();
+        futures_util::future::join_all(
+            jobs.into_iter()
+                .map(|job| execute(state, registry, job, options.lease, None)),
+        )
+        .await;
+    }
+    round.more = crate::tenancy::system(
+        "jobs.claim",
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM background_jobs \
+             WHERE kind = ANY($1) AND state = 'queued' AND run_at <= now())",
+        )
+        .bind(&kinds)
+        .fetch_one(crate::db::scoped(&state.pool)),
+    )
+    .await?;
+    Ok(round)
 }
 
 /// Run the host kinds that are due, one at a time, while `lease` (the
