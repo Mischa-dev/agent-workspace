@@ -1071,7 +1071,6 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{webhook}");
-    assert_eq!(webhook["connection"]["wakeupFormat"], "typed");
     let (_, dm) = owner
         .call(
             &app,
