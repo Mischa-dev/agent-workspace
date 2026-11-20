@@ -30,4 +30,9 @@ describe('offlineGate', () => {
     const known = new Map([[home.id, settings({ 'offline.reading': true })]])
     expect(offlineGate(home.id, [home, work], (id) => known.get(id)).on).toBeNull()
   })
+
+  it('keeps nothing once the person turned it off, even while another workspace is unknown', () => {
+    const known = new Map([[home.id, settings({ 'offline.reading': false })]])
+    expect(offlineGate(home.id, [home, work], (id) => known.get(id)).on).toBe(false)
+  })
 })

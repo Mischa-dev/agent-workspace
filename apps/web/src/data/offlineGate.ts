@@ -16,7 +16,7 @@ const allows = (settings: EffectiveSettings) => settings.settings.find((setting)
  * person turned it on.
  *
  * `on` is null while any workspace's settings are still unknown (loading, or
- * offline), which changes nothing.
+ * offline), which changes nothing, unless what is known already says no.
  */
 export function offlineGate(
   current: string,
@@ -27,6 +27,8 @@ export function offlineGate(
   const blockedBy = known.flatMap(({ workspace, settings }) => (settings && !allows(settings) ? [workspace] : []))
   if (blockedBy.length) return { on: false, blockedBy }
   const mine = settingsOf(current)
+  // The person's own switch, once known, being off is enough on its own.
+  if (mine && !offlineReadingOn(mine)) return { on: false, blockedBy }
   if (!mine || known.some(({ settings }) => !settings)) return { on: null, blockedBy }
   return { on: offlineReadingOn(mine), blockedBy }
 }

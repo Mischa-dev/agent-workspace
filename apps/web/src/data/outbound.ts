@@ -245,8 +245,11 @@ export async function queueOp<N extends OpName>(
  * later one follows on from it: the person's own changes don't clash with
  * each other. Someone else's change still refuses the first of them.
  */
-async function followOn(thing: string, version: number) {
-  for (const later of entries.filter((entry) => entry.thing === thing)) {
+async function followOn(thing: string, version: number, sent: string) {
+  // The write that went through keeps its own input until it's forgotten: a
+  // run cut off in between sends it again under the same request id, which
+  // only answers again for the same input.
+  for (const later of entries.filter((entry) => entry.thing === thing && entry.id !== sent)) {
     const input = later.input as { expectedVersion?: unknown } | null
     if (!input || typeof input.expectedVersion !== 'number' || input.expectedVersion === version) continue
     await keep({ ...later, input: { ...input, expectedVersion: version } })
@@ -289,7 +292,7 @@ export function flushOutbound(): Promise<FlushResult> {
       }
       const version = (answer as { version?: unknown } | null)?.version
       // Kept before this one is forgotten, so a run cut off after it still sends the next at the version it reached.
-      if (entry.thing && typeof version === 'number') await followOn(entry.thing, version)
+      if (entry.thing && typeof version === 'number') await followOn(entry.thing, version, entry.id)
       await forget(entry.id)
       result.sent.push(entry)
     }
