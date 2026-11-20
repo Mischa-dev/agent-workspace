@@ -54,9 +54,10 @@ const LOCAL_HASH_SQL: &str = r#"
         WHEN 'automation' THEN (SELECT md5(jsonb_build_array(r.name, r.trigger, r.conditions,
                                                              r.actions, r.enabled)::text)
                                 FROM automation_rules r WHERE r.id = object.object_id)
-        WHEN 'form' THEN (SELECT md5(jsonb_build_array(l.name, l.collection_id, l.form)::text)
-                          FROM bug_report_links l WHERE l.id = object.object_id
-                            AND l.state <> 'disabled')
+        WHEN 'form' THEN (SELECT md5(jsonb_build_array(l.name, l.collection_id,
+                                                       f.definition)::text)
+                          FROM bug_report_links l JOIN forms f ON f.id = l.form_id
+                          WHERE l.id = object.object_id AND l.state <> 'disabled')
         WHEN 'role' THEN (SELECT md5(jsonb_build_array(w.name, w.description, w.base_role,
                                                        w.permissions, w.modules_off,
                                                        w.defaults)::text)
