@@ -299,6 +299,61 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
     );
     assert!(!shape(pool, target).await.is_empty());
 
+    // An archive from before pages had records (its pages' records left
+    // out) gives every page its record.
+    let older = folder.path().join("older.awx");
+    rewritten(
+        &archive,
+        &older,
+        |name, bytes| {
+            if !name.contains("collection_record") {
+                return Some((name.to_owned(), bytes));
+            }
+            let text = String::from_utf8(bytes).expect("text");
+            let kept = text
+                .lines()
+                .filter(|line| {
+                    // The page's own record, and its record's history.
+                    let row = serde_json::from_str::<Value>(line).unwrap_or_default();
+                    let row = row.get("data").unwrap_or(&row);
+                    let record = row
+                        .get("record_id")
+                        .or_else(|| row.get("id"))
+                        .and_then(Value::as_str);
+                    record != Some(a.page.as_str())
+                })
+                .map(|line| format!("{line}\n"))
+                .collect::<String>();
+            Some((name.to_owned(), kept.into_bytes()))
+        },
+        &[],
+    );
+    let backfilled = import::start_import(
+        state,
+        StartImport {
+            path: &older,
+            owner,
+            slug: None,
+        },
+    )
+    .await
+    .expect("start the older archive");
+    assert!(
+        import::run_import(state, backfilled.transfer.id, RunLimits::default())
+            .await
+            .expect("older")
+    );
+    let without = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_pages page JOIN projects space ON space.id = page.project_id \
+         WHERE space.organization_id = $1 AND page.memory_for_kind IS DISTINCT FROM 'conversation' \
+           AND NOT EXISTS (SELECT 1 FROM collection_records record WHERE record.id = page.id)",
+    )
+    .bind(backfilled.workspace_id)
+    .fetch_one(pool)
+    .await
+    .expect("pages without records");
+    assert_eq!(without, 0, "every page has its record");
+
     // Every reference points into the copy, text included.
     let copied_task = sqlx::query_scalar::<_, Uuid>(
         "SELECT copy.id FROM work_items copy, work_items original \
