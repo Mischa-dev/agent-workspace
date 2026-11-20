@@ -96,7 +96,7 @@ describe('modules that are off', () => {
 
   it('with Projects off, Home has no projects and the rail no project tiles', async () => {
     withModulesOff(['projects', 'channels', 'tasks', 'pages', 'whiteboards', 'code', 'runs', 'automations'])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     render(<App />)
     expect(await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / })).toBeVisible()
     expect(await screen.findByRole('link', { name: 'Messages' })).toBeVisible()
@@ -109,7 +109,7 @@ describe('modules that are off', () => {
     const tile = `[data-rail-project="${projectAId}"]`
     // Projects off at Home but on in Agent Workspace (another workspace, say).
     withModulesOff(['projects'], [], [])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     const first = render(<App />)
     await waitFor(() => expect(first.container.querySelector(tile)).toBeTruthy())
     first.unmount()
@@ -294,7 +294,7 @@ describe('modules that are off', () => {
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
     // Projects on at Home, off in Beta.
     withModulesOff([], [], [projectBId])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     const { container } = render(<App />)
     // Home's recent projects row for Beta, once the list has loaded.
     const beta = await waitFor(() => {
@@ -417,7 +417,7 @@ describe('modules that are off', () => {
 
   it('a project’s whiteboard follows that project’s modules, not Home’s', async () => {
     withBoard({ projectId: projectAId, organizationId: organization.id }, `/projects/${projectAId}`)
-    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    window.history.replaceState({}, '', `/w/-/whiteboards/${boardId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
     expect(window.location.pathname).toBe(`/w/mischa/whiteboards/${boardId}`)
@@ -426,7 +426,7 @@ describe('modules that are off', () => {
   it('a whiteboard across another workspace follows that workspace’s modules', async () => {
     const other = '019fb600-0000-7000-8000-0000000000b1'
     withBoard({ projectId: null, organizationId: other }, `/organizations/${other}`)
-    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    window.history.replaceState({}, '', `/w/-/whiteboards/${boardId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
   })

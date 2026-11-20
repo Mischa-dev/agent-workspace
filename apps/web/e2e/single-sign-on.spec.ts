@@ -48,7 +48,7 @@ test('links single sign-on, signs in with it, stays signed in, and signs out', a
   await expect(signIn.getByText(`Single sign-on linked as ${workOsStandIn.user.email}.`)).toBeVisible()
 
   // Still signed in after a reload, on another page, and after the server checks with WorkOS again.
-  await signIn.goto('/home')
+  await signIn.goto('/w/-/home')
   await expect(signIn).toHaveURL(/\/home$/)
   expireWorkOsChecks()
   await signIn.reload()
@@ -63,7 +63,7 @@ test('links single sign-on, signs in with it, stays signed in, and signs out', a
   const csrf = (await context.cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
   const signOut = await signIn.request.post('/api/v1/auth/logout', { headers: { 'x-csrf-token': csrf, origin: webOrigin } })
   expect(signOut.ok()).toBe(true)
-  await signIn.goto('/home')
+  await signIn.goto('/w/-/home')
   await expect(signIn).toHaveURL(/\/sign-in/)
   await context.close()
 })

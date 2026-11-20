@@ -289,7 +289,7 @@ export function installAppShellLifecycle() {
   beforeEach(() => {
     WebSocketStub.instances = []
     vi.stubGlobal('WebSocket', WebSocketStub)
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     document.cookie =
       'agent_workspace_csrf=test-csrf; Path=/; SameSite=Strict'
   })

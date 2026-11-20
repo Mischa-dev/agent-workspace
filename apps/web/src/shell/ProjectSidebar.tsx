@@ -1,4 +1,4 @@
-import { spaceHref } from '../app/href'
+import { here, spaceHref } from '../app/href'
 import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -121,7 +121,7 @@ export function ProjectSidebar({
         <IconButton
           icon="search"
           label={`Search ${project.name}`}
-          onClick={() => go(`/search?projectId=${encodeURIComponent(project.id)}`)}
+          onClick={() => go(here(`/search?projectId=${encodeURIComponent(project.id)}`))}
           side="bottom"
         />
       }

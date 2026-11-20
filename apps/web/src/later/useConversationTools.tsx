@@ -80,7 +80,7 @@ export function useConversationTools({
   const commandKey = useRef<{ text: string; id: string } | null>(null)
   const waiting = (scheduled.data ?? []).filter((item) => item.status === 'scheduled')
 
-  const viewLater = (view?: string) => ({ label: 'View', onSelect: () => navigate(view ? `/later?view=${view}` : '/later') })
+  const viewLater = (view?: string) => ({ label: 'View', onSelect: () => navigate(here(view ? `/later?view=${view}` : '/later')) })
 
   const changeLevel = async (next: NotificationLevel | null) => {
     const result = await setLevel(conversationId, next)

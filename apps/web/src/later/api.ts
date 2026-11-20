@@ -82,7 +82,7 @@ function maybe(value: unknown): string | null {
 /** Only in-app paths are followed; anything else opens the Later page. */
 function inApp(value: unknown): string {
   const href = str(value)
-  return href.startsWith('/') && !href.startsWith('//') ? href : '/later'
+  return href.startsWith('/') && !href.startsWith('//') ? href : '/w/-/later'
 }
 
 export function normalizeSavedItem(value: unknown): SavedItem | null {

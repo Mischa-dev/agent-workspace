@@ -46,7 +46,7 @@ export class AppErrorBoundary extends Component<Props, State> {
               Try again
             </Button>
             <Button onClick={() => window.location.reload()}>Reload workspace</Button>
-            <Button onClick={() => window.location.assign('/home')} variant="ghost">
+            <Button onClick={() => window.location.assign('/w/-/home')} variant="ghost">
               Go to Home
             </Button>
           </div>

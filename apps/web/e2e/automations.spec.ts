@@ -12,7 +12,7 @@ test.use({ storageState: storageStatePath })
 test('a rule built from pickers and an operation’s form, tried without writing', async ({ page }) => {
   const projectId = seededValue('E2E_PROJECT_ID')
   const name = `Check reviews ${Date.now() % 100000}`
-  await page.goto(`/settings/projects/${projectId}/automations`)
+  await page.goto(`/w/-/settings/spaces/${projectId}/automations`)
   await page.getByRole('button', { name: 'New rule' }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New rule' })
   await dialog.getByLabel('Name').fill(name)

@@ -41,7 +41,7 @@ export function RouteErrorPage() {
         <Button onClick={() => window.location.reload()} variant="primary">
           Reload workspace
         </Button>
-        <Button onClick={() => window.location.assign('/home')} variant="ghost">
+        <Button onClick={() => window.location.assign('/w/-/home')} variant="ghost">
           Go to Home
         </Button>
       </div>

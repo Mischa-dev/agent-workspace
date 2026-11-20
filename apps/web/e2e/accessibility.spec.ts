@@ -5,6 +5,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { seededValue, storageStatePath } from './environment'
 import { writer } from './support/done'
+import { at } from './addresses'
 
 // W1.36, the accessibility gate: every page a module registers, at a
 // desktop and a phone width, in the light and the dark theme, with no
@@ -60,7 +61,7 @@ for (const scheme of ['light', 'dark'] as const) {
         test.setTimeout(240_000)
         const findings: string[] = []
         for (const address of registeredPaths()) {
-          await page.goto(address)
+          await page.goto(at(address))
           await page.waitForLoadState('networkidle')
           for (const finding of await axeFindings(page)) findings.push(`${address}: ${finding}`)
         }

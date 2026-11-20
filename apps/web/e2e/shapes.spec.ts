@@ -91,7 +91,7 @@ async function offWords(page: Page, words: string[]) {
 for (const shape of SHAPES) {
   test(`a ${shape} workspace shows nothing of a module that's off`, async ({ page }) => {
     test.setTimeout(180_000)
-    await page.goto('/home')
+    await page.goto('/w/-/home')
     const session = (await (await page.request.get(`${serverOrigin}/api/v1/auth/session`)).json()) as { user: { actorId: string } }
     const workspaceId = randomUUID()
     const slug = `shape-${shape.replace('_', '-')}-${workspaceId.slice(0, 8)}`
