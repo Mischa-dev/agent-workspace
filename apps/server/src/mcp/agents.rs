@@ -270,8 +270,10 @@ pub(super) async fn agent_list(
         let actor_ids = agents.iter().map(|agent| agent.actor_id).collect::<Vec<_>>();
 
         // Roles are shown where the caller may see the member list.
-        let my_roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
-            "SELECT project_id, role, workspace_role_permissions(role_id) FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
+        let my_roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
+            "SELECT project_id, role, workspace_role_permissions(role_id), \
+                    space_group_permissions(actor_id, project_id) \
+             FROM project_memberships WHERE actor_id = $1 AND enabled AND project_id = ANY($2)",
         )
         .bind(principal.actor_id)
         .bind(&projects)
@@ -279,18 +281,15 @@ pub(super) async fn agent_list(
         .await?;
         let sees_roles = my_roles
             .into_iter()
-            .filter(|(project_id, role, role_permissions)| {
+            .filter(|(project_id, role, role_permissions, groups)| {
                 role_allows(
                     principal,
                     *project_id,
-                    &StoredRole {
-                        role: role.clone(),
-                        role_permissions: role_permissions.clone(),
-                    },
+                    &StoredRole::of(role, role_permissions.as_deref()).with_groups(groups.clone()),
                     Action::MembershipView,
                 )
             })
-            .map(|(project_id, _, _)| project_id)
+            .map(|(project_id, _, _, _)| project_id)
             .collect::<HashSet<_>>();
         let memberships = sqlx::query_as::<_, MembershipRow>(
             r#"
@@ -462,10 +461,11 @@ async fn managed_projects(
         .into_iter()
         .collect::<Vec<_>>();
     let reach = accessible_project_ids(state, principal).await?;
-    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
+    let roles = sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
         SELECT project.id, membership.role,
-               workspace_role_permissions(membership.role_id) AS role_permissions
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($1, project.id) AS group_permissions
         FROM projects project
         JOIN organization_memberships organization
           ON organization.organization_id = project.organization_id
@@ -486,18 +486,15 @@ async fn managed_projects(
     .await?;
     Ok(roles
         .into_iter()
-        .filter(|(project_id, role, role_permissions)| {
+        .filter(|(project_id, role, role_permissions, groups)| {
             role_allows(
                 principal,
                 *project_id,
-                &StoredRole {
-                    role: role.clone(),
-                    role_permissions: role_permissions.clone(),
-                },
+                &StoredRole::of(role, role_permissions.as_deref()).with_groups(groups.clone()),
                 Action::ExternalAgentManage,
             )
         })
-        .map(|(project_id, _, _)| project_id)
+        .map(|(project_id, _, _, _)| project_id)
         .collect())
 }
 

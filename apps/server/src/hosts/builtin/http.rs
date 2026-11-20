@@ -32,6 +32,7 @@ struct ConversationRow {
     project_archived: bool,
     membership_role: String,
     membership_role_permissions: Option<Vec<String>>,
+    membership_group_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -889,6 +890,7 @@ pub(crate) async fn interrupt_run_in(
         project_id: Uuid,
         membership_role: String,
         membership_role_permissions: Option<Vec<String>>,
+        membership_group_permissions: Option<Vec<String>>,
         membership_enabled: bool,
         state: String,
     }
@@ -901,6 +903,7 @@ pub(crate) async fn interrupt_run_in(
             c.project_id,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled,
             ar.state
         FROM agent_runs ar
@@ -929,6 +932,7 @@ pub(crate) async fn interrupt_run_in(
         context.project_id,
         &context.membership_role,
         context.membership_role_permissions.as_deref(),
+        context.membership_group_permissions.as_deref(),
         context.membership_enabled,
         Action::RunInterrupt,
     )?;
@@ -1211,6 +1215,7 @@ async fn guard_conversation_mutation(
         project_archived: bool,
         membership_role: String,
         membership_role_permissions: Option<Vec<String>>,
+        membership_group_permissions: Option<Vec<String>>,
         membership_enabled: bool,
     }
 
@@ -1254,6 +1259,7 @@ async fn guard_conversation_mutation(
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         JOIN projects p
@@ -1285,6 +1291,7 @@ async fn guard_conversation_mutation(
         project_id,
         &guard.membership_role,
         guard.membership_role_permissions.as_deref(),
+        guard.membership_group_permissions.as_deref(),
         guard.membership_enabled,
         action,
     )?;
@@ -1326,6 +1333,7 @@ async fn authorized_conversation(
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
             workspace_role_permissions(pm.role_id) AS membership_role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS membership_group_permissions,
             pm.enabled AS membership_enabled
         FROM conversations c
         LEFT JOIN conversations parent
@@ -1354,6 +1362,7 @@ async fn authorized_conversation(
         conversation.project_id,
         &conversation.membership_role,
         conversation.membership_role_permissions.as_deref(),
+        conversation.membership_group_permissions.as_deref(),
         conversation.membership_enabled,
         action,
     )?;
@@ -1365,10 +1374,13 @@ pub(crate) fn authorize_project_action(
     project_id: Uuid,
     membership_role: &str,
     membership_role_permissions: Option<&[String]>,
+    membership_group_permissions: Option<&[String]>,
     membership_enabled: bool,
     action: Action,
 ) -> Result<(), AppError> {
-    let grant = RoleGrant::stored(membership_role, membership_role_permissions)?;
+    let grant = RoleGrant::stored(membership_role, membership_role_permissions)?.with_groups(
+        crate::access::group_permissions(membership_group_permissions),
+    );
     if crate::access::membership_allows(
         principal.actor_id(),
         project_id,

@@ -34,5 +34,16 @@ retries = 1
 # three to four minutes alone, by size, and a minute before each window
 # for PostgreSQL's statistics to land. Ten minutes too; no retry.
 [[profile.ci.overrides]]
-filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=write_isolation::one_workspace_never_writes_to_another) | test(=idle_cost::ten_thousand_quiet_workspaces_cost_what_one_does)"
+filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=workspace_isolation::a_token_for_one_workspace_never_sees_another_its_account_is_in) | test(=write_isolation::one_workspace_never_writes_to_another) | test(=idle_cost::ten_thousand_quiet_workspaces_cost_what_one_does)"
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# The sweeps are CPU-bound and sort last, so they used to start together
+# and starve each other: the agent sweep, four minutes alone, ran past ten
+# with five others beside it (#308). Two at a time keeps each near its own
+# time, and the run no longer than before.
+[test-groups]
+isolation-sweeps = { max-threads = 2 }
+
+[[profile.ci.overrides]]
+filter = "test(/^workspace_isolation::one_workspace_never_sees_another_/) | test(=workspace_isolation::a_token_for_one_workspace_never_sees_another_its_account_is_in) | test(=write_isolation::one_workspace_never_writes_to_another)"
+test-group = "isolation-sweeps"

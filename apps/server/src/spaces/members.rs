@@ -170,16 +170,21 @@ async fn set_expiry(
     account: Uuid,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<(), OpError> {
-    sqlx::query(
+    // An owner's membership lasts: a space never loses its owner to a timer.
+    let role = sqlx::query_scalar::<_, String>(
         "UPDATE project_memberships SET expires_at = $3 \
-         WHERE project_id = $1 AND actor_id = $2 AND NOT via_group",
+         WHERE project_id = $1 AND actor_id = $2 AND NOT via_group \
+         RETURNING role",
     )
     .bind(space)
     .bind(account)
     .bind(expires_at)
-    .execute(&mut *connection)
+    .fetch_optional(&mut *connection)
     .await
     .map_err(AppError::from)?;
+    if expires_at.is_some() && role.is_some_and(|role| crate::access::tier::stored_owner(&role)) {
+        return Err(OpError::invalid("account", "An owner's membership lasts."));
+    }
     Ok(())
 }
 

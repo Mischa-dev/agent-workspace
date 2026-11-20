@@ -75,11 +75,15 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     let project_id = uuid_field(&project, "id");
 
     let worker_actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker_actor_id)
-        .execute(&pool)
-        .await
-        .expect("insert Worker Actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) \
+         SELECT $1, 'execution_worker', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(worker_actor_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("insert Worker Actor");
     sqlx::query(
         r#"
         INSERT INTO project_memberships (
