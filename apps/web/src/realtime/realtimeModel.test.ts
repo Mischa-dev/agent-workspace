@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   durableMessageId,
   messageUpdate,
-  parseLegacyRealtimeEvent,
   parseRealtimeEnvelope,
   reactionChange,
-  streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
 
@@ -119,32 +117,6 @@ describe('realtime wire validation', () => {
     expect(
       parseRealtimeEnvelope({ ...base, payload: { value: 'x'.repeat(66_000) } }),
     ).toBeNull()
-  })
-
-  it('keeps legacy provider deltas ephemeral and bounded', () => {
-    const event = parseLegacyRealtimeEvent({
-      event_id: eventId,
-      project_id: projectId,
-      conversation_id: conversationId,
-      kind: 'message.delta',
-      payload: { message_id: 'provider-message', delta: 'hello' },
-    })
-    expect(event).not.toBeNull()
-    expect(event && streamDelta(event)).toEqual({
-      messageId: 'provider-message',
-      runId: null,
-      delta: 'hello',
-    })
-  })
-
-  it('rejects unsafe and over-limit provider deltas', () => {
-    const event = (delta: string) => ({
-      type: 'message.delta',
-      payload: { message_id: 'provider-message', delta },
-    })
-    expect(streamDelta(event('unsafe\u0000text'))).toBeNull()
-    expect(streamDelta(event('🙂'.repeat(20_001)))).toBeNull()
-    expect(streamDelta(event('🙂'.repeat(20_000)))).not.toBeNull()
   })
 
   it('parses a message edit or removal and refuses malformed ones', () => {

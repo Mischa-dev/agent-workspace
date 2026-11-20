@@ -1,4 +1,3 @@
-import { isSafeMessageText } from '../conversations/messageContentModel'
 
 export const REALTIME_ENVELOPE_VERSION = 1
 
@@ -13,14 +12,6 @@ export type RealtimeEnvelope = {
   conversationId: string | null
   type: string
   occurredAt: string
-  payload: Record<string, unknown>
-}
-
-export type LegacyRealtimeEvent = {
-  eventId: string
-  projectId: string
-  conversationId: string | null
-  type: string
   payload: Record<string, unknown>
 }
 
@@ -120,57 +111,6 @@ export function parseRealtimeEnvelope(value: unknown): RealtimeEnvelope | null {
     occurredAt,
     payload,
   }
-}
-
-// M0/M1 provider stream events remain accepted while their durable event
-// producers are migrated to the M2 outbox. They are deliberately excluded
-// from the durable envelope contract and only drive ephemeral stream text.
-export function parseLegacyRealtimeEvent(
-  value: unknown,
-): LegacyRealtimeEvent | null {
-  const record = asRecord(value)
-  if (
-    record.version !== undefined ||
-    record.eventCursor !== undefined ||
-    record.event_cursor !== undefined
-  ) {
-    return null
-  }
-  const eventId = uuid(field(record, 'eventId', 'event_id'))
-  const projectId = uuid(field(record, 'projectId', 'project_id'))
-  const rawConversationId = field(
-    record,
-    'conversationId',
-    'conversation_id',
-  )
-  const conversationId = rawConversationId ? uuid(rawConversationId) : null
-  const type = boundedType(record.kind ?? record.type)
-  const payload = boundedPayload(record.payload)
-  if (!eventId || !projectId || (rawConversationId && !conversationId) || !type || !payload) {
-    return null
-  }
-  return { eventId, projectId, conversationId, type, payload }
-}
-
-export function streamDelta(
-  event: Pick<LegacyRealtimeEvent, 'type' | 'payload'>,
-): { messageId: string; runId: string | null; delta: string } | null {
-  if (event.type !== 'message.delta') return null
-  const messageId = field(event.payload, 'messageId', 'message_id')
-  const rawRunId = field(event.payload, 'agentRunId', 'agent_run_id')
-  const runId = rawRunId === null || rawRunId === undefined ? null : uuid(rawRunId)
-  const delta = event.payload.delta
-  if (
-    typeof messageId !== 'string' ||
-    messageId.length === 0 ||
-    messageId.length > 200 ||
-    (rawRunId !== null && rawRunId !== undefined && !runId) ||
-    typeof delta !== 'string' ||
-    !isSafeMessageText(delta)
-  ) {
-    return null
-  }
-  return { messageId, runId, delta }
 }
 
 export function durableMessageId(
