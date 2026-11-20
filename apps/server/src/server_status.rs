@@ -215,6 +215,10 @@ struct ServerView {
     jobs: JobsView,
     event_log: EventLogView,
     instances: Vec<InstanceView>,
+    /// A release newer than this build, when the release feed names one
+    /// (H1.15).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    newer_release: Option<crate::releases::NewerRelease>,
 }
 
 /// A server process sharing this database (K5.7): what it does, which
@@ -325,6 +329,7 @@ async fn read_http(
         .await
     })
     .await?;
+    let newer_release = crate::releases::newer(&state.pool).await?;
     Ok(Json(ServerView {
         version: env!("CARGO_PKG_VERSION"),
         commit: BUILD_COMMIT,
@@ -346,6 +351,7 @@ async fn read_http(
             parked,
         },
         instances,
+        newer_release,
     }))
 }
 

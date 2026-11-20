@@ -2321,6 +2321,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StatementCount {
 /// messages it shows: nothing is read message by message.
 #[tokio::test]
 async fn a_timeline_reads_in_a_fixed_number_of_statements() {
+    use tracing::instrument::WithSubscriber;
     use tracing_subscriber::layer::SubscriberExt;
 
     let Some(setup) = setup("timeline_statements").await else {
@@ -2349,18 +2350,33 @@ async fn a_timeline_reads_in_a_fixed_number_of_statements() {
         )
         .await;
     }
-    let mut counts = Vec::new();
+    // Each timeline is opened once first, so the pool has the connections
+    // a request uses: a connection opened while counting runs its own
+    // setup statement (the test schema's search path) and would count as
+    // the timeline's.
     for channel in [&quiet, &busy] {
-        let counter = StatementCount::default();
-        let subscriber = tracing_subscriber::registry().with(counter.clone());
-        let guard = tracing::subscriber::set_default(subscriber);
-        let (status, timeline) = get(
+        let (status, _) = get(
             &setup,
             &setup.browser,
             &format!("/api/v1/conversations/{channel}/timeline"),
         )
         .await;
-        drop(guard);
+        assert_eq!(status, StatusCode::OK);
+    }
+    let mut counts = Vec::new();
+    for channel in [&quiet, &busy] {
+        let counter = StatementCount::default();
+        let subscriber = tracing_subscriber::registry().with(counter.clone());
+        // Counted only while the request itself is polled: a default for
+        // the thread would also count whatever else the runtime polls on
+        // it meanwhile, such as the app's background loops.
+        let (status, timeline) = get(
+            &setup,
+            &setup.browser,
+            &format!("/api/v1/conversations/{channel}/timeline"),
+        )
+        .with_subscriber(subscriber)
+        .await;
         assert_eq!(status, StatusCode::OK, "{timeline}");
         counts.push(counter.0.load(std::sync::atomic::Ordering::Relaxed));
     }

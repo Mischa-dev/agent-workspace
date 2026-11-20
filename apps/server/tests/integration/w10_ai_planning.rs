@@ -332,13 +332,16 @@ impl Fixture {
     }
 
     async fn background_run(&self) {
-        detect::request(
-            &self.pool,
+        crate::support::as_job(
             self.organization_id,
-            self.project_id,
-            Mode::Nightly,
-            None,
-            Vec::new(),
+            detect::request(
+                &self.pool,
+                self.organization_id,
+                self.project_id,
+                Mode::Nightly,
+                None,
+                Vec::new(),
+            ),
         )
         .await
         .expect("queue run");
@@ -896,15 +899,21 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     // Two steps (milestones, the first hundred tasks), then the server
     // "stops"; the job picks up from there.
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Progress
     );
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Progress
     );
     let so_far = sqlx::query_scalar::<_, i64>(
@@ -917,9 +926,12 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     assert_eq!(so_far, 100);
     fixture.run_jobs().await;
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Done
     );
 
@@ -1182,9 +1194,12 @@ async fn a_plan_stops_when_its_committer_loses_what_its_steps_need() {
     fixture
         .limit_member_apps(json!(["tasks.view", "tasks.create"]))
         .await;
-    let step = plans::commit_next_step(&fixture.pool, id)
-        .await
-        .expect("step");
+    let step = crate::support::as_job(
+        fixture.organization_id,
+        plans::commit_next_step(&fixture.pool, id),
+    )
+    .await
+    .expect("step");
     assert!(
         matches!(&step, Step::Failed(message) if message.contains("app") && message.contains("change")),
         "{step:?}"
@@ -1231,9 +1246,12 @@ async fn a_plan_stops_when_its_committer_loses_what_its_steps_need() {
     .execute(&fixture.pool)
     .await
     .expect("narrow the member's role");
-    let step = plans::commit_next_step(&fixture.pool, id)
-        .await
-        .expect("step");
+    let step = crate::support::as_job(
+        fixture.organization_id,
+        plans::commit_next_step(&fixture.pool, id),
+    )
+    .await
+    .expect("step");
     assert!(
         matches!(&step, Step::Failed(message) if message.contains("can no longer create")),
         "{step:?}"

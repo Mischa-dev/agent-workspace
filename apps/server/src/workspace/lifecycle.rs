@@ -9,7 +9,7 @@
 //!   `workspace_suspended` ([`ensure_open`]); people can still sign in and
 //!   see why.
 //! - [`request_deletion`] marks it `deleting` and queues the
-//!   `workspace.delete` job for 14 days later; [`cancel_deletion`] undoes
+//!   `workspace.delete` job for 14 days later; until then [`cancel_deletion`] undoes
 //!   both. While it is deleting, every call but cancelling is refused.
 //! - The job ([`delete_now`]) deletes the workspace's file bytes, retires the
 //!   agent and app accounts it owns (credentials revoked, memberships
@@ -140,6 +140,7 @@ pub async fn create(
         None => super::slug::readable_for_new(connection, name).await?,
     };
     let id = input.id.unwrap_or_else(Uuid::now_v7);
+    crate::tenancy::widen_to_new_workspace(connection, id, owner).await?;
     let inserted = sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(name)
@@ -741,6 +742,17 @@ pub async fn cancel_deletion(
     if lock(connection, workspace).await? != Lifecycle::Deleting {
         return Err(AppError::Conflict("workspace", "not being deleted"));
     }
+    // Past its date the deletion has begun (its own buckets may already be
+    // empty), so it can't be kept any more.
+    let started = sqlx::query_scalar::<_, bool>(
+        "SELECT coalesce(delete_after <= now(), false) FROM organizations WHERE id = $1",
+    )
+    .bind(workspace)
+    .fetch_one(&mut *connection)
+    .await?;
+    if started {
+        return Err(AppError::Conflict("workspace", "its deletion has started"));
+    }
     let delete_after = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
         r#"
         UPDATE organizations organization
@@ -842,6 +854,15 @@ async fn delete_in_scope(
     workspace: Uuid,
     ignore_date: bool,
 ) -> Result<Option<Deleted>, AppError> {
+    // The workspace's own buckets are emptied first, while their rows (and
+    // the credentials to reach them) still exist, so a failed attempt is
+    // retried with everything it needs. Once due, a deletion can't be
+    // cancelled (`cancel_deletion`), so a kept workspace never loses a file.
+    if start_deletion(state, workspace, ignore_date).await? {
+        for store in crate::files::workspace_store::all_of(state, workspace).await? {
+            store.delete_workspace(workspace).await?;
+        }
+    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let connection = &mut *transaction;
     // The decision is taken under the workspace's row lock, which keeping
@@ -895,7 +916,11 @@ async fn delete_in_scope(
     .bind(workspace)
     .fetch_one(&mut *connection)
     .await?;
+    // The accounts it owned leave every workspace they joined, which
+    // reaches past this workspace's scope.
+    let own_scope = tenancy::widen_to_system(&mut *connection, "workspace.delete").await?;
     let retired_accounts = retire_owned_accounts(connection, workspace).await?;
+    tenancy::restore(&mut *connection, &own_scope).await?;
     sqlx::query(
         "UPDATE users SET default_organization_id = NULL, updated_at = now() \
          WHERE default_organization_id = $1",
@@ -903,7 +928,11 @@ async fn delete_in_scope(
     .bind(workspace)
     .execute(&mut *connection)
     .await?;
+    // Connections reaching on into other workspaces move to one of them:
+    // finding and moving them reaches past this workspace's scope.
+    let own_scope = tenancy::widen_to_system(&mut *connection, "workspace.delete").await?;
     crate::delivery::connections::rehome_from(connection, workspace).await?;
+    tenancy::restore(&mut *connection, &own_scope).await?;
     let rows = delete_rows(connection, workspace).await?;
     sqlx::query(
         "INSERT INTO deleted_workspaces (id, requested_by_actor_id, repository_ids) \
@@ -933,9 +962,41 @@ async fn delete_in_scope(
     }))
 }
 
-/// Remove what a deleted workspace kept on disk: its repositories'
-/// mirrors and worktrees, and its file folder. Missing pieces are fine, so
-/// a retry finishes a removal that failed part way.
+/// Whether `workspace` is deleting and due. With `ignore_date` its date is
+/// brought forward to now, so it can't be cancelled from here on either.
+async fn start_deletion(
+    state: &AppState,
+    workspace: Uuid,
+    ignore_date: bool,
+) -> Result<bool, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let due = sqlx::query_scalar::<_, bool>(
+        "SELECT lifecycle = 'deleting' AND ($2 OR delete_after <= now()) \
+         FROM organizations WHERE id = $1 FOR UPDATE",
+    )
+    .bind(workspace)
+    .bind(ignore_date)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or(false);
+    if due && ignore_date {
+        sqlx::query(
+            "UPDATE organizations SET delete_after = least(coalesce(delete_after, now()), now()) \
+             WHERE id = $1",
+        )
+        .bind(workspace)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(due)
+}
+
+/// Remove what a deleted workspace kept on the server's own storage: its
+/// repositories' mirrors and worktrees, and its file folder in each of the
+/// server's stores. (Its own buckets were emptied before its rows went.)
+/// Missing pieces are fine, so a retry finishes a removal that failed part
+/// way.
 async fn remove_bytes(
     state: &AppState,
     workspace: Uuid,
@@ -944,11 +1005,7 @@ async fn remove_bytes(
     for repository in repositories {
         crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
     }
-    let own = crate::files::workspace_store::all_of(state, workspace).await?;
-    for store in crate::files::store::FileStore::all(&state.config)
-        .into_iter()
-        .chain(own)
-    {
+    for store in crate::files::store::FileStore::all(&state.config) {
         store.delete_workspace(workspace).await?;
     }
     Ok(())
@@ -1276,6 +1333,8 @@ async fn delete_rows(
 
     // Rows of other workspaces that point at a row going let go of it: a
     // request one workspace raised through another's host keeps itself.
+    // Only these statements reach past the workspace's own scope.
+    let own_scope = tenancy::widen_to_system(&mut *connection, "workspace.delete").await?;
     for key in &foreign_keys {
         let (Some(column), true) = (tenant_column(&key.child), key.detachable) else {
             continue;
@@ -1313,6 +1372,7 @@ async fn delete_rows(
         .execute(&mut *connection)
         .await?;
     }
+    tenancy::restore(&mut *connection, &own_scope).await?;
 
     // One statement: every table's rows at once.
     let mut parts = Vec::new();

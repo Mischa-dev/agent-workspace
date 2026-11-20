@@ -7,10 +7,7 @@
 use std::io::{Read, Write};
 
 use agent_workspace_server::{
-    export::{
-        import::{self, ImportError, RunLimits, StartImport},
-        transfer,
-    },
+    export::import::{self, ImportError, RunLimits, StartImport},
     files::store::FileStore,
     jobs,
 };
@@ -163,7 +160,9 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(state, export).await.expect("export");
+    crate::support::run_export(state, export)
+        .await
+        .expect("export");
     let archive = folder.path().join("a.awx");
     archive_of(&fixture, export, &archive).await;
 
@@ -210,7 +209,7 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
     // Its job, run while another worker's lease on the transfer still
     // holds (one that stopped without letting go), tries again later
     // rather than finishing and leaving the workspace importing.
-    import::enqueue(state, target, resumed.transfer.id)
+    crate::support::as_job(target, import::enqueue(state, target, resumed.transfer.id))
         .await
         .expect("enqueue");
     sqlx::query(
@@ -381,6 +380,35 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
             .iter()
             .any(|body| body.contains(&format!("/tasks/{copied_task}"))),
         "the address names the copy's task"
+    );
+    // A page's live document holds ids in binary: the copy leaves it
+    // behind, and each copied page makes a fresh one from its rewritten
+    // Markdown when opened.
+    let documents = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_page_documents WHERE workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("documents");
+    assert_eq!(documents, 0, "no live document is copied with stale ids");
+    // Field values are keyed by their field's id: the copy's keys name the
+    // copy's fields, so its records keep their values.
+    let (keys, strangers) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT count(*), count(*) FILTER (WHERE NOT EXISTS ( \
+             SELECT 1 FROM field_definitions field \
+             WHERE field.workspace_id = $1 AND field.id::text = key)) \
+         FROM collection_records record, jsonb_object_keys(record.field_values) key \
+         WHERE record.workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("field keys");
+    assert!(keys > 0, "the fixture's record has field values");
+    assert_eq!(
+        strangers, 0,
+        "every field value names one of the copy's fields"
     );
     let originals = [a.task.to_string(), a.channel.clone(), a.page.clone()];
     for table in ["work_items", "messages", "conversations", "project_pages"] {

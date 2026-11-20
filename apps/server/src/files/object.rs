@@ -21,6 +21,14 @@ use zeroize::Zeroizing;
 use super::store::{StoredBytes, Written};
 use crate::{config::ObjectStoreConfig, error::AppError, outbound};
 
+/// The longest a request that moves no file body may take: a look, a
+/// delete, a listing, or starting, finishing or abandoning an upload.
+const CONTROL_DEADLINE: Duration = Duration::from_secs(60);
+/// The longest a request that moves at most a part's bytes may take.
+const PART_DEADLINE: Duration = Duration::from_secs(300);
+/// The most of a control answer read: a listing of a thousand keys is
+/// well under this.
+const CONTROL_BYTES: usize = 4 << 20;
 /// Bytes held before an upload becomes multipart; also each part's size.
 /// S3 needs parts of at least 5 MiB, except the last.
 const PART_BYTES: usize = 8 * 1024 * 1024;
@@ -194,6 +202,7 @@ impl ObjectBucket {
                 &[],
                 &[("x-amz-checksum-mode".to_owned(), "ENABLED".to_owned())],
                 Bytes::new(),
+                Some(CONTROL_DEADLINE),
             )
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
@@ -224,6 +233,7 @@ impl ObjectBucket {
                 &[],
                 &[("range".to_owned(), range)],
                 Bytes::new(),
+                Some(body_deadline(count)),
             )
             .await?;
         let mut response = expect(response, "read a file").await?;
@@ -244,7 +254,14 @@ impl ObjectBucket {
 
     pub async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), AppError> {
         let response = self
-            .send(Method::PUT, key, &[], &[], Bytes::copy_from_slice(bytes))
+            .send(
+                Method::PUT,
+                key,
+                &[],
+                &[],
+                Bytes::copy_from_slice(bytes),
+                Some(body_deadline(bytes.len() as u64)),
+            )
             .await?;
         expect(response, "store a file").await.map(drop)
     }
@@ -305,7 +322,10 @@ impl ObjectBucket {
     }
 
     pub async fn get(&self, key: &str) -> Result<StoredBytes, AppError> {
-        let response = self.send(Method::GET, key, &[], &[], Bytes::new()).await?;
+        // Streamed on to its reader, at the reader's pace: no deadline.
+        let response = self
+            .send(Method::GET, key, &[], &[], Bytes::new(), None)
+            .await?;
         let response = expect(response, "read a file").await?;
         let length = response.content_length().unwrap_or(0);
         let body = futures_util::stream::unfold(Some(response), |response| async move {
@@ -323,7 +343,16 @@ impl ObjectBucket {
     }
 
     pub async fn read_all(&self, key: &str, maximum: u64) -> Result<Vec<u8>, AppError> {
-        let response = self.send(Method::GET, key, &[], &[], Bytes::new()).await?;
+        let response = self
+            .send(
+                Method::GET,
+                key,
+                &[],
+                &[],
+                Bytes::new(),
+                Some(body_deadline(maximum)),
+            )
+            .await?;
         let mut response = expect(response, "read a file").await?;
         if response
             .content_length()
@@ -348,7 +377,14 @@ impl ObjectBucket {
     /// Deleting a key that is already gone succeeds.
     pub async fn delete(&self, key: &str) -> Result<(), AppError> {
         let response = self
-            .send(Method::DELETE, key, &[], &[], Bytes::new())
+            .send(
+                Method::DELETE,
+                key,
+                &[],
+                &[],
+                Bytes::new(),
+                Some(CONTROL_DEADLINE),
+            )
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(());
@@ -371,13 +407,20 @@ impl ObjectBucket {
                 query.push(("continuation-token".to_owned(), token.clone()));
             }
             let response = self
-                .send_raw(Method::GET, None, &query, &[], Bytes::new())
+                .send_raw(
+                    Method::GET,
+                    None,
+                    &query,
+                    &[],
+                    Bytes::new(),
+                    Some(CONTROL_DEADLINE),
+                )
                 .await?;
-            let listing = expect(response, "list files")
-                .await?
-                .text()
-                .await
-                .map_err(|_| AppError::Internal("list the object store"))?;
+            let listing = control_text(
+                expect(response, "list files").await?,
+                "list the object store",
+            )
+            .await?;
             for key in xml_values(&listing, "Key") {
                 let Some(key) = key.strip_prefix(&self.config.prefix) else {
                     continue;
@@ -454,13 +497,14 @@ impl ObjectBucket {
                 &[("uploads".to_owned(), String::new())],
                 &[],
                 Bytes::new(),
+                Some(CONTROL_DEADLINE),
             )
             .await?;
-        let body = expect(response, "start an upload")
-            .await?
-            .text()
-            .await
-            .map_err(|_| AppError::Internal("start an upload to the object store"))?;
+        let body = control_text(
+            expect(response, "start an upload").await?,
+            "start an upload to the object store",
+        )
+        .await?;
         let upload_id = xml_values(&body, "UploadId")
             .into_iter()
             .next()
@@ -478,6 +522,7 @@ impl ObjectBucket {
         bytes: Vec<u8>,
     ) -> Result<(), AppError> {
         let number = multipart.parts.len() + 1;
+        let deadline = body_deadline(bytes.len() as u64);
         let response = self
             .send(
                 Method::PUT,
@@ -488,6 +533,7 @@ impl ObjectBucket {
                 ],
                 &[],
                 Bytes::from(bytes),
+                Some(deadline),
             )
             .await?;
         let response = expect(response, "upload a part").await?;
@@ -519,14 +565,15 @@ impl ObjectBucket {
                 &[("uploadId".to_owned(), multipart.upload_id.clone())],
                 &[("content-type".to_owned(), "application/xml".to_owned())],
                 Bytes::from(body),
+                Some(CONTROL_DEADLINE),
             )
             .await?;
         // A failed completion can still answer 200, with an error inside.
-        let text = expect(response, "finish an upload")
-            .await?
-            .text()
-            .await
-            .map_err(|_| AppError::Internal("finish an upload to the object store"))?;
+        let text = control_text(
+            expect(response, "finish an upload").await?,
+            "finish an upload to the object store",
+        )
+        .await?;
         if text.contains("<Error>") {
             return Err(AppError::Internal("finish an upload to the object store"));
         }
@@ -541,10 +588,12 @@ impl ObjectBucket {
                 &[("uploadId".to_owned(), multipart.upload_id.clone())],
                 &[],
                 Bytes::new(),
+                Some(CONTROL_DEADLINE),
             )
             .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
         method: Method,
@@ -552,10 +601,14 @@ impl ObjectBucket {
         query: &[(String, String)],
         headers: &[(String, String)],
         body: Bytes,
+        deadline: Option<Duration>,
     ) -> Result<reqwest::Response, AppError> {
-        self.send_raw(method, Some(key), query, headers, body).await
+        self.send_raw(method, Some(key), query, headers, body, deadline)
+            .await
     }
 
+    /// One signed request. `deadline` bounds it from connecting until its
+    /// answer's body is read; a download streamed on to a reader has none.
     async fn send_raw(
         &self,
         method: Method,
@@ -563,6 +616,7 @@ impl ObjectBucket {
         query: &[(String, String)],
         headers: &[(String, String)],
         body: Bytes,
+        deadline: Option<Duration>,
     ) -> Result<reqwest::Response, AppError> {
         let credentials = self.credentials()?;
         let signed = self.sign(
@@ -579,7 +633,7 @@ impl ObjectBucket {
             self.private_ok,
             outbound::Timeouts {
                 connect: Duration::from_secs(10),
-                total: None,
+                total: deadline,
             },
             None,
         )
@@ -721,6 +775,39 @@ async fn expect(
         return Err(AppError::Internal("the object store refused"));
     }
     Ok(response)
+}
+
+/// A control answer's text (a listing, an upload's id, a completion), read
+/// up to `CONTROL_BYTES`: a store that answers with more is refused, not
+/// held in memory.
+async fn control_text(
+    mut response: reqwest::Response,
+    failure: &'static str,
+) -> Result<String, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > CONTROL_BYTES as u64)
+    {
+        return Err(AppError::Internal(failure));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AppError::Internal(failure))?
+    {
+        if bytes.len() + chunk.len() > CONTROL_BYTES {
+            return Err(AppError::Internal(failure));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes).map_err(|_| AppError::Internal(failure))
+}
+
+/// How long a request moving `bytes` may take: a part's deadline, or longer
+/// for more, at no less than 64 KiB a second.
+fn body_deadline(bytes: u64) -> Duration {
+    PART_DEADLINE.max(Duration::from_secs(bytes / (64 * 1024)))
 }
 
 fn amz_date(now: &DateTime<Utc>) -> String {

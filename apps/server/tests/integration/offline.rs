@@ -140,7 +140,9 @@ async fn a_server_with_no_outside_service_does_everything_a_person_starts_with()
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(&state, export).await.expect("export");
+    crate::support::run_export(&state, export)
+        .await
+        .expect("export");
     let response = router
         .clone()
         .oneshot(browser.request(
