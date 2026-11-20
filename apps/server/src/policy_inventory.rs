@@ -1371,6 +1371,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     boundary_route!("hosts/routes", Post, "/api/v1/hosts/enrol", HostCredential),
     boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/builtin/enrol",
+        HostCredential
+    ),
+    boundary_route!(
         "modules/connected/http",
         Post,
         "/api/v1/connected-modules/token",

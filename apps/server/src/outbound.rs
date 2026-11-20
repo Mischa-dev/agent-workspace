@@ -752,6 +752,10 @@ mod tests {
             ("ai/gateway.rs", "the built-in providers' own addresses"),
             ("auth/workos.rs", "the sign-in provider's API"),
             ("github.rs", "the configured GitHub API"),
+            (
+                "hosts/builtin/program.rs",
+                "the host program enrolling with its operator-set server",
+            ),
             ("provider/claude_cloud.rs", "the provider's own cloud API"),
             (
                 "push.rs",
