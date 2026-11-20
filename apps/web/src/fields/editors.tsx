@@ -1,8 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { requestJson } from '../api/client'
-import { collectionKeys } from '../collections/keys'
 import { listPages, memoryKeys } from '../memory/api'
 import { fileContentUrl } from '../files/model'
 import { Avatar, Button, Icon, TextArea, TextField, actorKind } from '../ui'
@@ -10,6 +8,7 @@ import { Calendar, ComboboxList, Popover } from '../ui/pickers'
 import { useAssignableActors } from '../work-items/hooks'
 import { useDebouncedValue } from '../work-items/pickerModel'
 import { TaskSearchPicker } from '../work-items/TaskSearchPicker'
+import { recordLabel, useRecordPick } from './recordPick'
 import { displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
 import '../styles/work.css'
 
@@ -369,33 +368,7 @@ function PageEditor({
   )
 }
 
-export type RecordHit = { id: string; title: string; number: number }
-
 /** A record of the collection a record link holds (AWD-110), found by its title. */
-/** A record as a picker names it. */
-export const recordLabel = (record: RecordHit) => record.title || `Untitled #${record.number}`
-
-/** Up to 20 records of `collection` matching `query` (debounced), for a picker. */
-export function useRecordPick(projectId: string, collection: string, query: string) {
-  const debounced = useDebouncedValue(query, 200)
-  return useQuery({
-    queryKey: collectionKeys.recordPick(projectId, collection, debounced.trim()),
-    enabled: Boolean(collection),
-    queryFn: async () => {
-      const params = new URLSearchParams({ limit: '20' })
-      if (debounced.trim()) params.set('search', debounced.trim())
-      const payload = await requestJson<{ records?: Array<{ id?: unknown; title?: unknown; number?: unknown }> }>(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records?${params.toString()}`,
-      )
-      return (payload.records ?? []).flatMap((record): RecordHit[] =>
-        typeof record.id === 'string'
-          ? [{ id: record.id, title: typeof record.title === 'string' ? record.title : '', number: typeof record.number === 'number' ? record.number : 0 }]
-          : [],
-      )
-    },
-  })
-}
-
 function RecordEditor({
   field,
   multiple = false,

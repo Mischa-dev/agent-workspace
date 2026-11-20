@@ -6,7 +6,7 @@ import { useWorkspaceId } from '../app/workspace'
 import { answerBody, missing, normalizeQuestions, type Answers } from '../forms/formModel'
 import { Questions, type PersonInput } from '../forms/Questions'
 import { Banner, Button, Checkbox, Dialog, ErrorState, ListSkeleton, SelectField, TextField, describeError, showToast } from '../ui'
-import { recordLabel, useRecordPick } from '../fields/editors'
+import { recordLabel, useRecordPick } from '../fields/recordPick'
 import { useAssignableActors } from '../work-items/hooks'
 import { collectionKeys } from './keys'
 
