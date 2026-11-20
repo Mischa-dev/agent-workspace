@@ -136,7 +136,7 @@ class AreaValidationTests(unittest.TestCase):
             f"cargo nextest archive --workspace --archive-file {self.env['CI_NEXTEST_ARCHIVE']}",
             build,
         )
-        self.assertIn("cargo build -p agent-workspace-server --bin agent-workspace-server", build)
+        self.assertIn("cargo build --workspace", build)
         self.assertIn("cargo test --workspace --doc --quiet", build)
         self.assertTrue(any(c.split() == ["schema-snapshot.sh"] for c in build))
         run = [c for c in tests if c.startswith("cargo-nextest nextest run")]

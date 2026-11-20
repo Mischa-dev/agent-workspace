@@ -572,10 +572,15 @@ fi
 if runs rust-build && [ "${part}" != all ]; then
   : "${nextest_archive:?the rust-build part needs CI_NEXTEST_ARCHIVE}"
   step "install cargo-nextest" install_tool cargo-nextest
+  # The server library and its unit tests take about 5 GB each to compile;
+  # side by side they ran a 16 GB runner out of memory. The library and
+  # binaries first, then the tests reuse the library.
   if has rust; then
+    step "rust build" cargo build --workspace
     step "rust test build" cargo nextest archive --workspace --archive-file "${nextest_archive}"
+  else
+    step "server build" cargo build -p agent-workspace-server --bin agent-workspace-server
   fi
-  step "server build" cargo build -p agent-workspace-server --bin agent-workspace-server
   if has rust; then
     step "doc tests" cargo test --workspace --doc --quiet
     step "schema snapshot" tools/db/schema-snapshot.sh
