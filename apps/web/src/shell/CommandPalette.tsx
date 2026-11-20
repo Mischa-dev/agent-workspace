@@ -459,7 +459,7 @@ export function CommandPalette() {
         group: 'Theme',
         label: `Switch to ${preset.name}`,
         icon: 'palette',
-        keywords: ['theme', preset.id === 'daylight' ? 'light mode' : 'dark mode'],
+        keywords: ['theme', preset.scheme === 'dark' ? 'dark mode' : 'light mode'],
         hint: theme.theme === preset.id ? 'Current' : undefined,
         onSelect: () => theme.setTheme(preset.id),
       })

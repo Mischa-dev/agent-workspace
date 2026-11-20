@@ -183,7 +183,7 @@ export function WhiteboardsPage() {
 }
 
 function BoardCover({ board }: { board: Whiteboard }) {
-  const { preset } = useTheme()
+  const { shownPreset: preset } = useTheme()
   return board.elementCount > 0 ? (
     <img alt="" loading="lazy" src={previewUrl(board.id, board.sceneSeq, isDarkPreset(preset))} />
   ) : (

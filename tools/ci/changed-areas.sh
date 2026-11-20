@@ -24,6 +24,7 @@ while IFS= read -r file; do
     apps/web/src/experience/registry.json | \
       apps/web/src/ui/markdown/*.json | \
       apps/web/src/memory/live/*.json | \
+      apps/web/src/theme/contract.json | \
       apps/web/src/settings/workspace/roles.ts | \
       apps/web/src/api/generated/*)
       rust=true
