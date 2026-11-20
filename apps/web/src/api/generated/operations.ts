@@ -392,7 +392,7 @@ export type ProjectLine = { archived?: boolean; id: string; key: string; message
 
 export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
-export type PublicField = { description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
+export type PublicField = { collection?: string | null; description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
 
 export type PublicOption = { color: string; id: string; name: string }
 

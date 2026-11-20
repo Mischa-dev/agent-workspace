@@ -369,9 +369,33 @@ function PageEditor({
   )
 }
 
-type RecordHit = { id: string; title: string; number: number }
+export type RecordHit = { id: string; title: string; number: number }
 
 /** A record of the collection a record link holds (AWD-110), found by its title. */
+/** A record as a picker names it. */
+export const recordLabel = (record: RecordHit) => record.title || `Untitled #${record.number}`
+
+/** Up to 20 records of `collection` matching `query` (debounced), for a picker. */
+export function useRecordPick(projectId: string, collection: string, query: string) {
+  const debounced = useDebouncedValue(query, 200)
+  return useQuery({
+    queryKey: collectionKeys.recordPick(projectId, collection, debounced.trim()),
+    enabled: Boolean(collection),
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: '20' })
+      if (debounced.trim()) params.set('search', debounced.trim())
+      const payload = await requestJson<{ records?: Array<{ id?: unknown; title?: unknown; number?: unknown }> }>(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records?${params.toString()}`,
+      )
+      return (payload.records ?? []).flatMap((record): RecordHit[] =>
+        typeof record.id === 'string'
+          ? [{ id: record.id, title: typeof record.title === 'string' ? record.title : '', number: typeof record.number === 'number' ? record.number : 0 }]
+          : [],
+      )
+    },
+  })
+}
+
 function RecordEditor({
   field,
   multiple = false,
@@ -390,25 +414,8 @@ function RecordEditor({
 }) {
   const [chosen, setChosen] = useState<string[]>(Array.isArray(value) ? value : typeof value === 'string' ? [value] : [])
   const [query, setQuery] = useState('')
-  const debounced = useDebouncedValue(query, 200)
-  const collection = field.collection ?? ''
-  const records = useQuery({
-    queryKey: collectionKeys.recordPick(projectId, collection, debounced.trim()),
-    enabled: Boolean(collection),
-    queryFn: async () => {
-      const params = new URLSearchParams({ limit: '20' })
-      if (debounced.trim()) params.set('search', debounced.trim())
-      const payload = await requestJson<{ records?: Array<{ id?: unknown; title?: unknown; number?: unknown }> }>(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records?${params.toString()}`,
-      )
-      return (payload.records ?? []).flatMap((record): RecordHit[] =>
-        typeof record.id === 'string'
-          ? [{ id: record.id, title: typeof record.title === 'string' ? record.title : '', number: typeof record.number === 'number' ? record.number : 0 }]
-          : [],
-      )
-    },
-  })
-  const label = (record: RecordHit) => record.title || `Untitled #${record.number}`
+  const records = useRecordPick(projectId, field.collection ?? '', query)
+  const label = recordLabel
   return (
     <ComboboxList
       emptyText={records.isError ? 'Records didn’t load. Try again.' : 'No records match'}

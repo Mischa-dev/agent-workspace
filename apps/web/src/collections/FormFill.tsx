@@ -6,6 +6,7 @@ import { useWorkspaceId } from '../app/workspace'
 import { answerBody, missing, normalizeQuestions, type Answers } from '../forms/formModel'
 import { Questions, type PersonInput } from '../forms/Questions'
 import { Banner, Button, Checkbox, Dialog, ErrorState, ListSkeleton, SelectField, TextField, describeError, showToast } from '../ui'
+import { recordLabel, useRecordPick } from '../fields/editors'
 import { useAssignableActors } from '../work-items/hooks'
 import { collectionKeys } from './keys'
 
@@ -79,7 +80,7 @@ export function FormFill({ formId, onBack, onClose, projectId }: { formId: strin
           onChange={(event) => set('title', event.target.value)}
           value={typeof answers.title === 'string' ? answers.title : ''}
         />
-        <Questions answers={answers} fields={questions} onChange={set} personInput={(props) => <PersonQuestion {...props} projectId={projectId} />} />
+        <Questions answers={answers} fields={questions} onChange={set} personInput={(props) => (props.field.type === 'relation' ? <RelationQuestion {...props} projectId={projectId} /> : <PersonQuestion {...props} projectId={projectId} />)} />
         {problem ? <Banner tone="danger">{problem}</Banner> : null}
         {send.error ? <Banner tone="danger">{describeError(send.error).message}</Banner> : null}
       </div>
@@ -116,5 +117,35 @@ function PersonQuestion({ field, label, onChange, projectId, value }: Parameters
         </option>
       ))}
     </SelectField>
+  )
+}
+
+/** Records of the related collection: found by title, ticked to pick. */
+function RelationQuestion({ field, label, onChange, projectId, value }: Parameters<PersonInput>[0] & { projectId: string }) {
+  const [query, setQuery] = useState('')
+  const [names, setNames] = useState<Record<string, string>>({})
+  const records = useRecordPick(projectId, field.collection ?? '', query)
+  const picked = Array.isArray(value) ? value : []
+  const hits = records.data ?? []
+  const shown = [...picked.filter((id) => !hits.some((record) => record.id === id)).map((id) => ({ id, label: names[id] ?? id })), ...hits.map((record) => ({ id: record.id, label: recordLabel(record) }))]
+  return (
+    <fieldset className="aw-pform__group">
+      <legend className="aw-pform__legend">{label}</legend>
+      {field.description ? <p className="aw-pform__hint">{field.description}</p> : null}
+      <TextField label={`Find in ${field.name}`} onChange={(event) => setQuery(event.target.value)} placeholder="Type a title" type="search" value={query} />
+      {records.isError ? <p className="aw-pform__hint">Records didn’t load. Try again.</p> : null}
+      {!records.isPending && !shown.length ? <p className="aw-pform__hint">No records match.</p> : null}
+      {shown.map((record) => (
+        <Checkbox
+          checked={picked.includes(record.id)}
+          key={record.id}
+          label={record.label}
+          onChange={(checked) => {
+            setNames((current) => ({ ...current, [record.id]: record.label }))
+            onChange(checked ? [...picked, record.id] : picked.filter((id) => id !== record.id))
+          }}
+        />
+      ))}
+    </fieldset>
   )
 }
