@@ -464,3 +464,67 @@ async fn an_upgrade_builds_on_what_it_keeps_and_renames_its_role() {
         "the new module holds the page the first version made"
     );
 }
+
+/// A page moved out of the install's space since stays where it is: the
+/// upgrade plans no change to it and the rest still goes ahead.
+#[tokio::test]
+async fn an_upgrade_leaves_a_page_moved_out_of_its_space() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .build("m110_upgrade_moved_page")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let v1 = handbook("1.0.0", "Editor", false);
+    let preview = tool(&world, "package_preview", json!({"package": v1})).await;
+    let installed = tool(
+        &world,
+        "package_install",
+        json!({"package": v1, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "moved-v1"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    let install = installed["value"]["installId"]
+        .as_str()
+        .expect("install")
+        .to_owned();
+    sqlx::query("UPDATE project_pages SET project_id = $1::uuid WHERE title = 'Handbook guide'")
+        .bind(world.project("WORK"))
+        .execute(&pool)
+        .await
+        .expect("move the page");
+
+    let mut v2 = handbook("1.1.0", "Editor", false);
+    v2["contents"][2]["body"]["markdown"] = json!("Read me again.");
+    let preview = tool(
+        &world,
+        "package_upgrade_preview",
+        json!({"installId": install, "package": v2}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    assert_eq!(
+        actions(&preview["value"])["page:guide"],
+        "keep",
+        "{preview}"
+    );
+    let upgraded = tool(
+        &world,
+        "package_upgrade",
+        json!({"installId": install, "package": v2, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "moved-v2"}),
+    )
+    .await;
+    assert_eq!(upgraded["outcome"], "ok", "{upgraded}");
+    let body = sqlx::query_scalar::<_, String>(
+        "SELECT body FROM project_pages WHERE title = 'Handbook guide'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("page");
+    assert_eq!(body.trim(), "Read me.");
+}

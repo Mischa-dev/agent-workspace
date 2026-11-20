@@ -176,6 +176,8 @@ struct OldObject {
     local_hash: Option<String>,
     now: Option<String>,
     owner: Option<Uuid>,
+    /// A page or skill moved out of the install's space since.
+    moved: bool,
 }
 
 /// A plan, with what applying it needs.
@@ -312,11 +314,15 @@ pub(crate) async fn plan(
     let objects = sqlx::query_as::<_, OldObject>(&format!(
         "SELECT object.package_key AS key, object.object_kind AS kind, object.object_id AS id, \
                 object.action, object.installed_hash, object.local_hash, \
-                ({LOCAL_HASH_SQL}) AS now, ({OWNER_SQL}) AS owner \
+                ({LOCAL_HASH_SQL}) AS now, ({OWNER_SQL}) AS owner, \
+                (object.object_kind IN ('page', 'skill') AND EXISTS ( \
+                    SELECT 1 FROM project_pages page WHERE page.id = object.object_id \
+                      AND page.project_id IS DISTINCT FROM $2)) AS moved \
          FROM package_objects object WHERE object.install_id = $1 \
          ORDER BY object.object_kind, object.package_key"
     ))
     .bind(old.id)
+    .bind(old.space_id)
     .fetch_all(&mut *connection)
     .await
     .map_err(|error| OpError::logged(NAME, &error.into()))?;
@@ -362,6 +368,10 @@ pub(crate) async fn plan(
                 if object.now.is_none() {
                     item.reason =
                         because("It was archived or turned off here, so it stays that way.");
+                } else if object.moved {
+                    // Upgrades write only in the install's space.
+                    item.reason =
+                        because("It was moved to another space here, so it stays as it is.");
                 } else if planned.action == "skip" {
                     item.reason = planned.reason.clone();
                 } else if new_hash == Some(&object.installed_hash) {
