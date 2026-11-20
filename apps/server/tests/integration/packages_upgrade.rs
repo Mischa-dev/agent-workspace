@@ -353,3 +353,114 @@ async fn an_upgrade_keeps_local_changes_detaches_and_only_grows() {
         "Welcome, v3."
     );
 }
+
+fn handbook(version: &str, role: &str, with_module: bool) -> Value {
+    let mut contents = vec![
+        json!({"kind": "role", "key": "editor", "body": {
+            "name": role, "baseRole": "member", "permissions": ["tasks.view"]}}),
+        json!({"kind": "space", "key": "handbook", "body": {"name": "Handbook", "key": "HBK"}}),
+        json!({"kind": "page", "key": "guide", "body": {"title": "Handbook guide", "markdown": "Read me."}}),
+    ];
+    if with_module {
+        contents.push(json!({"kind": "module", "key": "handbook", "body": {
+            "name": "Handbook", "parts": [{"kind": "page", "key": "guide"}]}}));
+    }
+    json!({
+        "format": "agent-workspace-package/1",
+        "id": "handbook",
+        "version": version,
+        "name": "Handbook",
+        "target": "space",
+        "contents": contents,
+    })
+}
+
+/// A new version can name what an earlier one made and the upgrade leaves
+/// be (a new module holding the old page), and a role renamed upstream is
+/// the same role, renamed, not a second one beside it.
+#[tokio::test]
+async fn an_upgrade_builds_on_what_it_keeps_and_renames_its_role() {
+    let Some(world) = WorldBuilder::default()
+        .connected_app("desk")
+        .build("m110_upgrade_kept")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let v1 = handbook("1.0.0", "Editor", false);
+    let preview = tool(&world, "package_preview", json!({"package": v1})).await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    let installed = tool(
+        &world,
+        "package_install",
+        json!({"package": v1, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "handbook-v1"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    let install = installed["value"]["installId"]
+        .as_str()
+        .expect("install")
+        .to_owned();
+    let role = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT object_id FROM package_objects WHERE install_id = $1::uuid AND object_kind = 'role'",
+    )
+    .bind(&install)
+    .fetch_one(&pool)
+    .await
+    .expect("role");
+
+    let v2 = handbook("1.1.0", "Writer", true);
+    let preview = tool(
+        &world,
+        "package_upgrade_preview",
+        json!({"installId": install, "package": v2}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    let lines = actions(&preview["value"]);
+    assert_eq!(lines["role:editor"], "update", "{preview}");
+    assert_eq!(lines["module:handbook"], "create", "{preview}");
+    let upgraded = tool(
+        &world,
+        "package_upgrade",
+        json!({"installId": install, "package": v2, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "handbook-v2"}),
+    )
+    .await;
+    assert_eq!(upgraded["outcome"], "ok", "{upgraded}");
+    let second = upgraded["value"]["installId"]
+        .as_str()
+        .expect("install")
+        .to_owned();
+
+    let roles = sqlx::query_as::<_, (uuid::Uuid, String)>(
+        "SELECT id, name FROM workspace_roles WHERE lower(name) IN ('editor', 'writer')",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("roles");
+    assert_eq!(roles, vec![(role, "Writer".to_owned())]);
+    let tracked = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT object_id FROM package_objects WHERE install_id = $1::uuid AND object_kind = 'role'",
+    )
+    .bind(&second)
+    .fetch_one(&pool)
+    .await
+    .expect("tracked role");
+    assert_eq!(tracked, role);
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM module_parts p JOIN modules m ON m.id = p.module_id \
+         JOIN project_pages g ON g.id = p.object_id \
+         WHERE m.package_install_id = $1::uuid AND g.title = 'Handbook guide'",
+    )
+    .bind(&second)
+    .fetch_one(&pool)
+    .await
+    .expect("module parts");
+    assert_eq!(
+        held, 1,
+        "the new module holds the page the first version made"
+    );
+}

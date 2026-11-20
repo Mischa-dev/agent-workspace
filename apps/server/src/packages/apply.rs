@@ -246,9 +246,10 @@ pub(crate) async fn install(
     install_keeping(tx, who, package, document, place, plan, &HashMap::new()).await
 }
 
-/// [`install`], with the collections an earlier version installed (by
-/// package key): an upgrade's new parts name those, even where the
-/// collection was renamed here or upstream.
+/// [`install`], with what an earlier version installed (by kind and
+/// package key): an upgrade's new parts name those, even where one was
+/// renamed here or upstream, and a new module may hold a page or form the
+/// upgrade leaves as it is.
 pub(crate) async fn install_keeping(
     tx: &mut Transaction<'static, Postgres>,
     who: &Installer<'_>,
@@ -256,7 +257,7 @@ pub(crate) async fn install_keeping(
     document: &Value,
     place: &Place,
     plan: &Plan,
-    kept_collections: &HashMap<String, Uuid>,
+    kept: &HashMap<(String, String), Uuid>,
 ) -> Result<Installed, InstallError> {
     use crate::workspace_templates::{self as templates, TemplateDefinition, TemplateProject};
 
@@ -519,7 +520,7 @@ pub(crate) async fn install_keeping(
             }
             ContentKind::Collection => {
                 let name = body["name"].as_str().unwrap_or("").trim();
-                if let Some(id) = kept_collections.get(&part.key) {
+                if let Some(id) = kept.get(&("collection".to_owned(), part.key.clone())) {
                     collections.insert(part.key.clone(), *id);
                     record(&mut objects, "collection", &part.key, *id);
                 } else if let Some(space) = space
@@ -555,6 +556,24 @@ pub(crate) async fn install_keeping(
             .iter()
             .find(|line| line.kind == kind && line.key == key);
         let Some(line) = line else { continue };
+        // What an earlier version made and the upgrade leaves be: later
+        // parts (a new module's) may name it.
+        if line.action == "skip"
+            && matches!(
+                part.kind,
+                ContentKind::Form
+                    | ContentKind::Automation
+                    | ContentKind::Page
+                    | ContentKind::Skill
+                    | ContentKind::Agent
+                    | ContentKind::Module
+                    | ContentKind::Theme
+            )
+            && let Some(id) = kept.get(&(kind.to_owned(), key.to_owned()))
+        {
+            record(&mut objects, kind, key, *id);
+            continue;
+        }
         if line.action == "skip" {
             if !matches!(part.kind, ContentKind::Channels) {
                 skipped.push(format!(
