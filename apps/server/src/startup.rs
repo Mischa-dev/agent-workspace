@@ -77,6 +77,12 @@ async fn release(pool: &PgPool, holder: Uuid, token: i64) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// Whether a holder last renewed `since` ago must stop: one more round
+/// (a tick and a renewal's timeout) could take it past the lease's life.
+fn lapsing(since: Duration) -> bool {
+    since + RENEW * 3 >= TTL
+}
+
 /// Waits until `holder` takes the lease, for at most `limit`.
 pub async fn wait_for(pool: &PgPool, holder: Uuid, limit: Duration) -> anyhow::Result<Waited> {
     let started = tokio::time::Instant::now();
@@ -122,20 +128,33 @@ pub async fn under_lease<T>(
     tokio::pin!(work);
     let mut renew = tokio::time::interval(RENEW);
     renew.tick().await;
+    let mut renewed_at = tokio::time::Instant::now();
     let result = loop {
         tokio::select! {
             result = &mut work => break result,
             _ = renew.tick() => {
-                match take(pool, holder).await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
+                // A renewal that hangs counts as failed, so the fence below
+                // is reached in time.
+                match tokio::time::timeout(RENEW, take(pool, holder)).await {
+                    Ok(Ok(Some(_))) => renewed_at = tokio::time::Instant::now(),
+                    Ok(Ok(None)) => {
                         break Err(anyhow::anyhow!(
                             "{LEASE} was taken over while starting; exiting"
                         ));
                     }
-                    Err(error) => {
+                    Ok(Err(error)) => {
                         tracing::warn!(%error, "{LEASE} not renewed; trying again");
                     }
+                    Err(_) => tracing::warn!("{LEASE} renewal timed out; trying again"),
+                }
+                // Fenced: the work stops (dropped here, which rolls back an
+                // open migration) before the lease can lapse and another
+                // process take it while this one still writes.
+                if lapsing(renewed_at.elapsed()) {
+                    break Err(anyhow::anyhow!(
+                        "{LEASE} not renewed for {}s; stopping before it can lapse",
+                        renewed_at.elapsed().as_secs()
+                    ));
                 }
             }
         }
@@ -148,6 +167,17 @@ pub async fn under_lease<T>(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn a_holder_stops_a_full_round_before_its_lease_lapses() {
+        assert!(!super::lapsing(Duration::ZERO));
+        assert!(!super::lapsing(Duration::from_secs(40)));
+        assert!(super::lapsing(Duration::from_secs(45)));
+        // Whatever the round costs, the check fires while the lease lives.
+        assert!(super::lapsing(super::TTL - super::RENEW * 2));
+    }
+
     #[test]
     fn the_lease_is_the_one_the_cluster_names() {
         assert_eq!(

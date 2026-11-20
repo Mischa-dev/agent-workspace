@@ -813,3 +813,51 @@ async fn renaming_an_agent_once_renames_it_in_every_space() {
     assert_eq!(profile, "Rook the Second");
     world.finish().await;
 }
+
+/// Signing in again over a live session's cookie revokes that session, and
+/// the revoke reaches the event log for live connections on every
+/// instance, although a sign-in arrives before its account is known.
+#[tokio::test]
+async fn a_sign_in_over_a_live_cookie_signals_the_old_sessions_revoke() {
+    let Some(setup) = super::support::world::setup("rotate_signal").await else {
+        return;
+    };
+    let response = setup
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("origin", "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &setup.browser.cookie)
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "loginName": "owner",
+                        "password": super::support::app::PASSWORD,
+                    }))
+                    .expect("login body"),
+                ))
+                .expect("login request"),
+        )
+        .await
+        .expect("login response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rotated = sqlx::query_scalar::<_, Uuid>(
+        "SELECT rotated_from_session_id FROM sessions WHERE rotated_from_session_id IS NOT NULL",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the old session, rotated");
+    let signals = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM (SELECT type, payload FROM events \
+         UNION ALL SELECT type, payload FROM event_staging) logged \
+         WHERE type = 'session.revoked' AND payload->>'sessionId' = $1::text",
+    )
+    .bind(rotated)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("signals");
+    assert_eq!(signals, 1);
+}
