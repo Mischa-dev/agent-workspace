@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
@@ -249,7 +250,7 @@ function RunRow({ run, usage }: { run: RunLine; usage: boolean }) {
         </>
       }
       title={
-        <Link className="aw-runs__link" to={`/runs/${encodeURIComponent(run.id)}`}>
+        <Link className="aw-runs__link" to={here(`/runs/${encodeURIComponent(run.id)}`)}>
           {runTitle(run)}
         </Link>
       }

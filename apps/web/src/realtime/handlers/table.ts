@@ -23,3 +23,6 @@ export const HANDLERS: Readonly<Record<string, Handler>> = {
 export function touchesFor(event: RealtimeEnvelope, context: HandlerContext): Touch[] {
   return HANDLERS[event.type]?.(event, context) ?? []
 }
+
+// Loads with the table, after the first paint: a run you asked for that finishes says so (runs/RunFinishedToasts.tsx).
+export { announceRunFinished } from '../runFinished'

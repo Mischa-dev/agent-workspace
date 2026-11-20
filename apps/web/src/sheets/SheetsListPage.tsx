@@ -9,6 +9,7 @@ import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, Ro
 import { sheetKeys, updateSheet, useSheets, type SheetSummary } from './api'
 import { SheetDetailsDialog } from './SheetDialogs'
 import { SheetImportButton } from './SheetImportButton'
+import { spaceHref } from '../app/href'
 
 type Shown = 'open' | 'archived'
 
@@ -38,7 +39,7 @@ export function SheetsListPage() {
   const all = sheets.data?.sheets ?? []
   const archivedCount = all.filter((sheet) => sheet.archived).length
   const visible = all.filter((sheet) => (shown === 'archived' ? sheet.archived : !sheet.archived))
-  const href = (id: string) => `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(id)}`
+  const href = (id: string) => spaceHref(projectId, `/sheets/${encodeURIComponent(id)}`)
   const restore = async (sheet: SheetSummary) => {
     try {
       await updateSheet(projectId, sheet.id, { archived: false })

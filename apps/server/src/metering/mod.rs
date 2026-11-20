@@ -60,11 +60,6 @@ pub struct Meter {
     pub unit: &'static str,
     /// What it counts, in words, for people and agents.
     pub name: &'static str,
-    /// Counted only where a spend limit covers it (H1.27): the work it
-    /// counts (operations, messages, deliveries) costs the server nothing,
-    /// so no plan limits it and nothing is recorded until someone sets a
-    /// limit.
-    pub limited_only: bool,
 }
 
 const fn meter(id: &'static str, kind: MeterKind, unit: &'static str, name: &'static str) -> Meter {
@@ -73,18 +68,6 @@ const fn meter(id: &'static str, kind: MeterKind, unit: &'static str, name: &'st
         kind,
         unit,
         name,
-        limited_only: false,
-    }
-}
-
-/// A counter that only spend limits count (A2's budget meters).
-const fn limited(id: &'static str, unit: &'static str, name: &'static str) -> Meter {
-    Meter {
-        id,
-        kind: MeterKind::Counter,
-        unit,
-        name,
-        limited_only: true,
     }
 }
 
@@ -126,135 +109,23 @@ pub const METERS: &[Meter] = &[
         "count",
         "form submissions",
     ),
-    limited("operations", "count", "operations"),
-    limited("writes", "count", "writes"),
-    limited("messages", "count", "messages"),
-    limited("deliveries", "count", "deliveries"),
-    limited("reported_cost_micros", "micros", "reported run cost"),
-    limited("reported_tokens", "tokens", "reported run tokens"),
+    meter("operations", MeterKind::Counter, "count", "operations"),
+    meter("writes", MeterKind::Counter, "count", "writes"),
+    meter("messages", MeterKind::Counter, "count", "messages"),
+    meter("deliveries", MeterKind::Counter, "count", "deliveries"),
+    meter(
+        "reported_cost_micros",
+        MeterKind::Counter,
+        "micros",
+        "reported run cost",
+    ),
+    meter(
+        "reported_tokens",
+        MeterKind::Counter,
+        "tokens",
+        "reported run tokens",
+    ),
 ];
-
-/// The job that tells whoever can raise a limit it is near or reached.
-pub const NOTICE_KIND: &str = "metering.limit_notice";
-
-pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
-    registry.register(NOTICE_KIND, |context| async move {
-        let notice: NoticeJob = context.job.payload_as()?;
-        deliver_notice(&context.state.pool, &notice).await?;
-        Ok(())
-    });
-}
-
-/// The notice job's input: ids, kinds and numbers.
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NoticeJob {
-    workspace_id: Uuid,
-    notice: NoticeFields,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NoticeFields {
-    meter: String,
-    scope: NoticeScope,
-    limit: i64,
-    used: i64,
-    level: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct NoticeScope {
-    kind: String,
-    id: Option<Uuid>,
-}
-
-/// A limit notice's words, from the numbers its notification holds (rule
-/// 10): its title and preview in the inbox.
-pub(crate) fn notice_words(detail: &serde_json::Value) -> (String, Option<String>) {
-    let text = |key: &str| detail.get(key).and_then(serde_json::Value::as_str);
-    let number = |key: &str| detail.get(key).and_then(serde_json::Value::as_i64);
-    let whose = match text("scopeKind") {
-        Some("account") => "An account",
-        Some("space") => "A space",
-        Some("conversation") => "A conversation",
-        _ => "The workspace",
-    };
-    let meter = text("meter")
-        .and_then(find_meter)
-        .map_or("a meter", |meter| meter.name);
-    let title = if text("level") == Some("hard") {
-        format!("{whose} reached its limit for {meter}")
-    } else {
-        format!("{whose} is near its limit for {meter}")
-    };
-    let preview = number("used")
-        .zip(number("limit"))
-        .map(|(used, limit)| format!("{used} of {limit} used."));
-    (title, preview)
-}
-
-/// Tells the workspace's settings managers (and, for a limit on one
-/// account, that account) in their inbox, from the workspace's own space.
-async fn deliver_notice(pool: &sqlx::PgPool, job: &NoticeJob) -> Result<(), AppError> {
-    let Some(meter) = find_meter(&job.notice.meter) else {
-        return Ok(());
-    };
-    let notice = &job.notice;
-    let mut transaction = crate::db::scoped_tx(pool).await?;
-    let Some(space) = crate::spaces::workspace::find(&mut transaction, job.workspace_id).await?
-    else {
-        return Ok(());
-    };
-    let account = (notice.scope.kind == "account")
-        .then_some(notice.scope.id)
-        .flatten();
-    let recipients = sqlx::query_scalar::<_, Uuid>(
-        "SELECT membership.actor_id FROM project_memberships membership \
-         WHERE membership.project_id = $1 AND membership.enabled \
-           AND (role_allows(membership.role, membership.role_id, 'settings.manage') \
-                OR membership.actor_id = $2)",
-    )
-    .bind(space)
-    .bind(account)
-    .fetch_all(&mut *transaction)
-    .await?;
-    let day = Utc::now().format("%Y-%m-%d");
-    let scope_id = notice.scope.id.unwrap_or(job.workspace_id);
-    for recipient in recipients {
-        let notification = crate::notifications::NewNotification {
-            project_id: space,
-            recipient_actor_id: recipient,
-            kind: crate::notifications::kind::SPEND_LIMIT,
-            subject_kind: "workspace",
-            subject_id: job.workspace_id,
-            actor_id: None,
-            conversation_id: None,
-            message_id: None,
-            work_item_id: None,
-            agent_run_id: None,
-            pull_request_id: None,
-            detail: serde_json::json!({
-                "href": crate::addresses::Target::WorkspaceSettings("usage").legacy_path(),
-                "meter": meter.id,
-                "scopeKind": notice.scope.kind,
-                "limit": notice.limit,
-                "used": notice.used,
-                "level": notice.level,
-            }),
-            group_key: format!("limit:{}:{}:{scope_id}", meter.id, notice.scope.kind),
-            dedupe_key: format!(
-                "limit:{}:{}:{scope_id}:{}:{day}",
-                meter.id, notice.scope.kind, notice.level
-            ),
-        };
-        if crate::notifications::deliver(&mut transaction, &notification).await? {
-            crate::notifications::announce(&mut transaction, space, recipient).await?;
-        }
-    }
-    transaction.commit().await?;
-    Ok(())
-}
 
 pub fn find_meter(id: &str) -> Option<&'static Meter> {
     METERS.iter().find(|meter| meter.id == id)
@@ -271,7 +142,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub(crate) fn kind(self) -> &'static str {
+    fn kind(self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
             Self::Account(_) => "account",
@@ -280,7 +151,7 @@ impl Scope {
         }
     }
 
-    pub(crate) fn id(self, workspace: Uuid) -> Uuid {
+    fn id(self, workspace: Uuid) -> Uuid {
         match self {
             Self::Workspace => workspace,
             Self::Account(id) | Self::Space(id) | Self::Conversation(id) => id,
@@ -304,7 +175,7 @@ impl Period {
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
+    fn parse(value: &str) -> Option<Self> {
         match value {
             "day" => Some(Self::Day),
             "month" => Some(Self::Month),
@@ -333,57 +204,6 @@ impl Period {
     }
 }
 
-/// A rate: a spend limit over a minute or an hour, counted in the shared
-/// limiter's store (K5.6) rather than the durable counters. A rate is a
-/// hard limit only.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Rate {
-    Minute,
-    Hour,
-}
-
-impl Rate {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "minute" => Some(Self::Minute),
-            "hour" => Some(Self::Hour),
-            _ => None,
-        }
-    }
-
-    fn word(self) -> &'static str {
-        match self {
-            Self::Minute => "minute",
-            Self::Hour => "hour",
-        }
-    }
-
-    fn window(self) -> std::time::Duration {
-        std::time::Duration::from_secs(match self {
-            Self::Minute => 60,
-            Self::Hour => 3_600,
-        })
-    }
-
-    /// The limiter bucket its counters live in.
-    fn bucket(self) -> &'static str {
-        match self {
-            Self::Minute => "spend.minute",
-            Self::Hour => "spend.hour",
-        }
-    }
-}
-
-/// A spend limit over a rate: which row, and whether it counts each
-/// account on its own.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RateLimit {
-    rate: Rate,
-    id: Uuid,
-    per_account: bool,
-}
-
 /// Who can raise a limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -406,12 +226,28 @@ enum Source {
 struct Limit {
     scope: Scope,
     period: Option<Period>,
-    /// Over a minute or an hour instead of a period.
-    rate: Option<RateLimit>,
     soft: Option<i64>,
     hard: Option<i64>,
     source: Source,
+    /// A minute or hour budget (A2.14): the use in the last this many
+    /// seconds, read from the ledger, instead of a day's or month's counter.
+    window: Option<i64>,
+    /// For a budget on each account in a scope on its own: that scope (the
+    /// account's use is counted inside it).
+    within: Option<Scope>,
+    /// The `spend_limits` row it came from and who set it (the one told
+    /// when it is nearly used); `None` for a plan, a setting or a default.
+    row: Option<(Uuid, Uuid)>,
 }
+
+/// The default message rate (A2.14): each account sends at most this many
+/// messages a minute in a workspace, so two agents answering each other
+/// stop well before they cost anything. A `spend_limits` row on the
+/// workspace for `messages`, `minute`, each account on its own, replaces it.
+pub const DEFAULT_MESSAGE_RATE: i64 = 60;
+
+/// The meter of messages sent, which the default rate is on.
+pub const MESSAGES_METER: &str = "messages";
 
 /// What is asked for.
 #[derive(Clone, Copy, Debug)]
@@ -472,6 +308,9 @@ pub struct LimitNotice {
     pub used: i64,
     /// `soft`: near the limit or over a soft one; nothing is refused yet.
     pub level: &'static str,
+    /// The budget it came from and who set it (A2.14), who is told.
+    #[serde(skip)]
+    pub budget: Option<(Uuid, Uuid)>,
 }
 
 /// The ask may go ahead.
@@ -494,41 +333,13 @@ pub struct LimitRefusal {
     pub resets_at: Option<DateTime<Utc>>,
     pub who_can_change: Who,
     pub message: String,
-    /// The workspace, and the day or month the refusal's notice belongs
-    /// to, for telling whoever can raise it (H1.27). Not shown.
-    #[serde(skip)]
-    pub(crate) workspace_id: Uuid,
-    #[serde(skip)]
-    pub(crate) notice_period: NaiveDate,
 }
 
 impl LimitRefusal {
-    /// What its notice says: this limit, reached.
-    fn notice(&self) -> LimitNotice {
-        LimitNotice {
-            meter: self.meter,
-            scope: self.scope,
-            limit: self.limit,
-            used: self.used,
-            level: "hard",
-        }
-    }
-
-    fn new(
-        meter: &'static Meter,
-        workspace_id: Uuid,
-        limit: &Limit,
-        value: i64,
-        used: i64,
-        retry_after: Option<u64>,
-    ) -> Self {
-        let now = Utc::now();
-        let resets_at = match (limit.period, retry_after) {
-            (_, Some(seconds)) => Some(
-                now + chrono::Duration::seconds(i64::try_from(seconds).unwrap_or(i64::MAX / 1_000)),
-            ),
-            (Some(period), None) => Some(period.bounds(now).1),
-            (None, None) => None,
+    fn new(meter: &'static Meter, limit: &Limit, value: i64, used: i64) -> Self {
+        let resets_at = match limit.window {
+            Some(seconds) => Some(Utc::now() + chrono::Duration::seconds(seconds)),
+            None => limit.period.map(|period| period.bounds(Utc::now()).1),
         };
         let who = match limit.source {
             Source::Plan => Who::Owners,
@@ -545,14 +356,7 @@ impl LimitRefusal {
             "micros" => format!("${:.2}", value as f64 / 1_000_000.0),
             _ => value.to_string(),
         };
-        let mut message = if let Some(rate) = limit.rate {
-            format!(
-                "{whose} has reached its limit for {}: {} a {}.",
-                meter.name,
-                amount(value),
-                rate.rate.word()
-            )
-        } else if meter.kind == MeterKind::Each {
+        let mut message = if meter.kind == MeterKind::Each {
             format!(
                 "That is over the limit for {} of {}.",
                 meter.name,
@@ -566,8 +370,12 @@ impl LimitRefusal {
                 amount(value)
             )
         };
-        if let Some(seconds) = retry_after {
-            message.push_str(&format!(" Try again in {seconds} seconds."));
+        if let Some(seconds) = limit.window {
+            message.push_str(if seconds <= 60 {
+                " It counts the last minute: wait a little and try again."
+            } else {
+                " It counts the last hour: wait a while and try again."
+            });
         } else if resets_at.is_some() {
             message.push_str(" It resets at the start of the next ");
             message.push_str(match limit.period {
@@ -587,19 +395,7 @@ impl LimitRefusal {
             resets_at,
             who_can_change: who,
             message,
-            workspace_id,
-            notice_period: notice_period(limit, now),
         }
-    }
-}
-
-/// The day or month a notice about `limit` is given once in: its period,
-/// the day for a rate, the month for anything else.
-fn notice_period(limit: &Limit, now: DateTime<Utc>) -> NaiveDate {
-    match (limit.period, limit.rate) {
-        (Some(period), _) => period.bounds(now).0,
-        (None, Some(_)) => Period::Day.bounds(now).0,
-        (None, None) => Period::Month.bounds(now).0,
     }
 }
 
@@ -648,6 +444,18 @@ async fn plan_limits(
 const SETTING_LIMITS: &[(&str, &str, i64)] =
     &[("storage_bytes", "files.workspace_quota_mb", 1024 * 1024)];
 
+#[derive(sqlx::FromRow)]
+struct SpendLimitRow {
+    id: Uuid,
+    scope_kind: String,
+    scope_id: Uuid,
+    per_account: bool,
+    period: String,
+    soft_limit: Option<i64>,
+    hard_limit: Option<i64>,
+    set_by_actor_id: Uuid,
+}
+
 /// Every limit on `ask`'s meter that applies to it.
 async fn limits_for(
     connection: &mut PgConnection,
@@ -656,10 +464,6 @@ async fn limits_for(
 ) -> Result<Vec<Limit>, AppError> {
     let mut found = Vec::new();
     let plan_period = (meter.kind == MeterKind::Counter).then_some(Period::Month);
-    if meter.limited_only {
-        spend_limits(connection, meter, ask, &mut found).await?;
-        return Ok(found);
-    }
     // A per-account gauge (workspaces owned) is the acting account's.
     let plan_scope = match (meter.id, ask.account_id) {
         ("workspaces_owned", Some(account)) => Scope::Account(account),
@@ -673,10 +477,12 @@ async fn limits_for(
         found.push(Limit {
             scope: plan_scope,
             period: plan_period,
-            rate: None,
             soft,
             hard,
             source: Source::Plan,
+            window: None,
+            within: None,
+            row: None,
         });
     }
     let settings_wanted = SETTING_LIMITS
@@ -699,29 +505,22 @@ async fn limits_for(
                 found.push(Limit {
                     scope: Scope::Workspace,
                     period: plan_period,
-                    rate: None,
                     soft: None,
                     hard: Some(value.saturating_mul(*unit)),
                     source: Source::Setting,
+                    window: None,
+                    within: None,
+                    row: None,
                 });
             }
         }
     }
-    spend_limits(connection, meter, ask, &mut found).await?;
-    Ok(found)
-}
-
-/// The `spend_limits` rows on `ask`'s meter that apply to it: on the
-/// workspace, the acting account, the space or the conversation. A row
-/// that counts each account on its own applies only when an account acts.
-async fn spend_limits(
-    connection: &mut PgConnection,
-    meter: &'static Meter,
-    ask: &Ask<'_>,
-    found: &mut Vec<Limit>,
-) -> Result<(), AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, bool, String, Option<i64>, Option<i64>)>(
-        "SELECT id, scope_kind, scope_id, per_account, period, soft_limit, hard_limit \
+    // Day and month budgets add up in the counters; minute and hour ones
+    // (A2.14) count the ledger's last minute or hour, and only those can be
+    // each account's on its own (`per_account`).
+    let rows = sqlx::query_as::<_, SpendLimitRow>(
+        "SELECT id, scope_kind, scope_id, per_account, period, soft_limit, hard_limit, \
+                set_by_actor_id \
          FROM spend_limits \
          WHERE workspace_id = $1 AND meter = $2 \
            AND (NOT per_account OR $3::uuid IS NOT NULL) \
@@ -738,39 +537,61 @@ async fn spend_limits(
     .bind(Scope::Workspace.kind())
     .fetch_all(&mut *connection)
     .await?;
-    for (id, kind, scope_id, per_account, period, soft, hard) in rows {
-        let scope = match kind.as_str() {
-            "account" => Scope::Account(scope_id),
-            "space" => Scope::Space(scope_id),
-            "conversation" => Scope::Conversation(scope_id),
+    let mut default_rate = meter.id == MESSAGES_METER && ask.account_id.is_some();
+    for row in rows {
+        let window = match row.period.as_str() {
+            "minute" => Some(60),
+            "hour" => Some(3_600),
+            _ => None,
+        };
+        if meter.kind != MeterKind::Counter && window.is_some() {
+            continue;
+        }
+        let row_scope = match row.scope_kind.as_str() {
+            "account" => Scope::Account(row.scope_id),
+            "space" => Scope::Space(row.scope_id),
+            "conversation" => Scope::Conversation(row.scope_id),
             _ => Scope::Workspace,
         };
-        let counted = meter.kind == MeterKind::Counter;
-        let rate = Rate::parse(&period)
-            .filter(|_| counted)
-            .map(|rate| RateLimit {
-                rate,
-                id,
-                per_account,
-            });
-        if Rate::parse(&period).is_some() && rate.is_none() {
-            // A rate on a gauge or a single ask means nothing.
-            continue;
+        // Each account in the scope on its own: the asker's use there.
+        let (scope, within) = match (row.per_account, ask.account_id) {
+            (true, Some(account)) => (Scope::Account(account), Some(row_scope)),
+            _ => (row_scope, None),
+        };
+        if row.per_account && row.scope_kind == Scope::Workspace.kind() && row.period == "minute" {
+            default_rate = false;
         }
         found.push(Limit {
             scope,
-            period: if counted {
-                Period::parse(&period)
-            } else {
+            period: if meter.kind != MeterKind::Counter {
                 None
+            } else if window.is_some() {
+                // Said once a day, near or at a short budget.
+                Some(Period::Day)
+            } else {
+                Period::parse(&row.period)
             },
-            rate,
-            soft,
-            hard,
+            soft: row.soft_limit,
+            hard: row.hard_limit,
             source: Source::SpendLimit,
+            window,
+            within,
+            row: Some((row.id, row.set_by_actor_id)),
         });
     }
-    Ok(())
+    if default_rate && let Some(account) = ask.account_id {
+        found.push(Limit {
+            scope: Scope::Account(account),
+            period: Some(Period::Day),
+            soft: None,
+            hard: Some(DEFAULT_MESSAGE_RATE),
+            source: Source::SpendLimit,
+            window: Some(60),
+            within: Some(Scope::Workspace),
+            row: None,
+        });
+    }
+    Ok(found)
 }
 
 /// A gauge's reading for a scope.
@@ -869,6 +690,105 @@ async fn counted(
         .unwrap_or(0))
 }
 
+/// A minute or hour budget's use: the ledger's last minute or hour in its
+/// scope. A hard budget's row is held first, so two asks at once count each
+/// other.
+async fn windowed(
+    connection: &mut PgConnection,
+    meter: &'static Meter,
+    workspace: Uuid,
+    limit: &Limit,
+) -> Result<i64, AppError> {
+    if limit.hard.is_some() {
+        match limit.row {
+            Some((row, _)) => {
+                sqlx::query("SELECT 1 FROM spend_limits WHERE id = $1 FOR UPDATE")
+                    .bind(row)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            // The default rate has no row: its scope's counter for the day
+            // is held instead, which recording the use takes anyway.
+            None => {
+                Box::pin(counted(
+                    connection,
+                    meter,
+                    workspace,
+                    limit.scope,
+                    Period::Day,
+                    true,
+                ))
+                .await?;
+            }
+        }
+    }
+    let (mut account, mut space, mut conversation) = (None, None, None);
+    for scope in std::iter::once(limit.scope).chain(limit.within) {
+        match scope {
+            Scope::Workspace => {}
+            Scope::Account(id) => account = Some(id),
+            Scope::Space(id) => space = Some(id),
+            Scope::Conversation(id) => conversation = Some(id),
+        }
+    }
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(sum(quantity), 0)::bigint FROM usage_events \
+         WHERE workspace_id = $1 AND meter = $2 \
+           AND created_at > now() - make_interval(secs => $3) \
+           AND ($4::uuid IS NULL OR account_id = $4) \
+           AND ($5::uuid IS NULL OR space_id = $5) \
+           AND ($6::uuid IS NULL OR conversation_id = $6)",
+    )
+    .bind(workspace)
+    .bind(meter.id)
+    .bind(limit.window.unwrap_or(60) as f64)
+    .bind(account)
+    .bind(space)
+    .bind(conversation)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+/// A budget's use now (A2.14), counted as [`admit`] counts it: the last
+/// minute or hour for a short one, the day's or month's counter otherwise.
+/// `within` is the scope of a budget on each account there on its own.
+pub async fn budget_used(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    meter: &str,
+    scope: Scope,
+    within: Option<Scope>,
+    period: &str,
+) -> Result<i64, AppError> {
+    let Some(meter) = find_meter(meter).filter(|meter| meter.kind == MeterKind::Counter) else {
+        return Ok(0);
+    };
+    let window = match period {
+        "minute" => Some(60),
+        "hour" => Some(3_600),
+        _ => None,
+    };
+    match window {
+        Some(_) => {
+            let limit = Limit {
+                scope,
+                period: Some(Period::Day),
+                soft: None,
+                hard: None,
+                source: Source::SpendLimit,
+                window,
+                within,
+                row: None,
+            };
+            windowed(connection, meter, workspace, &limit).await
+        }
+        None => {
+            let period = Period::parse(period).unwrap_or(Period::Month);
+            counted(connection, meter, workspace, scope, period, false).await
+        }
+    }
+}
+
 /// A limit with what was used and what the ask would make it.
 type Decided = (Limit, i64, i64);
 
@@ -878,7 +798,7 @@ fn decide(
     checked: &[(Limit, i64)],
     quantity: i64,
     kind: MeterKind,
-) -> Result<Option<Decided>, Decided> {
+) -> Result<Option<Decided>, Box<Decided>> {
     let after = |used: i64| {
         if kind == MeterKind::Each {
             quantity
@@ -896,7 +816,7 @@ fn decide(
         }
     }
     if let Some(refused) = refused {
-        return Err(refused);
+        return Err(Box::new(refused));
     }
     // Near a hard limit (80%), or over a soft one: the nearest of them.
     let mut near: Option<(Limit, i64, i64, f64)> = None;
@@ -924,11 +844,6 @@ fn decide(
 pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admission, AppError> {
     let meter = find_meter(ask.meter).ok_or(AppError::Internal("an unknown meter"))?;
     let quantity = ask.quantity.max(0);
-    let limits = limits_for(connection, meter, &ask).await?;
-    // Work that costs nothing is counted only where a limit covers it.
-    if meter.limited_only && limits.is_empty() {
-        return Ok(Admission::Allowed);
-    }
     // A thing already counted (a retry) goes ahead without counting again.
     if let Some(recorded) = ask.record {
         let seen = sqlx::query_scalar::<_, bool>(
@@ -942,13 +857,15 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
             return Ok(Admission::Allowed);
         }
     }
-    let (rates, periods): (Vec<Limit>, Vec<Limit>) =
-        limits.into_iter().partition(|limit| limit.rate.is_some());
-    let mut checked = Vec::with_capacity(periods.len());
-    for limit in &periods {
+    let limits = limits_for(connection, meter, &ask).await?;
+    let mut checked = Vec::with_capacity(limits.len());
+    for limit in limits {
         let used = match meter.kind {
             MeterKind::Each => 0,
             MeterKind::Gauge => gauge(connection, meter, ask.workspace_id, limit.scope).await?,
+            MeterKind::Counter if limit.window.is_some() => {
+                windowed(connection, meter, ask.workspace_id, &limit).await?
+            }
             MeterKind::Counter => {
                 let period = limit.period.unwrap_or(Period::Month);
                 counted(
@@ -962,59 +879,20 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
                 .await?
             }
         };
-        checked.push((*limit, used));
+        checked.push((limit, used));
     }
     let decided = match decide(&checked, quantity, meter.kind) {
         Ok(decided) => decided,
-        Err((limit, value, used)) => {
-            let refusal = LimitRefusal::new(meter, ask.workspace_id, &limit, value, used, None);
-            return Err(refuse(connection, refusal).await?);
+        Err(refused) => {
+            let (limit, value, used) = *refused;
+            note(connection, meter, ask.workspace_id, &limit, "hard").await?;
+            return Err(AppError::LimitReached(Box::new(LimitRefusal::new(
+                meter, &limit, value, used,
+            ))));
         }
     };
-    // Rates last, so a refusal above spends nothing from them. Each spends
-    // in the caller's transaction and comes back with it if it rolls back.
-    if quantity > 0 {
-        for limit in &rates {
-            let (Some(rate), Some(hard)) = (limit.rate, limit.hard) else {
-                continue;
-            };
-            let account = ask.account_id.filter(|_| rate.per_account);
-            let key = format!("{}:{}", rate.id, account.unwrap_or_default());
-            let cost = u32::try_from(quantity).unwrap_or(u32::MAX);
-            let ceiling = u32::try_from(hard).unwrap_or(u32::MAX);
-            if let Some(retry_after) = crate::limits::spend_on(
-                connection,
-                rate.rate.bucket(),
-                key.as_bytes(),
-                Some(ask.workspace_id),
-                rate.rate.window(),
-                cost,
-                ceiling,
-            )
-            .await?
-            {
-                let scope = match account {
-                    Some(account) => Scope::Account(account),
-                    None => limit.scope,
-                };
-                let refusal = LimitRefusal::new(
-                    meter,
-                    ask.workspace_id,
-                    &Limit { scope, ..*limit },
-                    hard,
-                    hard,
-                    Some(retry_after),
-                );
-                return Err(refuse(connection, refusal).await?);
-            }
-        }
-    }
-    // A meter only limits count is recorded only where a period limit
-    // needs the count; rates keep their own.
-    let counts = !meter.limited_only || !periods.is_empty();
     if let Some(recorded) = ask.record
         && meter.kind == MeterKind::Counter
-        && counts
     {
         record(
             connection,
@@ -1033,157 +911,44 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
     let Some((limit, value, used)) = decided else {
         return Ok(Admission::Allowed);
     };
-    let notice = LimitNotice {
-        meter: meter.id,
-        scope: limit.scope,
-        limit: value,
-        used: used.saturating_add(quantity),
-        level: "soft",
-    };
-    let period = notice_period(&limit, Utc::now());
-    if !note(connection, ask.workspace_id, &notice, period).await? {
+    if !note(connection, meter, ask.workspace_id, &limit, "soft").await? {
         return Ok(Admission::Allowed);
     }
-    tell(connection, ask.workspace_id, &notice).await?;
-    Ok(Admission::AllowedNearLimit { notice })
-}
-
-/// A message an account sends, on A2's `messages` meter: limited (and
-/// counted) only where a spend limit covers it, so a workspace without one
-/// pays one indexed read per message.
-pub async fn admit_message(
-    connection: &mut PgConnection,
-    space_id: Option<Uuid>,
-    conversation_id: Uuid,
-    account_id: Uuid,
-    message_id: Uuid,
-) -> Result<(), AppError> {
-    // A message in a space counts in its workspace; one in a DM or group
-    // counts in the workspace the conversation was kept in, and one in the
-    // direct scope belongs to no workspace, so no workspace's limit holds it.
-    let workspace_id = match space_id {
-        Some(space) => {
-            sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM spaces WHERE id = $1")
-                .bind(space)
-                .fetch_optional(&mut *connection)
-                .await?
-        }
-        None => sqlx::query_scalar::<_, Uuid>(
-            "-- visibility: the sender's message in it was just admitted\n\
-             SELECT workspace_id FROM conversations WHERE id = $1 AND workspace_id <> direct_scope_id()",
-        )
-        .bind(conversation_id)
-        .fetch_optional(&mut *connection)
-        .await?,
-    };
-    let Some(workspace_id) = workspace_id else {
-        return Ok(());
-    };
-    let dedupe_key = format!("message:{message_id}");
-    admit(
-        connection,
-        Ask {
-            account_id: Some(account_id),
-            space_id,
-            conversation_id: Some(conversation_id),
-            record: Some(Recorded {
-                source_kind: "message",
-                source_id: Some(message_id),
-                dedupe_key: &dedupe_key,
-            }),
-            ..Ask::new(workspace_id, "messages", 1)
+    Ok(Admission::AllowedNearLimit {
+        notice: LimitNotice {
+            meter: meter.id,
+            scope: limit.scope,
+            limit: value,
+            used: used.saturating_add(quantity),
+            level: "soft",
+            budget: limit.row,
         },
-    )
-    .await?;
-    Ok(())
+    })
 }
 
-/// Marks a notice as given for its scope and period; true the first time.
+/// Marks a notice as given for this scope and period; true the first time.
 async fn note(
     connection: &mut PgConnection,
+    meter: &'static Meter,
     workspace: Uuid,
-    notice: &LimitNotice,
-    period: NaiveDate,
+    limit: &Limit,
+    level: &str,
 ) -> Result<bool, AppError> {
+    let start = limit.period.unwrap_or(Period::Month).bounds(Utc::now()).0;
     Ok(sqlx::query(
         "INSERT INTO limit_notices (workspace_id, meter, scope_kind, scope_id, period_start, level) \
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
     )
     .bind(workspace)
-    .bind(notice.meter)
-    .bind(notice.scope.kind())
-    .bind(notice.scope.id(workspace))
-    .bind(period)
-    .bind(notice.level)
+    .bind(meter.id)
+    .bind(limit.scope.kind())
+    .bind(limit.scope.id(workspace))
+    .bind(start)
+    .bind(level)
     .execute(&mut *connection)
     .await?
     .rows_affected()
         == 1)
-}
-
-/// Asks the notice job to tell whoever can raise the limit.
-async fn tell(
-    connection: &mut PgConnection,
-    workspace: Uuid,
-    notice: &LimitNotice,
-) -> Result<(), AppError> {
-    crate::jobs::enqueue(
-        &mut *connection,
-        crate::jobs::NewJob::new(NOTICE_KIND)
-            .workspace(workspace)
-            .payload(serde_json::json!({ "workspaceId": workspace, "notice": notice })),
-    )
-    .await?;
-    Ok(())
-}
-
-/// A refusal, noted and told in the caller's transaction, once per scope
-/// and period. Where the caller rolls back (an operation refused), the
-/// notice goes with it and [`notice_refusal`] gives it on its own.
-async fn refuse(
-    connection: &mut PgConnection,
-    refusal: LimitRefusal,
-) -> Result<AppError, AppError> {
-    let notice = refusal.notice();
-    if note(
-        connection,
-        refusal.workspace_id,
-        &notice,
-        refusal.notice_period,
-    )
-    .await?
-    {
-        tell(connection, refusal.workspace_id, &notice).await?;
-    }
-    Ok(AppError::LimitReached(Box::new(refusal)))
-}
-
-/// A refused ask's notice (H1.27): the refusal rolled the caller's work
-/// back, so it is given here, in a transaction of its own, once per scope
-/// and period. Called where refusals become answers.
-pub async fn notice_refusal(pool: &sqlx::PgPool, refusal: &LimitRefusal) {
-    let notice = refusal.notice();
-    let given = async {
-        let mut transaction = crate::db::scoped_tx(pool).await?;
-        if note(
-            &mut transaction,
-            refusal.workspace_id,
-            &notice,
-            refusal.notice_period,
-        )
-        .await?
-        {
-            tell(&mut transaction, refusal.workspace_id, &notice).await?;
-        }
-        transaction.commit().await?;
-        Ok::<_, AppError>(())
-    };
-    if let Err(error) = given.await {
-        tracing::warn!(
-            error_category = error.log_category(),
-            "a limit's notice wasn't given"
-        );
-    }
 }
 
 /// Records usage of a counted meter, once per dedupe key: the ledger row
@@ -1505,7 +1270,9 @@ mod tests {
             soft,
             hard,
             source: Source::SpendLimit,
-            rate: None,
+            window: None,
+            within: None,
+            row: None,
         }
     }
 
@@ -1518,10 +1285,11 @@ mod tests {
             (limit(Scope::Space(Uuid::nil()), None, Some(1_000)), 50),
         ];
         // 50 + 20 is over the account's 60, not the workspace's 100.
-        let (refused, value, used) = decide(&checked, 20, MeterKind::Counter).expect_err("refused");
+        let (refused, value, used) =
+            *decide(&checked, 20, MeterKind::Counter).expect_err("refused");
         assert_eq!((refused.scope, value, used), (account, 60, 50));
         // Over two: the smaller is named.
-        let (refused, value, _) = decide(&checked, 60, MeterKind::Counter).expect_err("refused");
+        let (refused, value, _) = *decide(&checked, 60, MeterKind::Counter).expect_err("refused");
         assert_eq!((refused.scope, value), (account, 60));
         // Within all: allowed, with the nearest named once past 80%.
         let (near, value, _) = decide(&checked, 0, MeterKind::Counter)

@@ -16,4 +16,6 @@ export const OnboardingPage = lazy(() => import('../onboarding/OnboardingPage').
 export const NotFoundPage = lazy(() => import('./NotFoundPage').then((module) => ({ default: module.NotFoundPage })))
 export const DesignSystemPage = lazy(() => import('../design/DesignSystemPage').then((module) => ({ default: module.DesignSystemPage })))
 export const PieceGallery = lazy(() => import('../pieces/PieceGallery').then((module) => ({ default: module.PieceGallery })))
+// A thing's permanent address (W1.14b): rarely opened, so it loads when it is.
+export const ThingRedirect = lazy(() => import('./ThingRedirect').then((module) => ({ default: module.ThingRedirect })))
 export const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))

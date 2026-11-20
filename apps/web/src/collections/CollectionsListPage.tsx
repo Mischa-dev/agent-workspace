@@ -8,6 +8,7 @@ import { useShellPage } from '../shell/shellStore'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, countLabel, describeError, formatRelative, showToast } from '../ui'
 import { collectionKeys, updateCollection, useCollections, type CollectionSummary } from './api'
 import { CollectionDetailsDialog } from './CollectionDialogs'
+import { spaceHref } from '../app/href'
 
 type Shown = 'open' | 'archived'
 
@@ -41,7 +42,7 @@ export function CollectionsListPage() {
   const all = collections.data?.collections ?? []
   const archivedCount = all.filter((collection) => collection.archived).length
   const visible = all.filter((collection) => (shown === 'archived' ? collection.archived : !collection.archived))
-  const href = (collection: CollectionSummary) => `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection.id)}`
+  const href = (collection: CollectionSummary) => spaceHref(projectId, `/collections/${encodeURIComponent(collection.id)}`)
   const restore = async (collection: CollectionSummary) => {
     try {
       await updateCollection(projectId, collection.id, { expectedVersion: collection.version, archived: false })

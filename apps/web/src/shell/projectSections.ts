@@ -1,5 +1,5 @@
 /** Pages that sit under Tasks in a project's sidebar, shown as tabs on each. */
-const workPages = ['work-items', 'milestones', 'timeline', 'next', 'suggestions', 'graph', 'plan-import']
+const workPages = ['tasks', 'milestones', 'timeline', 'planning']
 /** Pages that sit under Pages. */
 const memoryPages = ['pages', 'decisions']
 

@@ -11,6 +11,7 @@ import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
 import '../styles/pages.css'
+import { here, spaceHref } from '../app/href'
 
 // The preset cards bring the layout registry, so they load in their own chunk.
 const PresetPicker = lazy(() => import('../experience/PresetPicker'))
@@ -76,7 +77,7 @@ export function CreateProjectPage() {
         <div className="aw-page aw-page--reading">
           <ErrorState
             action={
-              <ButtonLink to="/home" variant="primary">
+              <ButtonLink to={here('/home')} variant="primary">
                 Go to Home
               </ButtonLink>
             }
@@ -123,7 +124,7 @@ export function CreateProjectPage() {
         })
         navigate(switched.href, { replace: true })
       } catch {
-        navigate(`/projects/${encodeURIComponent(project.id)}`, { replace: true })
+        navigate(spaceHref(project.id), { replace: true })
       }
     } catch (reason) {
       setError(isApiError(reason) ? reason.message : `The project wasn’t created. ${describeError(reason).message}`)
@@ -219,7 +220,7 @@ export function CreateProjectPage() {
             </Suspense>
           ) : null}
           <div className="aw-form__actions">
-            <Button onClick={() => navigate('/home')} variant="secondary">
+            <Button onClick={() => navigate(here('/home'))} variant="secondary">
               Cancel
             </Button>
             <Button busy={createProject.isPending} disabled={Boolean(validation)} type="submit" variant="primary">

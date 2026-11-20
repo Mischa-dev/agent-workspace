@@ -106,9 +106,6 @@ pub mod kind {
     pub const THING_UPDATE: &str = "thing_update";
     /// T1.29: a public form you made reached its daily limit and paused.
     pub const FORM_PAUSED: &str = "form_paused";
-    /// H1.27: a spend limit the workspace set is near or reached, for whoever
-    /// manages its settings (and the account a limit is on).
-    pub const SPEND_LIMIT: &str = "spend_limit";
 
     /// Kinds that ask something of you (C2.4): someone mentioned or
     /// messaged you, gave you a task or a review, a request or a waiting run
@@ -129,7 +126,6 @@ pub mod kind {
         REMINDER,
         CONNECTION_PROBLEM,
         BUDGET_WARNING,
-        SPEND_LIMIT,
     ];
 }
 
@@ -2271,6 +2267,23 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 (format!("Suggested edits to {page}"), None)
             }
         }
+        // A2.14: its words come from the budget's numbers (rule 10).
+        kind::BUDGET_WARNING => (
+            "A budget you set is nearly used".to_owned(),
+            match (
+                row.detail.get("used").and_then(serde_json::Value::as_i64),
+                row.detail.get("limit").and_then(serde_json::Value::as_i64),
+                row.detail
+                    .get("meter")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::metering::find_meter),
+            ) {
+                (Some(used), Some(limit), Some(meter)) => {
+                    Some(format!("{used} of {limit} for {}.", meter.name))
+                }
+                _ => None,
+            },
+        ),
         // Its words come from the limit it hit, not stored text (rule 10).
         kind::FORM_PAUSED => (
             "A form you made paused itself".to_owned(),
@@ -2283,8 +2296,6 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                     )
                 }),
         ),
-        // Its words come from the limit's numbers, not stored text (rule 10).
-        kind::SPEND_LIMIT => crate::metering::notice_words(&row.detail),
         other => (
             row.detail
                 .get("title")

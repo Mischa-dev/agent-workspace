@@ -626,9 +626,9 @@ fn at_index<T, U>(index: usize, refusal: ToolResult<T>) -> ToolResult<U> {
         ToolResult::TemporarilyUnavailable { message } => ToolResult::TemporarilyUnavailable {
             message: prefix(message),
         },
-        ToolResult::LimitReached { message, refusal } => ToolResult::LimitReached {
+        ToolResult::LimitReached { message, limit } => ToolResult::LimitReached {
             message: prefix(message),
-            refusal,
+            limit,
         },
     }
 }

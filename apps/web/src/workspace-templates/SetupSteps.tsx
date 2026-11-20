@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toastError } from '../app/toastError'
 import { onboardingKeys, updateOnboarding, type Onboarding } from '../onboarding/api'
@@ -103,7 +104,7 @@ export function RolesStep({ onboarding }: { onboarding: Onboarding }) {
         <Button busy={confirm.isPending} onClick={() => confirm.mutate()} variant="primary">
           That’s right
         </Button>
-        <ButtonLink to="/settings/workspace/roles" variant="ghost">
+        <ButtonLink to={here('/settings/workspace/roles')} variant="ghost">
           Change what each role can do
         </ButtonLink>
       </div>

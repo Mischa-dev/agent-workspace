@@ -155,7 +155,7 @@ describe('App shell and Project navigation', () => {
       await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(window.location.pathname).toBe(
-      `/projects/${projectAId}/threads/${threadId}`,
+      `/w/mischa/s/${projectAId}/threads/${threadId}`,
     )
 
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('link', { name: /^Home/ }))
@@ -167,7 +167,7 @@ describe('App shell and Project navigation', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Beta Project' }),
     ).toBeVisible()
-    expect(window.location.pathname).toBe(`/projects/${projectBId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectBId}`)
 
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Spaces' })).getByRole('link', { name: /^Home/ }))
     fireEvent.click(
@@ -202,7 +202,7 @@ describe('App shell and Project navigation', () => {
       await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(window.location.pathname).toBe(
-      `/projects/${projectAId}/threads/${threadId}`,
+      `/w/mischa/s/${projectAId}/threads/${threadId}`,
     )
   })
 

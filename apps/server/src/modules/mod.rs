@@ -449,7 +449,6 @@ mod tests {
             kind::CONNECTION_PROBLEM,
             kind::AGENT_UNRESPONSIVE,
             kind::BUDGET_WARNING,
-            kind::SPEND_LIMIT,
             kind::THING_UPDATE,
             kind::FORM_PAUSED,
             crate::automations::NOTIFICATION_KIND,

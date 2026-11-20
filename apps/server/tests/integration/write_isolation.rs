@@ -539,6 +539,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_ref_decide",
     "agent_ref_remove",
     "agent_ref_update",
+    "app_consent_set",
     "group_archive",
     "group_create",
     "group_members_set",
@@ -611,7 +612,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload_finish",
     "workspace_store_set",
     "workspace_store_revoke",
-    "spend_limit_set",
     "workspace_export_start",
     "layout_preset_write",
     "label_create",
@@ -654,6 +654,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "schedule_update",
     "follow_set",
     "guard_set",
+    "budget_set",
     "memory_page_set",
     "request_create",
     "request_respond",
@@ -3186,9 +3187,10 @@ pub(super) async fn digest_ignoring(
 }
 
 /// Every table in the schema (partitions and their parents included),
-/// except the shared limit counters: every call into a workspace spends its
-/// budget (H1.1), so a counter row changes on reads too. They hold numbers,
-/// never records; `hosting_limits` checks whose budget a call spends.
+/// except the shared limit counters and the usage ledger: every call into a
+/// workspace spends its budget (H1.1) and is counted (A2.14), so their rows
+/// change on reads too. They hold numbers, never records; `hosting_limits`
+/// checks whose budget a call spends, `budgets` what is counted.
 pub(super) async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
@@ -3198,7 +3200,7 @@ pub(super) async fn base_tables(pool: &PgPool) -> Vec<String> {
         JOIN pg_namespace schema
           ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
         WHERE listed.relkind IN ('r', 'p')
-          AND listed.relname <> 'rate_limit_counters'
+          AND listed.relname NOT IN ('rate_limit_counters', 'usage_counters', 'usage_events')
         ORDER BY 1
         "#,
     )
@@ -6659,11 +6661,40 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"conversation": a.channel, "account": b.agent, "ambient": true}),
         ]),
+        // A2.15: consent is given in A's own DM; B's DM and channel aren't
+        // found from A.
+        mcp_case(
+            "app_consent_set",
+            json!({"conversation": a.dm, "app": a.agent}),
+            vec![
+                json!({"conversation": b.dm, "app": a.agent}),
+                json!({"conversation": b.channel, "app": a.agent}),
+            ],
+        )
+        .without_own(
+            "consent is for an account that acts as itself as an app, which this world \
+             doesn't make; reply_requests covers granting it",
+        ),
         // A2.27: a guard in A, or in A's space; B's space isn't found.
         mcp_case(
             "guard_set",
             json!({"name": "Net guard", "action": "deny", "terms": ["zq-net-guard"]}),
             vec![json!({"space": b.project, "name": "Net guard", "action": "deny"})],
+        ),
+        // A2.14: a budget on A's agent; B's agent, space and channel aren't
+        // found from A.
+        mcp_case(
+            "budget_set",
+            json!({"scope": "account", "scopeId": a.agent, "meter": "operations",
+                   "period": "month", "hardLimit": 1000000}),
+            vec![
+                json!({"scope": "account", "scopeId": b.agent, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "space", "scopeId": b.project, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "conversation", "scopeId": b.channel, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+            ],
         ),
         // A2.16: memory of A's channel or space; B's aren't found from A.
         mcp_case(
@@ -8104,22 +8135,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "workspace_store_revoke",
             json!({}),
             vec![json!({"workspace": b.organization})],
-        ),
-        // H1.27: a spend limit is set in the caller's workspace only, and
-        // never on B's account, space or conversation.
-        mcp_case(
-            "spend_limit_set",
-            json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 1000}),
-            vec![
-                json!({"workspace": b.organization, "scope": "workspace", "meter": "messages",
-                       "period": "day", "hardLimit": 1}),
-                json!({"scope": "account", "scopeId": b.agent, "meter": "messages",
-                       "period": "day", "hardLimit": 1}),
-                json!({"scope": "space", "scopeId": b.project, "meter": "messages",
-                       "period": "day", "hardLimit": 1}),
-                json!({"scope": "conversation", "scopeId": b.channel, "meter": "messages",
-                       "period": "minute", "perAccount": true, "hardLimit": 1}),
-            ],
         ),
         // H1.9: an export starts in the caller's own workspace only.
         mcp_case(

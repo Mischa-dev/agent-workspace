@@ -3806,8 +3806,8 @@ async fn channel_writes_keep_to_private_channels() {
     world.finish().await;
 }
 
-/// H1.27: only someone who may manage settings lists or sets spend limits,
-/// and never on a direct conversation they aren't in.
+/// H1.27: only someone who may manage settings lists or sets budgets, and
+/// never on a direct conversation they aren't in.
 #[tokio::test]
 async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -3823,9 +3823,9 @@ async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
     let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
     let lena = &world.people["lena"];
     for (op, body) in [
-        ("spend_limit_list", json!({})),
+        ("budget_list", json!({})),
         (
-            "spend_limit_set",
+            "budget_set",
             json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 5}),
         ),
     ] {
@@ -3842,10 +3842,10 @@ async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
         &world.app,
         world.owner.browser.request(
             "POST",
-            &route("spend_limit_set"),
+            &route("budget_set"),
             Some("owner-secret-limit"),
             json!({"scope": "conversation", "scopeId": secret, "meter": "messages",
-                   "period": "minute", "perAccount": true, "hardLimit": 1}),
+                   "period": "minute", "eachAccount": true, "hardLimit": 1}),
         ),
     )
     .await;
@@ -4928,11 +4928,25 @@ async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
             "conversation_agent_settings_set",
             json!({ "conversation": channel, "account": rook, "ambient": true }),
         ),
+        // A2.15: only the DM's participants say which apps hear it.
+        (
+            lena,
+            "app_consent_set",
+            json!({ "conversation": dm, "app": rook }),
+        ),
         // A2.27: guards are set by those who manage the workspace's settings.
         (
             lena,
             "guard_set",
             json!({ "name": "Mine", "action": "deny", "accounts": [rook] }),
+        ),
+        // A2.14: budgets are set by those who manage the workspace's
+        // settings; a DM someone isn't in isn't one they can budget.
+        (
+            lena,
+            "budget_set",
+            json!({ "scope": "account", "scopeId": rook, "meter": "messages",
+                    "period": "day", "hardLimit": 1 }),
         ),
         // A2.16: a viewer doesn't write a channel's memory.
         (
@@ -5081,6 +5095,23 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .await;
     assert_ne!(edited["outcome"], "ok", "{edited}");
     assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor a file on it, even by its id.
+    let file = upload(
+        &world.app,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=plan.txt"),
+        "text/plain",
+        format!("Plan: {word}").into_bytes(),
+    )
+    .await;
+    for path in [
+        format!("/api/v1/files/{file}"),
+        format!("/api/v1/files/{file}/content"),
+    ] {
+        let (status, read) = send(&world.app, lena.request("GET", &path, None, Value::Null)).await;
+        assert!(!status.is_success(), "{path}: {status} {read}");
+        assert!(!read.to_string().contains(&word), "{path}: {read}");
+    }
     // Nor list it among the space's Pages records, by any view of them.
     let (_, records) = world.agents["rook"]
         .call(

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { can } from '../../auth/can'
 import { describeError, toastError } from '../../app/mutations'
+import { useWorkspaceExperience } from '../../experience/layout'
 import { humanize, roleLabel } from '../../projects/format'
 import {
   ActorTag,
@@ -85,6 +86,9 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   const [removing, setRemoving] = useState<WorkspaceMember | null>(null)
   const [limiting, setLimiting] = useState<WorkspaceMember | null>(null)
   const [applyToProjects, setApplyToProjects] = useState(true)
+  const experience = useWorkspaceExperience(organizationId)
+  const projectsOn = experience.moduleOn('projects')
+  const agentsOn = experience.moduleOn('agents')
   const roles = useQuery({
     queryKey: roleKeys.roles(organizationId),
     queryFn: () => listRoles(organizationId),
@@ -152,9 +156,10 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   return (
     <>
       <PageHeader icon="users" title="Members">
-        People and agents in {workspace.name}. Anyone here can be added to any of its projects.
+        {agentsOn ? `People and agents in ${workspace.name}.` : `People in ${workspace.name}.`}
+        {projectsOn ? ' Anyone here can be added to any of its projects.' : null}
       </PageHeader>
-      {manager && <InviteSection organizationId={organizationId} roles={roles.data} />}
+      {manager && <InviteSection organizationId={organizationId} projectsOn={projectsOn} roles={roles.data} />}
       <Section
         actions={total > 8 ? (
           <TextField
@@ -170,7 +175,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         id="workspace-members-heading"
         title={total ? `Members (${total})` : 'Members'}
       >
-        {manager ? (
+        {manager && projectsOn ? (
           <Checkbox
             checked={applyToProjects}
             description="Giving someone a role also gives it to them in each of their projects, except where they’re the owner."
@@ -241,7 +246,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                   <span className="aw-row__metaline aw-wrap">
                     <span>@{member.handle}</span>
                     {member.agentLimit ? <span>Apps limited</span> : null}
-                    <span>In {countLabel(member.projectCount, 'project')}</span>
+                    {projectsOn ? <span>In {countLabel(member.projectCount, 'project')}</span> : null}
                     <span title={formatFullDate(member.joinedAt)}>Joined {formatShortDate(member.joinedAt)}</span>
                   </span>
                 }
@@ -290,7 +295,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         title={removing ? `Remove ${removing.displayName}?` : 'Remove member?'}
       >
         {removing
-          ? `${removing.displayName} will be removed from ${workspace.name} and from every project in it. ${
+          ? `${removing.displayName} will be removed from ${workspace.name}${projectsOn ? ' and from every project in it' : ''}. ${
               actorKind(removing.kind) === 'agent' ? 'Its credentials stop working.' : 'They’ll need a new invitation to come back.'
             }`
           : null}
@@ -382,7 +387,15 @@ function AppsDialog({
   )
 }
 
-function InviteSection({ organizationId, roles }: { organizationId: string; roles: RolesResponse | undefined }) {
+function InviteSection({
+  organizationId,
+  projectsOn,
+  roles,
+}: {
+  organizationId: string
+  projectsOn: boolean
+  roles: RolesResponse | undefined
+}) {
   const queryClient = useQueryClient()
   const invitations = useQuery({
     queryKey: workspaceKeys.invitations(organizationId),
@@ -443,7 +456,7 @@ function InviteSection({ organizationId, roles }: { organizationId: string; role
 
   return (
     <Section
-      description="One link for one person. They join the workspace once and can then be added to any project."
+      description={projectsOn ? 'One link for one person. They join the workspace once and can then be added to any project.' : 'One link for one person. They join the workspace once.'}
       id="workspace-invite-heading"
       title="Invite to the workspace"
     >

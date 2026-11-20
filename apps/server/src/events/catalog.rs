@@ -740,12 +740,6 @@ pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
     None,
     "The workspace's own file bucket was set or stopped",
 );
-pub static WORKSPACE_SPEND_LIMITS_CHANGED: EventType = fact(
-    "workspace.spend_limits_changed",
-    "workspace",
-    None,
-    "A spend limit was set, changed or removed",
-);
 pub static WORKSPACE_TRANSFER_CHANGED: EventType = fact(
     "workspace.transfer_changed",
     "workspace",
@@ -788,6 +782,12 @@ pub static GUARDS_CHANGED: EventType = signal(
     "agents",
     None,
     "A workspace's guards changed",
+);
+pub static BUDGETS_CHANGED: EventType = signal(
+    "budgets.changed",
+    "workspace",
+    None,
+    "A workspace's budgets changed",
 );
 
 // --- inbox -----------------------------------------------------------------
@@ -969,7 +969,6 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,
         &WORKSPACE_FILE_STORE_CHANGED,
-        &WORKSPACE_SPEND_LIMITS_CHANGED,
         &WORKSPACE_TRANSFER_CHANGED,
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
@@ -977,6 +976,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &THEME_CHANGED,
         &WORKSPACE_THEMES_CHANGED,
         &GUARDS_CHANGED,
+        &BUDGETS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,

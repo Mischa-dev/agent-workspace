@@ -70,6 +70,11 @@
     "title": "Resume agent"
   },
   {
+    "kind": "change",
+    "name": "app_consent_set",
+    "title": "Let an app hear a conversation"
+  },
+  {
     "kind": "create",
     "name": "automation_create",
     "title": "Create automation"
@@ -88,6 +93,11 @@
     "kind": "change",
     "name": "automation_update",
     "title": "Update automation"
+  },
+  {
+    "kind": "change",
+    "name": "budget_set",
+    "title": "Set a budget"
   },
   {
     "kind": "create",
@@ -898,11 +908,6 @@
     "kind": "change",
     "name": "space_update",
     "title": "Change a space"
-  },
-  {
-    "kind": "change",
-    "name": "spend_limit_set",
-    "title": "Set a spend limit"
   },
   {
     "kind": "change",

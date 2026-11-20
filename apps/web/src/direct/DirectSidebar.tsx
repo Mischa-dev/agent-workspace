@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -15,7 +16,8 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
   const navigate = useNavigate()
   const conversations = overview.data?.conversations ?? []
   const viewerId = session.user.actorId
-  const sectionsShown = useHomeExperience().shows('talk.sidebar_sections')
+  const experience = useHomeExperience()
+  const sectionsShown = experience.shows('talk.sidebar_sections')
   return (
     <SidebarFrame
       actions={
@@ -24,7 +26,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
           label="New message"
           onClick={() => {
             onNavigate()
-            navigate('/messages')
+            navigate(here('/messages'))
           }}
           side="bottom"
         />
@@ -56,7 +58,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
               label={conversationTitle(conversation, viewerId)}
               meta={conversation.kind === 'group' ? String(conversation.members.length) : undefined}
               onNavigate={onNavigate}
-              to={`/messages/${encodeURIComponent(conversation.id)}`}
+              to={here(`/messages/${encodeURIComponent(conversation.id)}`)}
               unread={conversation.unread && !conversation.muted}
             />
           )
@@ -75,9 +77,9 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
       {overview.data && conversations.length === 0 ? (
         <p className="aw-sidebar__note">No conversations yet. Start one with New message.</p>
       ) : null}
-      {overview.data?.capabilities.manageAgents ? (
+      {overview.data?.capabilities.manageAgents && experience.moduleOn('agents') ? (
         <ul className="aw-section__list aw-sidebar__bottom">
-          <SidebarLink icon="bot" label="Agents" onNavigate={onNavigate} to="/messages/agents" />
+          <SidebarLink icon="bot" label="Agents" onNavigate={onNavigate} to={here('/messages/agents')} />
         </ul>
       ) : null}
     </SidebarFrame>

@@ -1,3 +1,4 @@
+import { isSpaceAddress } from '../app/href'
 import type {
   ActivityChanges,
   ActorRef,
@@ -70,7 +71,7 @@ export function color(value: unknown) {
 /** Only same-app paths are followed, so a hostile href can't leave the app. */
 export function appHref(value: unknown) {
   const href = string(value)
-  return href.startsWith('/projects/') ? href : ''
+  return isSpaceAddress(href) ? href : ''
 }
 
 export function actorRef(value: unknown): ActorRef | null {

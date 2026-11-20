@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -60,7 +61,7 @@ export function useMessageLater({
       showToast({
         tone: 'success',
         title: item.remindAt ? `Reminder set for ${atPhrase(item.remindAt)}` : 'Saved for later',
-        action: { label: 'View Later', onSelect: () => navigate('/later') },
+        action: { label: 'View Later', onSelect: () => navigate(here('/later')) },
       })
     })
   }

@@ -136,12 +136,10 @@ pub(crate) enum ReplyToolResult<T> {
     TemporarilyUnavailable {
         retry_category: String,
     },
-    /// A limit the workspace set, or its plan's, refused it (H1.27).
+    /// A budget or limit refused the reply (A2.14): the numbers, when it
+    /// resets and who can raise it, as every other tool gives them.
     LimitReached {
-        message: String,
-        #[serde(skip)]
-        #[schemars(skip)]
-        refusal: Box<crate::metering::LimitRefusal>,
+        limit: Box<crate::metering::LimitRefusal>,
     },
 }
 
@@ -164,9 +162,10 @@ impl<T> ReplyToolResult<T> {
             Self::TemporarilyUnavailable { .. } => ToolResult::TemporarilyUnavailable {
                 message: "Try again shortly.".to_owned(),
             },
-            Self::LimitReached { message, refusal } => {
-                ToolResult::LimitReached { message, refusal }
-            }
+            Self::LimitReached { limit } => ToolResult::LimitReached {
+                message: "A limit is reached. Its details say which, when it resets and who can raise it.".to_owned(),
+                limit,
+            },
         }
     }
 
@@ -732,12 +731,9 @@ pub(crate) async fn reply_send(
             },
         },
         Err(AppError::NotFound(_)) => ReplyToolResult::from_failure(ReadFailure::NotFound),
-        Err(AppError::LimitReached(refusal)) => ReplyToolResult::LimitReached {
-            message: refusal.message.clone(),
-            refusal,
-        },
         Err(AppError::Validation("attachments")) => ReplyToolResult::invalid("attachmentIds"),
         Err(AppError::Validation(_) | AppError::Invalid(_)) => ReplyToolResult::invalid("text"),
+        Err(AppError::LimitReached(limit)) => ReplyToolResult::LimitReached { limit },
         Err(error) => {
             tracing::error!(category = error.log_category(), "reply_send failed");
             ReplyToolResult::unavailable()

@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { apiUrl, requestJson } from '../api/client'
 import { isDarkScheme, type ThemePreset } from '../theme/slots'
 
@@ -173,5 +174,5 @@ export function isDarkPreset(preset: ThemePreset) {
 }
 
 export function whiteboardPath(id: string) {
-  return `/whiteboards/${encodeURIComponent(id)}`
+  return here(`/whiteboards/${encodeURIComponent(id)}`)
 }

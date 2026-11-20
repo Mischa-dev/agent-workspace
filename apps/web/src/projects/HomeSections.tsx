@@ -16,6 +16,7 @@ import { things as taskThings } from '../../../../modules/tasks.json'
 import { getHome, homeKeys, type WorkingRun } from './homeApi'
 import type { QuietSections } from './homeQuiet'
 import { MoreLink } from './MoreLink'
+import { here, spaceHref } from '../app/href'
 
 const MAX_ROWS = 5
 
@@ -71,7 +72,7 @@ export function SetupCard({ organizationId }: { organizationId: string }) {
         <Button busy={hide.isPending} onClick={() => hide.mutate()} variant="ghost">
           Hide
         </Button>
-        <ButtonLink to="/welcome" variant="primary">
+        <ButtonLink to={here('/welcome')} variant="primary">
           Continue setup
         </ButtonLink>
       </div>
@@ -89,7 +90,7 @@ export function NeedsYou() {
     if (!item.read) update.mutate({ action: 'read', ids: [item.id] })
   }
   return (
-    <Section actions={<MoreLink to="/inbox">Inbox</MoreLink>} id="home-needs-you" title="Needs you">
+    <Section actions={<MoreLink to={here('/inbox')}>Inbox</MoreLink>} id="home-needs-you" title="Needs you">
       {inbox.isPending ? (
         <ListSkeleton label="Loading what needs you" rows={3} />
       ) : inbox.isError ? (
@@ -169,7 +170,7 @@ export function WorkingNow() {
   const experience = useHomeExperience()
   const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={experience.shows('workspace.runs') ? <MoreLink to="/runs">Runs</MoreLink> : null} id="home-working" title="Working now">
+    <Section actions={experience.shows('workspace.runs') ? <MoreLink to={here('/runs')}>Runs</MoreLink> : null} id="home-working" title="Working now">
       {home.isPending ? (
         <ListSkeleton label="Loading runs" rows={2} />
       ) : home.isError ? (
@@ -286,7 +287,7 @@ function taskThing(item: MyWork['assigned']['items'][number], keys: boolean): Th
     title: item.title,
     status: item.statusName,
     projectId: item.projectId,
-    href: `/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`,
+    href: spaceHref(item.projectId, `/work-items/${encodeURIComponent(item.id)}`),
     fields: {
       flags: item.overdue ? ['Overdue'] : item.blocked ? ['Blocked'] : [],
       project: item.projectName,
@@ -304,7 +305,7 @@ export function YourTasks() {
   const experience = useHomeExperience()
   const keys = experience.shows('tech.task_keys')
   return (
-    <Section actions={<MoreLink to="/my-work">My work</MoreLink>} id="home-tasks" title={`Your ${experience.word('task', 'many')}`}>
+    <Section actions={<MoreLink to={here('/my-work')}>My work</MoreLink>} id="home-tasks" title={`Your ${experience.word('task', 'many')}`}>
       {work.isPending ? (
         <ListSkeleton label="Loading your tasks" rows={3} />
       ) : work.isError ? (

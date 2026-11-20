@@ -119,5 +119,5 @@ export default {
   ],
   things: [{ kind: 'task', label: 'Task', icon: 'checklist' }],
   capture: [{ id: 'task', label: 'New task', icon: 'checklist', path: '/new-task' }],
-  phone: true,
+  phone: { id: 'my-work', space: 'home', rank: 30, part: 'workspace.my_work', icon: 'checklist', label: 'My work', path: '/my-work' },
 } satisfies WebModule

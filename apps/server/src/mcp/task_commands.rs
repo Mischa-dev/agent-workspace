@@ -258,7 +258,7 @@ fn answer<T>(result: ToolResult<T>) -> Result<T, OpError> {
             current: None,
         }),
         ToolResult::TemporarilyUnavailable { .. } => Err(OpError::Unavailable),
-        ToolResult::LimitReached { refusal, .. } => Err(OpError::LimitReached { refusal }),
+        ToolResult::LimitReached { limit, .. } => Err(OpError::LimitReached { refusal: limit }),
     }
 }
 

@@ -12,14 +12,14 @@ describe('structured Project locations', () => {
     const projectId = 'project-a'
     const thread = { kind: 'thread', conversationId: 'thread-a' } as const
     expect(projectLocationHref(projectId, { kind: 'project_overview' })).toBe(
-      '/projects/project-a',
+      '/w/-/s/project-a',
     )
     // A Project that last remembered its settings opens on its overview.
     expect(projectLocationHref(projectId, { kind: 'settings' })).toBe(
-      '/projects/project-a',
+      '/w/-/s/project-a',
     )
     expect(projectLocationHref(projectId, { kind: 'work_items' })).toBe(
-      '/projects/project-a/work-items',
+      '/w/-/s/project-a/tasks',
     )
     expect(
       projectLocationFromPath(projectId, '/projects/project-a/work-items/item-a'),
@@ -28,21 +28,21 @@ describe('structured Project locations', () => {
     expect(projectLocationFromPath(projectId, href)).toEqual(thread)
     const channel = { kind: 'channel', conversationId: 'channel-a' } as const
     const channelHref = projectLocationHref(projectId, channel)
-    expect(channelHref).toBe('/projects/project-a/channels/channel-a')
+    expect(channelHref).toBe('/w/-/s/project-a/chat/channel-a')
     expect(projectLocationFromPath(projectId, channelHref)).toEqual(channel)
   })
 
   it('remembers each task tab, the pages, one page, the decisions and the runs', () => {
     const projectId = 'project-a'
     const page = { kind: 'page', pageId: 'page-a' } as const
-    expect(projectLocationHref(projectId, page)).toBe('/projects/project-a/pages/page-a')
+    expect(projectLocationHref(projectId, page)).toBe('/w/-/s/project-a/pages/page-a')
     expect(projectLocationFromPath(projectId, '/projects/project-a/pages/page-a')).toEqual(page)
     expect(projectLocationFromPath(projectId, '/projects/project-a/pages')).toEqual({ kind: 'pages' })
     // Every planning page is the Planning tab, which opens on Up next.
     expect(projectLocationFromPath(projectId, '/projects/project-a/graph')).toEqual({ kind: 'planning' })
-    expect(projectLocationHref(projectId, { kind: 'planning' })).toBe('/projects/project-a/next')
+    expect(projectLocationHref(projectId, { kind: 'planning' })).toBe('/w/-/s/project-a/planning/next')
     expect(projectLocationFromPath(projectId, '/projects/project-a/launches')).toEqual({ kind: 'runs' })
-    expect(projectLocationHref(projectId, { kind: 'runs' })).toBe('/projects/project-a/launches')
+    expect(projectLocationHref(projectId, { kind: 'runs' })).toBe('/w/-/s/project-a/runs')
     for (const kind of ['milestones', 'timeline', 'decisions'] as const) {
       expect(projectLocationFromPath(projectId, projectLocationHref(projectId, { kind }))).toEqual({ kind })
     }
@@ -56,7 +56,7 @@ describe('structured Project locations', () => {
     const location = { kind: 'thread', conversationId: 'thread-a' } as const
     expect(
       safeProjectHref('project-a', 'https://attacker.invalid', location),
-    ).toBe('/projects/project-a/threads/thread-a')
+    ).toBe('/w/-/s/project-a/threads/thread-a')
     expect(
       projectLocationFromPath(
         'project-a',

@@ -225,19 +225,21 @@ export async function runOptimisticMove<T>(
  * it, so the server would refuse it as a conflict and the card would go back.
  * Each save waits for the one before it and gets the version that one left,
  * or undefined when it failed (the card's own version still holds then).
+ * The version a card's last save left is kept after it lands too: the board
+ * learns it only when it next loads, and a move dropped before then would
+ * otherwise send the older one.
  */
 export function createSaveQueue() {
   const last = new Map<string, Promise<number | undefined>>()
   return <T>(id: string, save: (savedVersion: number | undefined) => Promise<{ result: T; version: number }>): Promise<T> => {
-    const run = (last.get(id) ?? Promise.resolve(undefined)).then(save)
+    const before = last.get(id) ?? Promise.resolve(undefined)
+    const run = before.then(save)
+    // A failed save leaves the version the one before it reached.
     const version = run.then(
       (saved) => saved.version,
-      () => undefined,
+      () => before,
     )
     last.set(id, version)
-    void version.then(() => {
-      if (last.get(id) === version) last.delete(id)
-    })
     return run.then((saved) => saved.result)
   }
 }

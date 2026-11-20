@@ -6,6 +6,7 @@ import { memoryKeys, pin, recordDecision } from '../memory/api'
 import type { Project } from '../projects/types'
 import { Banner, Button, Checkbox, Dialog, SelectField, TextArea, TextField, describeError, showToast } from '../ui'
 import type { ConversationMessage } from './types'
+import { spaceHref } from '../app/href'
 
 function firstLine(text: string) {
   const line = text.trim().split('\n')[0] ?? ''
@@ -66,7 +67,7 @@ export function DecisionDialog({
           title: pinned ? 'Decision saved and pinned' : place ? `Decision saved in ${place}` : 'Decision saved',
           action: {
             label: 'View',
-            onSelect: () => navigate(`/projects/${encodeURIComponent(target)}/decisions#${encodeURIComponent(decision.id)}`),
+            onSelect: () => navigate(spaceHref(target, `/decisions#${encodeURIComponent(decision.id)}`)),
           },
         })
         onClose()

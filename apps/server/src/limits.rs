@@ -462,105 +462,58 @@ impl Limits {
         limit: u32,
     ) -> Result<Taken, AppError> {
         let digest = key.digest();
-        self.run(on, async |connection| {
-            take_named(
-                connection,
-                bucket.name,
-                &digest,
-                key.workspace(),
-                bucket.window,
-                cost,
-                limit,
-            )
-            .await
-        })
-        .await
-    }
-}
-
-/// Spends `cost` from a budget whose number is set at run time (a spend
-/// limit's `minute` or `hour`, H1.27), on the caller's connection, so the
-/// spend commits or rolls back with the caller's work. `name` is the
-/// counter's bucket and `key` who it belongs to; only a digest of the key
-/// is stored. `Ok(None)` when granted; `Ok(Some(seconds))` until it may go
-/// ahead when refused.
-pub async fn spend_on(
-    connection: &mut PgConnection,
-    name: &str,
-    key: &[u8],
-    workspace: Option<Uuid>,
-    window: Duration,
-    cost: u32,
-    limit: u32,
-) -> Result<Option<u64>, AppError> {
-    let digest: [u8; 32] = Sha256::digest(key).into();
-    if cost > limit {
-        return Ok(Some(seconds(window)));
-    }
-    Ok(
-        match take_named(connection, name, &digest, workspace, window, cost, limit).await? {
-            Taken::Granted { .. } => None,
-            Taken::Refused { retry_after } => Some(retry_after),
-        },
-    )
-}
-
-/// One exact spend from the counter `(name, digest)`.
-async fn take_named(
-    connection: &mut PgConnection,
-    name: &str,
-    digest: &[u8; 32],
-    workspace: Option<Uuid>,
-    window: Duration,
-    cost: u32,
-    limit: u32,
-) -> Result<Taken, sqlx::Error> {
-    let window = seconds(window) as i32;
-    let (used, left) = sqlx::query_as::<_, (Option<i32>, Option<f64>)>(
-        r#"
-            WITH taken AS (
-                INSERT INTO rate_limit_counters AS counter
-                    (bucket, key_digest, window_start, window_seconds, used, expires_at,
-                     workspace_id)
-                VALUES ($1, $2, now(), $3, $4, now() + make_interval(secs => $3), $6)
-                ON CONFLICT (bucket, key_digest) DO UPDATE
-                    SET window_start = CASE WHEN counter.expires_at <= now()
-                            THEN now() ELSE counter.window_start END,
-                        window_seconds = EXCLUDED.window_seconds,
-                        used = CASE WHEN counter.expires_at <= now()
-                            THEN EXCLUDED.used ELSE counter.used + EXCLUDED.used END,
-                        expires_at = CASE WHEN counter.expires_at <= now()
-                            THEN EXCLUDED.expires_at ELSE counter.expires_at END
-                    WHERE counter.expires_at <= now()
-                       OR counter.used + EXCLUDED.used <= $5
-                RETURNING used,
-                          extract(epoch FROM expires_at - now())::float8 AS remaining
-            )
-            SELECT
-                (SELECT used FROM taken),
-                coalesce(
-                    (SELECT remaining FROM taken),
-                    (SELECT extract(epoch FROM expires_at - now())::float8
-                     FROM rate_limit_counters
-                     WHERE bucket = $1 AND key_digest = $2)
+        let workspace = key.workspace();
+        let window = seconds(bucket.window) as i32;
+        let (used, left) = self
+            .run(on, async |connection| {
+                sqlx::query_as::<_, (Option<i32>, Option<f64>)>(
+                    r#"
+                    WITH taken AS (
+                        INSERT INTO rate_limit_counters AS counter
+                            (bucket, key_digest, window_start, window_seconds, used, expires_at,
+                             workspace_id)
+                        VALUES ($1, $2, now(), $3, $4, now() + make_interval(secs => $3), $6)
+                        ON CONFLICT (bucket, key_digest) DO UPDATE
+                            SET window_start = CASE WHEN counter.expires_at <= now()
+                                    THEN now() ELSE counter.window_start END,
+                                window_seconds = EXCLUDED.window_seconds,
+                                used = CASE WHEN counter.expires_at <= now()
+                                    THEN EXCLUDED.used ELSE counter.used + EXCLUDED.used END,
+                                expires_at = CASE WHEN counter.expires_at <= now()
+                                    THEN EXCLUDED.expires_at ELSE counter.expires_at END
+                            WHERE counter.expires_at <= now()
+                               OR counter.used + EXCLUDED.used <= $5
+                        RETURNING used,
+                                  extract(epoch FROM expires_at - now())::float8 AS remaining
+                    )
+                    SELECT
+                        (SELECT used FROM taken),
+                        coalesce(
+                            (SELECT remaining FROM taken),
+                            (SELECT extract(epoch FROM expires_at - now())::float8
+                             FROM rate_limit_counters
+                             WHERE bucket = $1 AND key_digest = $2)
+                        )
+                    "#,
                 )
-            "#,
-    )
-    .bind(name)
-    .bind(digest.as_slice())
-    .bind(window)
-    .bind(cost as i32)
-    .bind(limit as i32)
-    .bind(workspace)
-    .fetch_one(&mut *connection)
-    .await?;
-    let left = left.unwrap_or(f64::from(window));
-    Ok(match used {
-        Some(_) => Taken::Granted { left },
-        None => Taken::Refused {
-            retry_after: seconds_from(left),
-        },
-    })
+                .bind(bucket.name)
+                .bind(digest.as_slice())
+                .bind(window)
+                .bind(cost as i32)
+                .bind(limit as i32)
+                .bind(workspace)
+                .fetch_one(&mut *connection)
+                .await
+            })
+            .await?;
+        let left = left.unwrap_or(f64::from(window));
+        Ok(match used {
+            Some(_) => Taken::Granted { left },
+            None => Taken::Refused {
+                retry_after: seconds_from(left),
+            },
+        })
+    }
 }
 
 /// Where a limit's statement runs: on the pool, or on a connection the

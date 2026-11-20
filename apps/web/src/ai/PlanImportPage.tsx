@@ -28,6 +28,7 @@ import { PlanningFrame, PlanningIntro } from './frame'
 import { useCommitPlan, useCreatePlan, usePlan, usePlans, useProjectAi, useSavePlan } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
 import '../styles/work.css'
+import { spaceHref } from '../app/href'
 
 type SourceKind = PlanSource['kind']
 
@@ -268,7 +269,7 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
         </div>
         {done ? (
           <div className="aw-ai-planform__actions">
-            <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/work-items`} variant="primary">
+            <ButtonLink to={spaceHref(projectId, `/work-items`)} variant="primary">
               Open tasks
             </ButtonLink>
             <ButtonLink to={planningHref(projectId, 'graph')}>See the graph</ButtonLink>

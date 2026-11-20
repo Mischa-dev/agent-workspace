@@ -310,7 +310,7 @@ describe('M2 Channel workspace', () => {
       }),
     ).toHaveAttribute(
       'href',
-      `/projects/${projectId}/threads/${linkedThreadId}`,
+      `/w/mischa/s/${projectId}/threads/${linkedThreadId}`,
     )
     await waitFor(() =>
       expect(
@@ -368,7 +368,7 @@ describe('M2 Channel workspace', () => {
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get('thread')).toBe(createdThreadId),
     )
-    expect(window.location.pathname).toBe(`/projects/${projectId}/channels/${channelId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectId}/chat/${channelId}`)
     expect(await screen.findByRole('complementary', { name: 'Thread' })).toBeVisible()
   })
 
@@ -489,7 +489,7 @@ describe('M2 Channel workspace', () => {
     })
 
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/projects/${projectId}`),
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectId}`),
     )
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Agent Workspace' }),

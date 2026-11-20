@@ -52,6 +52,14 @@ export type BlockedProjection = { blockedAt: string; blockedByActorId: string; r
 
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
+export type BudgetMeter = { id: string; name: string; unit: string }
+
+export type BudgetPeriod = "minute" | "hour" | "day" | "month"
+
+export type BudgetScope = "workspace" | "account" | "space" | "conversation"
+
+export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
+
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
 export type ButtonStepInput = { arguments?: Record<string, unknown>; operation: string }
@@ -280,8 +288,6 @@ export type LayoutLine = { fromWorkspace: boolean; preset: string; tone: string;
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
-export type LimitableMeter = { id: string; name: string; unit: string }
-
 export type LinkArgument = { targetId: string; targetKind: string }
 
 export type LinkTarget = ("task" | "page") | "record"
@@ -484,6 +490,14 @@ export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
+export type ScopeAccount = { accountId: string; displayName?: string | null }
+
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; members: ScopeMember[]; name?: string | null; workspaceId: string }
+
+export type ScopeMember = { accountId: string; displayName?: string | null; you: boolean }
+
+export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
+
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
 
 export type SectionShow = "all" | "unread"
@@ -531,8 +545,6 @@ export type SpaceStatus = { canUpdate?: boolean | null; health?: string | null; 
 export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpaceVisibility = "members" | "workspace"
-
-export type SpendLimitView = { hardLimit?: number | null; id: string; meter: string; meterName: string; perAccount: boolean; period: string; scope: string; scopeId?: string | null; scopeName: string; softLimit?: number | null; unit: string; used?: number | null; version: number }
 
 export type StatusCount = { category: string; count: number; status: string }
 
@@ -702,6 +714,10 @@ export type AgentResumeInput = { account: string; everywhere?: boolean; reason?:
 
 export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
+export type AgentScopeGetInput = { account: string }
+
+export type AgentScopeGetOutput = { accountId: string; alsoInOtherWorkspaces: boolean; connections: number; displayName?: string | null; follows: number; handle?: string | null; managers: ScopeAccount[]; privateConversations: ScopeConversation[]; readsWithConsent: boolean; spaces: ScopeSpace[]; workspaceRole: string }
+
 export type AgentTemplateListInput = { spaceId?: string | null }
 
 export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
@@ -709,6 +725,10 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AppConsentSetInput = { app: string; conversation: string; granted?: boolean | null }
+
+export type AppConsentSetOutput = { appAccountId: string; changed: boolean; conversationId: string; granted: boolean }
 
 export type AutomationCreateInput = { actions: Action[]; conditions?: Conditions | null; enabled?: boolean | null; name: string; projectId: string; trigger: Trigger }
 
@@ -737,6 +757,14 @@ export type AutomationUpdateOutput = unknown
 export type BriefingGetInput = { projectId?: string | null }
 
 export type BriefingGetOutput = { claims?: TaskLine[]; mentions: Mention[]; nextSteps: string; notifications: NotificationLine[]; replyRequests?: InboxItem[]; tasks: TaskLine[]; threadUpdates: ThreadUpdate[]; unread: ConversationSummary[]; you: You }
+
+export type BudgetListInput = { account?: string | null }
+
+export type BudgetListOutput = { budgets: BudgetView[]; meters: BudgetMeter[] }
+
+export type BudgetSetInput = { eachAccount?: boolean; expectedVersion?: number | null; hardLimit?: number | null; meter: string; period: BudgetPeriod; scope: BudgetScope; scopeId?: string | null; softLimit?: number | null }
+
+export type BudgetSetOutput = { budget?: BudgetView | null }
 
 export type BugReportLinkCreateInput = { collection?: string | null; delete?: boolean | null; form?: FormWrite | null; linkId?: string | null; name?: string | null; projectId: string; replace?: boolean | null; state?: string | null }
 
@@ -1710,14 +1738,6 @@ export type SpaceUpdateInput = { description?: string | null; expectedVersion?: 
 
 export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
-export type SpendLimitListInput = Record<string, never>
-
-export type SpendLimitListOutput = { limits: SpendLimitView[]; meters: LimitableMeter[] }
-
-export type SpendLimitSetInput = { hardLimit?: number | null; meter: string; perAccount?: boolean | null; period: string; remove?: boolean | null; scope: string; scopeId?: string | null; softLimit?: number | null }
-
-export type SpendLimitSetOutput = { limit?: SpendLimitView | null }
-
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
 export type StatusDeleteOutput = { cleared: boolean }
@@ -2019,8 +2039,10 @@ export type Operations = {
   agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
+  agent_scope_get: { input: AgentScopeGetInput; output: AgentScopeGetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  app_consent_set: { input: AppConsentSetInput; output: AppConsentSetOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
   automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }
@@ -2028,6 +2050,8 @@ export type Operations = {
   automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
   automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }
+  budget_list: { input: BudgetListInput; output: BudgetListOutput }
+  budget_set: { input: BudgetSetInput; output: BudgetSetOutput }
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }
@@ -2271,8 +2295,6 @@ export type Operations = {
   space_personal_open: { input: SpacePersonalOpenInput; output: SpacePersonalOpenOutput }
   space_restore: { input: SpaceRestoreInput; output: SpaceRestoreOutput }
   space_update: { input: SpaceUpdateInput; output: SpaceUpdateOutput }
-  spend_limit_list: { input: SpendLimitListInput; output: SpendLimitListOutput }
-  spend_limit_set: { input: SpendLimitSetInput; output: SpendLimitSetOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }

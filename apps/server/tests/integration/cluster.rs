@@ -992,6 +992,8 @@ async fn write_budget_is_never_exceeded() {
     };
     let browser = cluster.instance(0).login("owner").await;
     let (_, channel) = work_channel(&cluster, &browser).await;
+    // The write bound is what's tested, not a workspace's message rate.
+    crate::support::db::lift_message_rate(&cluster.pool, &channel.to_string()).await;
     let started = Instant::now();
     let mut accepted = 0;
     let mut refused = 0;

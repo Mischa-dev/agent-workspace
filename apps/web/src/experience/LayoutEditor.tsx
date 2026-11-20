@@ -1,6 +1,8 @@
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import partClaims from 'virtual:modules/slots/parts'
 
 import { Banner, Button, Dialog, Icon, Switch, TextArea, TextField, type IconGlyph } from '../ui'
+import { ownerOf } from '../modules/ownership'
 import type { Word } from './layout'
 import type { NounId, PartId } from './parts'
 import { presetChoices, type PresetChoice } from './presetChoices'
@@ -193,22 +195,29 @@ export function SidebarPreview({ projectName, shape }: { projectName: string; sh
 export function PartSwitches({
   disabled = false,
   lockedOff,
+  moduleOn = () => true,
   onToggle,
   visible,
 }: {
   disabled?: boolean
   /** Parts that stay off here, with why: "My view" can't show what the layout hides. */
   lockedOff?: { parts: Set<string>; why: string }
+  /** Parts of a module that's off aren't offered: the module hides them anyway. */
+  moduleOn?: (module: string) => boolean
   onToggle: (part: PartId, shown: boolean) => void
   visible: Set<PartId>
 }) {
+  const offered = REGISTRY.parts.filter((part) => {
+    const owner = ownerOf(partClaims, part.id)
+    return !owner || moduleOn(owner)
+  })
   return (
     <div className="aw-partgroups">
-      {REGISTRY.groups.map((group) => (
+      {REGISTRY.groups.filter((group) => offered.some((part) => part.group === group.id)).map((group) => (
         <fieldset className="aw-partgroup" key={group.id}>
           <legend className="aw-partgroup__title">{group.label}</legend>
           <p className="aw-partgroup__desc">{group.description}</p>
-          {REGISTRY.parts
+          {offered
             .filter((part) => part.group === group.id)
             .map((part) => {
               const locked = lockedOff?.parts.has(part.id) ?? false
@@ -305,6 +314,7 @@ export function LayoutEditor({
   canSavePreset,
   cardsLabel,
   fallback,
+  moduleOn,
   onSave,
   onSavePreset,
   previewName,
@@ -316,6 +326,8 @@ export function LayoutEditor({
   cardsLabel: string
   /** What applies with no layout chosen here, and its card. */
   fallback: { name: string; description: string; layout: Layout | null }
+  /** Which modules are on where this layout applies; parts of the others aren't offered. */
+  moduleOn?: (module: string) => boolean
   onSave: (layout: Layout | null) => Promise<unknown>
   onSavePreset: (name: string, description: string, layout: Layout) => Promise<unknown>
   previewName: string
@@ -376,7 +388,7 @@ export function LayoutEditor({
               <p className="aw-pagesection__desc">Turn single parts on or off. Anything already in a hidden part stays as it is.</p>
             </div>
           </div>
-          <PartSwitches disabled={!canEdit} onToggle={toggle} visible={draft.visible} />
+          <PartSwitches disabled={!canEdit} moduleOn={moduleOn} onToggle={toggle} visible={draft.visible} />
         </section>
         <section aria-labelledby="layout-words" className="aw-pagesection">
           <div className="aw-pagesection__head">
