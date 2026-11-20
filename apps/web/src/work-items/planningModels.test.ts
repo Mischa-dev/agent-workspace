@@ -201,9 +201,11 @@ describe('board moves', () => {
     await expect(second).resolves.toBe('second')
     expect(seen).toEqual([undefined, 4])
 
-    // A failed save leaves no version, so the next one sends the card's own.
+    // A move dropped after the last one landed, before the board reloads, still gets its version.
+    await expect(queueSave('1', async (savedVersion) => ({ result: savedVersion, version: 6 }))).resolves.toBe(5)
+    // A failed save leaves the version the one before it reached.
     await expect(queueSave('1', async () => Promise.reject(new Error('conflict')))).rejects.toThrow('conflict')
-    await expect(queueSave('1', async (savedVersion) => ({ result: savedVersion, version: 6 }))).resolves.toBeUndefined()
+    await expect(queueSave('1', async (savedVersion) => ({ result: savedVersion, version: 7 }))).resolves.toBe(6)
   })
 
   it('starts a task added in a column with the column value and the filters it pins', () => {
