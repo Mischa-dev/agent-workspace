@@ -1024,18 +1024,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_conversation_links",
-                table: "work_item_conversation_links",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("conversation_id", "conversations"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_item_handoffs",
                 table: "work_item_handoffs",
                 references: &[
@@ -1066,17 +1054,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("label_id", "project_labels"),
                     ("added_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_links",
-                table: "work_item_links",
-                references: &[
-                    ("work_item_id", "work_items"),
-                    ("project_id", "projects"),
-                    ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1510,17 +1487,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "whiteboard_files",
                 references: &[
                     ("whiteboard_id", "whiteboards"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "whiteboard_links",
-                table: "whiteboard_links",
-                references: &[
-                    ("whiteboard_id", "whiteboards"),
-                    ("target_project_id", "projects"),
                     ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],

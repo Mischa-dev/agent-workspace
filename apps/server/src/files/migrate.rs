@@ -87,7 +87,10 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             .await
             .map_err(JobError::from)?
         {
-            tracing::info!(pass = again.pass, "files were held; another move pass is queued");
+            tracing::info!(
+                pass = again.pass,
+                "files were held; another move pass is queued"
+            );
             queue(&context.state.pool, again)
                 .await
                 .map_err(JobError::from)?;

@@ -1522,7 +1522,7 @@ async fn task_link_repositories_pull_requests_and_threads() {
     let pool = &setup.pool;
     let thread_linked = move || async move {
         sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_conversation_links WHERE work_item_id = $1 AND conversation_id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM task_threads WHERE work_item_id = $1 AND conversation_id = $2)",
         )
         .bind(task)
         .bind(secret)

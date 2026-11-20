@@ -1859,12 +1859,12 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
         .expect("task id");
     sqlx::query(
         r#"
-        INSERT INTO work_item_conversation_links
-            (project_id, work_item_id, conversation_id, created_by_actor_id)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO links
+            (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id)
+        SELECT task.workspace_id, task.id, $2, 'about', 'explicit', $3
+        FROM things task WHERE task.id = $1
         "#,
     )
-    .bind(seed.project_id)
     .bind(task)
     .bind(thread)
     .bind(seed.human_actor_id)

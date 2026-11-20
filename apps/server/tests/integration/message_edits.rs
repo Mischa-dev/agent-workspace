@@ -858,7 +858,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(
         count(
             &setup.pool,
-            "SELECT count(*) FROM work_item_links WHERE target_id = $1",
+            "SELECT count(*) FROM task_links WHERE target_id = $1",
             &message
         )
         .await,
@@ -1222,7 +1222,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "deliveries",
         "reply_requests",
         "conversation_pins",
-        "work_item_links",
+        "links",
         "conversations",
         "message_mentions",
         "project_decisions",
