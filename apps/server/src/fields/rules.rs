@@ -238,12 +238,15 @@ fn normalize_default(
     }
 }
 
-/// The default a new record starts with, as it would be written:
-/// "today" is today's date.
-pub fn default_written(rules: &FieldRules) -> Option<Value> {
-    let default = rules.default.as_ref()?;
+/// The default a new record starts with in `field`, as it would be
+/// written: a date field's "today" is today's date; any other field's
+/// "today" is just the word.
+pub fn default_written(field: &FieldDefinition) -> Option<Value> {
+    let default = field.config.rules.as_ref()?.default.as_ref()?;
     Some(match default.as_str() {
-        Some("today") => Value::String(chrono::Utc::now().date_naive().to_string()),
+        Some("today") if field.field_type == FieldType::Date => {
+            Value::String(chrono::Utc::now().date_naive().to_string())
+        }
         _ => default.clone(),
     })
 }

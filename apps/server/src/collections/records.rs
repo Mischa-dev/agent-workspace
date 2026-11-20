@@ -1046,12 +1046,7 @@ pub async fn write(
                 .iter()
                 .filter(|field| !field.archived && !given.contains(&field.id))
             {
-                let Some(default) = field
-                    .config
-                    .rules
-                    .as_ref()
-                    .and_then(fields::rules::default_written)
-                else {
+                let Some(default) = fields::rules::default_written(field) else {
                     continue;
                 };
                 if let Ok(more) = resolve_values(

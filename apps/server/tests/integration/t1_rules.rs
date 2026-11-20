@@ -54,6 +54,7 @@ async fn field_rules_hold_on_every_way_in() {
                  "rules": {"default": "Nut"}},
                 {"name": "Owner", "type": "person", "rules": {"default": "me"}},
                 {"name": "Added", "type": "date", "rules": {"default": "today"}},
+                {"name": "Note", "type": "text", "rules": {"default": "today"}},
                 {"name": "Price", "type": "number", "rules": {"buildersOnly": true}},
             ],
         }),
@@ -83,6 +84,8 @@ async fn field_rules_hold_on_every_way_in() {
         json!(chrono::Utc::now().date_naive().to_string()),
         "{written}"
     );
+    // Only a date field's "today" is a date.
+    assert_eq!(fields["Note"], json!("today"), "{written}");
 
     // Unique ignores case, and holds within one batch.
     for (records, why) in [
