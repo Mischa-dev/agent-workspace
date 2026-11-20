@@ -1541,6 +1541,8 @@ async fn resume_replays_what_was_missed() {
         );
     }
 
+    // Missed means in the log: a message still being sequenced comes live.
+    cluster.sequenced().await;
     let mut back = cluster.instance(0).socket_v2(&rook, Some(stopped)).await;
     let (replayed, ready) = ready_of(&mut back).await;
     assert_eq!(ready["resumed"], true, "{ready}");

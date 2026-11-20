@@ -290,6 +290,26 @@ pub(crate) async fn cluster_with(
 }
 
 impl Cluster {
+    /// Waits until every staged event has its position in the log, so what
+    /// a test just did can be replayed. Sequencing runs beside the request
+    /// that staged the event (on polls only, in a pooler run), so a resume
+    /// straight after a write can come before it.
+    pub(crate) async fn sequenced(&self) {
+        let started = std::time::Instant::now();
+        while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_staging")
+            .fetch_one(&self.pool)
+            .await
+            .expect("staging")
+            > 0
+        {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "never sequenced"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     /// Start one more instance; it gets the next name.
     pub(crate) async fn start(&mut self, extra: &[(&str, &str)]) -> &mut Instance {
         let name = NAMES[self.instances.len()];
