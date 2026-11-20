@@ -55,6 +55,15 @@ impl FromStr for Environment {
 #[derive(Clone)]
 pub struct SecretString(String);
 
+/// Where the built-in host's own program sends its protocol calls.
+#[derive(Clone, Debug)]
+pub struct BuiltinHostRemote {
+    /// The server's address, such as `http://server:3100`.
+    pub server_url: String,
+    /// The install's built-in host token.
+    pub token: SecretString,
+}
+
 impl SecretString {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -229,6 +238,10 @@ pub struct AppConfig {
     /// repositories on this machine's disk): `AGENT_WORKSPACE_BUILTIN_HOST`,
     /// default on.
     pub builtin_host: bool,
+    /// A1.17: set only in the built-in host's own program
+    /// (`agent-workspace-host`): the server it serves and the install's
+    /// token, so its protocol calls go over HTTP instead of in process.
+    pub builtin_host_remote: Option<BuiltinHostRemote>,
     /// How long a stopping instance answers "not ready" before it closes its
     /// sockets and stops taking requests, so the balancer moves off it
     /// first: `AGENT_WORKSPACE_DRAIN_SECONDS`, default 5.
@@ -899,6 +912,7 @@ impl AppConfig {
             directory_workspace_sources,
             roles,
             builtin_host,
+            builtin_host_remote: None,
             drain: Duration::from_secs(drain_seconds),
             health_addr,
             work_loop,

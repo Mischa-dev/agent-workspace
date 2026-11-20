@@ -47,6 +47,7 @@ RUN useradd --system --uid 10001 --user-group --home-dir /var/lib/agent-workspac
  && install -d -o agent-workspace -g agent-workspace -m 0700 \
       /var/lib/agent-workspace /var/lib/agent-workspace-keys
 COPY --from=server /src/target/release/agent-workspace-server /usr/local/bin/agent-workspace-server
+COPY --from=server /src/target/release/agent-workspace-host /usr/local/bin/agent-workspace-host
 COPY --from=web /src/apps/web/dist /app/web
 COPY NOTICE /app/NOTICE
 COPY --from=server /src/THIRD-PARTY-NOTICES /app/THIRD-PARTY-NOTICES

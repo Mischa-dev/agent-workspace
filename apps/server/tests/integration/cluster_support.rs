@@ -295,10 +295,32 @@ pub(crate) async fn cluster_with(
     Some(cluster)
 }
 
+/// A cluster on a database a test has already set up, with no instances
+/// yet.
+pub(crate) fn cluster_on(db: Db, organization_id: Uuid) -> Cluster {
+    Cluster {
+        instances: Vec::new(),
+        pool: db.pool.clone(),
+        url: db.url.clone(),
+        organization_id,
+        db: Some(db),
+    }
+}
+
 impl Cluster {
     /// Start one more instance; it gets the next name.
     pub(crate) async fn start(&mut self, extra: &[(&str, &str)]) -> &mut Instance {
-        let name = NAMES[self.instances.len()];
+        self.start_at(extra, "127.0.0.1:0").await
+    }
+
+    /// The same, listening on `address` (a restarted instance takes its
+    /// predecessor's).
+    pub(crate) async fn start_at(
+        &mut self,
+        extra: &[(&str, &str)],
+        address: &str,
+    ) -> &mut Instance {
+        let name = NAMES[self.instances.len() % NAMES.len()];
         let mut values = BTreeMap::from([
             ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), self.url.clone()),
             // Stopping drains at once unless a test asks for a drain time.
@@ -327,7 +349,7 @@ impl Cluster {
             .await
             .expect("instance pool");
         let server = Server::build(config, pool).await.expect("build instance");
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let listener = TcpListener::bind(address).await.expect("listener");
         let webhooks = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("webhook listener");

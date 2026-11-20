@@ -360,7 +360,10 @@ async fn a_test_wakeup_is_signed_like_a_real_one_and_reports_the_answer() {
     };
     assert_eq!(
         header_value("webhook-id"),
-        format!("evt_{}", answer["deliveryId"].as_str().expect("delivery id"))
+        format!(
+            "evt_{}",
+            answer["deliveryId"].as_str().expect("delivery id")
+        )
     );
     let timestamp = header_value("webhook-timestamp");
     assert_eq!(

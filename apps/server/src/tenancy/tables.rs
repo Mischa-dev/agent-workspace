@@ -339,6 +339,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "one-time codes that enrol a host, kept as digests: hosts are server-wide",
     ),
     (
+        "builtin_host_installs",
+        "the built-in host program's one enrolment for the whole install: it serves every workspace's built-in host (R24)",
+    ),
+    (
         "host_notices",
         "what a host is told about its agents: hosts are server-wide",
     ),

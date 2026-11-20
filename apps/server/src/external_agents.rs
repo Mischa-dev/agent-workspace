@@ -550,14 +550,10 @@ pub async fn set_webhook_for_host(
     // A new secret each time, as the command promises.
     crate::delivery::connections::clear_signing_secrets(&mut transaction, delivery.id, None)
         .await?;
-    let secret = crate::delivery::connections::set_webhook(
-        &mut transaction,
-        config,
-        &delivery,
-        Some(url),
-    )
-    .await?
-    .ok_or(AppError::Internal("a new webhook has a secret"))?;
+    let secret =
+        crate::delivery::connections::set_webhook(&mut transaction, config, &delivery, Some(url))
+            .await?
+            .ok_or(AppError::Internal("a new webhook has a secret"))?;
     transaction.commit().await?;
     Ok(secret)
 }

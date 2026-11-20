@@ -32,9 +32,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode, header},
 };
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 use sqlx::{Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;

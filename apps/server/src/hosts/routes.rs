@@ -6,7 +6,7 @@ use std::{convert::Infallible, time::Duration};
 
 use agent_workspace_host_protocol::{Ack, AckReply, CommandList};
 use axum::{
-    Extension, Json, Router,
+    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header::ACCEPT},
     response::{
@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::builtin::transport::BuiltinCaller;
+use super::builtin::install::BuiltinCall;
 use super::{
     HostRow, commands,
     protocol::{self, HostError},
@@ -35,6 +35,7 @@ pub const PROTOCOL_HEADER: &str = "aw-host-protocol";
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/hosts/enrol", post(enrol_route))
+        .route("/api/v1/host/builtin/enrol", post(builtin_enrol_route))
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/windows", post(windows_route))
@@ -142,7 +143,7 @@ async fn host_caller(state: &AppState, headers: &HeaderMap) -> Result<HostRow, H
 /// the built-in host (A1.16), the built-in row the command was written for.
 async fn command_caller(
     state: &AppState,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: &HeaderMap,
     command_id: Uuid,
 ) -> Result<HostRow, HostError> {
@@ -183,6 +184,25 @@ async fn enrol_route(
     ))
 }
 
+/// A1.17: the built-in host program's first start, its one-time code for
+/// the install's token.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BuiltinEnrolRequest {
+    code: String,
+}
+
+async fn builtin_enrol_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<BuiltinEnrolRequest>,
+) -> Result<(StatusCode, Json<Value>), HostError> {
+    state.rate_limits.check_mcp_auth(&request.code).await?;
+    protocol_header(&headers)?;
+    let token = super::builtin::install::enrol(&state.pool, &request.code).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "token": token }))))
+}
+
 async fn describe_route(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -206,7 +226,7 @@ async fn heartbeat_route(
 /// A1.24: the plan windows of the accounts the host described.
 async fn windows_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     ApiJson(request): ApiJson<super::windows::WindowsReport>,
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
@@ -318,7 +338,7 @@ const STREAM_FOR: Duration = Duration::from_secs(300);
 /// `Last-Event-ID`). Either counts as a heartbeat.
 async fn commands_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Query(query): Query<CommandsQuery>,
 ) -> Result<Response, HostError> {
@@ -390,7 +410,7 @@ fn command_stream(
 /// A1.12: one command whole, with any credential minted for it.
 async fn command_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
 ) -> Result<Json<Value>, HostError> {
@@ -401,7 +421,7 @@ async fn command_route(
 /// A1.12: the host's answer to a command.
 async fn ack_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
     ApiJson(ack): ApiJson<Ack>,

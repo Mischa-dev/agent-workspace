@@ -1633,8 +1633,7 @@ async fn next_push_of(
 ) -> (String, String, String) {
     for _ in 0..100 {
         if let Some(push) = received.lock().await.iter().find(|(_, _, body)| {
-            serde_json::from_str::<Value>(body)
-                .is_ok_and(|body| body["type"] == event_type)
+            serde_json::from_str::<Value>(body).is_ok_and(|body| body["type"] == event_type)
         }) {
             return push.clone();
         }

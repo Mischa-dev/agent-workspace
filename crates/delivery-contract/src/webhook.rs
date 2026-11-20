@@ -130,7 +130,10 @@ pub fn check_webhook(secret: &str, push: &Received, now: Option<u64>) -> Report 
         header("webhook-timestamp"),
     );
     let body = serde_json::from_str::<Value>(&push.body).unwrap_or(Value::Null);
-    report.result("sends a body shaped like the fixture", check_envelope(&body));
+    report.result(
+        "sends a body shaped like the fixture",
+        check_envelope(&body),
+    );
     report.record(
         "sends the event's id as webhook-id",
         body["id"]

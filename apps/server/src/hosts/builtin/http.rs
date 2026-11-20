@@ -1019,9 +1019,10 @@ pub(crate) async fn interrupt_run_in(
     )
     .await?;
     transaction.commit().await?;
-    if started {
-        // The built-in host hears the cancel now, not at its next tick.
-        // Otherwise its next tick does.
+    if started && state.config.builtin_host && state.config.builtin_host_remote.is_none() {
+        // The built-in host hears the cancel now, not at its next tick,
+        // when it runs in this process. Otherwise (its own program, or
+        // another instance) its next look does.
         if let Err(error) = crate::hosts::builtin::driver::hear_now(
             state,
             run_id,

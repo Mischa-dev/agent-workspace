@@ -416,13 +416,7 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(
                 &options,
-                &[
-                    "owner-login",
-                    "name",
-                    "handle",
-                    "token-file",
-                    "webhook-url",
-                ],
+                &["owner-login", "name", "handle", "token-file", "webhook-url"],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
             let (project_id, owner_actor_id) =
@@ -522,6 +516,23 @@ async fn main() -> anyhow::Result<()> {
             );
             return Ok(());
         }
+        Some("enrol-builtin-host") => {
+            // A1.17: a one-time code for the built-in host's own program,
+            // written to a file it reads on its first start. Earlier codes
+            // and the token before stop working.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["code-file"])?;
+            let path = std::path::PathBuf::from(required_option(&options, "code-file")?);
+            let code = agent_workspace_server::hosts::builtin::install::new_code(&pool)
+                .await
+                .context("write a code for the built-in host")?;
+            write_private_file(&path, &code)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "codeFile": path }))?
+            );
+            return Ok(());
+        }
         Some("migrate") => return Ok(()),
         Some(_) => bail!("unknown command"),
         None => {}
@@ -567,6 +578,27 @@ async fn main() -> anyhow::Result<()> {
             ),
             agent_workspace_server::setup::Prepared::Done
             | agent_workspace_server::setup::Prepared::Claimed => {}
+        }
+    }
+
+    // The built-in host as its own program (A1.17): until it has enrolled,
+    // a one-time code waits where it reads it. Only the file's path is
+    // logged.
+    if config.roles.work && !config.builtin_host {
+        use agent_workspace_server::hosts::builtin::install;
+        match install::prepare(&pool, &install::code_path(&config))
+            .await
+            .context("prepare the built-in host's enrolment")?
+        {
+            install::Prepared::Written(path) | install::Prepared::Waiting(path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "the built-in host program hasn't enrolled yet: start agent-workspace-host \
+                     with this data folder (or AGENT_WORKSPACE_HOST_CODE_PATH) and it reads its \
+                     code from this file"
+                );
+            }
+            install::Prepared::Enrolled => {}
         }
     }
 
