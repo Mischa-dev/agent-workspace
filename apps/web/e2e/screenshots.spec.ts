@@ -113,8 +113,8 @@ const keyPages: KeyPage[] = [
 
 // The theme each scheme should resolve to when the person picks "Match system".
 const schemes = [
-  { scheme: 'light', theme: 'daylight' },
-  { scheme: 'dark', theme: 'midnight' },
+  { scheme: 'light', theme: 'quiet' },
+  { scheme: 'dark', theme: 'quiet-dark' },
 ] as const
 
 test.use({ storageState: storageStatePath })
