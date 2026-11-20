@@ -1,10 +1,10 @@
 /**
  * The Appearance page's side of the color slots: each slot's group and
- * label, the contrast checks and theme codes. It loads with that page and the
+ * label, and the contrast checks. It loads with that page and the
  * design system page; slots.ts holds what the app shell needs to apply a
  * saved theme.
  */
-import { isThemePreset, sanitizeOverrides, toHex, type Rgb, type ThemePreset } from './slots'
+import { toHex, type Rgb } from './slots'
 
 /** [slot, label, shown in the main list] */
 export type SlotEntry = readonly [slot: string, label: string, main?: boolean]
@@ -136,35 +136,4 @@ export function fixContrast(foreground: Rgb, background: Rgb, floor: number): st
     color = foreground.map((value, index) => value + (target[index] - value) * step) as unknown as Rgb
   }
   return toHex(color)
-}
-
-function base64UrlEncode(text: string) {
-  return btoa(String.fromCharCode(...new TextEncoder().encode(text)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
-}
-
-function base64UrlDecode(text: string) {
-  const binary = atob(text.replace(/-/g, '+').replace(/_/g, '/'))
-  return new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)))
-}
-
-export function encodeTheme(preset: ThemePreset, overrides: Record<string, string>) {
-  return `AW1.${base64UrlEncode(JSON.stringify({ b: preset, o: sanitizeOverrides(overrides) }))}`
-}
-
-export class ThemeCodeError extends Error {}
-
-export function decodeTheme(code: string): { preset: ThemePreset; overrides: Record<string, string> } {
-  const match = /^AW1\.([A-Za-z0-9_-]+)$/.exec(code.trim())
-  if (!match) throw new ThemeCodeError('That isn’t a theme code. Theme codes start with AW1.')
-  let data: { b?: unknown; o?: unknown }
-  try {
-    data = JSON.parse(base64UrlDecode(match[1])) as { b?: unknown; o?: unknown }
-  } catch {
-    throw new ThemeCodeError('That theme code is damaged. Copy it again and paste the whole thing.')
-  }
-  if (!isThemePreset(data.b)) throw new ThemeCodeError('That theme code is for a preset this version doesn’t have.')
-  return { preset: data.b, overrides: sanitizeOverrides(data.o) }
 }

@@ -344,8 +344,8 @@ test('a form shared from the collection adds a record for someone who isn’t si
 })
 
 const schemes = [
-  { scheme: 'light', theme: 'daylight' },
-  { scheme: 'dark', theme: 'midnight' },
+  { scheme: 'light', theme: 'quiet' },
+  { scheme: 'dark', theme: 'quiet-dark' },
 ] as const
 const widths = [
   { name: 'desktop', width: 1440, height: 900 },

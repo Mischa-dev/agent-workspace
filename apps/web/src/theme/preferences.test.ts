@@ -8,7 +8,6 @@ import {
   resolvePreset,
   writeAppearancePreferences,
 } from './preferences'
-import { decodeTheme, encodeTheme } from './slotEditing'
 import { themeProperties } from './slots'
 
 function memoryStorage(initial: Record<string, string> = {}) {
@@ -29,7 +28,16 @@ describe('appearance preferences', () => {
         textSize: 'huge',
         overrides: { 'sidebar-bg': 'url(https://attacker.invalid)', accent: '#AABBCC', 'not-a-slot': '#000000' },
       }),
-    ).toEqual({ theme: 'system', density: 'comfortable', textSize: 'default', overrides: { accent: '#aabbcc' }, sidebarWidth: null, panelWidth: null })
+    ).toEqual({
+      theme: 'system',
+      customTheme: null,
+      mode: 'system',
+      density: 'comfortable',
+      textSize: 'default',
+      overrides: { accent: '#aabbcc' },
+      sidebarWidth: null,
+      panelWidth: null,
+    })
   })
 
   it('keeps dragged widths inside their limits and drops anything that is not a width', () => {
@@ -41,12 +49,23 @@ describe('appearance preferences', () => {
   it('stores one versioned presentation record and no application state', () => {
     const storage = memoryStorage()
     writeAppearancePreferences(
-      { theme: 'evergreen', density: 'compact', textSize: 'large', overrides: { accent: '#224466' }, sidebarWidth: 300, panelWidth: null },
+      {
+        theme: 'evergreen',
+        customTheme: { id: '0193f0a0-0000-7000-8000-000000000001', workspaceId: '0193f0a0-0000-7000-8000-000000000002' },
+        mode: 'dark',
+        density: 'compact',
+        textSize: 'large',
+        overrides: { accent: '#224466' },
+        sidebarWidth: 300,
+        panelWidth: null,
+      },
       storage,
     )
     expect([...storage.values.keys()]).toEqual([APPEARANCE_STORAGE_KEY])
     expect(readAppearancePreferences(storage)).toEqual({
       theme: 'evergreen',
+      customTheme: { id: '0193f0a0-0000-7000-8000-000000000001', workspaceId: '0193f0a0-0000-7000-8000-000000000002' },
+      mode: 'dark',
       density: 'compact',
       textSize: 'large',
       overrides: { accent: '#224466' },
@@ -68,14 +87,15 @@ describe('appearance preferences', () => {
     const light = memoryStorage({ 'agent-workspace:appearance:v1': '{"theme":"light"}' })
     expect(readAppearancePreferences(light)).toMatchObject({ theme: 'indigo' })
     expect(readAppearancePreferences({ getItem: () => { throw new Error('disabled') } })).toEqual(DEFAULT_APPEARANCE)
-    expect(resolvePreset('system', true)).toBe('midnight')
-    expect(resolvePreset('system', false)).toBe('daylight')
+    expect(resolvePreset('system', true)).toBe('quiet-dark')
+    expect(resolvePreset('system', false)).toBe('quiet')
   })
 
-  it('round-trips theme codes and derives follower slots from changed bases', () => {
-    const code = encodeTheme('graphite', { 'sidebar-bg': '#123456' })
-    expect(decodeTheme(code)).toEqual({ preset: 'graphite', overrides: { 'sidebar-bg': '#123456' } })
-    expect(() => decodeTheme('hello')).toThrow(/AW1/)
+  it('keeps only a well-formed custom theme choice', () => {
+    expect(normalizeAppearancePreferences({ customTheme: { id: 'x', workspaceId: 'y' }, mode: 'sepia' })).toMatchObject({ customTheme: null, mode: 'system' })
+  })
+
+  it('derives follower slots from changed bases', () => {
     const properties = themeProperties({ 'sidebar-bg': '#123456' })
     expect(properties['--sidebar-bg']).toBe('#123456')
     expect(properties['--sidebar-hover']).toContain('var(--sidebar-bg)')

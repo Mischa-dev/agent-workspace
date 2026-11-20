@@ -15,6 +15,7 @@ import { Button } from '../ui'
 
 // Loads after the page: it only keeps the account's saved theme in step.
 const AppearanceSync = lazy(() => import('../theme/AppearanceSync'))
+const CustomThemeSync = lazy(() => import('../theme/CustomThemeSync'))
 // Loads after the page too: it sends what was written offline once the connection is back.
 const Outbox = lazy(() => import('../app/Outbox'))
 // A run you asked for that finishes elsewhere says so.
@@ -94,6 +95,7 @@ export function SessionBoundary() {
         <Suspense fallback={null}>
           <DocumentTitle />
           <AppearanceSync />
+          <CustomThemeSync />
           <Outbox />
           <RunFinishedToasts />
         </Suspense>
