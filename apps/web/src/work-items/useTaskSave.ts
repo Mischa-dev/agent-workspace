@@ -305,6 +305,13 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     const requestId = entry.sent?.version === task.version ? entry.sent.requestId : newRequestId()
     change(id, { sent: { requestId, version: task.version } })
     const written = await callOp('task_update', input, { requestId })
+    // A suggestion leaves the task as it was, so a change to the same field
+    // queued behind this one starts from what the task holds, not from what
+    // was suggested.
+    const queued = entries.current.get(entry.field)
+    if (queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine) {
+      entries.current.set(entry.field, { ...queued, base: fieldValue(current(), entry.field) })
+    }
     change(id, null)
     if (written.proposalId) {
       showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
