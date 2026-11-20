@@ -1202,48 +1202,100 @@ fn content_key(organization_id: Uuid, sha256: &str) -> String {
     format!("{}/c-{sha256}", organization_id.simple())
 }
 
-/// Stores a [`ContentFile`] for `uploader` in `transaction`, after the
-/// workspace's room check. Nothing to take away if the transaction then
-/// fails: the bytes are named by content, so a later write reuses them.
-pub(crate) async fn store_content(
+/// A [`ContentFile`]'s bytes, written by [`stage_content`] before any
+/// transaction opens.
+pub(crate) struct StagedContent {
+    organization_id: Uuid,
+    sha256: String,
+    store_id: String,
+    key: String,
+}
+
+/// Writes the bytes of content files for a workspace to the file store
+/// before the write's transaction opens (no transaction is held across the
+/// store's network call), after the workspace's room check. Bytes a live
+/// row already holds aren't written again. Bytes no row then claims (the
+/// write was refused or didn't commit) stay noted as pending, and the
+/// sweep takes them away unless a row came to hold them.
+pub(crate) async fn stage_content(
     state: &AppState,
+    organization_id: Uuid,
+    bytes: &[u8],
+) -> Result<StagedContent, AppError> {
+    let sha256 = hex::encode(Sha256::digest(bytes));
+    let key = content_key(organization_id, &sha256);
+    let store = FileStore::from_config(&state.config);
+    let fresh = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let fresh = !content_stored(&mut transaction, store.id(), &key).await?;
+        if fresh {
+            hold_room(
+                state,
+                &mut transaction,
+                organization_id,
+                u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                0,
+            )
+            .await?;
+            // Noted before the write, so bytes nothing claims are found.
+            sqlx::query(
+                r#"
+                INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (storage_key) DO UPDATE SET started_at = now()
+                "#,
+            )
+            .bind(&key)
+            .bind(organization_id)
+            .bind(store.id())
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        fresh
+    };
+    if fresh {
+        store.put(&key, bytes).await?;
+    }
+    Ok(StagedContent {
+        organization_id,
+        sha256,
+        store_id: store.id().to_owned(),
+        key,
+    })
+}
+
+/// Records a [`ContentFile`] for `uploader` in `transaction`, over the
+/// bytes [`stage_content`] wrote for its workspace. No network call here.
+pub(crate) async fn store_content(
     transaction: &mut Transaction<'_, Postgres>,
     uploader: Uuid,
     file: ContentFile<'_>,
+    staged: &StagedContent,
 ) -> Result<FileRow, AppError> {
-    let organization_id = organization_of(&mut **transaction, file.project_id).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("files-quota:{organization_id}"))
-        .execute(&mut **transaction)
-        .await?;
-    let sha256 = hex::encode(Sha256::digest(file.bytes));
-    let key = content_key(organization_id, &sha256);
-    let store = FileStore::from_config(&state.config);
-    if !content_stored(transaction, store.id(), &key).await? {
-        require_room(
-            state,
-            transaction,
-            organization_id,
-            u64::try_from(file.bytes.len()).unwrap_or(u64::MAX),
-            0,
-        )
-        .await?;
-        store.put(&key, file.bytes).await?;
+    if organization_of(&mut **transaction, file.project_id).await? != staged.organization_id {
+        return Err(AppError::NotFound("thing"));
     }
-    insert_content_row(
+    let row = insert_content_row(
         transaction,
-        organization_id,
+        staged.organization_id,
         uploader,
         &file,
-        &sha256,
-        (store.id(), &key),
+        &staged.sha256,
+        (&staged.store_id, &staged.key),
         None,
     )
     .await?
     .ok_or(AppError::Conflict(
         "file",
         "That file was added a moment ago.",
-    ))
+    ))?;
+    sqlx::query("DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2")
+        .bind(&staged.store_id)
+        .bind(&staged.key)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(row)
 }
 
 /// Whether a live row already holds bytes under `key`.
@@ -1874,8 +1926,34 @@ async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Resu
     .bind(CLEANUP_BATCH)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let keys = due.iter().map(String::as_str).collect::<Vec<_>>();
-    let before = keys.len();
+    // A content file's bytes may be noted by a write that didn't commit
+    // and held by a row another write made: those stay, and only the note
+    // goes.
+    let held = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT DISTINCT storage_key FROM files
+        WHERE store_id = $1 AND storage_key = ANY($2) AND blob_deleted_at IS NULL
+        "#,
+    )
+    .bind(store.id())
+    .bind(&due)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    if !held.is_empty() {
+        sqlx::query(
+            "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = ANY($2)",
+        )
+        .bind(store.id())
+        .bind(&held)
+        .execute(crate::db::scoped(&state.pool))
+        .await?;
+    }
+    let keys = due
+        .iter()
+        .filter(|key| !held.contains(key))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let before = due.len();
     drop_objects(state, store, &keys).await;
     Ok(u64::try_from(before).unwrap_or(0))
 }

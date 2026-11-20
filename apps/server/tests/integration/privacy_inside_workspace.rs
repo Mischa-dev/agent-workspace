@@ -2768,6 +2768,13 @@ async fn a_shared_page_opens_only_itself() {
         pages.push(page["id"].as_str().expect("page").to_owned());
     }
     let (plan, salaries) = (&pages[0], &pages[1]);
+    // Salaries sits inside Plan: sharing Plan doesn't tell its title.
+    sqlx::query("UPDATE project_pages SET parent_page_id = $1::uuid WHERE id = $2::uuid")
+        .bind(plan)
+        .bind(salaries)
+        .execute(world.pool())
+        .await
+        .expect("nest salaries");
     let read = |browser: &Browser, uri: String| browser.request("GET", &uri, None, Value::Null);
     let op = |browser: &Browser, name: &str, key: &str, body: Value| {
         browser.request(
@@ -2827,6 +2834,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["title"], "Plan");
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a shared page names no page inside it: {page}"
+    );
     for uri in [
         format!("/api/v1/pages/{salaries}"),
         format!("/api/v1/projects/{secret}/pages"),
@@ -2864,6 +2875,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["id"], plan.as_str());
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a linked page names no page inside it: {page}"
+    );
     let (status, _) = send(
         &world.app,
         read(&mara.browser, format!("/api/v1/pages/{salaries}")),

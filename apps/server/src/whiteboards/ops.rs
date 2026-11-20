@@ -120,6 +120,12 @@ impl Operation for WhiteboardUpdateElements {
         let caller = whiteboard_commands::caller_of(call.ctx);
         let access_caller = call.ctx.caller.clone();
         let state = call.state;
+        // Images' bytes go to the file store before the transaction opens.
+        // A proposal keeps none; bytes it staged are swept unless a board
+        // comes to hold them.
+        let staged =
+            whiteboard_commands::stage_images(state, call.ctx.workspace_id, &input.operations)
+                .await?;
         let tx = call.tx().await?;
         let (board, mode) = board_for_writing(tx, &caller, &access_caller, id).await?;
         // The message it's made from, only one the caller reads in the
@@ -168,8 +174,7 @@ impl Operation for WhiteboardUpdateElements {
                 proposal_id: proposal_id.map(|proposal| proposal.to_string()),
             });
         }
-        let operations =
-            whiteboard_commands::store_images(state, tx, &caller, id, &input.operations).await?;
+        let operations = whiteboard_commands::attach_images(staged, tx, &caller, id).await?;
         let outcome = edit::apply(
             tx,
             &caller,

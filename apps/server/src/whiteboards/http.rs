@@ -522,16 +522,27 @@ async fn put_file_http(
         return Err(AppError::Validation("mimeType"));
     }
     let data = store::decode_data_url(&upload.data_url, &upload.mime_type)?;
+    // Only for a board the caller may edit, the bytes go to the file store
+    // before the write's transaction opens; it checks again.
+    let workspace = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        access(&mut transaction, &caller, id, true).await?;
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM whiteboards WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await?
+    };
+    let staged = crate::files::stage_content(&state, workspace, &data).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     access(&mut transaction, &caller, id, true).await?;
     let stored = store::put_file(
-        &state,
         &mut transaction,
         &caller,
         id,
         &upload.id,
         &upload.mime_type,
         &data,
+        &staged,
     )
     .await?;
     transaction.commit().await?;

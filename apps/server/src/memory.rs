@@ -471,8 +471,9 @@ pub async fn get_page(
     .bind(viewer)
     .fetch_all(crate::db::scoped(pool))
     .await?;
-    // Pages share their space's access until per-page sharing (C1.27), so
-    // the ancestors and children are the reader's to see.
+    // The pages around it, only those the reader reads themselves: someone
+    // a page was shared with by link reads that page, not its space, and a
+    // conversation's memory pages are for its readers.
     page.ancestors = sqlx::query_as::<_, PageCrumb>(
         r#"
         WITH RECURSIVE up(id, parent, depth) AS (
@@ -484,18 +485,25 @@ pub async fn get_page(
         )
         SELECT page.id, page.title FROM up JOIN project_pages page ON page.id = up.id
         WHERE up.depth > 0 AND page.archived_at IS NULL
+          AND space_readable_by(page.project_id, $3)
+          AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $3))
         ORDER BY up.depth DESC
         "#,
     )
     .bind(page_id)
     .bind(MAX_PAGE_DEPTH)
+    .bind(viewer)
     .fetch_all(crate::db::scoped(pool))
     .await?;
     page.children = sqlx::query_as::<_, PageCrumb>(
-        "SELECT id, title FROM project_pages \
-         WHERE parent_page_id = $1 AND archived_at IS NULL ORDER BY position, title, id",
+        "SELECT id, title FROM project_pages page \
+         WHERE parent_page_id = $1 AND archived_at IS NULL \
+           AND space_readable_by(page.project_id, $2) \
+           AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $2)) \
+         ORDER BY position, title, id",
     )
     .bind(page_id)
+    .bind(viewer)
     .fetch_all(crate::db::scoped(pool))
     .await?;
     Ok(Some(page))

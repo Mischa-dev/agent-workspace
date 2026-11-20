@@ -63,16 +63,29 @@ pub(crate) fn edit_error(error: EditError) -> OpError {
     }
 }
 
-/// The images an edit carries, stored on the board as the web stores a
-/// dropped image, with the operations pointing at them.
-pub(crate) async fn store_images(
+/// The images an edit carries, their bytes written for `workspace` before
+/// the edit's transaction opens; `StagedImages::attach` keeps them on the
+/// board inside it.
+pub(crate) async fn stage_images(
     state: &crate::AppState,
+    workspace: Uuid,
+    operations: &[Operation],
+) -> Result<whiteboard_tools::StagedImages, OpError> {
+    whiteboard_tools::stage_images(state, workspace, operations)
+        .await
+        .map_err(edit_error)
+}
+
+/// Keeps staged images on the board, in the edit's transaction, with the
+/// operations pointing at them.
+pub(crate) async fn attach_images(
+    staged: whiteboard_tools::StagedImages,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
-    operations: &[Operation],
 ) -> Result<Vec<Operation>, OpError> {
-    whiteboard_tools::store_images(state, transaction, caller, whiteboard_id, operations)
+    staged
+        .attach(transaction, caller, whiteboard_id)
         .await
         .map_err(edit_error)
 }

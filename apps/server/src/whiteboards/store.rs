@@ -835,14 +835,14 @@ pub fn allowed_mime(mime_type: &str) -> bool {
 /// Stores an image for a board the caller may edit, as a file of the board
 /// in the file store (C1.29). Excalidraw names files by content, so a
 /// second upload of the same id changes nothing.
-pub async fn put_file(
-    state: &AppState,
+pub(crate) async fn put_file(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
     file_id: &str,
     mime_type: &str,
     data: &[u8],
+    staged: &files::StagedContent,
 ) -> Result<bool, AppError> {
     if !elements::valid_id(file_id) {
         return Err(AppError::Validation("id"));
@@ -871,7 +871,6 @@ pub async fn put_file(
     }
     let name = format!("{file_id}.{}", extension(mime_type));
     files::store_content(
-        state,
         transaction,
         caller.actor_id,
         files::ContentFile {
@@ -884,6 +883,7 @@ pub async fn put_file(
             content_type: mime_type,
             bytes: data,
         },
+        staged,
     )
     .await?;
     sqlx::query("UPDATE whiteboards SET file_bytes = file_bytes + $2 WHERE id = $1")
