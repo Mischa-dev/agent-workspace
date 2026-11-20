@@ -224,13 +224,13 @@ impl Operation for GuardWrite {
                         .map(|guard| guard.operations.clone())
                         .unwrap_or_default(),
                 };
-                if let Some(unknown) = operations
-                    .iter()
-                    .find(|name| crate::ops::registry().get(name).is_none())
-                {
+                if let Some(unknown) = operations.iter().find(|name| {
+                    crate::ops::registry().get(name).is_none() && !crate::mcp::has_tool(name)
+                }) {
                     return Err(OpError::Invalid {
                         field: "operations".into(),
-                        message: format!("There's no operation called {unknown}.").into(),
+                        message: format!("There's no operation or agent tool called {unknown}.")
+                            .into(),
                     });
                 }
                 let target_kinds = match input.target_kinds {

@@ -12,6 +12,7 @@
 
 pub mod catalogue;
 pub mod connections;
+pub mod consent;
 pub mod cursor;
 pub mod envelope;
 pub mod http;

@@ -76,6 +76,11 @@
   },
   {
     "kind": "change",
+    "name": "app_consent_set",
+    "title": "Let an app hear a conversation"
+  },
+  {
+    "kind": "change",
     "name": "app_limit_set",
     "title": "Set app limit"
   },
@@ -98,6 +103,11 @@
     "kind": "change",
     "name": "automation_update",
     "title": "Update automation"
+  },
+  {
+    "kind": "change",
+    "name": "budget_set",
+    "title": "Set a budget"
   },
   {
     "kind": "create",

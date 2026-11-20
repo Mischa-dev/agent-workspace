@@ -71,6 +71,17 @@ export async function callOp<N extends OpName>(
   }
 }
 
+/**
+ * The review request a team's guard holds a write under, when it does
+ * (A2.27): the write didn't happen yet. Once a reviewer allows it, the same
+ * call made again goes through.
+ */
+export function heldForReview(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const held = value as { status?: unknown; requestId?: unknown }
+  return held.status === 'pending_review' && typeof held.requestId === 'string' ? held.requestId : null
+}
+
 /** The query key of an operation's answer: workspace, name, input. */
 export function opKey<N extends OpName>(name: N, input: OpInput<N>, workspaceId?: string): QueryKey {
   return ['op', workspaceId ?? null, name, input]

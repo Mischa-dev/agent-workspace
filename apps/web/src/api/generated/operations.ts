@@ -58,6 +58,14 @@ export type BlockedProjection = { blockedAt: string; blockedByActorId: string; r
 
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
+export type BudgetMeter = { id: string; name: string; unit: string }
+
+export type BudgetPeriod = "minute" | "hour" | "day" | "month"
+
+export type BudgetScope = "workspace" | "account" | "space" | "conversation"
+
+export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
+
 export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; on: boolean; parts: number; spaceId?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
@@ -584,7 +592,15 @@ export type ScheduledLine = { conversationId: string; failure?: string | null; i
 
 export type Scope = "workspace" | "project" | "user"
 
+export type ScopeAccount = { accountId: string; displayName?: string | null }
+
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; members: ScopeMember[]; name?: string | null; workspaceId: string }
+
+export type ScopeMember = { accountId: string; displayName?: string | null; you: boolean }
+
 export type ScopePermissions = { forApps: string[]; permissions: string[]; role: string; roleId?: string | null; roleName: string }
+
+export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
 
 export type ScopeView = { approved: boolean; known: boolean; label: string; required: boolean; scope: string; why: string }
 
@@ -852,6 +868,10 @@ export type AgentResumeInput = { account: string; everywhere?: boolean; reason?:
 
 export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
+export type AgentScopeGetInput = { account: string }
+
+export type AgentScopeGetOutput = { accountId: string; alsoInOtherWorkspaces: boolean; connections: number; displayName?: string | null; follows: number; handle?: string | null; managers: ScopeAccount[]; privateConversations: ScopeConversation[]; readsWithConsent: boolean; spaces: ScopeSpace[]; workspaceRole: string }
+
 export type AgentTemplateListInput = { spaceId?: string | null }
 
 export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
@@ -859,6 +879,10 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AppConsentSetInput = { app: string; conversation: string; granted?: boolean | null }
+
+export type AppConsentSetOutput = { appAccountId: string; changed: boolean; conversationId: string; granted: boolean }
 
 export type AppLimitSetInput = { account?: string | null; lift?: boolean; permissions?: string[] | null }
 
@@ -891,6 +915,14 @@ export type AutomationUpdateOutput = unknown
 export type BriefingGetInput = { projectId?: string | null }
 
 export type BriefingGetOutput = { claims?: TaskLine[]; mentions: Mention[]; nextSteps: string; notifications: NotificationLine[]; replyRequests?: InboxItem[]; tasks: TaskLine[]; threadUpdates: ThreadUpdate[]; unread: ConversationSummary[]; you: You }
+
+export type BudgetListInput = { account?: string | null }
+
+export type BudgetListOutput = { budgets: BudgetView[]; meters: BudgetMeter[] }
+
+export type BudgetSetInput = { eachAccount?: boolean; expectedVersion?: number | null; hardLimit?: number | null; meter: string; period: BudgetPeriod; scope: BudgetScope; scopeId?: string | null; softLimit?: number | null }
+
+export type BudgetSetOutput = { budget?: BudgetView | null }
 
 export type BugReportLinkCreateInput = { collection?: string | null; delete?: boolean | null; form?: FormWrite | null; linkId?: string | null; name?: string | null; projectId: string; replace?: boolean | null; state?: string | null }
 
@@ -2471,8 +2503,10 @@ export type Operations = {
   agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
+  agent_scope_get: { input: AgentScopeGetInput; output: AgentScopeGetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  app_consent_set: { input: AppConsentSetInput; output: AppConsentSetOutput }
   app_limit_set: { input: AppLimitSetInput; output: AppLimitSetOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
@@ -2481,6 +2515,8 @@ export type Operations = {
   automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
   automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }
+  budget_list: { input: BudgetListInput; output: BudgetListOutput }
+  budget_set: { input: BudgetSetInput; output: BudgetSetOutput }
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }

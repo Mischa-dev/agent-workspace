@@ -5089,11 +5089,25 @@ async fn following_and_ambient_mode_keep_to_what_the_caller_may_see() {
             "conversation_agent_settings_set",
             json!({ "conversation": channel, "account": rook, "ambient": true }),
         ),
+        // A2.15: only the DM's participants say which apps hear it.
+        (
+            lena,
+            "app_consent_set",
+            json!({ "conversation": dm, "app": rook }),
+        ),
         // A2.27: guards are set by those who manage the workspace's settings.
         (
             lena,
             "guard_set",
             json!({ "name": "Mine", "action": "deny", "accounts": [rook] }),
+        ),
+        // A2.14: budgets are set by those who manage the workspace's
+        // settings; a DM someone isn't in isn't one they can budget.
+        (
+            lena,
+            "budget_set",
+            json!({ "scope": "account", "scopeId": rook, "meter": "messages",
+                    "period": "day", "hardLimit": 1 }),
         ),
         // A2.16: a viewer doesn't write a channel's memory.
         (
@@ -5242,6 +5256,23 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .await;
     assert_ne!(edited["outcome"], "ok", "{edited}");
     assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor a file on it, even by its id.
+    let file = upload(
+        &world.app,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=plan.txt"),
+        "text/plain",
+        format!("Plan: {word}").into_bytes(),
+    )
+    .await;
+    for path in [
+        format!("/api/v1/files/{file}"),
+        format!("/api/v1/files/{file}/content"),
+    ] {
+        let (status, read) = send(&world.app, lena.request("GET", &path, None, Value::Null)).await;
+        assert!(!status.is_success(), "{path}: {status} {read}");
+        assert!(!read.to_string().contains(&word), "{path}: {read}");
+    }
     // Nor list it among the space's Pages records, by any view of them.
     let (_, records) = world.agents["rook"]
         .call(

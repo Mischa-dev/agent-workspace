@@ -139,6 +139,23 @@ pub async fn ensure_actor(connection: &mut PgConnection, actor: Uuid) -> Result<
     Ok(())
 }
 
+/// Who acted in event `event`, if `recipient` may be told of it: `None`
+/// when it isn't one they may hear (or doesn't exist), `Some(None)` when
+/// it names no actor.
+pub async fn heard_actor(
+    connection: &mut PgConnection,
+    recipient: Uuid,
+    event: Uuid,
+) -> Result<Option<Option<Uuid>>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT e.actor_account_id FROM events e WHERE e.id = $1 AND delivery_visible($2, e)",
+    )
+    .bind(event)
+    .bind(recipient)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
 /// Who may hear an event (ruling R8). Exactly one per event; the log's
 /// columns follow from it, and K5 routes live updates on them with no query.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

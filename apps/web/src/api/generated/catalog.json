@@ -345,6 +345,20 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "agents",
+    "name": "agent_scope_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "What an agent can reach"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
     "kind": "query",
     "long": false,
     "module": "agents",
@@ -367,6 +381,22 @@
     "preview": false,
     "proposable": false,
     "title": "List usage by agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "app_consent_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Let an app hear a conversation"
   },
   {
     "automation": true,
@@ -489,6 +519,36 @@
     "preview": false,
     "proposable": false,
     "title": "Briefing"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "budget_list",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Budgets"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "budgets.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "budget_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a budget"
   },
   {
     "automation": true,

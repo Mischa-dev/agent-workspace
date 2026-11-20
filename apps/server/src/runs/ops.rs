@@ -577,6 +577,16 @@ async fn open_with(
         )));
     }
 
+    // A2.14: a run isn't started once its account's budget on what runs
+    // cost is used up.
+    Box::pin(crate::budgets::admit_run(
+        transaction,
+        input.space_id,
+        conversation_id,
+        account_id,
+    ))
+    .await?;
+
     let run_id = Uuid::now_v7();
     let working = input.initial == RunState::Working;
     let run = sqlx::query_as::<_, RunRow>(&format!(
@@ -1349,6 +1359,23 @@ pub async fn record_usage(
             "That report is still being recorded. Try again in a moment.".to_owned(),
         ));
     }
+    // A2.14: counted against the account's budgets on what runs cost.
+    Box::pin(crate::budgets::record_run_usage(
+        transaction,
+        crate::budgets::RunUsage {
+            workspace: workspace_id,
+            space: run
+                .as_ref()
+                .and_then(|run| run.space_id)
+                .or(input.window.map(|_| input.space_id)),
+            conversation: run.as_ref().and_then(|run| run.conversation_id),
+            account: account_id,
+            report: report_id,
+            tokens: input.input_tokens.saturating_add(input.output_tokens),
+            cost: input.cost,
+        },
+    ))
+    .await?;
     if let Some(run) = run {
         super::usage::add_reported(transaction, &run, &model, &input, currency.as_deref()).await?;
         sqlx::query("UPDATE usage_reports SET attributed_at = now() WHERE id = $1")

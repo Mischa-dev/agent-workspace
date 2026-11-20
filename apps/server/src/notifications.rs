@@ -2268,6 +2268,23 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 (format!("Suggested edits to {page}"), None)
             }
         }
+        // A2.14: its words come from the budget's numbers (rule 10).
+        kind::BUDGET_WARNING => (
+            "A budget you set is nearly used".to_owned(),
+            match (
+                row.detail.get("used").and_then(serde_json::Value::as_i64),
+                row.detail.get("limit").and_then(serde_json::Value::as_i64),
+                row.detail
+                    .get("meter")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::metering::find_meter),
+            ) {
+                (Some(used), Some(limit), Some(meter)) => {
+                    Some(format!("{used} of {limit} for {}.", meter.name))
+                }
+                _ => None,
+            },
+        ),
         // Its words come from the limit it hit, not stored text (rule 10).
         kind::FORM_PAUSED => (
             "A form you made paused itself".to_owned(),

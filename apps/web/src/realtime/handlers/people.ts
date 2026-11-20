@@ -100,6 +100,8 @@ export const peopleHandlers: Record<string, Handler> = {
   'follows.changed': ownList('follow_list'),
   // A team's guards changed (A2.27): the lists of them read again.
   'guards.changed': ownList('guard_list'),
+  // A workspace's budgets changed (A2.14): the lists of them read again.
+  'budgets.changed': ownList('budget_list'),
   'dm_rules.changed': dmRulesChanged,
   'account.profile_changed': profileChanged,
   'account.status.changed': statusChanged,

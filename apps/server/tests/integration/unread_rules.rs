@@ -394,6 +394,7 @@ async fn unread_follows_the_rules() {
     assert_eq!(hers["unreadMessages"], 1, "{hers}");
 
     // A DM shows its number: 3 after 3 messages, and never more than 99.
+    crate::support::db::lift_message_rate(pool, &dm).await;
     for index in 0..3 {
         post(&lena.browser, &dm, format!("unread-dm-{index}"), "Ping").await;
     }
