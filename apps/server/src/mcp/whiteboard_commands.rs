@@ -79,13 +79,14 @@ pub(crate) async fn stage_images(
 /// Keeps staged images on the board, in the edit's transaction, with the
 /// operations pointing at them.
 pub(crate) async fn attach_images(
+    state: &crate::AppState,
     staged: whiteboard_tools::StagedImages,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
 ) -> Result<Vec<Operation>, OpError> {
     staged
-        .attach(transaction, caller, whiteboard_id)
+        .attach(state, transaction, caller, whiteboard_id)
         .await
         .map_err(edit_error)
 }

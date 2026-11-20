@@ -174,7 +174,7 @@ impl Operation for WhiteboardUpdateElements {
                 proposal_id: proposal_id.map(|proposal| proposal.to_string()),
             });
         }
-        let operations = whiteboard_commands::attach_images(staged, tx, &caller, id).await?;
+        let operations = whiteboard_commands::attach_images(state, staged, tx, &caller, id).await?;
         let outcome = edit::apply(
             tx,
             &caller,

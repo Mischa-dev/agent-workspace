@@ -536,6 +536,7 @@ async fn put_file_http(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     access(&mut transaction, &caller, id, true).await?;
     let stored = store::put_file(
+        &state,
         &mut transaction,
         &caller,
         id,

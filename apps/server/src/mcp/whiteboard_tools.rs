@@ -710,7 +710,7 @@ pub(super) async fn whiteboard_create(
         }
         let edit = match staged {
             Some(staged) => {
-                let operations = staged.attach(&mut transaction, &caller, id).await?;
+                let operations = staged.attach(state, &mut transaction, &caller, id).await?;
                 Some(edit::apply(&mut transaction, &caller, id, &operations, None, false).await?)
             }
             None => None,
@@ -819,12 +819,14 @@ impl StagedImages {
     /// must already be there. The operations to apply.
     pub(crate) async fn attach(
         self,
+        state: &AppState,
         transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         caller: &whiteboards::Caller,
         whiteboard_id: Uuid,
     ) -> Result<Vec<Operation>, EditError> {
         for (file_id, mime_type, bytes, staged) in &self.images {
             store::put_file(
+                state,
                 transaction,
                 caller,
                 whiteboard_id,

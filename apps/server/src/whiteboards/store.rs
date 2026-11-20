@@ -835,7 +835,9 @@ pub fn allowed_mime(mime_type: &str) -> bool {
 /// Stores an image for a board the caller may edit, as a file of the board
 /// in the file store (C1.29). Excalidraw names files by content, so a
 /// second upload of the same id changes nothing.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn put_file(
+    state: &AppState,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
@@ -871,6 +873,7 @@ pub(crate) async fn put_file(
     }
     let name = format!("{file_id}.{}", extension(mime_type));
     files::store_content(
+        state,
         transaction,
         caller.actor_id,
         files::ContentFile {

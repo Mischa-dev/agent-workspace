@@ -1225,32 +1225,33 @@ pub(crate) async fn stage_content(
     let sha256 = hex::encode(Sha256::digest(bytes));
     let key = content_key(organization_id, &sha256);
     let store = FileStore::from_config(&state.config);
+    // Under the workspace's files lock, which cleanup takes too: the bytes
+    // are pinned by a pending note whether they're written now or a row
+    // already holds them, and cleanup leaves pinned bytes alone until the
+    // row that claims them is in.
     let fresh = {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let fresh = !content_stored(&mut transaction, store.id(), &key).await?;
-        if fresh {
-            hold_room(
-                state,
-                &mut transaction,
-                organization_id,
-                u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                0,
-            )
-            .await?;
-            // Noted before the write, so bytes nothing claims are found.
-            sqlx::query(
-                r#"
-                INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (storage_key) DO UPDATE SET started_at = now()
-                "#,
-            )
-            .bind(&key)
-            .bind(organization_id)
-            .bind(store.id())
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{organization_id}"))
             .execute(&mut *transaction)
             .await?;
+        let fresh = !content_stored(&mut transaction, store.id(), &key).await?;
+        if fresh {
+            require_room(state, &mut transaction, organization_id, size, 0).await?;
         }
+        sqlx::query(
+            r#"
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (storage_key) DO UPDATE SET started_at = now()
+            "#,
+        )
+        .bind(&key)
+        .bind(organization_id)
+        .bind(store.id())
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
         fresh
     };
@@ -1266,8 +1267,10 @@ pub(crate) async fn stage_content(
 }
 
 /// Records a [`ContentFile`] for `uploader` in `transaction`, over the
-/// bytes [`stage_content`] wrote for its workspace. No network call here.
+/// bytes [`stage_content`] wrote or pinned for its workspace. No network
+/// call here.
 pub(crate) async fn store_content(
+    state: &AppState,
     transaction: &mut Transaction<'_, Postgres>,
     uploader: Uuid,
     file: ContentFile<'_>,
@@ -1275,6 +1278,16 @@ pub(crate) async fn store_content(
 ) -> Result<FileRow, AppError> {
     if organization_of(&mut **transaction, file.project_id).await? != staged.organization_id {
         return Err(AppError::NotFound("thing"));
+    }
+    // The room check again, under the lock, now the bytes count: staged
+    // uploads side by side each passed theirs before any row was in.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{}", staged.organization_id))
+        .execute(&mut **transaction)
+        .await?;
+    if !content_stored(transaction, &staged.store_id, &staged.key).await? {
+        let size = u64::try_from(file.bytes.len()).unwrap_or(u64::MAX);
+        require_room(state, transaction, staged.organization_id, size, size).await?;
     }
     let row = insert_content_row(
         transaction,
@@ -1827,7 +1840,8 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     let mut deleted = 0;
     for (id, organization_id, key, thumbnail_key, store_id) in removed {
         // Bytes named by content can be another file's too (a duplicated
-        // board's images): they stay while any other row still holds them.
+        // board's images): they stay while any other row still holds them,
+        // or an upload staging the same content has pinned them.
         // The check, the delete and the mark happen under the lock
         // `store_content` takes, so an upload of the same content either
         // finds this row live and is counted as sharing it, or comes after
@@ -1843,6 +1857,9 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
                 SELECT 1 FROM files
                 WHERE store_id = $3 AND storage_key = $1 AND id <> $2
                   AND blob_deleted_at IS NULL
+            ) OR EXISTS (
+                SELECT 1 FROM file_objects_pending
+                WHERE store_id = $3 AND storage_key = $1
             )
             "#,
         )
@@ -1913,9 +1930,9 @@ pub(crate) async fn sweep_pending_objects(
 }
 
 async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Result<u64, AppError> {
-    let due = sqlx::query_scalar::<_, String>(
+    let due = sqlx::query_as::<_, (String, Uuid)>(
         r#"
-        SELECT storage_key FROM file_objects_pending
+        SELECT storage_key, workspace_id FROM file_objects_pending
         WHERE store_id = $1 AND started_at < now() - make_interval(mins => $2)
         ORDER BY started_at
         LIMIT $3
@@ -1926,36 +1943,45 @@ async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Resu
     .bind(CLEANUP_BATCH)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    // A content file's bytes may be noted by a write that didn't commit
-    // and held by a row another write made: those stay, and only the note
-    // goes.
-    let held = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT DISTINCT storage_key FROM files
-        WHERE store_id = $1 AND storage_key = ANY($2) AND blob_deleted_at IS NULL
-        "#,
-    )
-    .bind(store.id())
-    .bind(&due)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
-    if !held.is_empty() {
-        sqlx::query(
-            "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = ANY($2)",
+    let (content, own): (Vec<_>, Vec<_>) = due
+        .iter()
+        .partition(|(key, workspace)| is_content_key(*workspace, key));
+    // An upload's own key is never written again: its bytes just go.
+    let keys = own.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>();
+    drop_objects(state, store, &keys).await;
+    // Bytes named by content may be held by a row another write made, or
+    // pinned again by an upload staging the same content: one at a time,
+    // under the workspace's files lock that staging and cleanup take, the
+    // note goes and the bytes go only if nothing holds or pins them since.
+    for (key, workspace) in content {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{workspace}"))
+            .execute(&mut *transaction)
+            .await?;
+        let still_due = sqlx::query_scalar::<_, bool>(
+            "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
+               AND started_at < now() - make_interval(mins => $3) RETURNING true",
         )
         .bind(store.id())
-        .bind(&held)
-        .execute(crate::db::scoped(&state.pool))
-        .await?;
+        .bind(key)
+        .bind(PENDING_OBJECT_MINUTES)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        if still_due && !content_stored(&mut transaction, store.id(), key).await? {
+            // A delete that fails leaves bytes nothing names: harmless, and
+            // the next write of the same content reuses the key.
+            let _ = store.delete(key).await;
+        }
+        transaction.commit().await?;
     }
-    let keys = due
-        .iter()
-        .filter(|key| !held.contains(key))
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let before = due.len();
-    drop_objects(state, store, &keys).await;
-    Ok(u64::try_from(before).unwrap_or(0))
+    Ok(u64::try_from(due.len()).unwrap_or(0))
+}
+
+/// Whether `key` names content of `workspace` ([`content_key`]).
+fn is_content_key(workspace: Uuid, key: &str) -> bool {
+    key.starts_with(&format!("{}/c-", workspace.simple()))
 }
 
 #[cfg(test)]
