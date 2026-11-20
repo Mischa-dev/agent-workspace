@@ -488,7 +488,7 @@ async fn lock_workspace_links(
     project_id: Uuid,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('work_item_links:' || organization_id::text, 0)) FROM projects WHERE id = $1",
+        "SELECT pg_advisory_xact_lock(hashtextextended('task_links:' || organization_id::text, 0)) FROM projects WHERE id = $1",
     )
     .bind(project_id)
     .execute(&mut **transaction)

@@ -49,7 +49,7 @@ pub(crate) struct ThreadSpec {
     /// Return the open thread already started from the origin message
     /// instead of making a second one.
     pub reuse_for_origin: bool,
-    /// Link the new thread to this task (`work_item_conversation_links`).
+    /// Link the new thread to this task (an `about` link in the link store).
     pub link_task: Option<Uuid>,
     /// Extra audit metadata (a reply request, a launch). Ids only.
     pub audit: serde_json::Value,
@@ -353,18 +353,24 @@ pub(crate) async fn create(
     )
     .await?;
     if let Some(work_item_id) = spec.link_task {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_conversation_links (
-                project_id, work_item_id, conversation_id, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4)
-            "#,
+        // A thread is linked to a task of its own project.
+        let in_space = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM work_items WHERE id = $1 AND project_id = $2)",
         )
-        .bind(parent.project_id)
         .bind(work_item_id)
-        .bind(thread_id)
-        .bind(creator.actor_id)
-        .execute(&mut **transaction)
+        .bind(parent.project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if !in_space {
+            return Err(AppError::NotFound("task"));
+        }
+        crate::links::put_checked(
+            transaction,
+            work_item_id,
+            thread_id,
+            "about",
+            Some(creator.actor_id),
+        )
         .await?;
     }
     enqueue_event(

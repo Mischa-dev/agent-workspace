@@ -780,6 +780,7 @@ async fn files_move_between_stores_and_resume() {
         to: "object".to_owned(),
         workspace: None,
         after: None,
+        pass: 0,
     };
     let first = files::migrate::move_batch(&state, &payload)
         .await
@@ -814,16 +815,19 @@ async fn files_move_between_stores_and_resume() {
         }
     }
     assert_eq!(batches, 3);
-    // Let go, it moves on the next pass; the rest are already there.
+    // The walk ended with a file held, so another pass comes, even once
+    // the file is let go before the walk's end is looked at.
     sqlx::query("UPDATE files SET move_lease = NULL, move_lease_until = NULL WHERE id = $1")
         .bind(held)
         .execute(&setup.pool)
         .await
         .expect("let go");
-    let mut again = files::migrate::MovePayload {
-        after: None,
-        ..payload.clone()
-    };
+    let mut again = files::migrate::next_pass(&state, &payload)
+        .await
+        .expect("next pass")
+        .expect("a pass for the file left behind");
+    assert_eq!((again.after, again.pass), (None, 1));
+    // It moves on that pass; the rest are already there.
     let mut moved_again = 0;
     loop {
         let moved = files::migrate::move_batch(&state, &again)
@@ -836,6 +840,13 @@ async fn files_move_between_stores_and_resume() {
         }
     }
     assert_eq!(moved_again, 1);
+    assert!(
+        files::migrate::next_pass(&state, &again)
+            .await
+            .expect("after the pass")
+            .is_none(),
+        "everything moved, no further pass"
+    );
     let stores: Vec<(String, String, Option<String>)> =
         sqlx::query_as("SELECT storage_key, store_id, moved_from_store_id FROM files ORDER BY id")
             .fetch_all(&setup.pool)
@@ -1362,6 +1373,7 @@ async fn a_workspace_bucket_takes_new_uploads() {
             to: store_id.clone(),
             workspace: Some(setup.organization_id),
             after: None,
+            pass: 0,
         },
     )
     .await

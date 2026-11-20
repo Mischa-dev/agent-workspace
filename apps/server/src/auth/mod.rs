@@ -374,6 +374,12 @@ pub(crate) async fn establish_session_in_transaction(
         && !existing_token.is_empty()
         && existing_token.len() <= MAX_COOKIE_VALUE_BYTES
     {
+        // A sign-in arrives anonymous, where the revoke's trigger could
+        // find no workspace of the cookie's account to stage its
+        // `session.revoked` signal in; server-wide for this one statement,
+        // keyed by the cookie's own digest, it does.
+        let connection: &mut sqlx::PgConnection = transaction;
+        let own_scope = crate::tenancy::widen_to_system(&mut *connection, "auth.rotate").await?;
         rotated_from_session_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             UPDATE sessions
@@ -383,8 +389,9 @@ pub(crate) async fn establish_session_in_transaction(
             "#,
         )
         .bind(hash_secret(&existing_token).to_vec())
-        .fetch_optional(&mut **transaction)
+        .fetch_optional(&mut *connection)
         .await?;
+        crate::tenancy::restore(&mut *connection, &own_scope).await?;
     }
     sqlx::query(
         r#"
