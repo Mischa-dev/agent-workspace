@@ -245,7 +245,7 @@ fn the_harness_hears_what_was_answered() {
 
 /// A1.17: a built-in run's tokens go through the host protocol like any
 /// host's, so they count against budgets, and the workspace's catalog
-/// prices them when the harness gives no cost. A retry adds nothing.
+/// prices every report, even one with its own cost. A retry adds nothing.
 #[tokio::test]
 async fn built_in_tokens_are_reported_priced_and_counted_once() {
     let Some((setup, seed, _temporary)) = seeded("a1_builtin_tokens").await else {
@@ -287,6 +287,16 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .usage("turn-1", &tokens)
         .await
         .expect("reported again");
+    // A later report that brings its own cost is priced too, so the
+    // estimate the totals show covers every token of the model.
+    let with_cost = agent_workspace_builtin_host::runtime::report::Usage {
+        cost_usd: Some(0.5),
+        ..tokens
+    };
+    reports
+        .usage("turn-2", &with_cost)
+        .await
+        .expect("reported with a cost");
 
     let (input, output, estimated, currency) =
         sqlx::query_as::<_, (i64, i64, Option<f64>, Option<String>)>(
@@ -296,10 +306,10 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
         .fetch_one(pool)
         .await
         .expect("the run's usage");
-    assert_eq!((input, output), (1_000_000, 100_000));
-    // 1M input at 2.00 and 100k output at 10.00 a million.
+    assert_eq!((input, output), (2_000_000, 200_000));
+    // Twice 1M input at 2.00 and 100k output at 10.00 a million.
     assert!(
-        estimated.is_some_and(|cost| (cost - 3.0).abs() < 1e-9),
+        estimated.is_some_and(|cost| (cost - 6.0).abs() < 1e-9),
         "{estimated:?}"
     );
     assert_eq!(currency.as_deref(), Some("USD"));
@@ -310,5 +320,5 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
     .fetch_one(pool)
     .await
     .expect("the budget meter");
-    assert_eq!(counted, Some(1_100_000));
+    assert_eq!(counted, Some(2_200_000));
 }

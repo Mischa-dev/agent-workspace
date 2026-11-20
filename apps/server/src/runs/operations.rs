@@ -869,9 +869,11 @@ impl Operation for RunUsageReport {
         }
         let reporter = reporter(call);
         // A built-in run's harness rarely knows its cost: the workspace's
-        // catalog prices it, as the catalog page shows them.
+        // catalog prices it, as the catalog page shows them. Every report is
+        // priced, even one that brought its own cost, so the estimate covers
+        // all of a model's tokens (totals prefer it over a reported cost).
         let estimate = match run_id {
-            Some(run_id) if input.cost.is_none() => crate::run_log::builtin_estimate(
+            Some(run_id) => crate::run_log::builtin_estimate(
                 call.state,
                 run_id,
                 &input.model,
