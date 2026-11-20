@@ -142,7 +142,7 @@ export const createRule = async (projectId: string, draft: RuleDraft) =>
   (await callOp('automation_create', { projectId, ...asInput(draft) } as OpInput<'automation_create'>)) as AutomationRule
 
 export const updateRule = async (projectId: string, rule: Pick<AutomationRule, 'id' | 'version'>, change: Partial<RuleDraft>) =>
-  (await callOp('automation_update', { projectId, ruleId: rule.id, expectedVersion: rule.version, ...asInput(change) })) as AutomationRule
+  (await callOp('automation_update', { projectId, ruleId: rule.id, expectedVersion: rule.version, ...asInput(change) } as OpInput<'automation_update'>)) as AutomationRule
 
 export const deleteRule = async (projectId: string, ruleId: string) => {
   await callOp('automation_delete', { projectId, ruleId })
