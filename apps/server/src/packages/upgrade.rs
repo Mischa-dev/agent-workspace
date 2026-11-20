@@ -1145,18 +1145,6 @@ async fn take_new(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_major_version_is_its_first_number() {
-        assert_eq!(major("1.2.0"), "1");
-        assert_ne!(major("1.9.0"), major("2.0.0"));
-        assert_eq!(major("3"), "3");
-    }
-}
-
 /// Gives an installed custom role the name its new version has, so the
 /// install's roles step finds it by that name. A built-in role keeps its
 /// name; another role already called that is a conflict to sort out first.
@@ -1208,4 +1196,16 @@ async fn rename_role(
         .await
         .map_err(|error| OpError::logged("package_upgrade", &error.into()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_major_version_is_its_first_number() {
+        assert_eq!(major("1.2.0"), "1");
+        assert_ne!(major("1.9.0"), major("2.0.0"));
+        assert_eq!(major("3"), "3");
+    }
 }
