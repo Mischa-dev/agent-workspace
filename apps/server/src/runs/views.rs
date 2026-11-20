@@ -115,7 +115,7 @@ const SUMMARY_SELECT: &str = r#"
     LEFT JOIN github_pull_requests pull_request
       ON pull_request.id = pull_request_request.github_pull_request_id
     LEFT JOIN LATERAL (
-        SELECT link.work_item_id FROM work_item_conversation_links link
+        SELECT link.work_item_id FROM task_threads link
         WHERE link.project_id = project.id AND link.conversation_id = run.conversation_id
         ORDER BY link.created_at, link.work_item_id
         LIMIT 1

@@ -26,8 +26,12 @@ const WINDOW: Duration = Duration::from_secs(20);
 const STATISTICS_LAG: Duration = Duration::from_secs(65);
 /// How often the other connections' statements are sampled in a window.
 const SAMPLE: Duration = Duration::from_millis(100);
-/// The workspaces added for the second count.
-const WORKSPACES: i64 = 10_000;
+/// The workspaces added for the second count: enough that a query per
+/// workspace, even once in a window, is more scans than the margin allows
+/// (one window reads about 3,500), and few enough that making them leaves
+/// the test well inside CI's ten minutes on a slow runner. Ten thousand
+/// took from five to over ten minutes there, most of it making them.
+const WORKSPACES: i64 = 5_000;
 
 /// Transactions finished and rows read in the test database so far.
 async fn counts(pool: &PgPool) -> (i64, i64) {
@@ -295,19 +299,23 @@ async fn vacuum(pool: &PgPool) {
 }
 
 #[tokio::test]
-async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
+async fn thousands_of_quiet_workspaces_cost_what_one_does() {
     let Some(cluster) = cluster("h1_42_idle_cost", 1).await else {
         return;
     };
     let pool = &cluster.pool;
+    let began = std::time::Instant::now();
+    let phase = |name: &str| eprintln!("idle_cost: {name} at {}s", began.elapsed().as_secs());
     // Both windows run on analyzed tables, so a poll is planned the same
     // way in each: an unanalyzed table plans some polls as several index
     // scans where an analyzed one takes one, or the other way.
     vacuum(pool).await;
     settle(pool).await;
+    phase("settled");
     let one = idle(pool).await;
+    phase("first window counted");
 
-    // Ten thousand empty workspaces, made in one batch as
+    // Thousands of empty workspaces, made in one batch as
     // `lifecycle::create` makes one: the row, its owner and its plan. (Most
     // of this test's time is here, in the triggers that give each its
     // workspace space and roles.)
@@ -342,11 +350,13 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     .await
     .expect("plans");
     transaction.commit().await.expect("commit");
+    phase("workspaces made");
     sqlx::query("ANALYZE organizations, organization_memberships, workspace_plans")
         .execute(pool)
         .await
         .expect("analyze");
     settle(pool).await;
+    phase("workspaces settled");
     // What autovacuum does on a server in time: every table that making the
     // workspaces wrote to is vacuumed and analyzed once. Stale statistics
     // would plan the idle polls by position as scans of the whole table,
@@ -354,7 +364,9 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     // table, which is the batch insert's cost, not idle work.
     vacuum(pool).await;
     settle(pool).await;
+    phase("vacuumed and settled");
     let many = idle(pool).await;
+    phase("second window counted");
 
     eprintln!(
         "idle over {}s: one workspace {} scans reading {} rows ({} transactions, {} rows \

@@ -338,9 +338,8 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .expect("insert repository precedence Work Item");
     transaction.commit().await.expect("commit");
     sqlx::query(
-        "INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id) SELECT task.workspace_id, task.id, $2, 'about', 'explicit', $3 FROM things task WHERE task.id = $1",
     )
-    .bind(seed.project_id)
     .bind(linked_work_item_id)
     .bind(linked_thread_id)
     .bind(seed.human_actor_id)

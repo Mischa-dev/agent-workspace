@@ -1319,7 +1319,7 @@ pub async fn presence(
               AND conversation_visible_to(ranked.conversation_id, $2)
         ) visible ON true
         LEFT JOIN LATERAL (
-            SELECT link.work_item_id FROM work_item_conversation_links link
+            SELECT link.work_item_id FROM task_threads link
             WHERE link.project_id = $1 AND link.conversation_id = visible.conversation_id
             ORDER BY link.created_at, link.work_item_id LIMIT 1
         ) task_link ON true

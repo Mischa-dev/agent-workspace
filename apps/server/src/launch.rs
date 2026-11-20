@@ -236,7 +236,7 @@ pub(crate) async fn task_fields(
     let pages = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT page.id, page.title
-        FROM work_item_links link
+        FROM task_links link
         JOIN project_pages page
           ON page.id = link.target_id AND page.project_id = link.project_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
@@ -1808,7 +1808,7 @@ async fn reusable_thread(
     Ok(sqlx::query_scalar::<_, Uuid>(&format!(
         r#"
         SELECT conversation.id
-        FROM work_item_conversation_links link
+        FROM task_threads link
         JOIN conversations conversation
           ON conversation.project_id = link.project_id
          AND conversation.id = link.conversation_id
@@ -1872,7 +1872,7 @@ async fn task_thread(
         FROM conversations channel
         LEFT JOIN LATERAL (
             SELECT max(link.created_at) AS linked_at
-            FROM work_item_conversation_links link
+            FROM task_threads link
             JOIN conversations thread
               ON thread.id = link.conversation_id AND thread.parent_channel_id = channel.id
             WHERE link.project_id = $1 AND link.work_item_id = $2
@@ -3152,7 +3152,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         VALUES (
             $1, $2, $3, $4, $5, $6, 'tag', $7, $8, 'now',
             (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
-            (SELECT link.work_item_id FROM work_item_conversation_links link
+            (SELECT link.work_item_id FROM task_threads link
              WHERE link.project_id = $3 AND link.conversation_id = $4
              ORDER BY link.created_at LIMIT 1),
             $9, $10, $11

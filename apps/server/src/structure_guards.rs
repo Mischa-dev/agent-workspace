@@ -1293,7 +1293,7 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
             1
         );
         assert_eq!(
-            task_core_updates(&literal("UPDATE work_item_links SET kind = $2")),
+            task_core_updates(&literal("UPDATE work_item_labels SET kind = $2")),
             0
         );
         assert_eq!(

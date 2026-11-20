@@ -151,7 +151,7 @@ const SUMMARY_SELECT: &str = r#"
            (SELECT editor.kind FROM actors editor WHERE editor.id = board.updated_by_actor_id)
              AS updated_by_kind,
            board.deleted_at IS NOT NULL AS deleted,
-           (SELECT count(*) FROM whiteboard_links link WHERE link.whiteboard_id = board.id)
+           (SELECT count(*) FROM board_links link WHERE link.whiteboard_id = board.id)
              AS link_count,
            board.is_template
     FROM whiteboards board
@@ -856,33 +856,17 @@ pub async fn set_link(
         return Err(AppError::NotFound("link target"));
     }
     let changed = if linked {
-        sqlx::query(
-            r#"
-            INSERT INTO whiteboard_links (
-                whiteboard_id, target_kind, target_id, target_project_id, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT DO NOTHING
-            "#,
+        crate::links::put_checked(
+            transaction,
+            whiteboard_id,
+            target_id,
+            "about",
+            Some(caller.actor_id),
         )
-        .bind(whiteboard_id)
-        .bind(kind.as_str())
-        .bind(target_id)
-        .bind(project_id)
-        .bind(caller.actor_id)
-        .execute(&mut **transaction)
         .await?
-        .rows_affected()
     } else {
-        sqlx::query(
-            "DELETE FROM whiteboard_links WHERE whiteboard_id = $1 AND target_kind = $2 AND target_id = $3",
-        )
-        .bind(whiteboard_id)
-        .bind(kind.as_str())
-        .bind(target_id)
-        .execute(&mut **transaction)
-        .await?
-        .rows_affected()
-    } > 0;
+        crate::links::drop_explicit(transaction, whiteboard_id, target_id, "about", false).await?
+    };
     if changed {
         audit(
             transaction,
@@ -943,7 +927,7 @@ pub async fn links(
                CASE WHEN link.target_kind = 'work_item' AND item.id IS NOT NULL
                  THEN project.project_key || '-' || item.number::text END AS key,
                '' AS url
-        FROM whiteboard_links link
+        FROM board_links link
         JOIN projects project ON project.id = link.target_project_id AND project.archived_at IS NULL
         LEFT JOIN task_rows item ON link.target_kind = 'work_item' AND item.id = link.target_id
         LEFT JOIN project_pages page ON link.target_kind = 'page' AND page.id = link.target_id
@@ -1016,7 +1000,7 @@ pub async fn linked_to(
     }
     Ok(sqlx::query_as::<_, BoardSummary>(&format!(
         r#"{SUMMARY_SELECT}
-        JOIN whiteboard_links target_link
+        JOIN board_links target_link
           ON target_link.whiteboard_id = board.id
          AND target_link.target_kind = $3 AND target_link.target_id = $4
         WHERE whiteboard_visible_to(board.id, $1)

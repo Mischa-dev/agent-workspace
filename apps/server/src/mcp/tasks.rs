@@ -2004,9 +2004,7 @@ pub(crate) async fn task_open(
                    CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
                    COALESCE(conversation.thread_outcome, '') AS text
             FROM (
-                SELECT conversation_id AS id FROM work_item_conversation_links WHERE work_item_id = $1
-                UNION
-                SELECT target_id FROM work_item_links
+                SELECT target_id AS id FROM task_links
                 WHERE work_item_id = $1 AND target_kind = 'conversation'
             ) linked
             JOIN conversations conversation ON conversation.id = linked.id
@@ -2030,7 +2028,7 @@ pub(crate) async fn task_open(
                    CASE WHEN message.removed_at IS NOT NULL THEN 'Message removed'
                         ELSE left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400)
                    END AS text
-            FROM work_item_links link
+            FROM task_links link
             LEFT JOIN project_pages page
               ON link.target_kind = 'page' AND page.id = link.target_id AND page.archived_at IS NULL
              AND page.project_id = link.project_id
@@ -3170,8 +3168,8 @@ pub(crate) struct LinkValue {
 /// What a task_link call points at, found in the task's own project.
 #[derive(Clone, Debug)]
 enum LinkTarget {
-    /// A conversation, message, page or decision (work_item_links), or a
-    /// thread in the task's project (work_item_conversation_links).
+    /// A conversation, message, page or decision, or a thread in the
+    /// task's project (both in the link store).
     Record {
         kind: &'static str,
         id: Uuid,
@@ -3583,15 +3581,6 @@ async fn task_link_inner(
             let version = if thread {
                 // Threads in the task's own project use the link the web app
                 // shows, with the same version bump, activity and audit.
-                if request.remove {
-                    sqlx::query(
-                        "DELETE FROM work_item_links WHERE work_item_id = $1 AND target_kind = 'conversation' AND target_id = $2",
-                    )
-                    .bind(task_id)
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
-                }
                 match change_thread_link(
                     &mut transaction,
                     &actor,
@@ -3710,14 +3699,13 @@ async fn change_record_link(
     target_id: Uuid,
     link: bool,
 ) -> Result<Option<i64>, AppError> {
-    let linked = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM work_item_links WHERE work_item_id = $1 AND target_kind = $2 AND target_id = $3)",
-    )
-    .bind(current.id)
-    .bind(kind)
-    .bind(target_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    // In the link store a task is made from a message, and about the rest.
+    let link_kind = if kind == "message" {
+        "made_from"
+    } else {
+        "about"
+    };
+    let linked = crate::links::has_explicit(transaction, current.id, target_id, link_kind).await?;
     if linked == link {
         return Ok(Some(current.version));
     }
@@ -3725,28 +3713,16 @@ async fn change_record_link(
         return Ok(None);
     }
     if link {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
-            VALUES ($1, $2, $3, $4, $5)
-            "#,
+        crate::links::put_checked(
+            transaction,
+            current.id,
+            target_id,
+            link_kind,
+            Some(actor.actor_id),
         )
-        .bind(current.id)
-        .bind(actor.project_id)
-        .bind(kind)
-        .bind(target_id)
-        .bind(actor.actor_id)
-        .execute(&mut **transaction)
         .await?;
     } else {
-        sqlx::query(
-            "DELETE FROM work_item_links WHERE work_item_id = $1 AND target_kind = $2 AND target_id = $3",
-        )
-        .bind(current.id)
-        .bind(kind)
-        .bind(target_id)
-        .execute(&mut **transaction)
-        .await?;
+        crate::links::drop_explicit(transaction, current.id, target_id, link_kind, false).await?;
     }
     let version =
         advance_version(transaction, actor.project_id, current.id, current.version).await?;
