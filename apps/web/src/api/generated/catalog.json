@@ -429,6 +429,20 @@
     "title": "List automations"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "automation_preview",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Preview automation"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -2134,7 +2148,7 @@
     "title": "Unbind an agent from a host"
   },
   {
-    "automation": true,
+    "automation": false,
     "destructive": false,
     "emits": [
       "host.enrolment_created"

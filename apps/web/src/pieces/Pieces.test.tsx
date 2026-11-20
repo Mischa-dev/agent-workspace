@@ -74,7 +74,7 @@ describe('pieces the app draws', () => {
         />
       </MemoryRouter>,
     )
-    const [first, second] = container.querySelectorAll('.aw-piece__row')
+    const [first, second] = container.querySelectorAll('.aw-list-piece__row')
     expect(first.querySelector('.aw-chip--agent')?.textContent).toBe('Guide')
     expect(first.querySelector('.aw-chip--warning')?.textContent).toBe('Not updated in months')
     expect(first.textContent).toContain('Edited')
@@ -122,7 +122,7 @@ describe('pieces the app draws', () => {
         />
       </MemoryRouter>,
     )
-    const [first, second] = container.querySelectorAll('.aw-piece__row')
+    const [first, second] = container.querySelectorAll('.aw-list-piece__row')
     // Each row can be linked to by its id.
     expect(first.id).toBe('decision-d1')
     expect(first.querySelector('.aw-chip')?.textContent).toBe('Replaced')

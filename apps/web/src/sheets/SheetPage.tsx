@@ -42,6 +42,7 @@ import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './shee
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
 import { bounds, cards, cellKey, cellMap, cellName, columnName, columnNumber, extent, patched, viewRows, type Selection } from './sheetModel'
 import { spaceHref } from '../app/href'
+import { useWatchDocument } from '../realtime/realtimeContext'
 
 type Dialogs =
   | { kind: 'details' }
@@ -78,6 +79,8 @@ const FILLS: [string, string][] = [
 export function SheetPage() {
   const { projectId = '', sheetId = '' } = useParams()
   const project = useProject(projectId)
+  // In the sheet's live room while it is open (W1.6).
+  useWatchDocument(sheetId ? { kind: 'sheet', id: sheetId } : null)
   useShellPage({ project: project.data })
   if (project.isPending) {
     return (

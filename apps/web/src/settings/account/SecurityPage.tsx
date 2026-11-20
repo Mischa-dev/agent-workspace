@@ -26,6 +26,7 @@ import {
 } from '../../ui'
 import { actionPhrase, actionSentence } from '../auditActions'
 import type { SettingsPageProps } from '../types'
+import { OfflineSection } from './OfflineSection'
 import {
   accountKeys,
   changePassword,
@@ -64,7 +65,7 @@ export default function SecurityPage({ session }: SettingsPageProps) {
   return (
     <>
       <PageHeader icon="shield-check" title="Security">
-        Your password, where you’re signed in, and two-factor authentication.
+        Your password, where you’re signed in, two-factor authentication, and reading offline.
       </PageHeader>
       {security.isPending ? (
         <SettingsSkeleton label="Loading security settings" sections={3} />
@@ -75,6 +76,7 @@ export default function SecurityPage({ session }: SettingsPageProps) {
           <PasswordSection hasPassword={security.data.hasPassword} />
           <TwoFactorSection loginName={session.user.loginName} security={security.data} />
           <SessionsSection />
+          <OfflineSection />
           <ActivitySection events={security.data.recentEvents} />
         </>
       )}

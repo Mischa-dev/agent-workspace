@@ -2095,6 +2095,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "ai_suggestions_list",
     "automation_history",
     "automation_list",
+    "automation_preview",
     "incoming_hook_list",
     "briefing_get",
     "bug_report_link_list",
@@ -2638,6 +2639,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("bug_report_link_list"),
         case(
             "automation_history",
+            vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
+            vec![
+                json!({"projectId": b.project, "ruleId": b.rule.to_string()}),
+                json!({"projectId": a.project, "ruleId": b.rule.to_string()}),
+            ],
+            vec![],
+        ),
+        // W1.42: trying B's rule shows nothing of it in A.
+        case(
+            "automation_preview",
             vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
             vec![
                 json!({"projectId": b.project, "ruleId": b.rule.to_string()}),

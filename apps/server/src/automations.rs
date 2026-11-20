@@ -702,7 +702,7 @@ fn check_shape(
             Action::RunOperation { operation, input } => {
                 let offered = crate::ops::registry()
                     .get(operation)
-                    .is_some_and(|entry| entry.meta.automation);
+                    .is_some_and(|entry| entry.meta.runs_in_rules());
                 if !offered {
                     return Err(AppError::Validation("actions.operation"));
                 }
@@ -1716,6 +1716,144 @@ pub(crate) async fn run_now(
     transaction.commit().await?;
     fire(state, run_id).await?;
     run_view(&state.pool, run_id).await
+}
+
+/// What trying a rule would do, worked out without doing any of it.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviewView {
+    /// Why nothing would happen, when nothing would (the maker can't see
+    /// the task, say).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+    /// How many tasks the actions would work on: the task tried, or for
+    /// schedules and capacity windows the tasks matching the conditions.
+    pub tasks: usize,
+    /// One entry per action, in order.
+    pub actions: Vec<PreviewStep>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviewStep {
+    /// The action's kind, such as set_field or run_operation.
+    pub kind: String,
+    /// What it would do, in a sentence.
+    pub summary: String,
+    /// The action as it would run, with {{variables}} filled in.
+    pub action: Value,
+}
+
+/// Works out what a rule would do if it fired now (on one task, if given):
+/// the tasks it would act on and each action with its text filled in. It
+/// sends, changes and records nothing, and it reads only what the rule's
+/// maker can see, so only the maker may try it, as with [`run_now`].
+pub(crate) async fn preview(
+    state: &AppState,
+    caller: &Caller,
+    project_id: Uuid,
+    rule_id: Uuid,
+    request: RunNow,
+) -> Result<PreviewView, AppError> {
+    let (can_edit, _) = reader_access(&state.pool, caller, project_id).await?;
+    let rule = fetch(&state.pool, project_id, rule_id).await?;
+    if !can_edit || rule.owner_actor_id != caller.actor_id {
+        return Err(AppError::Forbidden);
+    }
+    if let Some(work_item_id) = request.work_item_id {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM work_items WHERE project_id = $1 AND id = $2)",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
+        if !found {
+            return Err(AppError::NotFound("work item"));
+        }
+    }
+    let skipped = |reason: &str| PreviewView {
+        skipped: Some(reason.to_owned()),
+        tasks: 0,
+        actions: Vec::new(),
+    };
+    let (Ok(trigger), Ok(actions)) = (rule.trigger(), rule.actions()) else {
+        return Ok(skipped("It can't be read."));
+    };
+    if !rule.enabled {
+        return Ok(skipped("The rule is off."));
+    }
+    if let Some(module) = module_off(&state.pool, &rule).await? {
+        return Ok(skipped(&format!(
+            "{} is turned off in this workspace.",
+            module.name
+        )));
+    }
+    if let Err(reason) = acting_access(&state.pool, &rule).await? {
+        return Ok(skipped(&reason));
+    }
+    let subject = Subject {
+        work_item_id: request.work_item_id,
+        ..Subject::default()
+    };
+    let Some(context) = Context::load(state, &rule, &subject, "Tried by hand").await? else {
+        return Ok(skipped("Whoever made it can't see what this is about."));
+    };
+    let tasks = match target_tasks(&state.pool, &rule, &trigger, &context, MAX_TARGET_TASKS).await?
+    {
+        Ok(tasks) => tasks.len(),
+        Err(reason) => return Ok(skipped(&reason)),
+    };
+    let on_tasks = |verb: &str| match tasks {
+        0 => format!("{verb}, but no task matches now"),
+        1 => format!("{verb} on 1 task"),
+        many => format!("{verb} on {many} tasks"),
+    };
+    let steps = actions
+        .iter()
+        .map(|action| {
+            let filled = render_input(
+                &context,
+                &serde_json::to_value(action).unwrap_or(Value::Null),
+            );
+            let text = |key: &str| {
+                filled
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let summary = match action {
+                Action::Launch { .. } => on_tasks("Launch an agent"),
+                Action::SetField { field, .. } => on_tasks(&format!(
+                    "Set {} to \"{}\"",
+                    field.replace('_', " "),
+                    text("value")
+                )),
+                Action::Notify { recipients, .. } => {
+                    let who = match recipients {
+                        Recipients::Owner => "you",
+                        Recipients::Assignee => "the task's assignee",
+                        Recipients::ProjectAdmins => "the space's owners and admins",
+                    };
+                    format!("Notify {who}: \"{}\"", text("message"))
+                }
+                Action::PostMessage { .. } => format!("Post \"{}\"", text("text")),
+                Action::RunOperation { operation, .. } => format!("Run {operation}"),
+                Action::AskAgent { .. } => format!("Ask: \"{}\"", text("prompt")),
+            };
+            PreviewStep {
+                kind: action.kind().to_owned(),
+                summary,
+                action: filled,
+            }
+        })
+        .collect();
+    Ok(PreviewView {
+        skipped: None,
+        tasks,
+        actions: steps,
+    })
 }
 
 pub(crate) async fn runs(

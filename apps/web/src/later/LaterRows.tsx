@@ -1,6 +1,5 @@
-import { Link } from 'react-router-dom'
-
 import { Icon, IconButton, Menu, StatusChip, formatFullDate, plainPreview, type IconName, type MenuEntry } from '../ui'
+import { ListPiece, ListPieceTitle } from '../pieces/ListPiece'
 import type { SavedItem, ScheduledMessage } from './api'
 import { describeWhen, whenChoices } from './when'
 
@@ -35,77 +34,93 @@ function freshChoice(id: string) {
   return whenChoices(new Date()).find((choice) => choice.id === id)?.at ?? null
 }
 
-/** One saved message, task or reminder, with its reminder and Done. */
-export function SavedRow({
-  busy,
-  item,
+/** Saved messages, tasks and reminders, each with its reminder and Done. */
+export function SavedList({
+  busyId,
+  items,
+  label,
   now,
   onDone,
   onRemind,
   onRemindCustom,
   onRemove,
 }: {
-  busy: boolean
-  item: SavedItem
+  busyId: string | null
+  items: readonly SavedItem[]
+  label: string
   now: Date
-  onDone: (done: boolean) => void
-  onRemind: (at: Date | null) => void
-  onRemindCustom: () => void
-  onRemove: () => void
+  onDone: (item: SavedItem, done: boolean) => void
+  onRemind: (item: SavedItem, at: Date | null) => void
+  onRemindCustom: (item: SavedItem) => void
+  onRemove: (item: SavedItem) => void
 }) {
-  const title = savedTitle(item)
-  const due = item.remindAt && !item.done && new Date(item.remindAt).getTime() <= now.getTime()
-  const note = item.kind !== 'reminder' ? plainPreview(item.note, 160) : ''
-  const remindItems: MenuEntry[] = [
-    { heading: 'Remind me' },
-    ...whenChoices(now).map((choice) => ({
-      label: choice.label,
-      icon: 'clock' as const,
-      onSelect: () => onRemind(freshChoice(choice.id) ?? choice.at),
-    })),
-    { label: 'Custom time…', icon: 'clock' as const, onSelect: onRemindCustom },
-    ...(item.remindAt ? [{ separator: true as const }, { label: 'No reminder', icon: 'x' as const, onSelect: () => onRemind(null) }] : []),
-  ]
   return (
-    <li className={`aw-later__row${item.done ? ' is-done' : ''}`}>
-      <span className="aw-later__icon">
-        <Icon name={KIND_ICON[item.kind]} size={16} />
-      </span>
-      <div className="aw-later__text">
-        {/* A reminder lives here; it has nowhere else to open. */}
-        {item.kind === 'reminder' ? (
-          <span className="aw-later__title">{title}</span>
-        ) : (
-          <Link className="aw-later__title" to={item.href}>
-            {title}
-          </Link>
-        )}
-        <span className="aw-later__meta">
-          {savedMeta(item)}
-          {note ? <span className="aw-later__note"> · {note}</span> : null}
-        </span>
-      </div>
-      <div className="aw-later__end">
-        {item.remindAt && !item.done ? (
+    <ListPiece
+      actions={(item) => {
+        const busy = busyId === item.id
+        const remindItems: MenuEntry[] = [
+          { heading: 'Remind me' },
+          ...whenChoices(now).map((choice) => ({
+            label: choice.label,
+            icon: 'clock' as const,
+            onSelect: () => onRemind(item, freshChoice(choice.id) ?? choice.at),
+          })),
+          { label: 'Custom time…', icon: 'clock' as const, onSelect: () => onRemindCustom(item) },
+          ...(item.remindAt ? [{ separator: true as const }, { label: 'No reminder', icon: 'x' as const, onSelect: () => onRemind(item, null) }] : []),
+        ]
+        return (
+          <>
+            {item.done ? null : (
+              <Menu
+                items={remindItems}
+                label={`Remind me: ${savedTitle(item)}`}
+                placement="bottom-end"
+                trigger={<IconButton disabled={busy} icon="clock" label="Remind me" size="sm" />}
+              />
+            )}
+            <IconButton
+              disabled={busy}
+              icon={item.done ? 'undo' : 'check'}
+              label={item.done ? 'Move back to Saved' : 'Mark done'}
+              onClick={() => onDone(item, !item.done)}
+              size="sm"
+            />
+            <IconButton disabled={busy} icon="trash" label="Remove from Later" onClick={() => onRemove(item)} size="sm" />
+          </>
+        )
+      }}
+      aside={(item) => {
+        if (!item.remindAt || item.done) return null
+        const due = new Date(item.remindAt).getTime() <= now.getTime()
+        return (
           <span title={formatFullDate(item.remindAt)}>
             <StatusChip icon="clock" tone={due ? 'warning' : 'muted'}>
               {due ? `Due · ${describeWhen(item.remindAt, now)}` : describeWhen(item.remindAt, now)}
             </StatusChip>
           </span>
-        ) : null}
-        {item.done ? null : (
-          <Menu items={remindItems} label={`Remind me: ${title}`} placement="bottom-end" trigger={<IconButton disabled={busy} icon="clock" label="Remind me" size="sm" />} />
-        )}
-        <IconButton
-          disabled={busy}
-          icon={item.done ? 'undo' : 'check'}
-          label={item.done ? 'Move back to Saved' : 'Mark done'}
-          onClick={() => onDone(!item.done)}
-          size="sm"
-        />
-        <IconButton disabled={busy} icon="trash" label="Remove from Later" onClick={onRemove} size="sm" />
-      </div>
-    </li>
+        )
+      }}
+      isDone={(item) => item.done}
+      itemKey={(item) => item.id}
+      items={items}
+      label={label}
+      leading={(item) => (
+        <span className="aw-later__icon">
+          <Icon name={KIND_ICON[item.kind]} size={16} />
+        </span>
+      )}
+      meta={(item) => {
+        const note = item.kind !== 'reminder' ? plainPreview(item.note, 160) : ''
+        return (
+          <>
+            {savedMeta(item)}
+            {note ? <span className="aw-later__note"> · {note}</span> : null}
+          </>
+        )
+      }}
+      // A reminder lives here; it has nowhere else to open.
+      title={(item) => <ListPieceTitle to={item.kind === 'reminder' ? undefined : item.href}>{savedTitle(item)}</ListPieceTitle>}
+    />
   )
 }
 
@@ -114,10 +129,10 @@ function plainOnly(item: ScheduledMessage) {
   return Array.isArray(item.content?.nodes) && item.content.nodes.every((node) => node.type === 'text')
 }
 
-/** One message you scheduled: when it sends, and Send now, Change time, Edit and Cancel. */
-export function ScheduledRow({
-  busy,
-  item,
+/** Messages you scheduled: when each sends, and Send now, Change time, Edit and Cancel. */
+export function ScheduledList({
+  busyId,
+  items,
   now,
   onCancel,
   onCopy,
@@ -125,54 +140,73 @@ export function ScheduledRow({
   onReschedule,
   onSendNow,
 }: {
-  busy: boolean
-  item: ScheduledMessage
+  busyId: string | null
+  items: readonly ScheduledMessage[]
   now: Date
-  onCancel: () => void
-  onCopy: () => void
-  onEdit: () => void
-  onReschedule: () => void
-  onSendNow: () => void
+  onCancel: (item: ScheduledMessage) => void
+  onCopy: (item: ScheduledMessage) => void
+  onEdit: (item: ScheduledMessage) => void
+  onReschedule: (item: ScheduledMessage) => void
+  onSendNow: (item: ScheduledMessage) => void
 }) {
-  const waiting = item.status === 'scheduled'
-  // A failed message keeps every way to rescue its text; throwing it away asks first.
-  const menu: MenuEntry[] = [
-    { label: 'Change time…', icon: 'clock', onSelect: onReschedule },
-    ...(plainOnly(item) ? [{ label: 'Edit text…', icon: 'pencil' as const, onSelect: onEdit }] : []),
-    { label: 'Copy text', icon: 'copy', onSelect: onCopy },
-    { separator: true },
-    waiting
-      ? { label: 'Cancel message…', icon: 'x', danger: true, onSelect: onCancel }
-      : { label: 'Discard message…', icon: 'trash', danger: true, onSelect: onCancel },
-  ]
   return (
-    <li className="aw-later__row">
-      <span className={`aw-later__icon${waiting ? '' : ' is-failed'}`}>
-        <Icon name={waiting ? 'clock' : 'circle-alert'} size={16} />
-      </span>
-      <div className="aw-later__text">
-        <Link className="aw-later__title" to={item.href}>
-          {plainPreview(item.plainText, 200) || 'A message'}
-        </Link>
-        <span className="aw-later__meta">
+    <ListPiece
+      actions={(item) => {
+        const waiting = item.status === 'scheduled'
+        const busy = busyId === item.id
+        // A failed message keeps every way to rescue its text; throwing it away asks first.
+        const menu: MenuEntry[] = [
+          { label: 'Change time…', icon: 'clock', onSelect: () => onReschedule(item) },
+          ...(plainOnly(item) ? [{ label: 'Edit text…', icon: 'pencil' as const, onSelect: () => onEdit(item) }] : []),
+          { label: 'Copy text', icon: 'copy', onSelect: () => onCopy(item) },
+          { separator: true },
+          waiting
+            ? { label: 'Cancel message…', icon: 'x', danger: true, onSelect: () => onCancel(item) }
+            : { label: 'Discard message…', icon: 'trash', danger: true, onSelect: () => onCancel(item) },
+        ]
+        return (
+          <>
+            <IconButton
+              disabled={busy}
+              icon={waiting ? 'send' : 'retry'}
+              label={waiting ? 'Send now' : 'Try sending again'}
+              onClick={() => onSendNow(item)}
+              size="sm"
+            />
+            <Menu
+              items={menu}
+              label={`Scheduled message to ${item.place}`}
+              placement="bottom-end"
+              trigger={<IconButton disabled={busy} icon="more" label="More" size="sm" />}
+            />
+          </>
+        )
+      }}
+      aside={(item) => {
+        const waiting = item.status === 'scheduled'
+        return (
+          <span title={formatFullDate(item.sendAt)}>
+            <StatusChip icon={waiting ? 'clock' : 'circle-alert'} tone={waiting ? 'muted' : 'danger'}>
+              {waiting ? describeWhen(item.sendAt, now) : 'Not sent'}
+            </StatusChip>
+          </span>
+        )
+      }}
+      itemKey={(item) => item.id}
+      items={items}
+      label="Scheduled messages"
+      leading={(item) => (
+        <span className={`aw-later__icon${item.status === 'scheduled' ? '' : ' is-failed'}`}>
+          <Icon name={item.status === 'scheduled' ? 'clock' : 'circle-alert'} size={16} />
+        </span>
+      )}
+      meta={(item) => (
+        <>
           To {item.place} · {item.projectName}
           {item.failure ? <span className="aw-later__failure"> · {item.failure}</span> : null}
-        </span>
-      </div>
-      <div className="aw-later__end">
-        <span title={formatFullDate(item.sendAt)}>
-          <StatusChip icon={waiting ? 'clock' : 'circle-alert'} tone={waiting ? 'muted' : 'danger'}>
-            {waiting ? describeWhen(item.sendAt, now) : 'Not sent'}
-          </StatusChip>
-        </span>
-        <IconButton disabled={busy} icon={waiting ? 'send' : 'retry'} label={waiting ? 'Send now' : 'Try sending again'} onClick={onSendNow} size="sm" />
-        <Menu
-          items={menu}
-          label={`Scheduled message to ${item.place}`}
-          placement="bottom-end"
-          trigger={<IconButton disabled={busy} icon="more" label="More" size="sm" />}
-        />
-      </div>
-    </li>
+        </>
+      )}
+      title={(item) => <ListPieceTitle to={item.href}>{plainPreview(item.plainText, 200) || 'A message'}</ListPieceTitle>}
+    />
   )
 }

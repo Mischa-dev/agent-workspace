@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import type { ConversationTimelineEntry, MessageContentV1 } from '../conversations/types'
-import { normalizeTimelineEntry } from '../conversations/api'
+import { callOp } from '../api/ops'
+import type { MessageContentV1 } from '../conversations/types'
 import { laterKeys } from './keys'
 
 export { laterKeys } from './keys'
@@ -227,12 +227,8 @@ function scheduledFrom(value: unknown) {
 }
 
 export async function scheduleMessage(conversationId: string, content: MessageContentV1, sendAt: string) {
-  return scheduledFrom(
-    await requestJson<unknown>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/scheduled-messages`, {
-      method: 'POST',
-      json: { content, sendAt },
-    }),
-  )
+  const { scheduled } = await callOp('message_schedule', { conversationId, content, sendAt })
+  return scheduled
 }
 
 export async function updateScheduled(id: string, change: { content?: MessageContentV1; sendAt?: string }) {
@@ -242,32 +238,20 @@ export async function updateScheduled(id: string, change: { content?: MessageCon
 }
 
 export async function sendScheduledNow(id: string) {
-  return scheduledFrom(
-    await requestJson<unknown>(`/api/v1/scheduled-messages/${encodeURIComponent(id)}/send-now`, {
-      method: 'POST',
-      json: {},
-    }),
-  )
+  await callOp('scheduled_message_update', { id, sendNow: true })
 }
 
 export async function cancelScheduled(id: string) {
-  await requestJson<unknown>(`/api/v1/scheduled-messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  await callOp('scheduled_message_update', { id, cancel: true })
 }
 
-export async function forwardMessage(input: {
-  messageId: string
-  conversationId: string
-  text?: string
-  idempotencyKey: string
-}): Promise<ConversationTimelineEntry | null> {
-  const body = asRecord(
-    await requestJson<unknown>(`/api/v1/messages/${encodeURIComponent(input.messageId)}/forward`, {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: { conversationId: input.conversationId, ...(input.text?.trim() ? { text: input.text.trim() } : {}) },
-    }),
+export async function forwardMessage(input: { messageId: string; conversationId: string; text?: string; idempotencyKey: string }) {
+  const text = input.text?.trim()
+  return callOp(
+    'message_forward',
+    { messageId: input.messageId, conversationId: input.conversationId, ...(text ? { text } : {}) },
+    { requestId: input.idempotencyKey },
   )
-  return normalizeTimelineEntry(body.entry)
 }
 
 export async function fetchLevel(conversationId: string): Promise<ConversationLevel> {

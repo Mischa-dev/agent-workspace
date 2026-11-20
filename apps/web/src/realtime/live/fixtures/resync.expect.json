@@ -1,0 +1,33 @@
+{
+  "about": "Protocol 2: the server fell behind and says resync, the connection comes back from its last position, and the server can't replay that far: everything open refetches once more, cached lists only go stale.",
+  "fetched": {
+    "channel timeline": {
+      "min": 1
+    },
+    "sidebar": {
+      "min": 1
+    },
+    "rail": {
+      "min": 1
+    },
+    "page list": {
+      "min": 1
+    },
+    "sheet list": {
+      "min": 1
+    },
+    "collections": {
+      "min": 1
+    },
+    "task board": {
+      "min": 1
+    }
+  },
+  "sent": [
+    {
+      "type": "hello",
+      "protocol": 2,
+      "resumeFrom": "41"
+    }
+  ]
+}
