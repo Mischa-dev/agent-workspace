@@ -19,7 +19,10 @@ const linkedThreadId = '019fb600-0000-7000-8000-000000000006'
 const createdThreadId = '019fb600-0000-7000-8000-000000000007'
 
 class WebSocketStub extends EventTarget {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
   static instances: WebSocketStub[] = []
+  readyState = WebSocketStub.CONNECTING
   close = vi.fn()
   send = vi.fn()
 
