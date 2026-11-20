@@ -485,24 +485,28 @@ async fn a_spent_run_budget_refuses_a_built_in_run_too() {
     .execute(&world.pool)
     .await
     .expect("a spent budget");
-    let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+    // The built-in host opens runs of every workspace, as its scheduler does.
+    let refused = agent_workspace_server::tenancy::system("runs.host", async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+            .await
+            .expect("transaction");
+        agent_workspace_server::runs::builtin::open(
+            &mut transaction,
+            &agent_workspace_server::runs::builtin::NewBuiltinRun {
+                id: Uuid::now_v7(),
+                project_id: space,
+                execution_worker_id: worker,
+                prompt: "Another go",
+                from_request: false,
+                conversation_id: conversation,
+                requested_by: account,
+                sponsored_by: None,
+                predecessor_run_id: None,
+                settings: &json!({}),
+            },
+        )
         .await
-        .expect("transaction");
-    let refused = agent_workspace_server::runs::builtin::open(
-        &mut transaction,
-        &agent_workspace_server::runs::builtin::NewBuiltinRun {
-            id: Uuid::now_v7(),
-            project_id: space,
-            execution_worker_id: worker,
-            prompt: "Another go",
-            from_request: false,
-            conversation_id: conversation,
-            requested_by: account,
-            sponsored_by: None,
-            predecessor_run_id: None,
-            settings: &json!({}),
-        },
-    )
+    })
     .await;
     assert!(
         matches!(
@@ -511,6 +515,5 @@ async fn a_spent_run_budget_refuses_a_built_in_run_too() {
         ),
         "{refused:?}"
     );
-    drop(transaction);
     world.finish().await;
 }
