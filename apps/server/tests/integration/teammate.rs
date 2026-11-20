@@ -446,7 +446,7 @@ async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
         &world,
         "guard_set",
         json!({"name": "Pages get a look", "action": "review",
-               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+               "operations": ["page_write", "file_upload"], "reviewers": [world.owner.actor]}),
     )
     .await;
     let written = tool(
@@ -463,6 +463,22 @@ async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
             .to_string()
             .contains("none of its reviewers can read"),
         "{written}"
+    );
+    // Nor a file kept on the page, which names it inside `thing`.
+    let uploaded = tool(
+        &world,
+        rook,
+        "file_upload",
+        json!({"thing": {"kind": "page", "id": page}, "name": "plan.txt",
+               "text": "Second plan."}),
+    )
+    .await;
+    assert_ne!(uploaded["pendingReview"], true, "{uploaded}");
+    assert!(
+        uploaded
+            .to_string()
+            .contains("none of its reviewers can read"),
+        "{uploaded}"
     );
     let held = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds")
         .fetch_one(world.pool())

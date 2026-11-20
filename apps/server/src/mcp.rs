@@ -2280,32 +2280,51 @@ async fn guard_hand_written(
     let std::borrow::Cow::Borrowed(name) = &tool.name else {
         return Ok(None);
     };
-    let input = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
+    let mut input = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
+    // Read as the tool reads them: an id or a link to it. A conversation
+    // named by link is the conversation, so its readers alone review.
+    for key in ["conversationId", "sourceConversationId"] {
+        if let Some(id) = input
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .and_then(common::parse_id)
+        {
+            input[key] = serde_json::json!(id);
+        }
+    }
     let kind = name.split('_').next().unwrap_or(name);
-    let target = [
-        "pageId",
-        "taskId",
-        "messageId",
-        "whiteboardId",
-        "conversationId",
-        "id",
+    // What it changes, with the kind of thing that is: a file kept on a
+    // page (`thing`) is that page's change.
+    let nested = input.get("thing").and_then(|thing| {
+        let kind = match thing.get("kind").and_then(serde_json::Value::as_str)? {
+            "page" => "page",
+            "record" => "record",
+            _ => return None,
+        };
+        let id = common::parse_id(thing.get("id").and_then(serde_json::Value::as_str)?)?;
+        Some((kind, id))
+    });
+    let named = [
+        ("pageId", "page"),
+        ("taskId", "task"),
+        ("messageId", "message"),
+        ("whiteboardId", "whiteboard"),
+        ("conversationId", "conversation"),
+        ("id", kind),
     ]
     .iter()
-    .find_map(|key| {
-        input
-            .get(*key)
-            .and_then(serde_json::Value::as_str)
-            .map(|id| (*key, id))
-    })
-    // Read as the tool reads it: an id or a link to it.
-    .and_then(|(key, id)| {
-        if key == "messageId" {
+    .find_map(|(key, target_kind)| {
+        let id = input.get(*key).and_then(serde_json::Value::as_str)?;
+        let id = if *key == "messageId" {
             common::parse_message_id(id)
         } else {
             common::parse_id(id)
-        }
-    })
-    .map_or(("project", principal.project_id), |id| (kind, id));
+        }?;
+        Some((*target_kind, id))
+    });
+    let target = nested
+        .or(named)
+        .unwrap_or(("project", principal.project_id));
     let caller = crate::access::Caller::of_principal(principal, limits);
     let located = crate::ops::Located {
         workspace_id: workspace,
