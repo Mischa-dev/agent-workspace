@@ -327,9 +327,12 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
       // path, a change queued behind it starts from what the server stored,
       // which may be written its own way (a URL gains https://).
       await queryClient.invalidateQueries({ queryKey: queryKeys.workItem(task.projectId, task.id) })
-      const holds = fieldValue(current(), entry.field)
+      // Only the version this write made is known to hold its value; a newer
+      // one may be someone else's change, which must still stop it.
+      const now = current()
+      const holds = fieldValue(now, entry.field)
       const next = entries.current.get(entry.field)
-      if (next && next.id !== id && entry.mine !== null && next.base === entry.mine && holds !== entry.mine) {
+      if (now.version === written.version && next && next.id !== id && entry.mine !== null && next.base === entry.mine && holds !== entry.mine) {
         entries.current.set(entry.field, { ...next, base: holds })
       }
     }
@@ -380,7 +383,8 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
       message: null,
       // A changed patch is a new request; the same one again (a retry from
       // the description's own button) keeps the request id.
-      sent: patch && JSON.stringify(patch) !== JSON.stringify(entry.patch) ? null : entry.sent,
+      // "Keep yours" is a new request against the task as it is now.
+      sent: overTheirs || (patch && JSON.stringify(patch) !== JSON.stringify(entry.patch)) ? null : entry.sent,
     })
     publish()
     enqueue(entry.id)
