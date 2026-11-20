@@ -7,7 +7,6 @@ use super::{
     agent_interface::{connect_app, create_agent, initialize, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_code::{run, seeded, thread},
-    mcp_task_board::seed_pull_request,
     mcp_tasks::{add_member, space},
     message_edits::create_channel,
     modules::{narrow_in_project, switch},
@@ -373,83 +372,6 @@ async fn an_agent_s_inbox_leaves_out_requests_where_channels_is_off() {
         assert_ne!(refused["retryCategory"], "module", "{refused}");
         assert!(!refused.to_string().contains("Channels"), "{refused}");
     }
-}
-
-#[tokio::test]
-async fn code_lists_keep_the_messages_space_while_code_is_on() {
-    let Some(setup) = setup("awd75_code_direct").await else {
-        return;
-    };
-    let app = &setup.app;
-    // A second workspace keeps Code on somewhere, so the lists answer rather
-    // than the tool being turned off everywhere.
-    let owner = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner'",
-    )
-    .bind(setup.organization_id)
-    .fetch_one(&setup.pool)
-    .await
-    .expect("owner");
-    second_workspace(&setup.pool, owner).await;
-    // A repository and a pull request in the Messages space, which the Code
-    // tools have always listed.
-    let direct = space(&setup).await;
-    let repository = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO repositories (
-            id, project_id, github_repository_id, owner, name, clone_url,
-            default_branch, mirror_path, enabled, trusted, preparation_state
-        )
-        VALUES ($1, $2::uuid, 9200000752, 'Fixture', 'awd75-direct',
-                'https://github.com/Fixture/awd75-direct.git', 'main',
-                '/nonexistent/awd75-direct.git', true, true, 'pending')
-        "#,
-    )
-    .bind(repository)
-    .bind(&direct)
-    .execute(&setup.pool)
-    .await
-    .expect("repository");
-    let (pull_request, _) = seed_pull_request(&setup, &direct, repository, 1).await;
-    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
-    let session = initialize(app, &token).await.expect("owner app");
-    let call = |name: &'static str| {
-        let token = token.clone();
-        let session = session.clone();
-        async move {
-            let result = tool(app, &token, &session, name, json!({})).await;
-            assert_eq!(result["outcome"], "ok", "{name}: {result}");
-            result
-        }
-    };
-    let repository = repository.to_string();
-    let pull_request = pull_request.to_string();
-
-    // Code on: both are listed.
-    let repositories = call("repository_list").await;
-    assert!(
-        each(&repositories["value"]["repositories"], "id").contains(&repository),
-        "{repositories}"
-    );
-    let pull_requests = call("pull_request_list").await;
-    assert!(
-        each(&pull_requests["value"]["pullRequests"], "id").contains(&pull_request),
-        "{pull_requests}"
-    );
-
-    // Code off in the workspace: neither is.
-    switched_off(&setup, json!({"switches": {"code": false, "runs": false}})).await;
-    let repositories = call("repository_list").await;
-    assert!(
-        !each(&repositories["value"]["repositories"], "id").contains(&repository),
-        "{repositories}"
-    );
-    let pull_requests = call("pull_request_list").await;
-    assert!(
-        !each(&pull_requests["value"]["pullRequests"], "id").contains(&pull_request),
-        "{pull_requests}"
-    );
 }
 
 #[tokio::test]

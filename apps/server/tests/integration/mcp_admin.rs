@@ -26,7 +26,7 @@ async fn creating_a_project_again_creates_it_once() {
         &setup.pool,
         &codex,
         &session,
-        "project_create",
+        "space_create",
         json!({"key": "WEB", "name": "Website", "clientRequestId": "project-retry-1"}),
         json!({"key": "APP", "name": "App", "clientRequestId": "project-retry-1"}),
         "SELECT count(*) FROM projects",
@@ -49,7 +49,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -129,8 +129,8 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
             app,
             token,
             session,
-            "project_update",
-            json!({"projectId": work, "name": "Taken over"}),
+            "space_update",
+            json!({"spaceId": work, "name": "Taken over"}),
         )
         .await;
         assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -139,8 +139,8 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &codex,
         &session,
-        "project_update",
-        json!({"projectId": "WORK", "name": "Agent Workspace"}),
+        "space_update",
+        json!({"spaceId": "WORK", "name": "Agent Workspace"}),
     )
     .await;
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
@@ -150,20 +150,20 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &codex,
         &session,
-        "project_update",
-        json!({"projectId": work, "name": "Again", "expectedVersion": 1}),
+        "space_update",
+        json!({"spaceId": work, "name": "Again", "expectedVersion": 1}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
 
     // Archiving: agents and read-only apps can't; the owner can, and can
-    // bring it back by key even though archived projects are hidden.
+    // bring it back by id even though archived projects are hidden.
     let refused = tool(
         app,
         &mara_token,
         &mara_session,
-        "project_archive",
-        json!({"project": work}),
+        "space_archive",
+        json!({"spaceId": work}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -171,8 +171,8 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &reader,
         &reader_session,
-        "project_archive",
-        json!({"project": old}),
+        "space_archive",
+        json!({"spaceId": old}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -180,8 +180,8 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": "OLD"}),
+        "space_archive",
+        json!({"spaceId": "OLD"}),
     )
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
@@ -211,24 +211,22 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
             .any(|project| project["id"] == old.as_str() && project["archived"] == true),
         "{with_archived}"
     );
+    // Archived, it is out of reach of everything but space_restore.
     let again = tool(
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": old}),
+        "space_archive",
+        json!({"spaceId": old}),
     )
     .await;
-    assert_eq!(
-        again["outcome"], "ok",
-        "archiving twice is harmless: {again}"
-    );
+    assert_eq!(again["outcome"], "not_found", "{again}");
     let restored = tool(
         app,
         &codex,
         &session,
-        "project_archive",
-        json!({"project": "OLD", "archived": false}),
+        "space_restore",
+        json!({"spaceId": old}),
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
@@ -492,7 +490,7 @@ async fn owners_add_change_and_remove_members() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -500,25 +498,44 @@ async fn owners_add_change_and_remove_members() {
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
 
-    let set = |arguments: Value| {
+    let set = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, "project_member_set", arguments).await }
+        async move { tool(app, &codex, &session, name, arguments).await }
     };
 
-    let added = set(json!({"projectId": work, "person": "@mara"})).await;
+    let added = set(
+        "space_member_add",
+        json!({"spaceId": work, "account": "@mara"}),
+    )
+    .await;
     assert_eq!(added["outcome"], "ok", "{added}");
     assert_eq!(added["value"]["role"], "member");
-    assert_eq!(added["value"]["kind"], "agent");
-    let again = set(json!({"projectId": work, "person": "mara"})).await;
+    let again = set(
+        "space_member_add",
+        json!({"spaceId": work, "account": "mara"}),
+    )
+    .await;
     assert_eq!(again["outcome"], "ok", "adding twice is harmless: {again}");
     // An agent holds any role a person can (K1.14a).
-    let admin = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
+    let admin = set(
+        "space_member_update",
+        json!({"spaceId": work, "account": "@mara", "role": "admin"}),
+    )
+    .await;
     assert_eq!(admin["value"]["role"], "admin", "{admin}");
-    let viewer = set(json!({"projectId": work, "person": "@mara", "role": "viewer"})).await;
+    let viewer = set(
+        "space_member_update",
+        json!({"spaceId": work, "account": "@mara", "role": "viewer"}),
+    )
+    .await;
     assert_eq!(viewer["value"]["role"], "viewer", "{viewer}");
-    let own = set(json!({"projectId": work, "person": "@owner", "remove": true})).await;
-    assert_eq!(own["outcome"], "invalid_request", "{own}");
+    let own = set(
+        "space_member_remove",
+        json!({"spaceId": work, "account": "@owner"}),
+    )
+    .await;
+    assert_ne!(own["outcome"], "ok", "{own}");
 
     // Mara can't manage members, and loses access the moment she's removed.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
@@ -526,8 +543,8 @@ async fn owners_add_change_and_remove_members() {
         app,
         &mara_token,
         &mara_session,
-        "project_member_set",
-        json!({"projectId": work, "person": "@owner", "role": "viewer"}),
+        "space_member_update",
+        json!({"spaceId": work, "account": "@owner", "role": "viewer"}),
     )
     .await;
     assert_eq!(hers["outcome"], "permission_denied", "{hers}");
@@ -540,7 +557,11 @@ async fn owners_add_change_and_remove_members() {
     )
     .await;
     assert_eq!(before["outcome"], "ok", "{before}");
-    let removed = set(json!({"projectId": work, "person": "@mara", "remove": true})).await;
+    let removed = set(
+        "space_member_remove",
+        json!({"spaceId": work, "account": "@mara"}),
+    )
+    .await;
     assert_eq!(removed["value"]["active"], false, "{removed}");
     let after = tool(
         app,
@@ -552,8 +573,12 @@ async fn owners_add_change_and_remove_members() {
     .await;
     assert_ne!(after["outcome"], "ok", "{after}");
 
-    // Adding her back restores her.
-    let back = set(json!({"projectId": work, "person": "@mara", "role": "member"})).await;
+    // Giving her a role again brings her back.
+    let back = set(
+        "space_member_update",
+        json!({"spaceId": work, "account": "@mara", "role": "member"}),
+    )
+    .await;
     assert_eq!(back["value"]["active"], true, "{back}");
     assert_eq!(back["value"]["role"], "member");
 }
@@ -573,7 +598,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -1349,7 +1374,7 @@ async fn project_admin_rechecks_roles_after_waiting_for_the_project_lock() {
         .expect("project");
     let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
     let session = initialize(&setup.app, &token).await.expect("session");
-    for tool_name in ["project_update", "project_archive"] {
+    for tool_name in ["space_update", "space_archive"] {
         sqlx::query("UPDATE project_memberships SET role = 'owner' WHERE project_id = $1")
             .bind(project)
             .execute(&setup.pool)
@@ -1374,10 +1399,10 @@ async fn project_admin_rechecks_roles_after_waiting_for_the_project_lock() {
         let token = token.clone();
         let session = session.clone();
         let pending = tokio::spawn(async move {
-            let args = if tool_name == "project_update" {
-                json!({"projectId": project, "name": "Forbidden rename"})
+            let args = if tool_name == "space_update" {
+                json!({"spaceId": project, "name": "Forbidden rename"})
             } else {
-                json!({"project": project, "archived": true})
+                json!({"spaceId": project})
             };
             tool(&app, &token, &session, tool_name, args).await
         });
@@ -1402,7 +1427,7 @@ async fn project_admin_rechecks_roles_after_waiting_for_the_project_lock() {
 }
 
 #[tokio::test]
-async fn project_archive_checks_expected_version_even_when_already_in_that_state() {
+async fn space_archive_checks_expected_version() {
     let Some(setup) = setup("archive_version").await else {
         return;
     };
@@ -1413,10 +1438,8 @@ async fn project_archive_checks_expected_version_even_when_already_in_that_state
         &setup.app,
         &token,
         &session,
-        "project_archive",
-        json!({
-            "project": project, "archived": false, "expectedVersion": 999
-        }),
+        "space_archive",
+        json!({"spaceId": project, "expectedVersion": 999}),
     )
     .await;
     assert_eq!(result["outcome"], "conflict", "{result}");
@@ -1541,7 +1564,7 @@ async fn people_create_projects_through_their_apps() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -1557,7 +1580,7 @@ async fn people_create_projects_through_their_apps() {
             app,
             token,
             session,
-            "project_create",
+            "space_create",
             json!({"key": "NOPE", "name": "Not allowed"}),
         )
         .await;
@@ -1567,7 +1590,7 @@ async fn people_create_projects_through_their_apps() {
         app,
         &codex,
         &session,
-        "project_create",
+        "space_create",
         json!({"key": "1x", "name": "Bad key"}),
     )
     .await;
@@ -1577,8 +1600,8 @@ async fn people_create_projects_through_their_apps() {
         app,
         &codex,
         &session,
-        "project_create",
-        json!({"key": "web", "name": "Website"}),
+        "space_create",
+        json!({"key": "web", "name": "Website", "clientRequestId": "make-web"}),
     )
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
@@ -1586,13 +1609,13 @@ async fn people_create_projects_through_their_apps() {
     assert_eq!(created["value"]["name"], "Website");
     let project_id = created["value"]["id"].as_str().expect("project").to_owned();
 
-    // A retry returns the same project; another name with that key is refused.
+    // A retry returns the same project; another with that key is refused.
     let retried = tool(
         app,
         &codex,
         &session,
-        "project_create",
-        json!({"key": "WEB", "name": "Website"}),
+        "space_create",
+        json!({"key": "web", "name": "Website", "clientRequestId": "make-web"}),
     )
     .await;
     assert_eq!(retried["value"]["id"], project_id.as_str(), "{retried}");
@@ -1600,7 +1623,7 @@ async fn people_create_projects_through_their_apps() {
         app,
         &codex,
         &session,
-        "project_create",
+        "space_create",
         json!({"key": "WEB", "name": "Something else"}),
     )
     .await;
@@ -1654,8 +1677,8 @@ async fn an_agent_with_a_managing_role_changes_a_project() {
         &world.app,
         &rook.token,
         &rook.session,
-        "project_update",
-        json!({"projectId": work, "name": "Renamed by a member"}),
+        "space_update",
+        json!({"spaceId": work, "name": "Renamed by a member"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -1674,10 +1697,78 @@ async fn an_agent_with_a_managing_role_changes_a_project() {
         &world.app,
         &rook.token,
         &rook.session,
-        "project_update",
-        json!({"projectId": work, "name": "Renamed by an admin"}),
+        "space_update",
+        json!({"spaceId": work, "name": "Renamed by an admin"}),
     )
     .await;
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
     world.finish().await;
+}
+
+/// A credential confined to one space acts at workspace level only within
+/// what it holds there, and never with a permission that reaches the whole
+/// workspace: an owner's credential held to SOURCE can't make an agent,
+/// add a person or make an invitation link, though it still works in SOURCE.
+#[tokio::test]
+async fn a_space_confined_credential_does_nothing_workspace_wide() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some(setup) = setup("mcp_confined_workspace").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("owner");
+    let issued = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: actor,
+            project_id: source.parse().expect("source"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let session = initialize(&setup.app, &issued.token)
+        .await
+        .expect("session");
+    for (name, arguments) in [
+        (
+            "agent_create",
+            json!({"displayName": "Ivy", "handle": "ivy", "clientRequestId": "ivy"}),
+        ),
+        (
+            "person_create",
+            json!({"displayName": "Nia", "handle": "nia", "clientRequestId": "nia"}),
+        ),
+        ("invite_link_create", json!({"clientRequestId": "link"})),
+    ] {
+        let refused = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_ne!(
+            refused["outcome"], "ok",
+            "{name}: a confined credential acted on the whole workspace: {refused}"
+        );
+    }
+    let made: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM actors WHERE kind = 'agent') \
+              + (SELECT count(*) FROM users WHERE login_name IS NULL OR claimed_at IS NULL) \
+              + (SELECT count(*) FROM invite_tokens)",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(made, 0);
+    let created = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_create",
+        json!({"title": "Still works here"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
 }

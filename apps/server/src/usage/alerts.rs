@@ -364,7 +364,7 @@ pub async fn evaluate(
         .bind(format!("capacity-alerts:{}", account.id))
         .execute(&mut *transaction)
         .await?;
-    let Some(space) = crate::direct::space_for_member(
+    let Some(space) = crate::spaces::workspace::join(
         &mut transaction,
         account.organization_id,
         account.owner_actor_id,

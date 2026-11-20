@@ -457,13 +457,13 @@ pub fn check(definition: &TemplateDefinition) -> Result<(), Problem> {
         return Err(problem("defaultRole", "Name the default role."));
     }
     if let Some(project) = &definition.project {
-        if crate::projects::normalize_project_name(&project.name).is_err() {
+        if crate::spaces::manage::normalize_name(&project.name).is_err() {
             return Err(problem(
                 "project.name",
                 "Give the project a name of 1 to 120 bytes, on one line.",
             ));
         }
-        if crate::projects::normalize_project_key(&project.key).is_err() {
+        if crate::spaces::manage::normalize_key(&project.key).is_err() {
             return Err(problem(
                 "project.key",
                 "Use 2 to 10 letters or digits, starting with a letter, such as \"ENG\".",
@@ -869,6 +869,7 @@ pub(crate) async fn apply(
                         agent_limit: Some(role.agent_limit.clone()),
                         defaults,
                         modules_off: Some(role.modules_off.clone()),
+                        act_within_requester: None,
                         ..RoleChange::default()
                     },
                 )
@@ -898,6 +899,7 @@ pub(crate) async fn apply(
                         agent_limit: role.agent_limit.clone(),
                         defaults: defaults.unwrap_or_default(),
                         modules_off: role.modules_off.clone(),
+                        act_within_requester: false,
                         is_default: false,
                     },
                 )
@@ -1068,7 +1070,7 @@ pub(crate) async fn reusable_starter(
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $3
-         AND membership.enabled AND membership.role = 'owner'
+         AND membership.enabled AND membership.role = $5
         WHERE project.organization_id = $1 AND project.project_key = ANY($2)
           AND project.name = $4 AND project.archived_at IS NULL AND project.kind = 'standard'
         ORDER BY array_position($2, project.project_key)
@@ -1079,6 +1081,7 @@ pub(crate) async fn reusable_starter(
     .bind(&candidates)
     .bind(actor_id)
     .bind(name)
+    .bind(crate::access::tier::OWNER)
     .fetch_optional(connection)
     .await
 }
@@ -1092,35 +1095,36 @@ async fn starter_project(
     organization_id: Uuid,
     project: &TemplateProject,
 ) -> Result<(Uuid, bool), ApplyError> {
-    let name = crate::projects::normalize_project_name(&project.name)?;
-    let key = crate::projects::normalize_project_key(&project.key)?;
+    let name = crate::spaces::manage::normalize_name(&project.name)?;
+    let key = crate::spaces::manage::normalize_key(&project.key)?;
     let candidates = key_candidates(&key);
     let existing =
         reusable_starter(transaction, organization_id, caller.actor_id, &name, &key).await?;
     if let Some(id) = existing {
         return Ok((id, false));
     }
-    let (role, role_permissions, display_name, login_name) =
-        sqlx::query_as::<_, (String, Option<Vec<String>>, String, String)>(
-            r#"
-            SELECT membership.role, workspace_role_permissions(membership.role_id),
-                   user_account.display_name, user_account.login_name
-            FROM organization_memberships membership
-            JOIN users user_account ON user_account.actor_id = membership.actor_id
-             AND user_account.status = 'active'
-            WHERE membership.organization_id = $1 AND membership.actor_id = $2
-              AND membership.enabled
-            FOR UPDATE OF membership
-            "#,
-        )
-        .bind(organization_id)
-        .bind(caller.actor_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::NotFound("workspace"))?;
+    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
+        FROM organization_memberships membership
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE membership.organization_id = $1 AND membership.actor_id = $2
+          AND membership.enabled
+        FOR UPDATE OF membership
+        "#,
+    )
+    .bind(organization_id)
+    .bind(caller.actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("workspace"))?;
+    // The new space's owner is named as they are here, whatever their kind.
+    let (display_name, login_name) =
+        crate::accounts::names_in(transaction, organization_id, caller.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("workspace"))?;
     crate::projects::authorize_project_create(
         caller.actor_id,
-        caller.kind,
         organization_id,
         &role,
         role_permissions.as_deref(),
@@ -1144,15 +1148,21 @@ async fn starter_project(
                 "Every key like this one is taken. Use the template from settings with another key.",
             ))
         })?;
-    let id = crate::projects::insert_new_project(
+    let id = crate::spaces::manage::create(
         transaction,
-        organization_id,
-        &free,
-        &name,
-        crate::projects::ProjectOwner {
-            actor_id: caller.actor_id,
-            display_name: &display_name,
-            login_name: &login_name,
+        crate::spaces::manage::NewSpace {
+            workspace_id: organization_id,
+            kind: crate::spaces::SpaceKind::Project,
+            key: &free,
+            name: &name,
+            description: "",
+            visibility: crate::spaces::SpaceVisibility::Members,
+            icon: None,
+            owner: crate::spaces::manage::Owner {
+                account_id: caller.actor_id,
+                display_name: &display_name,
+                login_name: &login_name,
+            },
         },
     )
     .await?;
@@ -1363,7 +1373,7 @@ pub(crate) async fn snapshot(
         if role.is_default {
             default_role = Some(role.name.clone());
         }
-        if role.key == "owner" {
+        if crate::access::tier::stored_owner(&role.key) {
             continue;
         }
         let changed_built_in = role.agent_limit.is_some()

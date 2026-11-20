@@ -14,6 +14,10 @@ use crate::cluster_support::cluster;
 
 /// How long each idle stretch is counted for.
 const WINDOW: Duration = Duration::from_secs(20);
+/// The longest PostgreSQL holds back a backend's statistics, and a margin.
+const STATISTICS_LAG: Duration = Duration::from_secs(65);
+/// How often the other connections' statements are sampled in a window.
+const SAMPLE: Duration = Duration::from_millis(100);
 /// The workspaces added for the second count.
 const WORKSPACES: i64 = 10_000;
 
@@ -65,10 +69,15 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
         })
         .filter(|(rows, scans, _)| *rows > 0 || *scans > 0)
         .collect::<Vec<_>>();
+    // The most rows read, then the most scans among the rest: a probe that
+    // finds nothing reads no rows but still scans.
     grown.sort_unstable_by(|a, b| b.cmp(a));
-    grown
+    let mut shown = grown.iter().take(8).collect::<Vec<_>>();
+    let mut by_scans = grown.iter().skip(8).collect::<Vec<_>>();
+    by_scans.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(b.2)));
+    shown.extend(by_scans.into_iter().take(6));
+    shown
         .iter()
-        .take(8)
         .map(|(rows, scans, table)| format!("{table} {rows} rows in {scans} scans"))
         .collect::<Vec<_>>()
         .join("; ")
@@ -77,14 +86,50 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
 /// What the database did over one idle window, and the tables it read
 /// most.
 async fn idle(pool: &PgPool) -> (i64, i64, String) {
+    // A busy backend that can't take a statistics lock at once keeps its
+    // counts and tries again later, for up to a minute (PostgreSQL's
+    // PGSTAT_MAX_INTERVAL). The database's own entry, which every
+    // connection to it writes, is the one most often busy, so on a loaded
+    // machine the transactions of the catch-up just finished land here
+    // without the table reads that came with them. Let them land first.
+    tokio::time::sleep(STATISTICS_LAG).await;
     let (transactions, rows) = counts(pool).await;
     let before = tables(pool).await;
-    tokio::time::sleep(WINDOW).await;
+    let maintenance_before = maintenance(pool).await;
+    let sessions_before = sessions(pool).await;
+    // What the other connections to the database are doing, sampled each
+    // second, so a failure names the statements behind its transactions
+    // even when they read no table.
+    // Each sample is a transaction of its own, taken off the count below.
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut samples = 0;
+    let started = tokio::time::Instant::now();
+    while started.elapsed() < WINDOW {
+        tokio::time::sleep(SAMPLE).await;
+        samples += 1;
+        for statement in activity(pool).await {
+            *seen.entry(statement).or_default() += 1;
+        }
+    }
     // Busy connections report their statistics within a second of going
     // idle; let the last of them land.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (transactions_after, rows_after) = counts(pool).await;
     let after = tables(pool).await;
+    let maintenance = maintenance(pool).await - maintenance_before;
+    let (rollbacks, connections) = sessions(pool).await;
+    let (rollbacks, connections) = (
+        rollbacks - sessions_before.0,
+        connections - sessions_before.1,
+    );
+    let mut seen = seen.into_iter().collect::<Vec<_>>();
+    seen.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let seen = seen
+        .iter()
+        .take(16)
+        .map(|(statement, times)| format!("{times}x {statement}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
     // What the server did in the window: jobs it ran, consumers it moved.
     let work = sqlx::query_scalar::<_, Option<String>>(
         "SELECT concat_ws('; ', \
@@ -101,10 +146,63 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     .expect("window work")
     .unwrap_or_default();
     (
-        transactions_after - transactions,
+        transactions_after - transactions - samples,
         rows_after - rows,
-        format!("{}; {work}", busiest(&before, &after)),
+        format!(
+            "{}; autovacuum passes {maintenance}; rollbacks {rollbacks}; \
+             new sessions {connections}; {work}; sampled: {seen}",
+            busiest(&before, &after)
+        ),
     )
+}
+
+/// Rolled back transactions and sessions opened on the test database so
+/// far.
+async fn sessions(pool: &PgPool) -> (i64, i64) {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("SELECT pg_stat_clear_snapshot()")
+        .execute(&mut *connection)
+        .await
+        .expect("clear snapshot");
+    sqlx::query_as::<_, (i64, i64)>(
+        "SELECT xact_rollback::bigint, sessions::bigint \
+         FROM pg_stat_database WHERE datname = current_database()",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("session statistics")
+}
+
+/// The other busy connections to the test database: their kind, state and
+/// the start of their current statement.
+async fn activity(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT concat_ws(' ', backend_type, state, \
+                left(regexp_replace(query, '\\s+', ' ', 'g'), 90)) \
+         FROM pg_stat_activity \
+         WHERE datname = current_database() AND pid <> pg_backend_pid() \
+           AND state <> 'idle'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("activity")
+}
+
+/// Autovacuum and autoanalyze passes over the test database's tables so
+/// far: each is a transaction of its own, so one landing in a window shows.
+async fn maintenance(pool: &PgPool) -> i64 {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("SELECT pg_stat_clear_snapshot()")
+        .execute(&mut *connection)
+        .await
+        .expect("clear snapshot");
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(sum(autovacuum_count + autoanalyze_count), 0)::bigint \
+         FROM pg_stat_user_tables",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("maintenance statistics")
 }
 
 /// Until the server has caught up with what making the workspaces wrote,
@@ -193,13 +291,26 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
         .await
         .expect("analyze");
     settle(pool).await;
-    // What autovacuum does on a server in time: the log and the queue grew
-    // by a workspace's worth of rows each, and stale statistics would plan
-    // the idle polls by position as scans of the whole table.
-    sqlx::query("ANALYZE events, background_jobs, hosts")
-        .execute(pool)
+    // What autovacuum does on a server in time: every table that making the
+    // workspaces wrote to is vacuumed and analyzed once. Stale statistics
+    // would plan the idle polls by position as scans of the whole table,
+    // and autovacuum catching up inside the window is a transaction per
+    // table, which is the batch insert's cost, not idle work.
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("VACUUM (ANALYZE)")
+        .execute(&mut *connection)
         .await
-        .expect("analyze the log");
+        .expect("vacuum");
+    // VACUUM is a transaction or two for every table it goes through, a
+    // thousand or so here. A backend that can't take the statistics lock
+    // at once keeps its counts for up to ten seconds, which would land
+    // them inside the window as idle work; make this one hand them over
+    // now.
+    sqlx::query("SELECT pg_stat_force_next_flush()")
+        .execute(&mut *connection)
+        .await
+        .expect("flush statistics");
+    drop(connection);
     settle(pool).await;
     let (many_transactions, many_rows, many_tables) = idle(pool).await;
 

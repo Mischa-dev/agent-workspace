@@ -661,7 +661,7 @@ async fn personal_tokens_reach_only_the_person_s_own_projects() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let token = created["token"].as_str().expect("token").to_owned();
-    assert!(token.starts_with("aw_mcp_"));
+    assert!(token.starts_with("aw_sk_"));
     let credential = created["credential"]["id"]
         .as_str()
         .expect("credential")

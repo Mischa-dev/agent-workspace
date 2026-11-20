@@ -271,10 +271,11 @@ impl From<RunOpError> for StartError {
     }
 }
 
-/// The host an agent account is run by, other than the built-in one, and
-/// its reference for the agent there: the active binding on the host seen
-/// most recently. `None`: the agent connects by itself or the built-in host
-/// runs it (A1.13 routes a launch by this).
+/// The host an agent account is run by, other than the built-in one (save
+/// the built-in host's assistant, A1.25, which it runs as any host runs an
+/// agent), and its reference for the agent there: the active binding on
+/// the host seen most recently. `None`: the agent connects by itself or the
+/// built-in host runs it as a worker (A1.13 routes a launch by this).
 pub async fn binding_of(
     executor: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,
@@ -285,12 +286,14 @@ pub async fn binding_of(
         FROM host_agents binding
         JOIN hosts host ON host.id = binding.host_id
         WHERE binding.account_id = $1 AND binding.status = 'active'
-          AND host.status <> 'revoked' AND NOT host.builtin
+          AND host.status <> 'revoked'
+          AND (NOT host.builtin OR starts_with(binding.host_agent_ref, $2))
         ORDER BY (host.status = 'active') DESC, host.last_seen_at DESC NULLS LAST
         LIMIT 1
         "#,
     )
     .bind(account_id)
+    .bind(super::builtin::assistant::AGENT_REF_PREFIX)
     .fetch_optional(executor)
     .await?)
 }

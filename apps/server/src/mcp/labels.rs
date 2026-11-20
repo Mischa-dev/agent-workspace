@@ -107,7 +107,6 @@ pub(crate) async fn label_list(
         let messages_space = memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::WorkItemView,
         )

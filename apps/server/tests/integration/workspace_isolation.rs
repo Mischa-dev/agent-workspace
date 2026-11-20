@@ -62,7 +62,9 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
+    write_isolation::{
+        base_tables, digest_changes, digest_ignoring, refresh_digest, table_fingerprints,
+    },
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -269,6 +271,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          subscribes as A and checks no B event arrives",
     ),
     (
+        "/api/v1/shared/{token}",
+        "a page opened by a link's secret token, made for that one page; covered in \
+         privacy_inside_workspace (a_shared_page_opens_only_itself)",
+    ),
+    (
         "/api/v1/forms/{token}",
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
@@ -304,7 +311,11 @@ const READ_TOUCHES: &[&str] = &[
 
 /// Tools marked read-only that change rows anyway, each with why. The list
 /// only shrinks: fix the tool (or its hint) and take it off.
-const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[];
+const READ_TOOLS_THAT_WRITE: &[(&str, &str)] = &[(
+    "space_personal_open",
+    "opening your own space makes it the first time (K4 3.9: personal spaces are made on \
+     first use, never eagerly); only the caller's own rows, in their own workspace",
+)];
 
 // ---------------------------------------------------------------------------
 // Coverage guard (no database needed)
@@ -2076,9 +2087,14 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "proposal_list",
     "connection_delivery_list",
     "schedule_list",
+    "follow_list",
+    "guard_list",
+    "memory_page_open",
+    "conversation_agent_settings_list",
     "conversation_list",
     "conversation_open",
     "conversation_read",
+    "credential_list",
     "decision_list",
     "dependency_graph_get",
     "environment_list",
@@ -2175,6 +2191,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_usage_list",
     "workspace_search",
     "settings_get",
+    "space_list",
+    "space_open",
+    "space_personal_open",
     "status_list",
     "skill_get",
     "skill_list",
@@ -2208,7 +2227,10 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ) -> McpCase {
         McpCase {
             tool,
-            agent_only: matches!(tool, "inbox_list" | "external_event_poll"),
+            agent_only: matches!(
+                tool,
+                "inbox_list" | "external_event_poll" | "credential_list"
+            ),
             own,
             foreign,
             filtered,
@@ -2251,6 +2273,29 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("project_get"),
+        // K4.7: another workspace's spaces are out of reach.
+        case(
+            "space_list",
+            vec![
+                json!({}),
+                json!({"includeArchived": true, "kinds": ["project", "team"]}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "space_open",
+            vec![json!({"spaceId": "WORK"}), json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
+            vec![],
+        ),
+        // K4.9: your own space is in your workspace only.
+        case(
+            "space_personal_open",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("invitation_list"),
@@ -2722,6 +2767,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
+        // K1.23: an account's secrets. B's agent and B's owner aren't A's
+        // agent's to list.
+        case(
+            "credential_list",
+            vec![json!({})],
+            vec![json!({"account": b.agent}), json!({"account": b.rook})],
+            vec![],
+        ),
         case(
             "channel_list",
             vec![json!({"spaceId": a.project})],
@@ -3142,6 +3195,35 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![],
         ),
+        // A2.9: what the caller follows, in A; B's space isn't found.
+        case(
+            "follow_list",
+            vec![json!({}), json!({"space": a.project})],
+            vec![json!({"space": b.project})],
+            vec![],
+        ),
+        // A2.27: the guards of the workspace called.
+        case("guard_list", vec![json!({})], vec![], vec![]),
+        // A2.16: memory of A's channel or space; B's aren't found.
+        case(
+            "memory_page_open",
+            vec![
+                json!({"conversation": a.channel}),
+                json!({"space": a.project}),
+            ],
+            vec![
+                json!({"conversation": b.channel}),
+                json!({"space": b.project}),
+            ],
+            vec![],
+        ),
+        // A2.9: ambient mode in A's channel; B's channel isn't found.
+        case(
+            "conversation_agent_settings_list",
+            vec![json!({"conversation": a.channel})],
+            vec![json!({"conversation": b.channel})],
+            vec![],
+        ),
         case(
             "file_list",
             vec![
@@ -3256,7 +3338,9 @@ async fn check_mcp(
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
-    let mut fingerprints = table_fingerprints(pool).await;
+    // The schema's tables, read once: they don't change during the sweep.
+    let tables = base_tables(pool).await;
+    let mut fingerprints = table_fingerprints(pool, &tables).await;
     let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -3317,8 +3401,15 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            fingerprints =
-                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+            fingerprints = refresh_digest(
+                pool,
+                &a_list,
+                READ_TOUCHES,
+                &tables,
+                &fingerprints,
+                &mut a_rows,
+            )
+            .await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(

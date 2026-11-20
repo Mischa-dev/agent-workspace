@@ -144,6 +144,13 @@ pub static CONVERSATION_MEMBER_REMOVED: EventType = fact(
     "Someone left or was removed from a conversation",
 )
 .legacy(&["conversation.member.removed"]);
+pub static CONVERSATION_MEMBER_ADDED: EventType = fact(
+    "conversation.member.added",
+    "messages",
+    Some("conversation"),
+    "Someone was added to a conversation",
+)
+.legacy(&["conversation.member.added"]);
 pub static CONVERSATION_REPLY_REQUESTS_CHANGED: EventType = signal(
     "conversation.reply_requests_changed",
     "messages",
@@ -225,6 +232,12 @@ pub static SAVED_SEARCHES_CHANGED: EventType = signal(
     "workspace",
     None,
     "Someone's saved searches changed",
+);
+pub static FOLLOWS_CHANGED: EventType = signal(
+    "follows.changed",
+    "workspace",
+    None,
+    "What someone follows changed",
 );
 pub static INBOX_VIEWS_CHANGED: EventType = signal(
     "inbox_views.changed",
@@ -570,9 +583,33 @@ pub static LINK_DELETED: EventType = fact(
 );
 
 // --- spaces (today's projects) ---------------------------------------------
+pub static SPACE_CREATED: EventType = fact(
+    "space.created",
+    "workspace",
+    Some("space"),
+    "A space was made",
+);
+pub static SPACE_UPDATED: EventType = fact(
+    "space.updated",
+    "workspace",
+    Some("space"),
+    "A space's name, description, icon or visibility changed",
+);
+pub static SPACE_ARCHIVED: EventType = fact(
+    "space.archived",
+    "workspace",
+    Some("space"),
+    "A space was archived",
+);
+pub static SPACE_RESTORED: EventType = fact(
+    "space.restored",
+    "workspace",
+    Some("space"),
+    "An archived space was brought back",
+);
 pub static SPACE_MEMBER_CHANGED: EventType = fact(
     "space.member.changed",
-    "projects",
+    "workspace",
     Some("space"),
     "Someone joined, left or changed role in a space",
 )
@@ -650,6 +687,12 @@ pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
     None,
     "A workspace's custom emoji changed",
 );
+pub static GUARDS_CHANGED: EventType = signal(
+    "guards.changed",
+    "agents",
+    None,
+    "A workspace's guards changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -716,6 +759,24 @@ pub static ACCOUNT_ACCESS_CHANGED: EventType = signal(
     None,
     "What someone may see changed",
 );
+pub static ACCOUNT_REF_CHANGED: EventType = signal(
+    "account.ref_changed",
+    "agents",
+    None,
+    "Which agent elsewhere an agent account is changed, or a rebind waits",
+);
+pub static GROUP_CHANGED: EventType = fact(
+    "group.changed",
+    "workspace",
+    None,
+    "A group was made, changed, archived or brought back, or its members changed",
+);
+pub static THING_SHARE_CHANGED: EventType = signal(
+    "thing.share_changed",
+    "pages",
+    None,
+    "One thing was shared, or a share or link was revoked",
+);
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
     static CATALOG: &[&EventType] = &[
@@ -723,6 +784,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_UPDATED,
         &CONVERSATION_ARCHIVED,
         &CONVERSATION_MEMBER_REMOVED,
+        &CONVERSATION_MEMBER_ADDED,
         &CONVERSATION_REPLY_REQUESTS_CHANGED,
         &CONVERSATION_READ,
         &MESSAGE_CREATED,
@@ -735,6 +797,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &NOTIFICATION_KEYWORDS_CHANGED,
         &SIDEBAR_CHANGED,
         &SAVED_SEARCHES_CHANGED,
+        &FOLLOWS_CHANGED,
         &INBOX_VIEWS_CHANGED,
         &DM_RULES_CHANGED,
         &THREAD_STATUS_CHANGED,
@@ -786,6 +849,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &INCOMING_HOOK_RECEIVED,
         &LINK_CREATED,
         &LINK_DELETED,
+        &SPACE_CREATED,
+        &SPACE_UPDATED,
+        &SPACE_ARCHIVED,
+        &SPACE_RESTORED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,
@@ -798,6 +865,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
+        &GUARDS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,
@@ -810,6 +878,9 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONNECTION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_ACCESS_CHANGED,
+        &ACCOUNT_REF_CHANGED,
+        &THING_SHARE_CHANGED,
+        &GROUP_CHANGED,
     ];
     CATALOG
 }

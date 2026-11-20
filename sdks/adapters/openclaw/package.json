@@ -1,0 +1,32 @@
+{
+  "name": "@agent-workspace/openclaw-channel",
+  "version": "0.1.0",
+  "description": "Agent Workspace as an OpenClaw channel: reply requests in, answers out.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@agent-workspace/runner": "file:../../runner-typescript"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.11.5"
+  },
+  "scripts": {
+    "test": "node --import ./test/resolve.mjs --test 'test/*.test.ts'"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "agent-workspace",
+      "label": "Agent Workspace",
+      "blurb": "Answer in Agent Workspace: mentions, direct messages and followed threads."
+    }
+  }
+}

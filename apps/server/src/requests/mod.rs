@@ -175,7 +175,7 @@ pub async fn open_for_run(
 }
 
 /// Open a request: `request` holds its kind, title, detail, options,
-/// allowText, audience ({accounts, roles}), expiresInSeconds, onExpiry and
+/// allowText, sensitive, audience ({accounts, roles}), expiresInSeconds, onExpiry and
 /// clientRequestId. A repeat of the same `clientRequestId` (or run
 /// activity) returns the request already open.
 pub async fn open(
@@ -447,20 +447,24 @@ pub async fn open(
     .bind(Value::Array(options))
     .bind(allow_text)
     .bind(
-        // A join (A2.18) is answered by whoever its roles name; an agent a
-        // host made (A2.19) needs `agents.create`; a run's approval needs
-        // `runs.approve`.
-        match origin.subject {
-            Some((subject, _)) if subject == crate::hosts::register::REGISTER_SUBJECT => {
-                "agents.create"
+        if request.get("sensitive").and_then(Value::as_bool) == Some(true) {
+            SENSITIVE
+        } else {
+            // A join (A2.18) is answered by whoever its roles name; an agent a
+            // host made (A2.19) needs `agents.create`; a run's approval needs
+            // `runs.approve`.
+            match origin.subject {
+                Some((subject, _)) if subject == crate::hosts::register::REGISTER_SUBJECT => {
+                    "agents.create"
+                }
+                Some((subject, _))
+                    if kind == "approval" && subject != crate::accounts::join::JOIN_SUBJECT =>
+                {
+                    "runs.approve"
+                }
+                _ if kind == "approval" && origin.run_id.is_some() => "runs.approve",
+                _ => "requests.answer",
             }
-            Some((subject, _))
-                if kind == "approval" && subject != crate::accounts::join::JOIN_SUBJECT =>
-            {
-                "runs.approve"
-            }
-            _ if kind == "approval" && origin.run_id.is_some() => "runs.approve",
-            _ => "requests.answer",
         },
     )
     .bind(&accounts)
@@ -578,6 +582,10 @@ pub async fn get(
     .fetch_optional(&mut **transaction)
     .await?)
 }
+
+/// What a host's "is it the same agent?" request is about.
+const HOST_AGENT_SUBJECT: &str = "host_agent";
+const AGENT_REF_CHANGED: &str = "agent_ref_changed:";
 
 /// A host says one of its agents now has a reference from a different
 /// lineage (A1.11): it may be a different agent, so the account's managers
@@ -924,6 +932,9 @@ async fn holds_addressed_role(
     .await?)
 }
 
+/// The permission a sensitive request asks of whoever answers it (K1.14b).
+const SENSITIVE: &str = "requests.answer_sensitive";
+
 /// The space a request lives in, unlocked and unchecked: only for holding
 /// its workspace open before the request's row is locked.
 pub async fn space_of(
@@ -939,10 +950,11 @@ pub async fn space_of(
     )
 }
 
-/// Who may answer an open request they can see: an account it names; else
-/// a holder of one of the roles it names who has its permission; else,
-/// when it names nobody, anyone with its permission there. Never the
-/// account that raised it.
+/// Who may answer an open request they can see: an account it names (for
+/// a sensitive one, only while it holds its permission); else a holder of
+/// one of the roles it names who has its permission; else, when it names
+/// nobody, anyone with its permission there. Never the account that raised
+/// it.
 pub async fn may_answer(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &crate::access::Caller,
@@ -954,7 +966,9 @@ pub async fn may_answer(
     // Being asked by name still needs what answering it needs now: a
     // sponsor who has lost `runs.approve` no longer approves their run.
     if row.addressed_account_ids.contains(&caller.account_id) {
-        return holds(transaction, caller, row, true).await;
+        return Ok(
+            row.answer_permission != SENSITIVE || holds(transaction, caller, row, true).await?
+        );
     }
     if !row.addressed_role_keys.is_empty() {
         return Ok(
@@ -1223,6 +1237,25 @@ async fn follow(
     // A sponsored run request goes ahead or stops with its approval.
     if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
         crate::external_execution::approval_settled(state, transaction, row).await?;
+    }
+    // A host's "is it the same agent?" settles the rebind it proposed
+    // (K1.7): "same" accepts it, anything else sets it aside.
+    if row.subject_kind.as_deref() == Some(HOST_AGENT_SUBJECT)
+        && row
+            .client_request_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(AGENT_REF_CHANGED))
+        && let Some(agent) = row.subject_id
+    {
+        let same = status == "answered"
+            && row
+                .answer
+                .as_ref()
+                .and_then(|answer| answer.get("optionId"))
+                .and_then(Value::as_str)
+                == Some("same");
+        let by = by.unwrap_or(row.raised_by_account_id);
+        crate::accounts::refs::decide(transaction, agent, same, by).await?;
     }
     // An agent from outside joins when an admin approves (A2.18).
     if row.subject_kind.as_deref() == Some(crate::accounts::join::JOIN_SUBJECT) {

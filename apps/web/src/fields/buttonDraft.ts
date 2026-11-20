@@ -1,4 +1,4 @@
-import catalog from '../api/generated/catalog.json'
+import writes from '../api/generated/writes.json'
 import type { ButtonInput } from './api'
 import { buttonArgumentsShown, type FieldDefinition } from './fieldModel'
 
@@ -10,8 +10,8 @@ export const MAX_STEPS = 3
 const NEW_ARGUMENTS = '{\n  "spaceId": "{{space.id}}"\n}'
 
 /** The operations a button can run: every change the app has, but pressing buttons. */
-export const OPERATIONS = (catalog as Array<{ name: string; title: string; kind: string }>)
-  .filter((entry) => ['create', 'change', 'suggest'].includes(entry.kind) && entry.name !== 'button_press')
+export const OPERATIONS = (writes as Array<{ name: string; title: string; kind: string }>)
+  .filter((entry) => entry.name !== 'button_press')
   .sort((a, b) => a.title.localeCompare(b.title))
 
 export const newStep = (): StepDraft => ({ key: crypto.randomUUID(), operation: OPERATIONS[0]?.name ?? '', arguments: NEW_ARGUMENTS })

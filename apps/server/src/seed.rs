@@ -119,13 +119,14 @@ async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, App
         INSERT INTO organization_memberships (
             organization_id, actor_id, role, enabled
         )
-        VALUES ($1, $2, 'owner', true)
+        VALUES ($1, $2, $3, true)
         ON CONFLICT (organization_id, actor_id)
-        DO UPDATE SET role = 'owner', enabled = true, updated_at = now()
+        DO UPDATE SET role = $3, enabled = true, updated_at = now()
         "#,
     )
     .bind(organization_id)
     .bind(human_actor_id)
+    .bind(crate::access::tier::OWNER)
     .execute(&mut *transaction)
     .await?;
 

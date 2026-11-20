@@ -1051,17 +1051,30 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
 /// pays one indexed read per message.
 pub async fn admit_message(
     connection: &mut PgConnection,
-    space_id: Uuid,
+    space_id: Option<Uuid>,
     conversation_id: Uuid,
     account_id: Uuid,
     message_id: Uuid,
 ) -> Result<(), AppError> {
-    let Some(workspace_id) =
-        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM spaces WHERE id = $1")
-            .bind(space_id)
-            .fetch_optional(&mut *connection)
-            .await?
-    else {
+    // A message in a space counts in its workspace; one in a DM or group
+    // counts in the workspace the conversation was kept in, and one in the
+    // direct scope belongs to no workspace, so no workspace's limit holds it.
+    let workspace_id = match space_id {
+        Some(space) => {
+            sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM spaces WHERE id = $1")
+                .bind(space)
+                .fetch_optional(&mut *connection)
+                .await?
+        }
+        None => sqlx::query_scalar::<_, Uuid>(
+            "-- visibility: the sender's message in it was just admitted\n\
+             SELECT workspace_id FROM conversations WHERE id = $1 AND workspace_id <> direct_scope_id()",
+        )
+        .bind(conversation_id)
+        .fetch_optional(&mut *connection)
+        .await?,
+    };
+    let Some(workspace_id) = workspace_id else {
         return Ok(());
     };
     let dedupe_key = format!("message:{message_id}");
@@ -1069,7 +1082,7 @@ pub async fn admit_message(
         connection,
         Ask {
             account_id: Some(account_id),
-            space_id: Some(space_id),
+            space_id,
             conversation_id: Some(conversation_id),
             record: Some(Recorded {
                 source_kind: "message",

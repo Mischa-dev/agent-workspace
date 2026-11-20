@@ -460,11 +460,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         return Ok(0);
     }
     for event in events {
-        let direct =
-            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                .bind(event.project_id)
-                .fetch_one(crate::db::scoped(&state.pool))
-                .await?;
+        let direct = crate::spaces::kind::holds_messages(event.project_id);
         if shut_out(modules, &event.event_type, direct) {
             continue;
         }
@@ -524,7 +520,8 @@ impl Caller {
     }
 
     pub(crate) fn mcp(principal: &McpPrincipal) -> Self {
-        let account_wide = principal.actor_kind == ActorKind::Human && principal.account_wide;
+        let person = principal.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's token or grant is scoped by how it was made)
+        let account_wide = person && principal.account_wide;
         Self {
             actor_id: principal.actor_id,
             actor_kind: principal.actor_kind,
@@ -533,8 +530,7 @@ impl Caller {
             external_agent_connection_id: principal.external_agent_connection_id,
             // Agents reach the projects their connection allows; a person's
             // token or project-scoped grant reaches its one project.
-            token_project_id: (!account_wide && principal.actor_kind == ActorKind::Human)
-                .then_some(principal.project_id),
+            token_project_id: (!account_wide && person).then_some(principal.project_id),
             can_write: principal.can_write(),
             channel: "mcp",
             authentication_class: principal.authentication_class,

@@ -240,18 +240,19 @@ pub async fn resolve(
             r#"
             SELECT conversation.id
             FROM conversations conversation
-            WHERE conversation.project_id = ANY($2)
+            WHERE COALESCE(conversation.project_id, direct_scope_id()) = ANY($2)
               AND conversation.archived_at IS NULL
               AND conversation_visible_to(conversation.id, $1)
               AND (
                   (conversation.kind = 'channel'
                    AND (lower(conversation.name) = ANY($3)
                         OR lower(replace(conversation.name, ' ', '-')) = ANY($3)))
+                  -- A DM is in no space (K4.15): the other person goes by
+                  -- their handle in any workspace.
                   OR (conversation.kind = 'dm' AND EXISTS (
                       SELECT 1
                       FROM conversation_members them
-                      JOIN project_memberships person
-                        ON person.project_id = them.project_id AND person.actor_id = them.actor_id
+                      JOIN organization_actor_profiles person ON person.actor_id = them.actor_id
                       WHERE them.conversation_id = conversation.id
                         AND them.actor_id <> $1
                         AND lower(person.handle) = ANY($4)))
@@ -530,6 +531,17 @@ pub async fn search(
         query = query.bind(&projects[..]);
     }
     let mut hits = query.fetch_all(crate::db::scoped(pool)).await?;
+    // A DM or group is in no space, so a credential's limit can't narrow it
+    // by `projects`: a kept one follows its workspace's limit, as opening it
+    // would (`access::direct_grant_allows`).
+    hits.retain(|hit| {
+        hit.project_id != Some(crate::spaces::DIRECT)
+            || !crate::policy::agent_limit_hides_direct(
+                viewer,
+                hit.workspace_id,
+                crate::policy::Permission::ProjectsView,
+            )
+    });
     for hit in &mut hits {
         hit.link(addresses);
     }
@@ -557,8 +569,9 @@ const MESSAGES_SQL: &str = r#"
            CASE WHEN $2 = '' THEN left(message.plain_text, 300)
                 ELSE ts_headline('english', message.plain_text, query.q,
                                  'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') END AS snippet,
-           message.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(message.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, message.workspace_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            author.display_name AS author, message.created_at::text AS at,
            CASE WHEN space.direct THEN 'direct'
@@ -570,13 +583,12 @@ const MESSAGES_SQL: &str = r#"
            (CASE WHEN $2 = '' THEN 0 ELSE ts_rank(message.search_vector, query.q) END)::real AS rank
     FROM query, messages message
     JOIN conversations conversation ON conversation.id = message.conversation_id
-    JOIN projects project ON project.id = message.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
-    LEFT JOIN project_memberships author
-      ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
+    LEFT JOIN projects project ON project.id = message.project_id
+    CROSS JOIN LATERAL (SELECT message.project_id IS NULL AS direct) space
+    LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author ON true
     WHERE ($2 = '' OR message.search_vector @@ query.q)
       AND message.removed_at IS NULL
-      AND message.project_id = ANY({projects})
+      AND COALESCE(message.project_id, direct_scope_id()) = ANY({projects})
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $1)
       AND ($3::uuid[] IS NULL OR conversation.id = ANY($3) OR conversation.parent_channel_id = ANY($3))
@@ -621,8 +633,9 @@ const THREADS_SQL: &str = r#"
     SELECT 'thread' AS kind, thread.id,
            thread.name AS title, thread.thread_status AS status,
            COALESCE(thread.thread_outcome, '') AS snippet,
-           thread.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(thread.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, thread.workspace_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            parent.id AS conversation_id, parent.name AS conversation_name,
            NULL::text AS author,
            COALESCE(thread.thread_status_changed_at, thread.created_at)::text AS at,
@@ -634,12 +647,12 @@ const THREADS_SQL: &str = r#"
                               query.q) * 1.5 END)::real AS rank
     FROM query, conversations thread
     JOIN conversations parent ON parent.id = thread.parent_channel_id
-    JOIN projects project ON project.id = thread.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
+    LEFT JOIN projects project ON project.id = thread.project_id
+    CROSS JOIN LATERAL (SELECT thread.project_id IS NULL AS direct) space
     WHERE thread.kind = 'thread'
       AND ($2 = ''
            OR to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')) @@ query.q)
-      AND thread.project_id = ANY({projects})
+      AND COALESCE(thread.project_id, direct_scope_id()) = ANY({projects})
       AND thread.archived_at IS NULL
       AND conversation_visible_to(thread.id, $1)
       AND ($3::uuid[] IS NULL OR parent.id = ANY($3) OR thread.id = ANY($3))
@@ -702,6 +715,7 @@ const PAGES_SQL: &str = r#"
     WHERE page.search_vector @@ query.q
       AND page.project_id = ANY({projects})
       AND page.archived_at IS NULL
+      AND (page.memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(page.id, $1))
       AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
       AND $3::uuid[] IS NULL
       AND ($4::uuid[] IS NULL OR page.updated_by_actor_id = ANY($4))
@@ -719,7 +733,7 @@ const DECISIONS_SQL: &str = r#"
            CASE WHEN decision.status = 'superseded' THEN 'superseded' END AS status,
            left(decision.detail, 400) AS snippet,
            decision.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           project.name AS project_name,
            decision.source_conversation_id AS conversation_id, source.name AS conversation_name,
            decider.display_name AS author, decision.created_at::text AS at,
            'decision' AS link_kind,
@@ -863,8 +877,9 @@ const FILES_SQL: &str = r#"
                     'In ' || CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END
                 ELSE 'On ' || project.project_key || '-' || item.number::text || ' ' || item.title
            END AS snippet,
-           file.project_id, project.organization_id AS workspace_id,
-           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           COALESCE(file.project_id, direct_scope_id()) AS project_id,
+           COALESCE(project.organization_id, file.organization_id) AS workspace_id,
+           COALESCE(project.name, 'Messages') AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            uploader.display_name AS author, file.created_at::text AS at,
            CASE WHEN file.message_id IS NULL THEN 'task'
@@ -878,16 +893,15 @@ const FILES_SQL: &str = r#"
            (CASE WHEN file.search_vector @@ query.q
                  THEN ts_rank(file.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
     FROM query, files file
-    JOIN projects project ON project.id = file.project_id
-    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
+    LEFT JOIN projects project ON project.id = file.project_id
+    CROSS JOIN LATERAL (SELECT file.project_id IS NULL AS direct) space
     LEFT JOIN conversations conversation ON conversation.id = file.conversation_id
     LEFT JOIN messages message ON message.id = file.message_id
     LEFT JOIN task_rows item
       ON item.project_id = file.project_id AND item.id = file.work_item_id
-    LEFT JOIN project_memberships uploader
-      ON uploader.project_id = file.project_id AND uploader.actor_id = file.uploaded_by_actor_id
+    LEFT JOIN LATERAL place_profile(file.project_id, file.uploaded_by_actor_id) uploader ON true
     WHERE (file.search_vector @@ query.q OR file.name ILIKE query.pattern)
-      AND file.project_id = ANY({projects})
+      AND COALESCE(file.project_id, direct_scope_id()) = ANY({projects})
       AND file.attached_at IS NOT NULL
       AND file.removed_at IS NULL
       -- A page's own files are found through the page (C1.28 adds them).
@@ -904,7 +918,7 @@ const FILES_SQL: &str = r#"
       -- $9 (files only): projects whose conversations show (Messages for DMs,
       -- Channels for a project), so a file never names a conversation whose
       -- module is off.
-      AND (file.conversation_id IS NULL OR file.project_id = ANY($9))
+      AND (file.conversation_id IS NULL OR COALESCE(file.project_id, direct_scope_id()) = ANY($9))
       AND ($3::uuid[] IS NULL OR conversation.id = ANY($3) OR conversation.parent_channel_id = ANY($3))
       AND ($4::uuid[] IS NULL OR file.uploaded_by_actor_id = ANY($4))
       AND ($5::timestamptz IS NULL OR file.created_at >= $5)
@@ -948,7 +962,7 @@ pub async fn projects_allowing(
     .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
-    .filter(|project| !crate::policy::agent_limit_hides(viewer, *project, permission))
+    .filter(|project| !crate::access::limit_hides(viewer, *project, permission))
     .collect())
 }
 
@@ -971,6 +985,10 @@ pub async fn reachable_projects(
           ON membership.project_id = project.id AND membership.actor_id = $1 AND membership.enabled
         WHERE project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
+        -- DMs and groups live in no space (K4.17): their place.
+        UNION ALL
+        SELECT direct_scope_id()
+        WHERE $2::uuid IS NULL OR agent_connection_can_reach_direct($2)
         "#,
     )
     .bind(actor_id)

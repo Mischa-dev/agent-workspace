@@ -141,6 +141,12 @@ const memberRemoved: Handler = (event) => {
     sidebarSections, ...(id ? [conversationThing(id)] : [])]
 }
 
+/**
+ * Someone joined a group or private channel: its members, and for the new
+ * member the lists it now shows in.
+ */
+const memberAdded: Handler = (event, context) => [...updated(event, context), rail]
+
 export const conversationHandlers: Record<string, Handler> = {
   'conversation.created': created,
   'conversation.updated': updated,
@@ -150,5 +156,6 @@ export const conversationHandlers: Record<string, Handler> = {
   'conversation.message.updated': messageUpdated,
   'conversation.message.reactions.updated': reactions,
   'conversation.read_state.updated': readState,
+  'conversation.member.added': memberAdded,
   'conversation.member.removed': memberRemoved,
 }

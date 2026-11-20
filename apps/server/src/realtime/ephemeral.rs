@@ -202,7 +202,8 @@ async fn delta_route_here(
                COALESCE(parent.visibility, conversation.visibility) <> 'project'
         FROM conversations conversation
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
-        WHERE conversation.id = $1 AND conversation.project_id = $2
+        WHERE conversation.id = $1
+          AND COALESCE(conversation.project_id, direct_scope_id()) = $2
           AND conversation_visible_to(conversation.id, $3)
         "#,
     )

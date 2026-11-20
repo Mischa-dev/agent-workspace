@@ -501,15 +501,33 @@ pub(crate) async fn add_person(
     .execute(&setup.pool)
     .await
     .expect("organization membership");
+    // Their workspace name, which also puts them in the workspace's space.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, actor_id) DO NOTHING",
+    )
+    .bind(setup.organization_id)
+    .bind(actor_id)
+    .bind(display_name)
+    .bind(handle)
+    .execute(&setup.pool)
+    .await
+    .expect("workspace profile");
     for project in projects {
+        // DMs live in no space (K4.17): the workspace membership is enough.
+        let project = project.parse::<Uuid>().expect("project");
+        if project == agent_workspace_server::spaces::DIRECT {
+            continue;
+        }
         sqlx::query(
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
             VALUES ($1, $2, $3, 'member', $4, $5)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
             "#,
         )
         .bind(Uuid::now_v7())
-        .bind(project.parse::<Uuid>().expect("project"))
+        .bind(project)
         .bind(actor_id)
         .bind(display_name)
         .bind(handle)
@@ -1986,24 +2004,39 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
         .await
         .expect("users");
     ids.extend(users);
+    // K4.17: DMs and groups live in the direct scope, not in a workspace;
+    // they belong to the people in them.
+    let direct = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: a test sweep of every row a workspace's people own.
+        SELECT DISTINCT conversation.id FROM conversations conversation
+        JOIN conversation_members member ON member.conversation_id = conversation.id
+        WHERE conversation.project_id IS NULL AND member.actor_id = ANY($1)
+        "#,
+    )
+    .bind(&actors)
+    .fetch_all(pool)
+    .await
+    .expect("direct conversations");
+    ids.extend(direct);
 
     // Tables with a UUID `id` and one of these parent columns.
     let tables = sqlx::query_as::<_, (String, String)>(
         r#"
-        SELECT parent.table_name::text, parent.column_name::text
-        FROM information_schema.columns parent
-        JOIN information_schema.columns own
-          ON own.table_schema = parent.table_schema
-         AND own.table_name = parent.table_name
-         AND own.column_name = 'id'
-         AND own.data_type = 'uuid'
-        JOIN information_schema.tables listed
-          ON listed.table_schema = parent.table_schema
-         AND listed.table_name = parent.table_name
-         AND listed.table_type = 'BASE TABLE'
-        WHERE parent.table_schema = current_schema()
-          AND parent.data_type = 'uuid'
-          AND parent.column_name IN (
+        -- From pg_catalog: the same join over information_schema's views
+        -- took twenty seconds a sweep, three sweeps a test.
+        SELECT listed.relname::text, parent.attname::text
+        FROM pg_class listed
+        JOIN pg_namespace schema
+          ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
+        JOIN pg_attribute own
+          ON own.attrelid = listed.oid AND own.attname = 'id'
+         AND own.atttypid = 'uuid'::regtype AND NOT own.attisdropped
+        JOIN pg_attribute parent
+          ON parent.attrelid = listed.oid AND parent.attnum > 0
+         AND parent.atttypid = 'uuid'::regtype AND NOT parent.attisdropped
+        WHERE listed.relkind IN ('r', 'p')
+          AND parent.attname IN (
               'organization_id', 'project_id', 'conversation_id', 'work_item_id',
               'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id',
               -- K4.3 (G6): the names new tables use (ruling R1).

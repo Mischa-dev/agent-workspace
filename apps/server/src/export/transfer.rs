@@ -596,7 +596,16 @@ const HIDDEN: &str = r#"
         WHERE project_id = ANY(NOT_SPACES)
            OR (kind IN ('dm', 'group')
                AND (workspace_id = $1
-                    OR project_id IN (SELECT id FROM projects WHERE organization_id = $1)))
+                    OR project_id IN (SELECT id FROM projects WHERE organization_id = $1)
+                    -- in no workspace: one with a member of this workspace,
+                    -- whose rows here may name it
+                    OR (workspace_id = direct_scope_id()
+                        AND EXISTS (
+                            SELECT 1 FROM conversation_members member
+                            JOIN organization_memberships workspace_member
+                              ON workspace_member.actor_id = member.actor_id
+                             AND workspace_member.organization_id = $1
+                            WHERE member.conversation_id = conversations.id))))
         UNION
         SELECT child.id FROM conversations child
         JOIN direct ON child.parent_channel_id = direct.id
@@ -644,6 +653,8 @@ async fn accounts(
                jsonb_strip_nulls(jsonb_build_object(
                    'id', actor.id,
                    'kind', actor.account_kind,
+                   -- an agent that runs on a profile keeps its memberships' worker role
+                   'profile', actor.kind = 'execution_worker', -- // kind-check: mechanical (how the account runs)
                    'displayName', COALESCE(profile.display_name, person.display_name),
                    'handle', profile.handle,
                    'ownedByThisWorkspace', actor.owner_workspace_id = $1,
@@ -653,12 +664,20 @@ async fn accounts(
                                  ORDER BY email.address)
                               FROM user_email_addresses email
                               WHERE email.user_id = person.id)))
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
+        FROM actors actor
         LEFT JOIN users person ON person.actor_id = actor.id
         LEFT JOIN organization_actor_profiles profile
           ON profile.organization_id = $1 AND profile.actor_id = actor.id
-        WHERE membership.organization_id = $1
+        WHERE actor.id IN (
+            SELECT actor_id FROM organization_memberships WHERE organization_id = $1
+            -- a space's worker, unlisted in the workspace (K1.5), travels
+            -- with its seat; its machine is set up again after import
+            UNION
+            SELECT seat.actor_id FROM project_memberships seat
+            JOIN projects space ON space.id = seat.project_id
+            JOIN actors worker ON worker.id = seat.actor_id
+            WHERE space.organization_id = $1
+              AND worker.kind = 'execution_worker') -- // kind-check: mechanical (how the account runs)
         ORDER BY actor.id
         "#,
     )

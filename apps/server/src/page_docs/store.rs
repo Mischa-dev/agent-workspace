@@ -563,6 +563,28 @@ pub async fn lock_page(
     .await?)
 }
 
+/// The page locked for `viewer`'s change: as [`lock_page`], and `None` for
+/// a conversation's memory page they can't read (A2.16), whatever path the
+/// change comes by.
+pub async fn lock_page_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    page_id: Uuid,
+    viewer: Uuid,
+) -> Result<Option<LockedPage>, AppError> {
+    let visible = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_pages WHERE id = $1 \
+         AND (memory_for_kind IS DISTINCT FROM 'conversation' OR page_visible_to(id, $2)))",
+    )
+    .bind(page_id)
+    .bind(viewer)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !visible {
+        return Ok(None);
+    }
+    lock_page(transaction, page_id).await
+}
+
 /// A stored document.
 #[derive(Clone, Debug, FromRow)]
 pub struct Stored {

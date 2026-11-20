@@ -161,6 +161,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("retention", &["retention.rs"]),
     // Requests of every workspace that ran out of time.
     ("requests.expire", &["requests/mod.rs"]),
+    // Memberships of every workspace whose time has come.
+    ("memberships.expire", &["memberships/expiry.rs"]),
     // Statuses of every account whose time to clear has come.
     ("statuses.clear", &["statuses.rs"]),
     // Files nothing holds any more, unfinished uploads and old link

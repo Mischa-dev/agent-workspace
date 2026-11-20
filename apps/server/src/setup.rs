@@ -457,6 +457,16 @@ async fn set_up(
         .bind(password_phc)
         .execute(&mut *transaction)
         .await?;
+        // The setup code comes from the server's own files, so whoever
+        // holds it runs the server, as `bootstrap-admin` makes its user
+        // (K1.30).
+        sqlx::query(
+            "INSERT INTO server_roles (account_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(person.account_id)
+        .bind(crate::server_status::OPERATOR)
+        .execute(&mut *transaction)
+        .await?;
         let established = establish_session_in_transaction(
             &state.config,
             &headers,

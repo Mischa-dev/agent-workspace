@@ -58,6 +58,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("collection_view_pins", WORKSPACE_ID),
     ("collection_views", WORKSPACE_ID),
     ("collections", WORKSPACE_ID),
+    ("conversation_agent_settings", WORKSPACE_ID),
     ("conversation_entries", WORKSPACE_ID),
     ("conversation_members", WORKSPACE_ID),
     ("conversation_notification_levels", WORKSPACE_ID),
@@ -83,6 +84,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("file_objects_pending", WORKSPACE_ID),
     ("file_uploads", WORKSPACE_ID),
     ("files", ORGANIZATION_ID),
+    ("follows", WORKSPACE_ID),
     ("git_worktrees", WORKSPACE_ID),
     ("github_connect_attempts", ORGANIZATION_ID),
     ("github_installation_claims", ORGANIZATION_ID),
@@ -99,6 +101,8 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("github_pull_request_workspace_links", WORKSPACE_ID),
     ("github_pull_requests", WORKSPACE_ID),
     ("github_webhook_deliveries", WORKSPACE_ID),
+    ("guard_holds", WORKSPACE_ID),
+    ("guards", WORKSPACE_ID),
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
     ("host_a2a_tasks", WORKSPACE_ID),
@@ -110,7 +114,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
     ("links", WORKSPACE_ID),
-    ("mcp_client_credentials", WORKSPACE_ID),
     ("mcp_oauth_access_tokens", WORKSPACE_ID),
     ("mcp_oauth_authorization_codes", WORKSPACE_ID),
     ("mcp_oauth_grants", WORKSPACE_ID),
@@ -181,8 +184,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("repositories", WORKSPACE_ID),
     ("repository_workspaces", WORKSPACE_ID),
     ("requests", WORKSPACE_ID),
+    ("role_grants", WORKSPACE_ID),
     ("run_activities", WORKSPACE_ID),
-    ("run_credentials", WORKSPACE_ID),
+    ("access_tokens", WORKSPACE_ID),
     ("run_usage", WORKSPACE_ID),
     ("runs", WORKSPACE_ID),
     ("saved_items", ORGANIZATION_ID),
@@ -204,6 +208,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("task_import_links", WORKSPACE_ID),
     ("task_imports", WORKSPACE_ID),
     ("task_templates", WORKSPACE_ID),
+    ("thing_grants", WORKSPACE_ID),
     ("things", WORKSPACE_ID),
     ("usage_accounts", ORGANIZATION_ID),
     ("usage_reports", WORKSPACE_ID),
@@ -230,7 +235,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("work_item_statuses", WORKSPACE_ID),
     ("work_item_timeline_entries", WORKSPACE_ID),
     ("work_item_types", WORKSPACE_ID),
-    ("work_item_watchers", WORKSPACE_ID),
     ("work_item_worker_invocations", WORKSPACE_ID),
     ("work_items", WORKSPACE_ID),
     ("workos_agent_bindings", ORGANIZATION_ID),
@@ -266,6 +270,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "agent_outside_refs",
+        "which agent elsewhere an agent account is: accounts are server-wide (R19), so the reference is too",
     ),
     (
         "agent_connections",
@@ -393,6 +401,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "an issuer's identity linked to an account, and accounts are server-wide (H1.18)",
     ),
     (
+        "server_roles",
+        "who runs the server itself (its operators): above every workspace (K1.30)",
+    ),
+    (
         "sessions",
         "browser sign-in sessions, before any workspace is chosen",
     ),
@@ -425,6 +437,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "workos_login_attempts",
         "sign-in ceremonies, before any account is known",
     ),
+    (
+        "account_credentials",
+        "an account's credentials belong to the account (R19); workspace_id only narrows one",
+    ),
 ];
 
 /// Tables that must stay global whenever they exist: accounts, their
@@ -447,6 +463,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
     "account_credentials",
     "account_managers",
     "agent_outside_refs",
+    "server_roles",
     "agent_connections",
     "connection_signing_secrets",
     "hosts",

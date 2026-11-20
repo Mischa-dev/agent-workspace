@@ -180,11 +180,12 @@ async fn direct_conversations_are_private_to_their_members() {
         .expect("drop schema");
 }
 
-/// An agent connected in one of your projects can be messaged without being
-/// connected again under Messages. Agents you share no project with, and
-/// switched-off agents, stay out of reach.
+/// K4.12: who you may DM is whoever shares a workspace with you there, by
+/// your role's `direct.start`; what anyone may do in a DM follows their
+/// workspace roles, for agents exactly as for people. Switched-off accounts
+/// stay out of reach.
 #[tokio::test]
-async fn agents_in_your_projects_can_be_messaged() {
+async fn agent_dm_permissions_follow_role() {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return;
@@ -232,13 +233,7 @@ async fn agents_in_your_projects_can_be_messaged() {
         headers
     };
     let (_, overview) = call(&app, "GET", "/api/v1/direct", &headers(None), Value::Null).await;
-    let space_id = uuid(&overview, "projectId");
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(space_id)
-            .fetch_one(&pool)
-            .await
-            .expect("organization");
+    let organization_id = uuid(&overview, "organizationId");
     let project = |key: &'static str| {
         let headers = headers(Some(key));
         let app = app.clone();
@@ -286,35 +281,11 @@ async fn agents_in_your_projects_can_be_messaged() {
     let elsewhere = project("ELSE").await;
     let mara = connect(build, "Mara", "member").await;
     let rook = connect(build, "Rook", "member").await;
-    let watcher = connect(build, "Watcher", "viewer").await;
     let off = connect(build, "Off", "member").await;
+    // Ghost works only in a project the owner left: sharing the workspace
+    // is enough to be messaged.
     let ghost = connect(elsewhere, "Ghost", "member").await;
-    // Stale also works in Build, but its connection is switched off, so it
-    // can't reach anything any more. (K1.6: archiving the project it was
-    // first added to no longer does that; the connection is the workspace's.)
-    let attic = project("ATTIC").await;
-    let stale = connect(attic, "Stale", "member").await;
     let owner = owner_actor(&pool).await;
-    sqlx::query(
-        r#"
-        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
-        VALUES ($1, $2, $3, 'member', 'Stale', 'stale')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(build)
-    .bind(stale)
-    .execute(&pool)
-    .await
-    .expect("add Stale to Build");
-    sqlx::query(
-        "UPDATE external_agent_connections SET status = 'disabled', disabled_at = now() WHERE actor_id = $1",
-    )
-    .bind(stale)
-    .execute(&pool)
-    .await
-    .expect("switch Stale's connection off");
-    // The owner leaves Elsewhere, so Ghost shares no project with them.
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
     )
@@ -337,45 +308,21 @@ async fn agents_in_your_projects_can_be_messaged() {
         .iter()
         .map(|person| uuid(person, "id"))
         .collect::<Vec<_>>();
-    assert!(listed.contains(&mara) && listed.contains(&rook) && listed.contains(&watcher));
-    assert!(
-        !listed.contains(&ghost),
-        "Ghost shares no project with the owner"
-    );
+    assert!(listed.contains(&mara) && listed.contains(&rook) && listed.contains(&ghost));
     assert!(
         !listed.contains(&off),
         "a switched-off agent can't be messaged"
     );
-    assert!(
-        !listed.contains(&stale),
-        "an agent whose connection is off can't answer"
-    );
-
-    let (status, dm) = call(
+    let (status, _) = call(
         &app,
         "POST",
         "/api/v1/direct/dms",
         &headers(None),
-        json!({ "actorId": mara }),
+        json!({ "actorId": off }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{dm}");
-    let dm_id = uuid(&dm["conversation"], "id");
-    assert!(visible(&pool, dm_id, mara).await);
-    assert!(!visible(&pool, dm_id, rook).await);
-
-    for unreachable in [ghost, off, stale] {
-        let (status, _) = call(
-            &app,
-            "POST",
-            "/api/v1/direct/dms",
-            &headers(None),
-            json!({ "actorId": unreachable }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-    let (status, _) = call(
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, group) = call(
         &app,
         "POST",
         "/api/v1/direct/groups",
@@ -383,76 +330,21 @@ async fn agents_in_your_projects_can_be_messaged() {
         json!({ "memberIds": [rook, ghost] }),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    let (status, group) = call(
-        &app,
-        "POST",
-        "/api/v1/direct/groups",
-        &headers(Some("group-with-rook")),
-        json!({ "memberIds": [rook, watcher] }),
-    )
-    .await;
     assert_eq!(status, StatusCode::CREATED, "{group}");
-    assert!(visible(&pool, uuid(&group["conversation"], "id"), rook).await);
-
-    // Three agents with the same handle, from three projects, can all join.
-    let mut twins = Vec::new();
-    for (key, name) in [("TWINA", "TwinA"), ("TWINB", "TwinB"), ("TWINC", "TwinC")] {
-        let home = project(key).await;
-        let twin = connect(home, name, "member").await;
-        sqlx::query("UPDATE project_memberships SET handle = 'twin' WHERE project_id = $1 AND actor_id = $2")
-            .bind(home)
-            .bind(twin)
-            .execute(&pool)
+    let group_id = uuid(&group["conversation"], "id");
+    assert!(visible(&pool, group_id, ghost).await);
+    let space =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT project_id FROM conversations WHERE id = $1")
+            .bind(group_id)
+            .fetch_one(&pool)
             .await
-            .expect("same handle");
-        twins.push(twin);
-    }
-    let (status, trio) = call(
-        &app,
-        "POST",
-        "/api/v1/direct/groups",
-        &headers(Some("group-of-twins")),
-        json!({ "memberIds": twins }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{trio}");
-    let handles = sqlx::query_scalar::<_, String>(
-        "SELECT handle FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
-    )
-    .bind(space_id)
-    .bind(&twins)
-    .fetch_all(&pool)
-    .await
-    .expect("twin handles");
-    assert_eq!(handles.len(), 3);
+            .expect("group");
+    assert_eq!(space, None, "a group lives in no space");
 
-    // Each keeps its access: the read-only agent stays read-only here.
-    let roles = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT actor_id, role FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
-    )
-    .bind(space_id)
-    .bind(vec![mara, rook, watcher, ghost, off])
-    .fetch_all(&pool)
-    .await
-    .expect("space memberships")
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-    assert_eq!(
-        roles,
-        BTreeMap::from([
-            (mara, "member".to_owned()),
-            (rook, "member".to_owned()),
-            (watcher, "viewer".to_owned()),
-        ])
-    );
-
-    // An agent's read-only access in Messages holds even when its token may
-    // write and its workspace role is Member: Writer, made a Viewer in Build
-    // after it was connected, joins its DM as a Viewer and can't post there,
-    // while Talker, a Member, can; nor does a change to Writer's workspace
-    // role lift its role in Messages.
+    // Talker and Writer can both be messaged. Writer's workspace role is
+    // Viewer, so it can't post in its DM even with a token that writes;
+    // made a Member in the workspace, it can. A role in a project changes
+    // nothing in a DM.
     let agent = |name: &'static str| {
         let headers = headers(None);
         let app = app.clone();
@@ -481,14 +373,34 @@ async fn agents_in_your_projects_can_be_messaged() {
     };
     let (talker, talker_token) = agent("Talker").await;
     let (writer, writer_token) = agent("Writer").await;
-    sqlx::query(
-        "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(build)
-    .bind(writer)
-    .execute(&pool)
-    .await
-    .expect("Writer becomes a Viewer in Build");
+    let workspace_role = |actor: Uuid, role: &'static str| {
+        let pool = pool.clone();
+        async move {
+            // A workspace has no built-in viewer: a custom role reads only.
+            sqlx::query(
+                "INSERT INTO workspace_roles (id, organization_id, key, base_role, name) \
+                 VALUES (gen_random_uuid(), $1, 'reader', 'viewer', 'Reader') \
+                 ON CONFLICT (organization_id, key) DO NOTHING",
+            )
+            .bind(organization_id)
+            .execute(&pool)
+            .await
+            .expect("reader role");
+            sqlx::query(
+                "UPDATE organization_memberships SET role = 'member', \
+                     role_id = (SELECT id FROM workspace_roles \
+                                WHERE organization_id = $1 AND key = 'reader' AND $3 = 'viewer') \
+                 WHERE organization_id = $1 AND actor_id = $2",
+            )
+            .bind(organization_id)
+            .bind(actor)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("workspace role");
+        }
+    };
+    workspace_role(writer, "viewer").await;
     let mut dms = Vec::new();
     for (actor, key) in [(talker, "dm-talker"), (writer, "dm-writer")] {
         let (status, dm) = call(
@@ -502,66 +414,40 @@ async fn agents_in_your_projects_can_be_messaged() {
         assert_eq!(status, StatusCode::CREATED, "{dm}");
         dms.push(uuid(&dm["conversation"], "id"));
     }
-    let space_role = |actor: Uuid| {
-        let pool = pool.clone();
+    let send = |token: String, conversation: Uuid, key: &'static str| {
+        let app = app.clone();
         async move {
-            sqlx::query_scalar::<_, String>(
-                "SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+            let session = super::agent_interface::initialize(&app, &token)
+                .await
+                .expect("session");
+            super::agent_interface::tool(
+                &app,
+                &token,
+                &session,
+                "message_send",
+                json!({"conversationId": conversation, "text": "Hello", "clientRequestId": key}),
             )
-            .bind(space_id)
-            .bind(actor)
-            .fetch_one(&pool)
             .await
-            .expect("space role")
         }
     };
-    assert_eq!(space_role(writer).await, "viewer");
-    let talker_session = super::agent_interface::initialize(&app, &talker_token)
-        .await
-        .expect("Talker's session");
-    let said = super::agent_interface::tool(
-        &app,
-        &talker_token,
-        &talker_session,
-        "message_send",
-        json!({"conversationId": dms[0], "text": "Talker here", "clientRequestId": "talker-hello"}),
-    )
-    .await;
+    let said = send(talker_token.clone(), dms[0], "talker-hello").await;
     assert_eq!(said["outcome"], "ok", "{said}");
-    let writer_session = super::agent_interface::initialize(&app, &writer_token)
-        .await
-        .expect("Writer's session");
-    let refused = super::agent_interface::tool(
-        &app,
-        &writer_token,
-        &writer_session,
-        "message_send",
-        json!({"conversationId": dms[1], "text": "Writer here", "clientRequestId": "writer-hello"}),
-    )
-    .await;
+    let refused = send(writer_token.clone(), dms[1], "writer-hello").await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
-    let posted: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM messages WHERE conversation_id = $1 AND author_actor_id = $2",
-    )
-    .bind(dms[1])
-    .bind(writer)
-    .fetch_one(&pool)
-    .await
-    .expect("Writer's messages");
-    assert_eq!(posted, 0, "the Viewer agent posted in Messages");
+    // A project role doesn't lift it.
     sqlx::query(
-        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
     )
-    .bind(organization_id)
+    .bind(build)
     .bind(writer)
     .execute(&pool)
     .await
-    .expect("a change to Writer's workspace role");
-    assert_eq!(
-        space_role(writer).await,
-        "viewer",
-        "an agent's role in Messages followed its workspace role"
-    );
+    .expect("Writer an admin in Build");
+    let still = send(writer_token.clone(), dms[1], "writer-again").await;
+    assert_ne!(still["outcome"], "ok", "{still}");
+    workspace_role(writer, "member").await;
+    let allowed = send(writer_token, dms[1], "writer-member").await;
+    assert_eq!(allowed["outcome"], "ok", "{allowed}");
 
     agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
@@ -575,31 +461,58 @@ async fn add_agent(pool: &PgPool, space_id: Uuid, name: &str, handle: &str) -> U
         .execute(pool)
         .await
         .expect("insert agent");
+    // DMs live in no space: an agent is reached through its workspace.
+    let organization_id = if space_id == agent_workspace_server::spaces::DIRECT {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT organization_id FROM organization_memberships ORDER BY created_at LIMIT 1",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("the workspace")
+    } else {
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(space_id)
+            .fetch_one(pool)
+            .await
+            .expect("the space's workspace")
+    };
     sqlx::query(
-        r#"
-        INSERT INTO organization_memberships (organization_id, actor_id, role)
-        SELECT organization_id, $2, 'member' FROM projects WHERE id = $1
-        "#,
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
     )
-    .bind(space_id)
+    .bind(organization_id)
     .bind(actor_id)
     .execute(pool)
     .await
     .expect("insert agent organization membership");
     sqlx::query(
-        r#"
-        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
-        VALUES ($1, $2, $3, 'member', $4, $5)
-        "#,
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, actor_id) DO UPDATE \
+         SET display_name = EXCLUDED.display_name, handle = EXCLUDED.handle",
     )
-    .bind(Uuid::now_v7())
-    .bind(space_id)
+    .bind(organization_id)
     .bind(actor_id)
     .bind(name)
     .bind(handle)
     .execute(pool)
     .await
-    .expect("insert agent membership");
+    .expect("agent profile");
+    if space_id != agent_workspace_server::spaces::DIRECT {
+        sqlx::query(
+            r#"
+            INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+            VALUES ($1, $2, $3, 'member', $4, $5)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(space_id)
+        .bind(actor_id)
+        .bind(name)
+        .bind(handle)
+        .execute(pool)
+        .await
+        .expect("insert agent membership");
+    }
     actor_id
 }
 
@@ -766,7 +679,7 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{overview}");
-        assert_eq!(overview["projectId"], space.as_str());
+        assert_eq!(overview["workspaceSpaceId"], space.as_str());
     }
     let agent = add_agent(&setup.pool, space_id, "Mara", "mara").await;
 
@@ -893,7 +806,10 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
         format!(
             "/api/v1/projects/{space}/conversation-sidebar?selectedChannelId={group_id}&expandedChannelId={group_id}"
         ),
-        format!("/api/v1/projects/{space}/channels"),
+        // The direct scope is no space and lists no channels; the spaces
+        // Cleo is in show none of it either.
+        format!("/api/v1/projects/{work}/channels"),
+        format!("/api/v1/projects/{work}/conversation-sidebar?includeArchived=true"),
     ] {
         let (status, body) = send(
             &setup.app,
@@ -1049,8 +965,11 @@ async fn conversation_visible_to_is_whole_on_its_own() {
         sqlx::query_as::<_, (bool, bool, bool)>(
             r#"
             SELECT conversation_visible_to(conversation.id, $2),
+                   -- A DM has no space: the routes pair a membership
+                   -- check only where there is one.
                    conversation_visible_to(conversation.id, $2)
-                       AND actor_can_access_project($2, NULL, conversation.project_id),
+                       AND (conversation.project_id IS NULL
+                            OR actor_can_access_project($2, NULL, conversation.project_id)),
                    conversation_readable_by(conversation.id, $2)
             FROM conversations conversation -- visibility: the test asks the rule itself
             WHERE conversation.id = $1
@@ -1146,8 +1065,10 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    sqlx::query("UPDATE conversations SET kept = true WHERE id = $1")
+    // Kept in the workspace: it is that workspace's now.
+    sqlx::query("UPDATE conversations SET kept = true, workspace_id = $2 WHERE id = $1")
         .bind(dm_id)
+        .bind(world.organization)
         .execute(pool)
         .await
         .expect("keep the DM");
@@ -1265,6 +1186,222 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     for (who, viewer) in [("the owner", owner), ("an admin", ben.actor)] {
         assert!(!visible(pool, dm_id, viewer).await, "{who}, personal");
     }
+    world.finish().await;
+}
+
+/// One list everywhere (R20, K4.24): a pair has one personal DM on the
+/// server, started from any workspace they share, and every workspace's
+/// sidebar shows it. A workspace that keeps its DMs gets its own DM for the
+/// pair, listed only there and ending with membership; the personal one
+/// stays listed beside it, labelled. A DM from before R20 is personal.
+#[tokio::test]
+async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
+    use super::support::{app::send, world::WorldBuilder};
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .person("cal", "member")
+        .build("one_dm_per_pair")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let (ana, ben, cal) = (
+        &world.people["ana"],
+        &world.people["ben"],
+        &world.people["cal"],
+    );
+    let first = world.organization;
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Harbour', $2)")
+        .bind(second)
+        .bind(format!("harbour-{}", second.simple()))
+        .execute(pool)
+        .await
+        .expect("second workspace");
+    for actor in [ana.actor, ben.actor] {
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(second)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("joins the second workspace");
+    }
+    let open = |browser: &super::support::app::Browser, body: Value| {
+        let request = browser.request("POST", "/api/v1/direct/dms", None, body);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert!(status.is_success(), "{status} {body}");
+            (
+                status,
+                body["conversation"]["id"].as_str().expect("id").to_owned(),
+            )
+        }
+    };
+    // The list names the workspace the person is in (K4.6); an account in
+    // one workspace may leave it out.
+    let listed = |browser: &super::support::app::Browser, workspace: Option<Uuid>| {
+        let path = workspace.map_or_else(
+            || "/api/v1/direct".to_owned(),
+            |workspace| format!("/api/v1/direct?workspaceId={workspace}"),
+        );
+        let request = browser.request("GET", &path, None, Value::Null);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body["conversations"]
+                .as_array()
+                .expect("conversations")
+                .iter()
+                .map(|item| {
+                    (
+                        item["id"].as_str().expect("id").to_owned(),
+                        item["label"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        }
+    };
+
+    // In two workspaces, the list has to be told which one (K4.6).
+    let (status, unnamed) = send(
+        &world.app,
+        ana.browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unnamed}");
+
+    // From either shared workspace, the same personal DM.
+    let (status, personal) = open(&ana.browser, json!({"actorId": ben.actor})).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, again) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!((status, &again), (StatusCode::OK, &personal));
+    for workspace in [first, second] {
+        assert_eq!(
+            listed(&ben.browser, Some(workspace)).await.get(&personal),
+            Some(&None),
+            "ben sees the DM in every workspace"
+        );
+    }
+
+    // The second workspace keeps its DMs: a DM started there is its own.
+    sqlx::query(
+        "INSERT INTO settings (id, organization_id, scope, key, value) VALUES ($1, $2, 'workspace', 'messages.direct_messages', '\"kept\"')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(second)
+    .execute(pool)
+    .await
+    .expect("keep DMs");
+    let (status, kept) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_ne!(kept, personal);
+    let (status, kept_again) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!((status, &kept_again), (StatusCode::OK, &kept));
+    let (workspace, is_kept) = sqlx::query_as::<_, (Uuid, bool)>(
+        "SELECT workspace_id, kept FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&kept)
+    .fetch_one(pool)
+    .await
+    .expect("kept DM");
+    assert_eq!((workspace, is_kept), (second, true));
+    // Started from the first workspace, which doesn't keep DMs: the personal one.
+    let (_, from_first) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": first}),
+    )
+    .await;
+    assert_eq!(from_first, personal);
+
+    // Listed only there, with the personal one beside it, labelled.
+    let there = listed(&ana.browser, Some(second)).await;
+    assert_eq!(there.get(&kept), Some(&None), "{there:?}");
+    assert_eq!(
+        there.get(&personal),
+        Some(&Some("Personal".to_owned())),
+        "{there:?}"
+    );
+    let elsewhere = listed(&ana.browser, Some(first)).await;
+    assert!(!elsewhere.contains_key(&kept), "{elsewhere:?}");
+    assert_eq!(elsewhere.get(&personal), Some(&None), "{elsewhere:?}");
+
+    // A DM from before R20 (it carries a workspace, not the direct scope)
+    // is personal: listed in every workspace, and it is the pair's DM.
+    let old = Uuid::now_v7();
+    let (low, high) = if ana.actor < cal.actor {
+        (ana.actor, cal.actor)
+    } else {
+        (cal.actor, ana.actor)
+    };
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key) VALUES ($1, NULL, $2, 'dm', 'Direct message', 'members', $3)",
+    )
+    .bind(old)
+    .bind(first)
+    .bind(format!("{low}:{high}"))
+    .execute(pool)
+    .await
+    .expect("pre-R20 DM");
+    for actor in [ana.actor, cal.actor] {
+        sqlx::query(
+            "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES (NULL, $1, $2, $2)",
+        )
+        .bind(old)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("pre-R20 member");
+    }
+    for workspace in [first, second] {
+        assert!(
+            listed(&ana.browser, Some(workspace))
+                .await
+                .contains_key(&old.to_string())
+        );
+    }
+    let (status, found) = open(&ana.browser, json!({"actorId": cal.actor})).await;
+    assert_eq!((status, found), (StatusCode::OK, old.to_string()));
+
+    // The kept DM ends with ben's membership; the personal one doesn't.
+    assert!(listed(&ben.browser, Some(second)).await.contains_key(&kept));
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(second)
+    .bind(ben.actor)
+    .execute(pool)
+    .await
+    .expect("ben leaves");
+    let kept_id = kept.parse::<Uuid>().expect("kept id");
+    assert!(
+        !visible(pool, kept_id, ben.actor).await,
+        "ben, after leaving"
+    );
+    // Now in one workspace, ben needn't name it.
+    let after = listed(&ben.browser, None).await;
+    assert!(!after.contains_key(&kept), "{after:?}");
+    assert_eq!(after.get(&personal), Some(&None), "{after:?}");
     world.finish().await;
 }
 
@@ -1414,5 +1551,358 @@ async fn conversation_visibility_timings() {
         .await;
         println!("{rule}: conversation list {list:.1} ms, message search {search:.1} ms");
     }
+    world.finish().await;
+}
+
+/// Across two workspaces: a handle two accounts go by names nobody, a token
+/// for one workspace doesn't find the other's kept DMs in search, and a
+/// decision made from a DM pins there.
+#[tokio::test]
+async fn handles_tokens_and_pins_hold_across_workspaces() {
+    use super::support::{
+        app::{initialize, send, tool},
+        world::WorldBuilder,
+    };
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .person("cal", "member")
+        .agent("dex", "member")
+        .build("dm_across_workspaces")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let (ana, ben, cal) = (
+        &world.people["ana"],
+        &world.people["ben"],
+        &world.people["cal"],
+    );
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Harbour', $2)")
+        .bind(second)
+        .bind(format!("harbour-{}", second.simple()))
+        .execute(pool)
+        .await
+        .expect("second workspace");
+    for actor in [ana.actor, ben.actor] {
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(second)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("joins the second workspace");
+    }
+    sqlx::query(
+        "INSERT INTO settings (id, organization_id, scope, key, value) VALUES ($1, $2, 'workspace', 'messages.direct_messages', '\"kept\"')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(second)
+    .execute(pool)
+    .await
+    .expect("keep DMs");
+    let open = async |body: Value| {
+        let (status, dm) = send(
+            &world.app,
+            ana.browser
+                .request("POST", "/api/v1/direct/dms", None, body),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {dm}");
+        dm["conversation"]["id"].as_str().expect("id").to_owned()
+    };
+    let personal = open(json!({"actorId": ben.actor})).await;
+    let kept = open(json!({"actorId": ben.actor, "workspaceId": second})).await;
+    assert_ne!(personal, kept);
+    let say = async |dm: &str, word: &str| {
+        let (status, sent) = send(
+            &world.app,
+            ana.browser.request(
+                "POST",
+                &format!("/api/v1/conversations/{dm}/messages"),
+                Some(word),
+                json!({ "content": text_content(word) }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{sent}");
+    };
+    let personal_word = format!("personalword{}", Uuid::now_v7().simple());
+    let kept_word = format!("keptword{}", Uuid::now_v7().simple());
+    say(&personal, &personal_word).await;
+    say(&kept, &kept_word).await;
+    // Ben mentions Ana in the kept DM.
+    let (status, mentioned) = send(
+        &world.app,
+        ben.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{kept}/messages"),
+            Some("ben-mentions-ana"),
+            json!({ "content": {"version": 1, "nodes": [
+                {"type": "mention", "actorId": ana.actor},
+                {"type": "text", "text": " kept mention"}
+            ]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{mentioned}");
+
+    // Ana's account-wide token for the first workspace.
+    let (status, made) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/credential_create", world.organization),
+            Some("ana-account"),
+            json!({"name": "account", "space": world.project("WORK"), "reach": "account"}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let secret = made["value"]["secret"].as_str().expect("secret");
+    let (status, exchanged) = send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(
+                serde_urlencoded::to_string([
+                    ("grant_type", "client_credentials"),
+                    ("client_secret", secret),
+                ])
+                .expect("form"),
+            ))
+            .expect("token request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exchanged}");
+    let token = exchanged["access_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let session = initialize(&world.app, &token).await.expect("session");
+    let call = async |name: &str, arguments: Value| {
+        tool(&world.app, &token, &session, name, arguments).await
+    };
+
+    // Search finds the personal DM, never the second workspace's kept one.
+    let found = |answer: &Value| answer["value"]["results"].as_array().map_or(0, Vec::len);
+    let personal_hits = call("search", json!({"query": personal_word})).await;
+    assert_eq!(found(&personal_hits), 1, "{personal_hits}");
+    let kept_hits = call("search", json!({"query": kept_word})).await;
+    assert_eq!(
+        found(&kept_hits),
+        0,
+        "a token found another workspace's DM: {kept_hits}"
+    );
+
+    // Ben goes by "cal" in the second workspace, cal by "cal" in the first:
+    // "@cal" names nobody for sure, so nothing is sent.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, 'Ben', 'cal') \
+         ON CONFLICT (organization_id, actor_id) DO UPDATE SET handle = 'cal'",
+    )
+    .bind(second)
+    .bind(ben.actor)
+    .execute(pool)
+    .await
+    .expect("ben goes by cal there");
+    let handle_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(DISTINCT actor_id) FROM organization_actor_profiles WHERE lower(handle) = 'cal'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("handles");
+    assert_eq!(handle_rows, 2, "two accounts go by cal");
+    let ambiguous = call(
+        "conversation_start",
+        json!({"people": ["@cal"], "text": "for cal"}),
+    )
+    .await;
+    assert_ne!(ambiguous["outcome"], "ok", "{ambiguous}");
+    assert!(
+        ambiguous.to_string().contains("More than one account"),
+        "{ambiguous}"
+    );
+    let by_id = call(
+        "conversation_start",
+        json!({"people": [cal.actor.to_string()], "text": "for cal"}),
+    )
+    .await;
+    assert_eq!(by_id["outcome"], "ok", "{by_id}");
+
+    // Listing conversations shows the personal DM, never the second
+    // workspace's kept one.
+    let listed = call("conversation_list", json!({"kind": "dm", "limit": 50})).await;
+    let listed_ids = listed["value"]["conversations"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(listed_ids.contains(&personal), "{listed}");
+    assert!(
+        !listed_ids.contains(&kept),
+        "a token listed another workspace's DM: {listed}"
+    );
+
+    // Nor can it open the kept DM with a call that needs no permission.
+    let files = call("conversation_file_list", json!({"conversationId": kept})).await;
+    assert_ne!(
+        files["outcome"], "ok",
+        "a token listed another workspace's DM's files: {files}"
+    );
+
+    // A token for the second workspace sends a file in the kept DM; the
+    // first workspace's token can't read it, alone or by its message.
+    let (status, exchanged_second) = send(
+        &world.app,
+        Request::builder()
+            .method("POST")
+            .uri("/oauth/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(
+                serde_urlencoded::to_string([
+                    ("grant_type", "client_credentials"),
+                    ("client_secret", secret),
+                    ("workspace", second.to_string().as_str()),
+                ])
+                .expect("form"),
+            ))
+            .expect("token request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exchanged_second}");
+    let second_token = exchanged_second["access_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let second_session = initialize(&world.app, &second_token)
+        .await
+        .expect("session");
+    let upload = tool(
+        &world.app,
+        &second_token,
+        &second_session,
+        "file_upload",
+        json!({"conversationId": kept, "name": "kept.txt", "text": "kept file"}),
+    )
+    .await;
+    assert_eq!(upload["outcome"], "ok", "{upload}");
+    let kept_file = upload["value"]["fileId"].as_str().expect("file").to_owned();
+    let posted = tool(
+        &world.app,
+        &second_token,
+        &second_session,
+        "message_send",
+        json!({"conversationId": kept, "text": "a file", "clientRequestId": "kept-file",
+               "attachmentIds": [kept_file]}),
+    )
+    .await;
+    assert!(
+        matches!(posted["outcome"].as_str(), Some("ok" | "applied")),
+        "{posted}"
+    );
+    let read_file = call("file_read", json!({"fileId": kept_file})).await;
+    assert_ne!(
+        read_file["outcome"], "ok",
+        "a token read another workspace's DM file: {read_file}"
+    );
+    assert!(!read_file.to_string().contains("kept file"), "{read_file}");
+
+    // Saving a DM message leaves Later readable for an account-wide token.
+    let personal_message: Uuid = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at LIMIT 1",
+    )
+    .bind(personal.parse::<Uuid>().expect("dm"))
+    .fetch_one(pool)
+    .await
+    .expect("personal message");
+    let saved = call("later_save", json!({"messageId": personal_message})).await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    let later = call("later_list", json!({})).await;
+    assert_eq!(later["outcome"], "ok", "{later}");
+
+    // Nor does the briefing bring the kept DM's mention.
+    let briefing = call("briefing", json!({})).await;
+    assert_eq!(briefing["outcome"], "ok", "{briefing}");
+    assert!(
+        !briefing.to_string().contains(&kept),
+        "a token's briefing named another workspace's DM: {briefing}"
+    );
+
+    // The token is for the first workspace: the second's groups (a call
+    // that needs no permission) stay out of its reach.
+    let elsewhere = call("group_list", json!({"workspace": second.to_string()})).await;
+    assert_ne!(elsewhere["outcome"], "ok", "{elsewhere}");
+    let at_home = call(
+        "group_list",
+        json!({"workspace": world.organization.to_string()}),
+    )
+    .await;
+    assert_eq!(at_home["outcome"], "ok", "{at_home}");
+
+    // A decision made from the personal DM pins there.
+    let decided = call(
+        "decision_record",
+        json!({"conversationId": personal, "title": "Ship on Friday", "pin": true}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "ok", "{decided}");
+    let pinned = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM conversation_pins WHERE conversation_id = $1::uuid AND target_kind = 'decision')",
+    )
+    .bind(&personal)
+    .fetch_one(pool)
+    .await
+    .expect("pins");
+    assert!(pinned, "the decision is pinned in the DM");
+
+    // An agent's secret made for one space never makes a wider one.
+    let dex = &world.agents["dex"];
+    let narrow_secret = dex.token.clone();
+    let narrow_call = async |name: &str, arguments: Value| {
+        let (_, answer) = send(
+            &world.app,
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v2/w/{}/ops/{name}", world.organization))
+                .header(header::AUTHORIZATION, format!("Bearer {narrow_secret}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    "idempotency-key",
+                    format!("narrow-{name}-{}", Uuid::now_v7()),
+                )
+                .body(Body::from(arguments.to_string()))
+                .expect("op request"),
+        )
+        .await;
+        answer
+    };
+    let wider = narrow_call(
+        "credential_create",
+        json!({"name": "wider", "space": world.project("WORK"), "reach": "account"}),
+    )
+    .await;
+    assert_ne!(
+        wider["outcome"], "ok",
+        "a space's secret made an account-wide one: {wider}"
+    );
+    let same = narrow_call(
+        "credential_create",
+        json!({"name": "same", "space": world.project("WORK")}),
+    )
+    .await;
+    assert_eq!(same["outcome"], "ok", "{same}");
+
     world.finish().await;
 }

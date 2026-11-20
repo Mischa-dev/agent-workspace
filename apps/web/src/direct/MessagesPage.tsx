@@ -142,8 +142,8 @@ export function MessagesPage() {
     if (!conversationId) {
       try {
         conversationId = isGroup
-          ? await createGroup({ name: groupName, memberIds, idempotencyKey: groupKey.current })
-          : await openDm(memberIds[0])
+          ? await createGroup({ name: groupName, memberIds, idempotencyKey: groupKey.current, workspaceId: overview.data?.organizationId })
+          : await openDm(memberIds[0], overview.data?.organizationId)
       } catch (reason) {
         throw new Error(`The conversation didn’t start. ${describeError(reason).message}`, { cause: reason })
       }
@@ -346,9 +346,9 @@ export function AgentsPage() {
   const [placeHeld, setPlaceHeld] = useState(false)
   // New agents should appear in the people list as soon as you leave here.
   useEffect(() => () => void queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
-  const spaceId = overview.data?.projectId ?? ''
+  const spaceId = overview.data?.workspaceSpaceId ?? ''
   const places = [
-    { id: spaceId, name: 'Messages only' },
+    { id: spaceId, name: 'The workspace' },
     ...(projects.data?.projects ?? [])
       .filter((project) => project.organizationId === overview.data?.organizationId && !project.archivedAt && project.capabilities.manage)
       .map((project) => ({ id: project.id, name: project.name })),

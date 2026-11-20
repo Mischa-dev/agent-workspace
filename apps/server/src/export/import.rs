@@ -125,6 +125,9 @@ fn declared(module: &str, kind: &str) -> Option<(&'static ExportDecl, &'static K
 struct Stub {
     id: Uuid,
     kind: String,
+    /// An agent that runs on a profile: its worker role in spaces comes
+    /// with it, and its profile is set up again after import.
+    profile: bool,
     display_name: Option<String>,
     emails: Vec<(String, bool)>,
 }
@@ -369,6 +372,7 @@ pub fn inspect(path: &Path) -> Result<Inspected, ImportError> {
                 stubs.push(Stub {
                     id,
                     kind: parsed.data["kind"].as_str().unwrap_or("person").to_owned(),
+                    profile: parsed.data["profile"].as_bool().unwrap_or(false),
                     display_name: parsed.data["displayName"].as_str().map(ToOwned::to_owned),
                     emails: parsed.data["emails"]
                         .as_array()
@@ -687,6 +691,8 @@ async fn map_accounts(
             // its managers connect it again.
             let kind = if stub.kind == "app" {
                 "integration"
+            } else if stub.profile {
+                "execution_worker"
             } else {
                 "external_agent"
             };
@@ -1118,6 +1124,13 @@ const DERIVED: &str = "things";
 /// record shares its task's id and is checked against it at commit.
 const AFTER: &[(&str, &str)] = &[("collection_records", "work_items")];
 
+/// Columns never filled in afterwards, even where tables point at each
+/// other: where a row lives. A DM or group has no space, so a NULL space
+/// says "a DM" to the checks and triggers, never "not yet". A reference
+/// that pairs one with another column (a message in the same space) defers
+/// only the other, which leaves the reference unchecked until the fixups.
+const PLACEMENT: &[&str] = &["project_id", "space_id"];
+
 /// Rows that go in together, in one transaction: (table, its companion).
 /// A Tasks record goes in first, then its task, which checks for it.
 const COMPANIONS: &[(&str, &str)] = &[("work_items", "collection_records")];
@@ -1195,11 +1208,13 @@ fn plan(
     for (table, targets) in &edges {
         for (target, nullable) in targets {
             let cycle = reach[target].contains(table);
+            let nullable = nullable
+                .iter()
+                .filter(|column| !PLACEMENT.contains(&column.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
             if cycle && !nullable.is_empty() {
-                deferred
-                    .entry(table)
-                    .or_default()
-                    .extend(nullable.iter().cloned());
+                deferred.entry(table).or_default().extend(nullable);
             } else {
                 hard.entry(table).or_default().insert(target);
             }

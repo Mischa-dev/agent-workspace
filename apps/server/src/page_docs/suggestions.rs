@@ -472,7 +472,7 @@ pub async fn suggest_text(
     expected_version: Option<i64>,
     note: Option<&str>,
 ) -> Result<Suggested, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
+    let Some(page) = store::lock_page_for(transaction, page_id, author.actor_id).await? else {
         return Err(AppError::NotFound("page"));
     };
     if let Some(expected) = expected_version
@@ -582,7 +582,7 @@ pub async fn decide(
     suggestion_id: Uuid,
     decision: Decision,
 ) -> Result<Result<Decided, Refusal>, AppError> {
-    let Some(page) = store::lock_page(transaction, page_id).await? else {
+    let Some(page) = store::lock_page_for(transaction, page_id, decider.actor_id).await? else {
         return Ok(Err(Refusal::NotFound));
     };
     let Some(suggestion) = sqlx::query_as::<

@@ -113,7 +113,7 @@ pub async fn resolve(
             return workspace_address(connection, viewer, reference, tail, rest).await;
         }
         ["messages", _] | ["dm", _] => match id(1) {
-            Some(conversation) => direct_workspace(connection, viewer, conversation).await?,
+            Some(conversation) => direct_workspace(connection, viewer, conversation, None).await?,
             None => default_workspace(connection, viewer).await?,
         },
         ["runs", _, ..] => match id(1) {
@@ -196,7 +196,9 @@ async fn workspace_address(
             let Ok(conversation) = Uuid::parse_str(conversation) else {
                 return Ok(None);
             };
-            if direct_workspace(connection, viewer, conversation).await? != Some(workspace) {
+            if direct_workspace(connection, viewer, conversation, Some(workspace)).await?
+                != Some(workspace)
+            {
                 return Ok(None);
             }
         }
@@ -222,20 +224,51 @@ async fn default_workspace(
     )
 }
 
-/// The workspace of a DM or group the viewer is in.
+/// The workspace a DM or group the viewer is in opens in: a kept one's own
+/// workspace; a personal one (in the direct scope, K4.24) opens in any
+/// workspace the viewer belongs to, `wanted` when they belong to it, else
+/// the one they used last.
 async fn direct_workspace(
     connection: &mut PgConnection,
     viewer: &things::Viewer<'_>,
     conversation: Uuid,
+    wanted: Option<Uuid>,
 ) -> Result<Option<Uuid>, AppError> {
     let Some(thing) = things::get(connection, viewer, "conversation", conversation).await? else {
         return Ok(None);
     };
-    if thing.kind != "conversation" {
+    if thing.kind != "conversation" || thing.project_id.is_some() {
         // A channel or thread lives in its space, not with Messages.
         return Ok(None);
     }
-    space_of(connection, thing.project_id).await
+    let kept = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: checked through things::get just above; only its
+        -- workspace is read.
+        SELECT workspace_id FROM conversations
+        WHERE id = $1 AND workspace_id <> direct_scope_id()
+        "#,
+    )
+    .bind(conversation)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if kept.is_some() {
+        return Ok(kept);
+    }
+    if let Some(wanted) = wanted {
+        let member = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM organization_memberships \
+             WHERE organization_id = $1 AND actor_id = $2 AND enabled)",
+        )
+        .bind(wanted)
+        .bind(viewer.actor_id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if member {
+            return Ok(Some(wanted));
+        }
+    }
+    default_workspace(connection, viewer).await
 }
 
 /// The workspace of a whiteboard the viewer can see.

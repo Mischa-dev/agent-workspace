@@ -2493,12 +2493,11 @@ async fn workspace_role(setup: &Setup, actor: Uuid) -> String {
     .expect("workspace role")
 }
 
-/// A custom project role based on Admin never widens into the full
-/// workspace Admin, even when it keeps "manage members": its holder can't
-/// send workspace invitations it leaves out. The built-in project Admin
-/// still makes a workspace admin, as before.
+/// A project role never makes a workspace role (K1.19): neither a custom
+/// Admin-based project role nor the built-in project Admin makes someone a
+/// workspace admin, so neither sends workspace invitations.
 #[tokio::test]
-async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
+async fn a_project_role_never_makes_a_workspace_role() {
     let Some(setup) = setup("awd74_custom_admin").await else {
         return;
     };
@@ -2542,10 +2541,13 @@ async fn only_the_built_in_project_admin_makes_a_workspace_admin() {
     let (status, changed) =
         set_project_role(&setup, &work, cal, "cal-admin", json!({"role": "admin"})).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    assert_eq!(workspace_role(&setup, cal).await, "admin");
-    let (status, invited) =
+    assert_eq!(workspace_role(&setup, cal).await, "member");
+    let (status, refused) =
         send(app, cal_browser.request("POST", &invitations, None, invite)).await;
-    assert_eq!(status, StatusCode::CREATED, "{invited}");
+    assert!(
+        !status.is_success(),
+        "a project admin invited to the workspace: {refused}"
+    );
 }
 
 const OAUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
@@ -3118,6 +3120,45 @@ async fn the_built_in_viewer_cannot_be_the_workspace_default() {
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
     assert_eq!(role(&listed, "viewer")["isDefault"], false, "{listed}");
+}
+
+/// K1.19: the audit log follows "Read the audit log" (`settings.audit`),
+/// not the role's tier: a custom admin-tier role without it can't read the
+/// log, while the built-in Admin, which holds it, can.
+#[tokio::test]
+async fn the_audit_log_follows_read_the_audit_log() {
+    let Some(setup) = setup("k119_audit_log").await else {
+        return;
+    };
+    let (bea, bea_browser) = add_person(&setup, &[], "bea").await;
+    let (cal, cal_browser) = add_person(&setup, &[], "cal").await;
+    let (status, keeper) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Settings keeper", "baseRole": "admin", "permissions": ["members.view", "settings.manage"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    assert!(!keys(&keeper["permissions"]).contains(&"settings.audit".to_owned()));
+    let (status, assigned) = assign(&setup, &setup.browser, bea, &keeper["id"], false).await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    make_admin(&setup, cal).await;
+    let log = format!(
+        "/api/v1/organizations/{}/audit-events",
+        setup.organization_id
+    );
+    let (status, refused) = send(
+        &setup.app,
+        bea_browser.request("GET", &log, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, read) = send(
+        &setup.app,
+        cal_browser.request("GET", &log, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
 }
 
 /// A write-scope personal token for anyone whose role may write anything
@@ -6404,6 +6445,116 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
     .await
     .expect("owners");
     assert_eq!(owners, 1);
+}
+
+/// K1.16: commenting on a task is "comment on tasks", on the web and for
+/// agents alike, so a role that may comment but not edit tasks comments
+/// through both and changes nothing else. Removing someone else's comment is
+/// "moderate channels", held by admins, whatever kind of account holds it.
+#[tokio::test]
+async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
+    let Some(setup) = setup("k116_task_comments").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let task = owner_task(&setup, &work, "Ship it").await;
+    let (status, commenters) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.comment"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{commenters}");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (mara, mara_token) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    for (who, actor) in [("alex", alex), ("mara", mara)] {
+        let (status, changed) = set_project_role(
+            &setup,
+            &work,
+            actor,
+            &format!("k116-{who}"),
+            json!({"roleId": commenters["id"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{who}: {changed}");
+    }
+
+    // Alex comments in the browser, and can't edit the task.
+    let (status, said) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/comments"),
+            Some("k116-alex-comment"),
+            json!({"content": text("Looks good")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{said}");
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{task}"),
+            Some("k116-alex-edit"),
+            json!({"title": "Renamed", "expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    // Mara comments through her tools.
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let commented = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_comment",
+        json!({"taskId": task, "text": "On it", "clientRequestId": "k116-mara"}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let mara_comment = commented["activityId"]
+        .as_str()
+        .expect("comment id")
+        .to_owned();
+
+    // An agent holding Admin removes someone else's comment; Mara, without
+    // "moderate channels", can't remove Alex's.
+    let alex_comment = said["comment"]["id"]
+        .as_str()
+        .or_else(|| said["id"].as_str())
+        .unwrap_or_else(|| panic!("comment id: {said}"))
+        .to_owned();
+    let denied = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_comment_delete",
+        json!({"taskId": task, "commentId": alex_comment}),
+    )
+    .await;
+    assert_ne!(denied["outcome"], "ok", "{denied}");
+    let (rook, rook_token) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = NULL WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(rook)
+    .execute(&setup.pool)
+    .await
+    .expect("rook administers the project");
+    let rook_session = initialize(app, &rook_token).await.expect("Rook MCP");
+    let removed = tool(
+        app,
+        &rook_token,
+        &rook_session,
+        "task_comment_delete",
+        json!({"taskId": task, "commentId": mara_comment}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
 }
 
 /// C1.8: whether a save edits or suggests is the role's setting. A role

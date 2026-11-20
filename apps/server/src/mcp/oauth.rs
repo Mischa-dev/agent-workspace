@@ -43,7 +43,7 @@ pub fn router() -> Router<AppState> {
             get(authorization_server_metadata),
         )
         .route("/oauth/register", post(register_client))
-        .route("/oauth/authorize", get(authorize).post(consent))
+        .route("/oauth/authorize", get(authorize_page).post(consent))
         .route("/oauth/consent.css", get(consent_stylesheet))
         .route("/connect/confirm", post(consent))
         .route("/oauth/token", post(token))
@@ -115,7 +115,12 @@ async fn authorization_server_metadata(
         registration_endpoint: format!("{origin}/oauth/register"),
         revocation_endpoint: format!("{origin}/oauth/revoke"),
         response_types_supported: vec!["code"],
-        grant_types_supported: vec!["authorization_code", "refresh_token"],
+        grant_types_supported: vec![
+            "authorization_code",
+            "refresh_token",
+            "client_credentials",
+            TOKEN_EXCHANGE,
+        ],
         code_challenge_methods_supported: vec!["S256"],
         token_endpoint_auth_methods_supported: vec!["none"],
         scopes_supported: vec!["read", "write"],
@@ -331,7 +336,7 @@ struct ClientRow {
     redirect_uris: Vec<String>,
 }
 
-async fn authorize(
+async fn authorize_page(
     State(state): State<AppState>,
     principal: Result<AuthenticatedActor, AppError>,
     headers: HeaderMap,
@@ -536,13 +541,18 @@ async fn consent(
         (project_id, agent_actor_id, Some(connection_id))
     } else if selection == "self" || selection.starts_with("self:") {
         // The app acts as this person across their whole account. The grant is
-        // anchored to their Messages space, which every person belongs to;
-        // each call is checked against their current memberships.
+        // anchored to their current workspace's own space, which every member
+        // belongs to; each call is checked against their current memberships.
         let mut transaction = crate::db::scoped_tx(&state.pool)
             .await
             .map_err(AppError::from)?;
-        let (home, _) =
-            crate::direct::space_for_actor(&mut transaction, principal.actor_id, None).await?;
+        let (workspace, _) =
+            crate::workspace::default_workspace(&mut *transaction, principal.actor_id)
+                .await?
+                .ok_or(AppError::NotFound("organization"))?;
+        let home = crate::spaces::workspace::join(&mut transaction, workspace, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("organization"))?;
         transaction.commit().await.map_err(AppError::from)?;
         (home, principal.actor_id, None)
     } else {
@@ -624,11 +634,21 @@ async fn validate_authorize_request(
 #[derive(Deserialize)]
 struct TokenRequest {
     grant_type: String,
+    #[serde(default)]
     client_id: String,
     code: Option<String>,
     redirect_uri: Option<String>,
     code_verifier: Option<String>,
     refresh_token: Option<String>,
+    /// K1.23 `client_credentials`: an account's secret.
+    client_secret: Option<String>,
+    /// K1.23 token exchange: a secret or a federated assertion.
+    subject_token: Option<String>,
+    subject_token_type: Option<String>,
+    /// The workspace the token is for (its id or slug), for a secret that
+    /// reaches every workspace of its account.
+    workspace: Option<String>,
+    scope: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -636,9 +656,14 @@ struct TokenResponse {
     access_token: String,
     token_type: &'static str,
     expires_in: i64,
-    refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
     scope: String,
 }
+
+const TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
+const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 
 async fn token(
     State(state): State<AppState>,
@@ -669,13 +694,16 @@ async fn token(
         return Err(OAuthError::from(error));
     }
     let outcome = match request.grant_type.as_str() {
-        // A code or refresh token is looked up before its account is known:
-        // the row its digest names says whose it is (`auth.credential`).
+        // A code, refresh token or credential is looked up before its account
+        // is known: the row its digest names says whose it is (`auth.credential`).
         "authorization_code" => {
             crate::tenancy::system("auth.credential", exchange_code(&state, &request)).await
         }
         "refresh_token" => {
             crate::tenancy::system("auth.credential", refresh(&state, &request)).await
+        }
+        "client_credentials" | TOKEN_EXCHANGE => {
+            crate::tenancy::system("auth.credential", exchange(&state, &request)).await
         }
         _ => Err(OAuthError::unsupported_grant("unsupported grant type")),
     };
@@ -727,6 +755,8 @@ fn log_grant_type(grant_type: &str) -> &'static str {
     match grant_type {
         "authorization_code" => "authorization_code",
         "refresh_token" => "refresh_token",
+        "client_credentials" => "client_credentials",
+        TOKEN_EXCHANGE => "token_exchange",
         _ => "other",
     }
 }
@@ -794,10 +824,10 @@ async fn exchange_code(
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.status = 'active' AND membership.enabled
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND code.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND code.external_agent_connection_id IS NOT NULL)
+              (actor.kind = 'external_agent' AND code.external_agent_connection_id IS NOT NULL) -- // kind-check: mechanical (how each kind of account signs in)
           )
         FOR UPDATE OF code
     "#,
@@ -891,7 +921,7 @@ async fn create_backing_credential(
     let credential_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at, external_agent_connection_id
         ) VALUES ($1, $2, $3, 'OAuth grant', $4, $5, $6, now() + interval '10 years', $7)
@@ -954,10 +984,10 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.status = 'active' AND membership.enabled
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND grant_row.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND connection.status = 'active')
+              (actor.kind = 'external_agent' AND connection.status = 'active') -- // kind-check: mechanical (how each kind of account signs in)
           )
         FOR UPDATE OF token, grant_row
     "#,
@@ -1035,7 +1065,16 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
     let new_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM mcp_oauth_refresh_tokens WHERE token_digest = $1",
     )
-    .bind(Sha256::digest(response.refresh_token.as_bytes()).to_vec())
+    .bind(
+        Sha256::digest(
+            response
+                .refresh_token
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes(),
+        )
+        .to_vec(),
+    )
     .fetch_one(&mut *transaction)
     .await
     .map_err(AppError::from)?;
@@ -1088,7 +1127,7 @@ async fn issue_token_pair(
         access_token,
         token_type: "Bearer",
         expires_in: ACCESS_TOKEN_TTL_SECONDS,
-        refresh_token,
+        refresh_token: Some(refresh_token),
         scope: scopes.join(" "),
     })
 }
@@ -1227,6 +1266,157 @@ struct RejectedAccessRow {
     reuse_detected: bool,
 }
 
+/// K1.23: a secret (`client_credentials`, or a token exchange naming an
+/// access token) or a federated assertion (a token exchange naming a JWT)
+/// becomes a short-lived access token for one workspace. The token holds no
+/// more than the credential: its scopes, its space when it reaches only one,
+/// and it stops when the credential is revoked or lapses.
+async fn exchange(state: &AppState, request: &TokenRequest) -> Result<TokenResponse, OAuthError> {
+    let presented = if request.grant_type == "client_credentials" {
+        request.client_secret.as_deref()
+    } else {
+        match request.subject_token_type.as_deref() {
+            Some(JWT_TOKEN_TYPE | ACCESS_TOKEN_TYPE) => request.subject_token.as_deref(),
+            _ => {
+                return Err(OAuthError::invalid_request(
+                    "subject_token_type must name a JWT or an access token",
+                ));
+            }
+        }
+    };
+    let Some(presented) = presented.filter(|value| !value.is_empty() && value.len() <= 16 * 1024)
+    else {
+        return Err(OAuthError::invalid_request(
+            "the credential to exchange is missing",
+        ));
+    };
+    // Only what lasts exchanges: a secret or an assertion, never another
+    // short-lived token (which would never lapse).
+    let federated = presented.starts_with("eyJ");
+    let secret = ["aw_sk_", "aw_mcp_", "aw_ext_"]
+        .iter()
+        .any(|prefix| presented.starts_with(prefix));
+    if !(secret || (federated && request.grant_type == TOKEN_EXCHANGE)) {
+        return Err(OAuthError::invalid_grant(
+            "that credential can't be exchanged",
+        ));
+    }
+    let mut headers = HeaderMap::new();
+    let bearer = HeaderValue::from_str(&format!("Bearer {presented}"))
+        .map_err(|_| OAuthError::invalid_grant("that credential can't be exchanged"))?;
+    headers.insert(header::AUTHORIZATION, bearer);
+    let principal = crate::mcp::resolve_bearer_principal(state, &headers)
+        .await
+        .map_err(OAuthError::from)?
+        .ok_or_else(|| OAuthError::invalid_grant("the credential isn't valid"))?;
+    let mut scopes = principal
+        .scopes
+        .iter()
+        .filter(|scope| matches!(scope.as_str(), "read" | "write"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(asked) = request.scope.as_deref() {
+        let asked = asked.split_whitespace().collect::<Vec<_>>();
+        if asked
+            .iter()
+            .any(|scope| !scopes.iter().any(|held| held == scope))
+        {
+            return Err(OAuthError::invalid_scope(
+                "the credential doesn't hold that scope",
+            ));
+        }
+        scopes.retain(|scope| asked.contains(&scope.as_str()));
+    }
+    if !scopes.iter().any(|scope| scope == "read") {
+        return Err(OAuthError::invalid_scope("a token always reads"));
+    }
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(|error| OAuthError::from(AppError::from(error)))?;
+    let home_workspace =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(principal.project_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|error| OAuthError::from(AppError::from(error)))?;
+    let workspace_id = match request.workspace.as_deref() {
+        None => home_workspace,
+        Some(named) => sqlx::query_scalar::<_, Uuid>(
+            "SELECT organization.id FROM organizations organization \
+             JOIN organization_memberships membership \
+               ON membership.organization_id = organization.id \
+              AND membership.actor_id = $2 AND membership.enabled \
+             WHERE organization.id::text = $1 OR organization.slug = $1",
+        )
+        .bind(named)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| OAuthError::from(AppError::from(error)))?
+        .ok_or_else(|| OAuthError::invalid_target("that workspace isn't one this account is in"))?,
+    };
+    if workspace_id != home_workspace && !principal.account_wide {
+        return Err(OAuthError::invalid_target(
+            "this credential reaches only the workspace it was made in",
+        ));
+    }
+    let home_space = if workspace_id == home_workspace {
+        principal.project_id
+    } else {
+        // The workspace's own space when the account is in it, else the
+        // first space of theirs there.
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT project.id FROM projects project \
+             JOIN project_memberships membership \
+               ON membership.project_id = project.id AND membership.actor_id = $2 \
+              AND membership.enabled \
+             WHERE project.organization_id = $1 AND project.archived_at IS NULL \
+             ORDER BY (project.kind = $3) DESC, project.created_at, project.id LIMIT 1",
+        )
+        .bind(workspace_id)
+        .bind(principal.actor_id)
+        .bind(crate::spaces::SpaceKind::Workspace.stored())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| OAuthError::from(AppError::from(error)))?
+        .ok_or_else(|| OAuthError::invalid_target("that workspace isn't one this account is in"))?
+    };
+    let confined = crate::access::Caller::of_principal(&principal, None).confined_space;
+    let issued = crate::access::tokens::issue_scoped(
+        &mut transaction,
+        crate::access::tokens::ScopedTokenRequest {
+            account_id: principal.actor_id,
+            workspace_id,
+            home_space,
+            permissions: None,
+            spaces: confined.map(|space| vec![space]),
+            minutes: crate::access::credentials::EXCHANGED_MINUTES,
+            requested_by: None,
+            run: None,
+            credential_id: principal.mcp_credential_id,
+            scopes: Some(scopes.clone()),
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        AppError::Refused { .. } | AppError::Forbidden => {
+            OAuthError::invalid_grant("the credential's account can't act there")
+        }
+        other => OAuthError::from(other),
+    })?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| OAuthError::from(AppError::from(error)))?;
+    Ok(TokenResponse {
+        access_token: issued.token,
+        token_type: "Bearer",
+        expires_in: crate::access::credentials::EXCHANGED_MINUTES * 60,
+        refresh_token: None,
+        scope: scopes.join(" "),
+    })
+}
+
 pub async fn resolve_access_token(
     state: &AppState,
     token: &str,
@@ -1248,7 +1438,7 @@ pub async fn resolve_access_token(
         LEFT JOIN users user_account ON user_account.actor_id = grant_row.actor_id
         LEFT JOIN external_agent_connections connection
           ON connection.id = grant_row.external_agent_connection_id
-        LEFT JOIN mcp_client_credentials backing
+        LEFT JOIN account_credentials backing
           ON backing.id = grant_row.backing_credential_id
         LEFT JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
@@ -1264,15 +1454,15 @@ pub async fn resolve_access_token(
           -- checked against their current memberships. Project-scoped and
           -- agent grants still need their own project.
           AND (
-              (actor.kind = 'human' AND grant_row.account_wide)
+              (actor.kind = 'human' AND grant_row.account_wide) -- // kind-check: mechanical (how each kind of account signs in)
               OR (project.archived_at IS NULL AND membership.enabled
                   AND organization_membership.enabled)
           )
           AND (
-              (actor.kind = 'human' AND user_account.status = 'active'
+              (actor.kind = 'human' AND user_account.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND grant_row.external_agent_connection_id IS NULL)
               OR
-              (actor.kind = 'external_agent' AND connection.status = 'active'
+              (actor.kind = 'external_agent' AND connection.status = 'active' -- // kind-check: mechanical (how each kind of account signs in)
                AND backing.status = 'active' AND backing.expires_at > now())
           )
     "#,
@@ -1717,6 +1907,9 @@ impl OAuthError {
     }
     fn invalid_grant(description: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_grant", description)
+    }
+    fn invalid_target(description: &'static str) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "invalid_target", description)
     }
     fn invalid_scope(description: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_scope", description)

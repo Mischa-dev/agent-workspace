@@ -69,10 +69,11 @@ async fn a_server_with_no_outside_service_does_everything_a_person_starts_with()
     .await;
     assert_eq!(status, StatusCode::OK, "{session}");
     let browser = browser.expect("signed in");
-    let workspace = sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations")
-        .fetch_one(pool)
-        .await
-        .expect("the workspace");
+    let workspace =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE kind <> 'direct'")
+            .fetch_one(pool)
+            .await
+            .expect("the workspace");
     let (channel, space) = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT id, project_id FROM conversations \
          WHERE workspace_id = $1 AND kind = 'channel' AND archived_at IS NULL \

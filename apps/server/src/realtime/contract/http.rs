@@ -192,7 +192,7 @@ pub async fn ticket(
     // to the account's access past it is newer than the ticket.
     let head = head(&state).await?;
     let from = query.position()?.map_or(head, |after| after.min(head));
-    let set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
+    let set = subscription_for(&state, principal.actor_id).await?;
     let documents = viewable(&state, principal.actor_id, query.documents()?).await?;
     Ok(Json(issue(
         &state, &principal, &set, &documents, from, head,
@@ -221,7 +221,7 @@ pub async fn resume(
     let after = query.position()?.ok_or(AppError::Validation("after"))?;
     let asked = query.documents()?;
     let cut = head(&state).await?;
-    let mut set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
+    let mut set = subscription_for(&state, principal.actor_id).await?;
     let mut events = Vec::new();
     let mut position = after;
     let (resync, more) = loop {

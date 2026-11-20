@@ -292,6 +292,7 @@ if has rust; then
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
   step "runner SDK tests (Python)" python3 -m unittest discover -s sdks/runner-python/tests -t sdks/runner-python
+  step "Hermes plugin tests" python3 -m unittest discover -s sdks/adapters/hermes/tests -p 'test_*.py'
 fi
 if has web; then
   step "Node toolchain" fetch_pinned_node
@@ -314,6 +315,7 @@ if has web; then
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
   step "runner SDK tests (TypeScript)" node --test 'sdks/runner-typescript/test/*.test.ts'
+  step "OpenClaw plugin tests" node --import ./sdks/adapters/openclaw/test/resolve.mjs --test 'sdks/adapters/openclaw/test/*.test.ts'
 fi
 
 # 2. Web tests and build: in the background next to the Rust checks on a big

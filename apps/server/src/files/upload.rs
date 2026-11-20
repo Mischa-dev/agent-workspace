@@ -213,7 +213,7 @@ pub(crate) async fn start(
     )
     .bind(id)
     .bind(organization_id)
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(conversation_id)
     .bind(work_item_id)
     .bind(for_comment)
@@ -240,7 +240,8 @@ pub(crate) async fn start(
 pub(crate) struct UploadRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
-    pub space_id: Uuid,
+    /// None for a DM or group's file, which is in no space.
+    pub space_id: Option<Uuid>,
     pub conversation_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
     pub for_comment: bool,
@@ -367,7 +368,7 @@ pub(crate) async fn finish(
         &NewFile {
             id: upload.id,
             organization_id: upload.workspace_id,
-            project_id: upload.space_id,
+            project_id: crate::spaces::place(upload.space_id),
             destination,
             uploader: upload.uploaded_by_actor_id,
             name: &upload.name,

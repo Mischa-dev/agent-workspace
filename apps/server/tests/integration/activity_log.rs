@@ -149,12 +149,13 @@ async fn the_audit_trail_names_who_how_and_for_whom_and_keeps_private_conversati
         "{owner_log}"
     );
     assert!(!owner_log.to_string().contains("between us"), "{owner_log}");
-    // The owner is in the group, so its message shows to them.
+    // A group lives in no workspace (K4.15): its message is in no
+    // workspace's trail, even for the owner, who is in the group.
     assert!(
-        !events_where(&owner_log, |event| event["target"]["id"]
+        events_where(&owner_log, |event| event["target"]["id"]
             == message.as_str())
         .is_empty(),
-        "the owner sees the group's message: {owner_log}"
+        "the group's message stays out of the workspace's trail: {owner_log}"
     );
 
     // Vera, an admin outside the group, sees the task but none of the group.

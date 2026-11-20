@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Eye, Reply } from 'lucide-react'
 import { Suspense, lazy, useCallback, useState, type ReactNode } from 'react'
 
+import { can } from '../auth/can'
 import { useAuthenticatedSession } from '../auth/session'
 
 import { searchMentionableActors } from '../conversations/api'
@@ -123,9 +124,8 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   const files = useTaskFiles(item.projectId, item.id)
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(() => new Set())
   const viewerId = useAuthenticatedSession().user.actorId ?? null
-  const role = useProject(item.projectId).data?.role
-  // Owners and admins may delete anyone's comment; everyone else only their own.
-  const moderator = role === 'owner' || role === 'admin'
+  // Whoever may moderate here deletes anyone's comment; everyone else only their own.
+  const moderator = can(useProject(item.projectId).data, 'channels.moderate')
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PostedComment | null>(null)
   const [history, setHistory] = useState<PostedComment | null>(null)

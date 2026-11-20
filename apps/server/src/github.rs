@@ -42,10 +42,7 @@ use crate::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     outbox,
-    policy::{
-        Action, ActorKind, Membership, Permission, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, Permission, RoleGrant},
     work_item_commands::{self, AuditAttribution, CommandActor, record_audit_for},
 };
 
@@ -1470,7 +1467,6 @@ pub(crate) struct SyncedInstallation {
 pub(crate) async fn sync_installation_as(
     state: &AppState,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     installation_id: u64,
     repository_ids: &[Uuid],
@@ -1494,7 +1490,6 @@ pub(crate) async fn sync_installation_as(
     let role = require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1553,7 +1548,6 @@ pub(crate) async fn sync_installation_as(
     require_project_access_as(
         &mut transaction,
         actor_id,
-        kind,
         project_id,
         Action::GithubIntegrationManage,
     )
@@ -1653,7 +1647,6 @@ async fn sync_installation(
     } = sync_installation_as(
         &state,
         principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
         project_id,
         request.installation_id,
         &request.repository_ids,
@@ -5305,7 +5298,8 @@ async fn ensure_github_actor(
     .fetch_optional(&mut **transaction)
     .await?
     {
-        if kind != "integration" {
+        let integration = kind == "integration"; // kind-check: mechanical (the handle belongs to the GitHub integration's own account)
+        if !integration {
             return Err(AppError::Conflict("github_integration", "handle_in_use"));
         }
         sqlx::query("UPDATE actors SET status = 'active', updated_at = now() WHERE id = $1")
@@ -6097,7 +6091,6 @@ pub(crate) async fn merge_pull_request_as(
     require_project_access_as(
         &mut transaction,
         actor.actor_id,
-        actor.actor_kind,
         project_id,
         Action::PullRequestMerge,
     )
@@ -6350,14 +6343,7 @@ async fn require_project_access(
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
-    require_project_access_as(
-        transaction,
-        principal.actor_id,
-        crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        action,
-    )
-    .await
+    require_project_access_as(transaction, principal.actor_id, project_id, action).await
 }
 
 /// `require_project_access` for a caller resolved elsewhere, such as a
@@ -6365,7 +6351,6 @@ async fn require_project_access(
 pub(crate) async fn require_project_access_as(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<RoleGrant, AppError> {
@@ -6391,20 +6376,7 @@ pub(crate) async fn require_project_access_as(
     .await?
     .ok_or(AppError::NotFound("project"))?;
     let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
-    let subject = Subject::new(
-        actor_id,
-        kind,
-        true,
-        Some(Membership::project(project_id, role, true)),
-        None,
-    );
-    if authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(project_id)),
-    )
-    .is_allowed()
-    {
+    if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(role)
     } else {
         Err(AppError::Forbidden)

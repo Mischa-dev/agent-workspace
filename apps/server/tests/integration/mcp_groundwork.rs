@@ -296,7 +296,7 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -579,4 +579,61 @@ async fn message_links_name_the_message_everywhere() {
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+}
+
+/// K4.21: a tool that takes a space takes it as `spaceId` or `projectId`,
+/// whichever it names; both, naming different spaces, is refused.
+#[tokio::test]
+async fn tools_take_a_space_by_either_name() {
+    let Some(setup) = setup("mcp_ground_space_arg").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "WORK", "Work").await;
+    create_project(&setup, "PLAY", "Play").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+
+    // A tool that names it projectId, given spaceId.
+    let created = tool(
+        app,
+        &codex,
+        &session,
+        "task_create",
+        json!({"spaceId": "WORK", "title": "Either name", "clientRequestId": "space-arg-1"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    assert_eq!(created["value"]["key"], "WORK-1", "{created}");
+    // The same space by both names is fine; two different ones aren't.
+    let both = tool(
+        app,
+        &codex,
+        &session,
+        "task_list",
+        json!({"spaceId": "WORK", "projectId": "WORK"}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "ok", "{both}");
+    let differ = tool(
+        app,
+        &codex,
+        &session,
+        "task_list",
+        json!({"spaceId": "PLAY", "projectId": "WORK"}),
+    )
+    .await;
+    assert_ne!(differ["outcome"], "ok", "{differ}");
+
+    // An operation that names it spaceId, given projectId.
+    let opened = tool(
+        app,
+        &codex,
+        &session,
+        "space_open",
+        json!({"projectId": project}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(opened["value"]["id"], json!(project), "{opened}");
 }

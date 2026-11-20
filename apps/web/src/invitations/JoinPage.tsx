@@ -89,8 +89,10 @@ function handleFrom(name: string) {
 
 const HANDLE = /^[a-z0-9][a-z0-9_-]{1,31}$/
 
+const ROLE_TEXT: Record<string, string> = { admin: 'an admin', viewer: 'a viewer' }
+
 function roleText(role: ResolvedInvitation['role']) {
-  return role === 'admin' ? 'an admin' : role === 'viewer' ? 'a viewer' : 'a member'
+  return ROLE_TEXT[role] ?? 'a member'
 }
 
 export function JoinPage() {

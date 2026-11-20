@@ -198,15 +198,26 @@ pub async fn decide(
     kind: &str,
 ) -> Result<Decision, AppError> {
     let group = Group::of(kind);
+    // A DM (no space) follows the recipient's default workspace's choices.
+    let workspace = if crate::spaces::kind::holds_messages(project_id) {
+        crate::workspace::default_workspace(&mut *connection, recipient)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+    } else {
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&mut *connection)
+            .await?
+    };
     let rows = sqlx::query_as::<_, (String, bool)>(
         r#"
         SELECT preference.channel, preference.enabled
         FROM notification_channel_preferences preference
-        JOIN projects project ON project.organization_id = preference.organization_id
-        WHERE project.id = $1 AND preference.actor_id = $2 AND preference.kind_group = $3
+        WHERE preference.organization_id = $1 AND preference.actor_id = $2
+          AND preference.kind_group = $3
         "#,
     )
-    .bind(project_id)
+    .bind(workspace)
     .bind(recipient)
     .bind(group.as_str())
     .fetch_all(&mut *connection)
@@ -573,7 +584,7 @@ pub async fn read(
     let mutes = sqlx::query_as::<_, MuteView>(
         r#"
         SELECT mute.project_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
+               project.name
                    AS project_name,
                mute.kind_group AS "group"
         FROM notification_project_mutes mute
@@ -762,14 +773,16 @@ impl From<ConversationLevelRow> for ConversationLevelView {
 
 /// Conversations `$1` can see, with their own level when they set one.
 const LEVEL_SQL: &str = r#"
-    SELECT conversation.id AS conversation_id, conversation.project_id, conversation.kind,
+    SELECT conversation.id AS conversation_id,
+           COALESCE(conversation.project_id, direct_scope_id()) AS project_id, conversation.kind,
            conversation.name, level.level,
            conversation_notification_level($1, conversation.id) AS effective
     FROM conversations conversation
-    JOIN projects project ON project.id = conversation.project_id
+    LEFT JOIN projects project ON project.id = conversation.project_id
     LEFT JOIN conversation_notification_levels level
       ON level.conversation_id = conversation.id AND level.actor_id = $1
-    WHERE actor_can_access_project($1, NULL, conversation.project_id)
+    WHERE (conversation.project_id IS NULL
+           OR actor_can_access_project($1, NULL, conversation.project_id))
       AND conversation_visible_to(conversation.id, $1)
 "#;
 
@@ -809,7 +822,7 @@ pub async fn set_conversation_level(
             )
             .bind(actor_id)
             .bind(conversation_id)
-            .bind(current.project_id)
+            .bind(crate::spaces::space_of(current.project_id))
             .bind(level.as_str())
             .execute(crate::db::scoped(pool))
             .await?;
@@ -850,7 +863,8 @@ pub(crate) async fn follow_automatically(
     )
     .bind(actors)
     .bind(thread_id)
-    .bind(project_id)
+    // The place: a DM's row has no space.
+    .bind(crate::spaces::space_of(project_id))
     .execute(&mut **transaction)
     .await?;
     Ok(())

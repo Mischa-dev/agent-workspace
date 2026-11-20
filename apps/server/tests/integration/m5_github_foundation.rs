@@ -950,7 +950,9 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
             .expect("set the task up");
     }
     sqlx::query(
-        "INSERT INTO work_item_watchers (project_id, work_item_id, actor_id) VALUES ($1, $2, $3)",
+        "INSERT INTO follows (workspace_id, space_id, account_id, target_kind, target_id, level, \
+         created_by_account_id) \
+         SELECT organization_id, $1, $3, 'task', $2, 'everything', $3 FROM projects WHERE id = $1",
     )
     .bind(project)
     .bind(task)

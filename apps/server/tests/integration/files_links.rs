@@ -891,15 +891,21 @@ async fn files_move_between_stores_and_resume() {
 const TINY_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 async fn op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
+    let path = format!("/api/v2/w/{}/ops/{name}", setup.organization_id);
+    op_at(setup, &path, input).await
+}
+
+/// An operation on a DM or group, which is in no workspace: its target says
+/// where it acts.
+async fn direct_op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
+    op_at(setup, &format!("/api/v2/ops/{name}"), input).await
+}
+
+async fn op_at(setup: &Setup, path: &str, input: Value) -> (StatusCode, Value) {
     let key = Uuid::now_v7().to_string();
     let (status, body) = send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v2/w/{}/ops/{name}", setup.organization_id),
-            Some(&key),
-            input,
-        ),
+        setup.browser.request("POST", path, Some(&key), input),
     )
     .await;
     if body["outcome"] == "ok" {
@@ -912,7 +918,11 @@ async fn op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
 /// Sends bytes to a direct upload link as a client would.
 async fn put_direct(started: &Value, bytes: Vec<u8>) -> reqwest::StatusCode {
     let mut request = reqwest::Client::new()
-        .put(started["url"].as_str().expect("url"))
+        .put(
+            started["url"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a link to send to: {started}")),
+        )
         .body(bytes);
     for (name, value) in started["headers"].as_object().expect("headers") {
         request = request.header(name, value.as_str().expect("header"));
@@ -1332,7 +1342,7 @@ async fn a_workspace_bucket_takes_new_uploads() {
             .expect("row");
     assert_eq!((stored.as_str(), members_only), ("object", true));
     let bytes = b"straight, for the group".to_vec();
-    let (_, started) = op(
+    let (_, started) = direct_op(
         &setup,
         "file_upload_start",
         json!({"conversationId": group, "name": "g.txt", "size": bytes.len(),
@@ -1363,7 +1373,7 @@ async fn a_workspace_bucket_takes_new_uploads() {
         .await
         .expect("row");
     assert_eq!(stored, "object");
-    let (status, _) = op(
+    let (status, _) = direct_op(
         &setup,
         "file_upload_finish",
         json!({"uploadId": started["uploadId"]}),
