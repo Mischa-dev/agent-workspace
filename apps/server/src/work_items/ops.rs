@@ -2105,6 +2105,26 @@ impl Operation for ProjectUpdatePost {
                     "This space has no channel you can post in.",
                 ))?,
         };
+        // The text is checked before anything is saved, so an update the
+        // message can't carry leaves the space's health as it was. The
+        // thread's people are its channel's.
+        let content = crate::mcp::content_from_text(state, space, Some(channel), &text).await?;
+        if let Err(error) = crate::message_content::MessageContent::from_json(content.clone()) {
+            use crate::message_content::MessageContentError as Problem;
+            return Err(OpError::invalid(
+                "text",
+                match error {
+                    Problem::TextTooLong => {
+                        "That's too long for an update: keep it under 20,000 characters."
+                    }
+                    Problem::TooManyMentions => "That mentions too many people for one update.",
+                    Problem::UnsupportedControlCharacter => {
+                        "That has a character an update can't hold."
+                    }
+                    _ => "That update can't be posted as written.",
+                },
+            ));
+        }
         let scope = idempotency::resource_bound_scope("space", space, "status_update")?;
         let thread_id = match idempotency::reserve(
             &mut tx,
@@ -2166,7 +2186,6 @@ impl Operation for ProjectUpdatePost {
         };
         tx.commit().await.map_err(crate::error::AppError::from)?;
 
-        let content = crate::mcp::content_from_text(state, space, Some(thread_id), &text).await?;
         let posted = append_message_command_with(
             state,
             call.ctx.into(),

@@ -32,7 +32,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ConnectionRemove>()
         .add::<ConnectionDeliveryList>()
         .add::<ConnectionRedeliver>()
-        .add::<ConnectionTest>();
+        .add::<ConnectionTest>()
+        .add::<super::consent::AppConsentSet>();
 }
 
 // --- event_list --------------------------------------------------------------

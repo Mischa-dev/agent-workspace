@@ -42,10 +42,11 @@ import { useNavigate } from 'react-router-dom'
 import * as Y from 'yjs'
 
 import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
-import { useOptionalRealtime } from '../../realtime/realtimeContext'
+import { useOptionalRealtime, useWatchDocument } from '../../realtime/realtimeContext'
 import { Banner, Button, Menu, TextField, Tooltip, describeError, showToast, type MenuEntry } from '../../ui'
 import { formatShortcut } from '../../ui/shortcut'
 import { toastError } from '../../app/mutations'
+import { isConnectionError } from '../../app/localDrafts'
 import { uploadFile } from '../../files/api'
 import { PageEmbed } from '../embeds/PageEmbed'
 import { fileEmbed } from '../embeds/embedModel'
@@ -116,6 +117,8 @@ export default function LivePage({ collections, discussion = null, fallback, pag
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
+  // In the page's live room while it is open (W1.6).
+  useWatchDocument(pageId ? { kind: 'page', id: pageId } : null)
   useEffect(() => {
     let alive = true
     getPageDocument(pageId)
@@ -136,6 +139,17 @@ export default function LivePage({ collections, discussion = null, fallback, pag
       <>
         <Banner title="This page holds something the editor can’t show yet,">
           so it’s shown as last saved. Edit details still changes it.
+        </Banner>
+        {fallback}
+      </>
+    )
+  }
+  if (current && 'error' in current && isConnectionError(current.error)) {
+    // Offline (W1.31): the page as this device last kept it, said plainly, not as a failure.
+    return (
+      <>
+        <Banner onRetry={reload} title="You’re offline," tone="info">
+          so this is the page as last saved here. Editing comes back with the connection.
         </Banner>
         {fallback}
       </>

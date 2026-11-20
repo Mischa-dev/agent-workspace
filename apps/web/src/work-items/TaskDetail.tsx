@@ -326,7 +326,13 @@ function TaskDetailBody({
   const bar = (
     <TaskBar item={item} layout={layout} onClose={onClose} projectId={item.projectId}>
       <span aria-live="polite" className="aw-task__saving">
-        {save.saving ? 'Saving…' : ''}
+        {save.saving ? (
+          'Saving…'
+        ) : save.queued ? (
+          <>
+            Saved offline<span className="aw-task__saving-more">, sends when you’re back</span>
+          </>
+        ) : null}
       </span>
       {layout === 'panel' ? (
         <Tooltip label="Open full page" side="bottom">

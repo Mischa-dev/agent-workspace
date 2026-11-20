@@ -19,7 +19,9 @@ use crate::{
 };
 
 pub fn register_ops(registry: &mut crate::ops::Registry) {
-    registry.add::<AgentCreate>();
+    registry
+        .add::<AgentCreate>()
+        .add::<super::scope::AgentScopeGet>();
 }
 
 /// Make an agent account in this workspace, with its first credential.

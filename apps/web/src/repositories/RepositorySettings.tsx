@@ -185,7 +185,6 @@ export function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated
         githubRepositoryId: Number(githubRepositoryId),
         owner,
         name,
-        cloneUrl: `https://github.com/${owner}/${name}.git`,
         defaultBranch,
         trustAcknowledged: trusted,
         idempotencyKey: crypto.randomUUID(),

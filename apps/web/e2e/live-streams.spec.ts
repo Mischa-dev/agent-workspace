@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 
-import { parseLegacyRealtimeEvent, parseRealtimeEnvelope } from '../src/realtime/realtimeModel'
+import { parseServerFrame } from '../src/realtime/live/protocol'
+import { parseRealtimeEnvelope } from '../src/realtime/realtimeModel'
 import { seededValue, storageStatePath } from './environment'
 import { recordFrames, type Recorder } from './support/recordFrames'
 
@@ -18,18 +19,23 @@ async function writer(context: BrowserContext, page: Page) {
   return { request: page.request, headers }
 }
 
+/** The durable event a protocol 2 `event` frame carries, if it is one. */
+const eventType = (frame: unknown) => (frame as { type?: string; event?: { type?: string } }).type === 'event' ? (frame as { event?: { type?: string } }).event?.type : undefined
+
 /** Waits for `count` durable events of `type` since the recorder was cleared. */
 async function received(recorder: Recorder, type: string, count: number) {
   await expect
-    .poll(() => recorder.frames().filter((frame) => (frame as { type?: string }).type === type).length, { timeout: 15_000 })
+    .poll(() => recorder.frames().filter((frame) => eventType(frame) === type).length, { timeout: 15_000 })
     .toBeGreaterThanOrEqual(count)
 }
 
-/** Every recorded frame is a socket marker, a durable envelope or stream text. */
+/** Every recorded frame is a socket marker or a protocol 2 frame the client reads, events carrying an envelope. */
 function expectReadable(recorder: Recorder) {
   for (const frame of recorder.frames()) {
     if ((frame as { $?: string }).$) continue
-    expect(parseRealtimeEnvelope(frame) ?? parseLegacyRealtimeEvent(frame), JSON.stringify(frame)).not.toBeNull()
+    const wire = parseServerFrame(frame)
+    expect(wire && wire.type !== 'other', JSON.stringify(frame)).toBe(true)
+    if (wire?.type === 'event') expect(parseRealtimeEnvelope(wire.event), JSON.stringify(frame)).not.toBeNull()
   }
 }
 

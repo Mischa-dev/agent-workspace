@@ -167,7 +167,11 @@ export const timeline = {
 }
 
 export class WebSocketStub extends EventTarget {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
   static instances: WebSocketStub[] = []
+  readyState = WebSocketStub.CONNECTING
+  send = vi.fn()
   close = vi.fn()
 
   constructor(public readonly url: string) {

@@ -371,7 +371,7 @@ export function ShellFrame({
         {/* On a phone, back closes an open drawer or details sheet first. */}
         {phone ? (
           <Suspense fallback={null}>
-            <BackCloses close={closeDrawers} open={anyDrawerOpen} />
+            <BackCloses close={dismiss} open={anyDrawerOpen} />
           </Suspense>
         ) : null}
         {hasSidebar && context ? (

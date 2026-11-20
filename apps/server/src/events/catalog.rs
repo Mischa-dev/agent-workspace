@@ -783,6 +783,12 @@ pub static GUARDS_CHANGED: EventType = signal(
     None,
     "A workspace's guards changed",
 );
+pub static BUDGETS_CHANGED: EventType = signal(
+    "budgets.changed",
+    "workspace",
+    None,
+    "A workspace's budgets changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -970,6 +976,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &THEME_CHANGED,
         &WORKSPACE_THEMES_CHANGED,
         &GUARDS_CHANGED,
+        &BUDGETS_CHANGED,
         &NOTIFICATION_CHANGED,
         &REPLY_REQUESTED,
         &REPLY_FOLLOWUP,

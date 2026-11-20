@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
+import { setLocalDraftOwner } from '../app/localDrafts'
 import { BrandMark } from './AuthLayout'
 
 import {
@@ -65,7 +66,8 @@ export function SessionBoundary() {
     )
   }
 
-  if (session.isError) {
+  // A session kept for reading offline (W1.31) still opens the app when the check can't reach the server.
+  if (session.isError && !session.data) {
     return (
       <main className="aw-boot">
         <BrandMark />
@@ -87,6 +89,11 @@ export function SessionBoundary() {
       />
     )
   }
+
+  // A session kept for reading offline (W1.31) shows before the server is
+  // asked, so its person's drafts and waiting writes are read from here too,
+  // never left with no owner (which would drop them as someone else's).
+  setLocalDraftOwner(session.data.user.actorId)
 
   return (
     <AuthenticatedSessionProvider session={session.data}>

@@ -4,7 +4,7 @@ import { Checkbox, SelectField, TextArea, TextField } from '../ui'
 import { shownFields, type Answers, type PublicField } from './formModel'
 import './forms.css'
 
-/** How an internal form asks for one of the space's people. */
+/** How an internal form asks for one of the space's people, or a related collection's records. */
 export type PersonInput = (props: { field: PublicField; label: string; onChange: (value: Answers[string]) => void; value: Answers[string] | undefined }) => ReactNode
 
 /**
@@ -102,6 +102,7 @@ function FieldInput({
       return <Checkbox checked={value === true} description={hint} label={field.name} onChange={(checked) => onChange(checked)} />
     case 'person':
     case 'people':
+    case 'relation':
       return personInput ? personInput({ field, label, onChange, value }) : null
   }
 }

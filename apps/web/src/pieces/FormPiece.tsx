@@ -14,6 +14,7 @@ export function FormPiece({
   autoFocus = false,
   describeFailure = defaultFailure,
   fields,
+  initialValues,
   label,
   labelledBy,
   onSubmit,
@@ -25,6 +26,8 @@ export function FormPiece({
   /** A failed send in words. */
   describeFailure?: (error: unknown) => string
   fields: readonly FormField[]
+  /** What the fields hold when the form opens, such as a panel's last values. */
+  initialValues?: FormValues
   /** The form's name for screen readers, unless `labelledBy` names a heading. */
   label?: string
   labelledBy?: string
@@ -35,7 +38,7 @@ export function FormPiece({
   /** The name of a field people never see (T1.29); only a script fills it in. */
   trap?: string
 }) {
-  const [values, setValues] = useState<FormValues>({})
+  const [values, setValues] = useState<FormValues>(() => initialValues ?? {})
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
@@ -71,15 +74,7 @@ export function FormPiece({
 
   return (
     <form aria-label={labelledBy ? undefined : label} aria-labelledby={labelledBy} className="aw-piece__form" noValidate onSubmit={submit}>
-      {fields.map((field, index) => (
-        <FieldInput
-          autoFocus={autoFocus && index === 0}
-          field={field}
-          key={field.id}
-          onChange={(value) => set(field.id, value)}
-          value={values[field.id]}
-        />
-      ))}
+      <FormPieceFields autoFocus={autoFocus} fields={fields} onChange={set} values={values} />
       {trap ? (
         <div aria-hidden="true" className="aw-piece__trap">
           <label>
@@ -106,6 +101,37 @@ export function FormPiece({
         </Button>
       </div>
     </form>
+  )
+}
+
+/**
+ * The form piece's questions without its form: for a form that holds them
+ * among its own fields (an automation's operation input, say) and sends
+ * them itself.
+ */
+export function FormPieceFields({
+  autoFocus = false,
+  fields,
+  onChange,
+  values,
+}: {
+  autoFocus?: boolean
+  fields: readonly FormField[]
+  onChange: (id: string, value: FormValue) => void
+  values: FormValues
+}) {
+  return (
+    <>
+      {fields.map((field, index) => (
+        <FieldInput
+          autoFocus={autoFocus && index === 0}
+          field={field}
+          key={field.id}
+          onChange={(value) => onChange(field.id, value)}
+          value={values[field.id]}
+        />
+      ))}
+    </>
   )
 }
 

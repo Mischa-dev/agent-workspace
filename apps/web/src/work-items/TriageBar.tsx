@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { callOp, type OpInput } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
+import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { Button, Dialog, Kbd, TextArea, describeError, showToast } from '../ui'
 import { TRIAGE_KEYS } from '../views/viewKeys'
 import { isTypingTarget } from './shortcutKeys'
@@ -30,6 +31,10 @@ export function TriageBar({
   taskId: string | null
 }) {
   const client = useQueryClient()
+  // While the live connection is up, the decision's task event refreshes the
+  // views that hold the task; refetching them here too doubled each
+  // decision's reads, and a quick triage ran into the read limit.
+  const live = useOptionalRealtime()?.connection === 'live'
   const [busy, setBusy] = useState(false)
   const [asking, setAsking] = useState<'decline' | 'snooze' | null>(null)
   const [reason, setReason] = useState('')
@@ -47,7 +52,7 @@ export function TriageBar({
       setAsking(null)
       setReason('')
       onDone()
-      void client.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
+      if (!live) void client.invalidateQueries({ queryKey: queryKeys.workItemsRoot(projectId) })
     } catch (error) {
       showToast({ tone: 'danger', title: describeError(error).message })
     } finally {

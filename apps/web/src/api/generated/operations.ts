@@ -52,6 +52,14 @@ export type BlockedProjection = { blockedAt: string; blockedByActorId: string; r
 
 export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
 
+export type BudgetMeter = { id: string; name: string; unit: string }
+
+export type BudgetPeriod = "minute" | "hour" | "day" | "month"
+
+export type BudgetScope = "workspace" | "account" | "space" | "conversation"
+
+export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
+
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
 export type ButtonStepInput = { arguments?: Record<string, unknown>; operation: string }
@@ -386,13 +394,15 @@ export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
+export type PreviewStep = { action: unknown; kind: string; summary: string }
+
 export type ProjectHeader = { id: string; key: string; name: string; role: string; url: string }
 
 export type ProjectLine = { archived?: boolean; id: string; key: string; messagesSpace: boolean; name: string; openTasks: number; role: string; unreadConversations: number; url: string; version: number }
 
 export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
-export type PublicField = { description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
+export type PublicField = { collection?: string | null; description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
 
 export type PublicOption = { color: string; id: string; name: string }
 
@@ -481,6 +491,14 @@ export type ScheduleInput = { every?: number | null; frequency: string; monthDay
 export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
+
+export type ScopeAccount = { accountId: string; displayName?: string | null }
+
+export type ScopeConversation = { conversationId: string; heard: boolean; kind: string; members: ScopeMember[]; name?: string | null; workspaceId: string }
+
+export type ScopeMember = { accountId: string; displayName?: string | null; you: boolean }
+
+export type ScopeSpace = { kind: string; name: string; role: string; spaceId: string }
 
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
 
@@ -698,6 +716,10 @@ export type AgentResumeInput = { account: string; everywhere?: boolean; reason?:
 
 export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
+export type AgentScopeGetInput = { account: string }
+
+export type AgentScopeGetOutput = { accountId: string; alsoInOtherWorkspaces: boolean; connections: number; displayName?: string | null; follows: number; handle?: string | null; managers: ScopeAccount[]; privateConversations: ScopeConversation[]; readsWithConsent: boolean; spaces: ScopeSpace[]; workspaceRole: string }
+
 export type AgentTemplateListInput = { spaceId?: string | null }
 
 export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
@@ -705,6 +727,10 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AppConsentSetInput = { app: string; conversation: string; granted?: boolean | null }
+
+export type AppConsentSetOutput = { appAccountId: string; changed: boolean; conversationId: string; granted: boolean }
 
 export type AutomationCreateInput = { actions: Action[]; conditions?: Conditions | null; enabled?: boolean | null; name: string; projectId: string; trigger: Trigger }
 
@@ -722,6 +748,10 @@ export type AutomationListInput = { projectId: string }
 
 export type AutomationListOutput = unknown
 
+export type AutomationPreviewInput = { projectId: string; ruleId: string; taskId?: string | null }
+
+export type AutomationPreviewOutput = { actions: PreviewStep[]; skipped?: string | null; tasks: number }
+
 export type AutomationRunStartInput = { projectId: string; ruleId: string; taskId?: string | null }
 
 export type AutomationRunStartOutput = unknown
@@ -733,6 +763,14 @@ export type AutomationUpdateOutput = unknown
 export type BriefingGetInput = { projectId?: string | null }
 
 export type BriefingGetOutput = { claims?: TaskLine[]; mentions: Mention[]; nextSteps: string; notifications: NotificationLine[]; replyRequests?: InboxItem[]; tasks: TaskLine[]; threadUpdates: ThreadUpdate[]; unread: ConversationSummary[]; you: You }
+
+export type BudgetListInput = { account?: string | null }
+
+export type BudgetListOutput = { budgets: BudgetView[]; meters: BudgetMeter[] }
+
+export type BudgetSetInput = { eachAccount?: boolean; expectedVersion?: number | null; hardLimit?: number | null; meter: string; period: BudgetPeriod; scope: BudgetScope; scopeId?: string | null; softLimit?: number | null }
+
+export type BudgetSetOutput = { budget?: BudgetView | null }
 
 export type BugReportLinkCreateInput = { collection?: string | null; delete?: boolean | null; form?: FormWrite | null; linkId?: string | null; name?: string | null; projectId: string; replace?: boolean | null; state?: string | null }
 
@@ -2007,15 +2045,20 @@ export type Operations = {
   agent_ref_update: { input: AgentRefUpdateInput; output: AgentRefUpdateOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
+  agent_scope_get: { input: AgentScopeGetInput; output: AgentScopeGetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  app_consent_set: { input: AppConsentSetInput; output: AppConsentSetOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
   automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }
   automation_list: { input: AutomationListInput; output: AutomationListOutput }
+  automation_preview: { input: AutomationPreviewInput; output: AutomationPreviewOutput }
   automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
   automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }
+  budget_list: { input: BudgetListInput; output: BudgetListOutput }
+  budget_set: { input: BudgetSetInput; output: BudgetSetOutput }
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }

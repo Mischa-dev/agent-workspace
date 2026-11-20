@@ -417,9 +417,8 @@ enum EmbedTarget {
 }
 
 /// What an embed's same-origin path names, as the web's `embedTarget` reads
-/// it: `/w/{ws}/s/{p}/sheets/{s}?tab=&range=` (or today's
-/// `/projects/{p}/sheets/{s}`), or a board at
-/// `…/whiteboards/{id}`.
+/// it: a sheet at `/w/{workspace}/s/{space}/sheets/{s}?tab=&range=` (or the
+/// older `/projects/{p}/sheets/{s}`), or a board at `…/whiteboards/{id}`.
 fn embed_target(href: &str) -> Option<EmbedTarget> {
     let base = url::Url::parse("https://app.invalid/").ok()?;
     let url = base.join(href).ok()?;
@@ -431,7 +430,6 @@ fn embed_target(href: &str) -> Option<EmbedTarget> {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     match segments.as_slice() {
-        // Either shape of address, as the web reads it.
         ["projects", project, "sheets", sheet] | ["w", _, "s", project, "sheets", sheet] => {
             let query = |name: &str| {
                 url.query_pairs()
@@ -670,17 +668,21 @@ mod tests {
             })
         );
         assert_eq!(
-            embed_target(&format!("/w/acme/s/{id}/sheets/{id}")),
+            embed_target(&format!("https://elsewhere.test/whiteboards/{id}")),
+            None
+        );
+        assert_eq!(
+            embed_target(&format!("/w/acme/s/{id}/sheets/{id}?tab={id}")),
             Some(EmbedTarget::Sheet {
                 project_id: id,
                 sheet_id: id,
-                tab_id: None,
+                tab_id: Some(id),
                 range: None,
             })
         );
         assert_eq!(
-            embed_target(&format!("https://elsewhere.test/whiteboards/{id}")),
-            None
+            embed_target(&format!("/w/acme/s/{id}/whiteboards/{id}")),
+            Some(EmbedTarget::Board(id))
         );
         assert_eq!(embed_target("/projects/x/collections/y"), None);
     }
