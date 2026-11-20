@@ -905,6 +905,21 @@
     "title": "Update task template"
   },
   {
+    "kind": "create",
+    "name": "theme_create",
+    "title": "Make theme"
+  },
+  {
+    "kind": "change",
+    "name": "theme_delete",
+    "title": "Delete theme"
+  },
+  {
+    "kind": "change",
+    "name": "theme_update",
+    "title": "Change theme"
+  },
+  {
     "kind": "change",
     "name": "thing_link",
     "title": "Link two things"
@@ -1028,5 +1043,10 @@
     "kind": "change",
     "name": "workspace_store_set",
     "title": "Use the workspace's own file bucket"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_theme_set",
+    "title": "Offer theme to the workspace"
   }
 ]

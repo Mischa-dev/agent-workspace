@@ -37,6 +37,12 @@
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",
+    "theme_list": "query",
+    "theme_get": "describe",
+    "theme_create": "create",
+    "theme_update": "change",
+    "theme_delete": "change",
+    "workspace_theme_set": "change",
     "notification_list": "query",
     "notification_update": "change",
     "file_upload": "create",
@@ -168,8 +174,8 @@
   ],
   "events": {
     "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "budgets.changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "follows.changed", "group.changed", "link.created", "link.deleted",
-      "saved_searches.changed", "space.archived", "space.created", "space.member.changed", "space.restored", "space.updated",
-      "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
+      "saved_searches.changed", "space.archived", "space.created", "space.member.changed", "space.restored", "space.updated", "theme.changed",
+      "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed", "workspace_themes.changed"],
     "listens": []
   },
   "notifications": ["thing_update", "budget_warning"],

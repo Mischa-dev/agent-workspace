@@ -137,8 +137,8 @@ const sizes = [
 ] as const
 const schemes = ['light', 'dark'] as const
 
-// W1.40: UI_TOUR_DIRECTION previews one of the visual directions (theme/directions.ts).
-const direction = process.env.UI_TOUR_DIRECTION ?? ''
+// UI_TOUR_THEME tours a built-in theme pair, such as paper (paper and paper-dark); unset is Quiet.
+const direction = process.env.UI_TOUR_THEME ?? ''
 const file = (screen: Screen, size: string, scheme: string) => `${direction ? `${direction}-` : ''}${screen.name}-${size}-${scheme}.png`
 
 test.use({ storageState: storageStatePath })
@@ -150,13 +150,13 @@ for (const scheme of schemes) {
     test.use({ colorScheme: scheme })
 
     test.beforeEach(async ({ page }) => {
-      await page.addInitScript((previewed) => {
+      const theme = direction ? (scheme === 'dark' ? `${direction}-dark` : direction) : 'system'
+      await page.addInitScript((picked) => {
         window.localStorage.setItem(
           'agent-workspace:appearance:v2',
-          JSON.stringify({ theme: 'system', overrides: {}, density: 'comfortable', textSize: 'default' }),
+          JSON.stringify({ theme: picked, overrides: {}, density: 'comfortable', textSize: 'default' }),
         )
-        if (previewed) window.sessionStorage.setItem('agent-workspace:direction-preview', previewed)
-      }, direction)
+      }, theme)
     })
 
     for (const screen of chosen) {
