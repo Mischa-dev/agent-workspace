@@ -600,6 +600,7 @@ pub(crate) async fn file_upload(
                 &crate::events::catalog::FILE_ATTACHED,
                 project_id,
                 row.id,
+                principal.actor_id,
             )
             .await
         {
@@ -663,6 +664,7 @@ async fn task_file_event(
     ty: &'static crate::events::EventType,
     space: Uuid,
     file: Uuid,
+    actor: Uuid,
 ) -> Result<(), AppError> {
     crate::events::emit(
         connection,
@@ -677,7 +679,9 @@ async fn task_file_event(
             changes: &[],
             audience: crate::events::Audience::Space,
             payload: serde_json::json!({}),
-            actor: None,
+            // The command's own transaction carries no event context, so
+            // the event names who uploaded or removed the file.
+            actor: Some(actor),
             legacy_type: None,
         },
     )
@@ -742,6 +746,7 @@ pub(crate) async fn file_delete(
                 &crate::events::catalog::FILE_REMOVED,
                 row.project_id,
                 row.id,
+                principal.actor_id,
             )
             .await?;
         }
