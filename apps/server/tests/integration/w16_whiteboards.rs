@@ -1710,6 +1710,28 @@ async fn board_images_live_in_the_file_store() {
     .await
     .expect("the image is a file of the board");
     assert_eq!((kind.as_str(), purpose.as_str()), ("whiteboard", "inline"));
+    // The same image id again with other bytes stores nothing and leaves no
+    // staged bytes behind (they'd count toward nothing for an hour).
+    use base64::Engine as _;
+    let other = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nother bytes")
+    );
+    let (status, again) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/files"),
+        json!({"id": "photo1", "mimeType": "image/png", "dataURL": other}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["stored"], false, "{again}");
+    let staged = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_objects_pending")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("pending notes");
+    assert_eq!(staged, 0, "nothing staged stays behind");
     let file_url = |board: &str, file: &str| format!("/api/v1/whiteboards/{board}/files/{file}");
     let (status, file) = request(
         &setup,

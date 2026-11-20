@@ -1204,11 +1204,15 @@ fn content_key(organization_id: Uuid, sha256: &str) -> String {
 
 /// A [`ContentFile`]'s bytes, written by [`stage_content`] before any
 /// transaction opens.
+#[derive(Clone)]
 pub(crate) struct StagedContent {
     organization_id: Uuid,
     sha256: String,
     store_id: String,
     key: String,
+    /// When this stage pinned the key: [`abandon_content`] takes back only
+    /// its own pin, not one a later stage of the same content renewed.
+    pinned_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Writes the bytes of content files for a workspace to the file store
@@ -1223,37 +1227,41 @@ pub(crate) async fn stage_content(
     bytes: &[u8],
 ) -> Result<StagedContent, AppError> {
     let sha256 = hex::encode(Sha256::digest(bytes));
-    let key = content_key(organization_id, &sha256);
     let store = FileStore::from_config(&state.config);
     // Under the workspace's files lock, which cleanup takes too: the bytes
     // are pinned by a pending note whether they're written now or a row
     // already holds them, and cleanup leaves pinned bytes alone until the
     // row that claims them is in.
-    let fresh = {
+    let (key, fresh, pinned_at) = {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("files-quota:{organization_id}"))
             .execute(&mut *transaction)
             .await?;
-        let fresh = !content_stored(&mut transaction, store.id(), &key).await?;
+        let (key, fresh) =
+            content_target(&mut transaction, store.id(), organization_id, &sha256).await?;
         if fresh {
             require_room(state, &mut transaction, organization_id, size, 0).await?;
         }
-        sqlx::query(
+        // Fresh bytes count toward the room checks until a row holds them.
+        let pinned_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
             r#"
-            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (storage_key) DO UPDATE SET started_at = now()
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id, byte_size)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (storage_key) DO UPDATE SET started_at = now(),
+                byte_size = COALESCE(EXCLUDED.byte_size, file_objects_pending.byte_size)
+            RETURNING started_at
             "#,
         )
         .bind(&key)
         .bind(organization_id)
         .bind(store.id())
-        .execute(&mut *transaction)
+        .bind(fresh.then(|| i64::try_from(size).unwrap_or(i64::MAX)))
+        .fetch_one(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        fresh
+        (key, fresh, pinned_at)
     };
     if fresh {
         store.put(&key, bytes).await?;
@@ -1263,7 +1271,70 @@ pub(crate) async fn stage_content(
         sha256,
         store_id: store.id().to_owned(),
         key,
+        pinned_at,
     })
+}
+
+/// Takes back a stage no row claimed: the write stored nothing new (the
+/// board already had that image) or didn't commit. Its pin goes, and its
+/// bytes too unless a row holds them, deleted outside any transaction under
+/// a claim as cleanup does. A pin another stage of the same content renewed
+/// since is left for that one. Never fails the caller: what it can't take
+/// back, the sweep does.
+pub(crate) async fn abandon_content(state: &AppState, staged: &StagedContent) {
+    if let Err(error) = abandon_staged_content(state, staged).await {
+        tracing::warn!(
+            category = error.log_category(),
+            "staged file bytes not taken back"
+        );
+    }
+}
+
+async fn abandon_staged_content(state: &AppState, staged: &StagedContent) -> Result<(), AppError> {
+    let claimed = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{}", staged.organization_id))
+            .execute(&mut *transaction)
+            .await?;
+        let held = content_stored(&mut transaction, &staged.store_id, &staged.key).await?;
+        let query = if held {
+            "DELETE FROM file_objects_pending WHERE storage_key = $1 AND started_at = $2 \
+               AND deleting_since IS NULL RETURNING true"
+        } else {
+            "UPDATE file_objects_pending SET deleting_since = now(), byte_size = NULL \
+             WHERE storage_key = $1 AND started_at = $2 AND deleting_since IS NULL RETURNING true"
+        };
+        let ours = sqlx::query_scalar::<_, bool>(query)
+            .bind(&staged.key)
+            .bind(staged.pinned_at)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+        transaction.commit().await?;
+        ours && !held
+    };
+    if !claimed {
+        return Ok(());
+    }
+    let store = FileStore::resolve(state, &staged.store_id).await?;
+    finish_claim(state, &staged.key, store.delete(&staged.key).await.is_ok()).await
+}
+
+/// Lifts a deletion claim once the store's delete ran: the note goes with
+/// the bytes, or stays as a pending note for the sweep when they couldn't
+/// be deleted.
+async fn finish_claim(state: &AppState, key: &str, deleted: bool) -> Result<(), AppError> {
+    let finish = if deleted {
+        "DELETE FROM file_objects_pending WHERE storage_key = $1 AND deleting_since IS NOT NULL"
+    } else {
+        "UPDATE file_objects_pending SET deleting_since = NULL WHERE storage_key = $1"
+    };
+    sqlx::query(finish)
+        .bind(key)
+        .execute(crate::db::scoped(&state.pool))
+        .await?;
+    Ok(())
 }
 
 /// Records a [`ContentFile`] for `uploader` in `transaction`, over the
@@ -1285,6 +1356,15 @@ pub(crate) async fn store_content(
         .bind(format!("files-quota:{}", staged.organization_id))
         .execute(&mut **transaction)
         .await?;
+    // The pin goes first, so the bytes it counted aren't counted twice.
+    sqlx::query(
+        "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
+           AND deleting_since IS NULL",
+    )
+    .bind(&staged.store_id)
+    .bind(&staged.key)
+    .execute(&mut **transaction)
+    .await?;
     if !content_stored(transaction, &staged.store_id, &staged.key).await? {
         let size = u64::try_from(file.bytes.len()).unwrap_or(u64::MAX);
         require_room(state, transaction, staged.organization_id, size, size).await?;
@@ -1303,11 +1383,6 @@ pub(crate) async fn store_content(
         "file",
         "That file was added a moment ago.",
     ))?;
-    sqlx::query("DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2")
-        .bind(&staged.store_id)
-        .bind(&staged.key)
-        .execute(&mut **transaction)
-        .await?;
     Ok(row)
 }
 
@@ -1325,6 +1400,32 @@ async fn content_stored(
     .bind(store_id)
     .fetch_one(&mut *connection)
     .await?)
+}
+
+/// Where content `sha256` goes in a workspace, and whether its bytes must
+/// be written: its content key, written unless a live row already holds
+/// it. While cleanup or the sweep is deleting the bytes under that key
+/// (a claim), a key of its own, so the delete in flight can't take them.
+/// Called under the workspace's files lock.
+async fn content_target(
+    connection: &mut PgConnection,
+    store_id: &str,
+    organization_id: Uuid,
+    sha256: &str,
+) -> Result<(String, bool), AppError> {
+    let key = content_key(organization_id, sha256);
+    let claimed = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM file_objects_pending \
+         WHERE storage_key = $1 AND deleting_since IS NOT NULL)",
+    )
+    .bind(&key)
+    .fetch_one(&mut *connection)
+    .await?;
+    if claimed {
+        return Ok((storage_key(organization_id, Uuid::now_v7()), true));
+    }
+    let fresh = !content_stored(connection, store_id, &key).await?;
+    Ok((key, fresh))
 }
 
 /// Inserts a content file's row, attached at once (or at `attached_at`,
@@ -1393,9 +1494,9 @@ pub(crate) async fn move_content(
         .execute(&mut **transaction)
         .await?;
     let sha256 = hex::encode(Sha256::digest(file.bytes));
-    let key = content_key(organization_id, &sha256);
     let store = FileStore::from_config(&state.config);
-    if !content_stored(transaction, store.id(), &key).await? {
+    let (key, fresh) = content_target(transaction, store.id(), organization_id, &sha256).await?;
+    if fresh {
         store.put(&key, file.bytes).await?;
     }
     Ok(insert_content_row(
@@ -1457,6 +1558,9 @@ pub(crate) async fn require_room(
             ) kept
             UNION ALL
             SELECT image_bytes FROM link_previews WHERE image_key IS NOT NULL
+            UNION ALL
+            -- Staged bytes no row holds yet.
+            SELECT byte_size FROM file_objects_pending WHERE byte_size IS NOT NULL
         ) stored
         "#,
     )
@@ -1845,62 +1949,9 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     .await?;
     let mut deleted = 0;
     for (id, organization_id, key, thumbnail_key, store_id) in removed {
-        // Bytes named by content can be another file's too (a duplicated
-        // board's images): they stay while any other row still holds them,
-        // or an upload staging the same content has pinned them.
-        // The check, the delete and the mark happen under the lock
-        // `store_content` takes, so an upload of the same content either
-        // finds this row live and is counted as sharing it, or comes after
-        // the mark and writes the bytes again.
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("files-quota:{organization_id}"))
-            .execute(&mut *transaction)
-            .await?;
-        let shared = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM files
-                WHERE store_id = $3 AND storage_key = $1 AND id <> $2
-                  AND blob_deleted_at IS NULL
-            ) OR EXISTS (
-                SELECT 1 FROM file_objects_pending
-                WHERE store_id = $3 AND storage_key = $1
-            )
-            "#,
-        )
-        .bind(&key)
-        .bind(id)
-        .bind(&store_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        // One file the store can't delete mustn't stop every later one: it
-        // stays in the batch and is tried again next time.
-        let mut failed = false;
-        match FileStore::resolve(state, &store_id).await {
-            Ok(store) => {
-                let keys = if shared { None } else { Some(key) };
-                for key in keys.into_iter().chain(thumbnail_key) {
-                    if let Err(error) = store.delete(&key).await {
-                        tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
-                        failed = true;
-                    }
-                }
-            }
-            Err(_) => {
-                tracing::warn!(file_id = %id, "file bytes are in a store this server doesn't have");
-                failed = true;
-            }
+        if delete_removed(state, id, organization_id, key, thumbnail_key, &store_id).await? {
+            deleted += 1;
         }
-        if failed {
-            continue;
-        }
-        sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        deleted += 1;
     }
     for store in FileStore::all(&state.config) {
         deleted += sweep_pending_objects(state, &store).await?;
@@ -1919,6 +1970,99 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     deleted += upload::sweep(state).await?;
     deleted += crate::link_previews::cleanup(state).await?;
     Ok(deleted)
+}
+
+/// Deletes one removed file's bytes and marks it, true when it's done.
+/// Bytes named by content can be another file's too (a duplicated board's
+/// images): they stay while any other row still holds them, or an upload
+/// staging the same content has pinned them. That check is made under the
+/// lock `stage_content` takes, and bytes this file alone holds are claimed
+/// in the same transaction; the store's delete runs outside any
+/// transaction, and a second one marks the file and lifts the claim. An
+/// upload of the same content meanwhile writes its bytes under a key of its
+/// own ([`content_target`]).
+async fn delete_removed(
+    state: &AppState,
+    id: Uuid,
+    organization_id: Uuid,
+    key: String,
+    thumbnail_key: Option<String>,
+    store_id: &str,
+) -> Result<bool, AppError> {
+    let delete_key = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{organization_id}"))
+            .execute(&mut *transaction)
+            .await?;
+        let shared = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM files
+                WHERE store_id = $3 AND storage_key = $1 AND id <> $2
+                  AND blob_deleted_at IS NULL
+            ) OR EXISTS (
+                SELECT 1 FROM file_objects_pending WHERE storage_key = $1
+            )
+            "#,
+        )
+        .bind(&key)
+        .bind(id)
+        .bind(store_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        // Only content is staged again under the same key: an upload's own
+        // key needs no claim.
+        if !shared && is_content_key(organization_id, &key) {
+            sqlx::query(
+                "INSERT INTO file_objects_pending (storage_key, workspace_id, store_id, deleting_since) \
+                 VALUES ($1, $2, $3, now())",
+            )
+            .bind(&key)
+            .bind(organization_id)
+            .bind(store_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        !shared
+    };
+    let claimed = delete_key && is_content_key(organization_id, &key);
+    // One file the store can't delete mustn't stop every later one: it
+    // stays unmarked and is tried again next time.
+    let mut failed = false;
+    match FileStore::resolve(state, store_id).await {
+        Ok(store) => {
+            let keys = delete_key.then_some(key.as_str());
+            for key in keys.into_iter().chain(thumbnail_key.as_deref()) {
+                if let Err(error) = store.delete(key).await {
+                    tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
+                    failed = true;
+                }
+            }
+        }
+        Err(_) => {
+            tracing::warn!(file_id = %id, "file bytes are in a store this server doesn't have");
+            failed = true;
+        }
+    }
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    if !failed {
+        sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    if claimed {
+        sqlx::query(
+            "DELETE FROM file_objects_pending WHERE storage_key = $1 AND deleting_since IS NOT NULL",
+        )
+        .bind(&key)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(!failed)
 }
 
 /// Deletes bytes written more than an hour ago that no file row claimed:
@@ -1958,29 +2102,51 @@ async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Resu
     // Bytes named by content may be held by a row another write made, or
     // pinned again by an upload staging the same content: one at a time,
     // under the workspace's files lock that staging and cleanup take, the
-    // note goes and the bytes go only if nothing holds or pins them since.
+    // note goes if a row holds them, or else becomes a claim. The delete
+    // runs outside any transaction, and a second one lifts the claim, or
+    // puts the note back when the store couldn't delete the bytes.
     for (key, workspace) in content {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("files-quota:{workspace}"))
-            .execute(&mut *transaction)
-            .await?;
-        let still_due = sqlx::query_scalar::<_, bool>(
-            "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
-               AND started_at < now() - make_interval(mins => $3) RETURNING true",
-        )
-        .bind(store.id())
-        .bind(key)
-        .bind(PENDING_OBJECT_MINUTES)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .is_some();
-        if still_due && !content_stored(&mut transaction, store.id(), key).await? {
-            // A delete that fails leaves bytes nothing names: harmless, and
-            // the next write of the same content reuses the key.
-            let _ = store.delete(key).await;
+        let claimed = {
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(format!("files-quota:{workspace}"))
+                .execute(&mut *transaction)
+                .await?;
+            let still_due = sqlx::query_scalar::<_, bool>(
+                "SELECT true FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
+                   AND started_at < now() - make_interval(mins => $3)",
+            )
+            .bind(store.id())
+            .bind(key)
+            .bind(PENDING_OBJECT_MINUTES)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+            let claimed = if !still_due {
+                false
+            } else if content_stored(&mut transaction, store.id(), key).await? {
+                sqlx::query("DELETE FROM file_objects_pending WHERE storage_key = $1")
+                    .bind(key)
+                    .execute(&mut *transaction)
+                    .await?;
+                false
+            } else {
+                sqlx::query(
+                    "UPDATE file_objects_pending SET deleting_since = now(), started_at = now(), \
+                     byte_size = NULL WHERE storage_key = $1",
+                )
+                .bind(key)
+                .execute(&mut *transaction)
+                .await?;
+                true
+            };
+            transaction.commit().await?;
+            claimed
+        };
+        if !claimed {
+            continue;
         }
-        transaction.commit().await?;
+        finish_claim(state, key, store.delete(key).await.is_ok()).await?;
     }
     Ok(u64::try_from(due.len()).unwrap_or(0))
 }

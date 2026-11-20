@@ -623,7 +623,10 @@ async fn gauge(
                      SELECT image_bytes FROM link_previews \
                      WHERE organization_id = $1 AND image_key IS NOT NULL \
                      UNION ALL \
-                     SELECT held_bytes FROM incoming_hooks WHERE workspace_id = $1) stored",
+                     SELECT held_bytes FROM incoming_hooks WHERE workspace_id = $1 \
+                     UNION ALL \
+                     SELECT byte_size FROM file_objects_pending \
+                     WHERE workspace_id = $1 AND byte_size IS NOT NULL) stored",
             )
             .bind(workspace)
             .fetch_one(&mut *connection)
