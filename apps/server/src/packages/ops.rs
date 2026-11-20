@@ -316,7 +316,10 @@ impl Operation for PackageInstall {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::ModulesManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    /// The package is read (an uploaded file may come over the network)
+    /// before the request id is kept, so nothing waits holding a
+    /// connection (rule 14).
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const MAX_BODY_BYTES: usize = install::MAX_DOCUMENT_BYTES;
     const TITLE: &'static str = "Install a package";
     const DESCRIPTION: &'static str = "Install a package as package_preview planned it: its \
@@ -340,7 +343,13 @@ impl Operation for PackageInstall {
         )
         .await?;
         let place = input.target.place(call, &origin.package)?;
-        install_planned(call, origin, place, Some(&input.plan_hash)).await
+        let reservation = match keep_request(call, Self::NAME, &input).await? {
+            Kept::Replay(installed) => return Ok(installed),
+            Kept::Reserved(reservation) => reservation,
+        };
+        let installed = install_planned(call, origin, place, Some(&input.plan_hash)).await?;
+        kept(call, reservation, &installed).await?;
+        Ok(installed)
     }
 }
 
@@ -590,7 +599,8 @@ impl Operation for PackageUpgrade {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::ModulesManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    /// As package_install: the package is read before the request id is kept.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const MAX_BODY_BYTES: usize = install::MAX_DOCUMENT_BYTES;
     const TITLE: &'static str = "Upgrade a package";
     const DESCRIPTION: &'static str = "Upgrade an install as package_upgrade_preview planned it \
@@ -612,6 +622,10 @@ impl Operation for PackageUpgrade {
             input.file_id.as_deref(),
         )
         .await?;
+        let reservation = match keep_request(call, Self::NAME, &input).await? {
+            Kept::Replay(upgraded) => return Ok(upgraded),
+            Kept::Reserved(reservation) => reservation,
+        };
         let ctx = call.ctx;
         let workspace = ctx.workspace_id;
         let actor = call.account_id();
@@ -693,8 +707,62 @@ impl Operation for PackageUpgrade {
                 "detached": upgraded.detached.len(),
             }),
         );
+        kept(call, reservation, &upgraded).await?;
         Ok(upgraded)
     }
+}
+
+/// A request id kept by a package write once its package is in hand.
+enum Kept<T> {
+    /// The same request ran before: its answer.
+    Replay(T),
+    /// Kept for this run (none when the call gave no request id).
+    Reserved(Option<crate::idempotency::IdempotencyReservation>),
+}
+
+/// Keeps the call's request id for `name`, in the call's transaction. Called
+/// after the package is read, so no transaction is open across that read.
+async fn keep_request<I: Serialize, T: serde::de::DeserializeOwned>(
+    call: &mut OpCall<'_>,
+    name: &str,
+    input: &I,
+) -> Result<Kept<T>, OpError> {
+    let Some(key) = call
+        .ctx
+        .request_id
+        .as_deref()
+        .and_then(|key| crate::idempotency::IdempotencyKey::parse(key).ok())
+    else {
+        return Ok(Kept::Reserved(None));
+    };
+    call.key_honoured();
+    let actor = call.account_id();
+    let scope = format!("op.{name}.{}", call.ctx.workspace_id.simple());
+    let hash =
+        crate::idempotency::RequestHash::for_value(input).map_err(|_| OpError::Unavailable)?;
+    let tx = call.tx().await?;
+    match crate::idempotency::reserve(tx, actor, &scope, &key, hash).await? {
+        crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+            call.mark_replayed(true);
+            Ok(Kept::Replay(replay.decode::<T>()?))
+        }
+        crate::idempotency::IdempotencyOutcome::Reserved(reserved) => {
+            Ok(Kept::Reserved(Some(reserved)))
+        }
+    }
+}
+
+/// Stores `output` as the kept request's answer.
+async fn kept<T: Serialize>(
+    call: &mut OpCall<'_>,
+    reservation: Option<crate::idempotency::IdempotencyReservation>,
+    output: &T,
+) -> Result<(), OpError> {
+    if let Some(reservation) = reservation {
+        let tx = call.tx().await?;
+        crate::idempotency::complete(tx, &reservation, axum::http::StatusCode::OK, output).await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------- package_list (M1.9)

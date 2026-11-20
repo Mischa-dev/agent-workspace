@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use rmcp::schemars::{self, JsonSchema};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -27,7 +27,7 @@ use crate::{
 const NAME: &str = "package_install";
 
 /// An object an install made or reused.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledObject {
     pub kind: String,
@@ -38,7 +38,7 @@ pub struct InstalledObject {
     pub action: String,
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Installed {
     #[schemars(with = "String")]

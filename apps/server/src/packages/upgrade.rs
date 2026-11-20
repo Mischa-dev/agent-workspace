@@ -131,7 +131,7 @@ pub struct UpgradePlan {
 }
 
 /// What an upgrade did. Lists name parts as "kind:key"; kept ones say why.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Upgraded {
     /// The new install; the old one is superseded.
@@ -603,6 +603,37 @@ pub(crate) async fn upgrade(
             line.action = "skip".to_owned();
             line.reason = None;
         }
+    }
+    // Collections taken grow first: a new or updated form, view or
+    // automation may name a field the new version adds. (Growing is
+    // additive, so the pass below finds nothing more to add.)
+    let none = HashMap::new();
+    let no_objects = HashMap::new();
+    let growing = Applying {
+        workspace: who.workspace,
+        space: old.space_id,
+        collections: &none,
+        channels: &none,
+        objects: &no_objects,
+    };
+    for object in objects
+        .iter()
+        .filter(|object| object.kind == "collection" && object.action != "detached")
+    {
+        let at = (object.kind.clone(), object.key.clone());
+        let Some((_, true)) = finals.get(&at) else {
+            continue;
+        };
+        let Some(body) = package
+            .contents
+            .iter()
+            .find(|part| part.kind.key() == "collection" && part.key == object.key)
+            .and_then(|part| part.body.as_ref())
+        else {
+            continue;
+        };
+        let field = format!("package.collection:{}", object.key);
+        take_new(tx, who, &growing, "collection", object.id, body, &field).await?;
     }
     let installed = apply::install(tx, who, package, document, &place, &install_plan).await?;
     let new_install = installed.install_id;

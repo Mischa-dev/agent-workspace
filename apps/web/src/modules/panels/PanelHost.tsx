@@ -182,7 +182,14 @@ export function PanelHost({
     return (
       <div className="aw-panel-host" data-part="panel-host">
         <Suspense fallback={<ListSkeleton />}>
-          <FrameHost frame={frame} onAnswer={take} onCancel={closeFrame} workspaceId={workspaceId} />
+          <FrameHost
+            // A new launch opens a new host page, so it starts a new host.
+            key={frame.launchId}
+            frame={frame}
+            onAnswer={take}
+            onCancel={closeFrame}
+            workspaceId={workspaceId}
+          />
         </Suspense>
       </div>
     )
