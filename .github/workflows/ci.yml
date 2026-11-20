@@ -145,8 +145,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Swap, so the test build fits beside the library build
-        run: tools/ci/swap.sh 12G
       - name: Rust toolchain
         run: |
           tools/ci/rust-toolchain.sh

@@ -424,14 +424,19 @@ run_browser_smoke() {
   # The static-host spec serves this run's web build when there is one, and
   # builds its own otherwise (apps/web/e2e/static-host.spec.ts).
   # One shard of the specs (CI_SHARD=k/n) when GitHub splits them across jobs;
-  # each shard seeds its own server and database in the global setup.
-  # Shards split by test, not by file (--fully-parallel; still one worker, in
-  # order): the screenshot spec alone holds half the tests, and split by file
-  # one shard got nearly everything and another nothing.
+  # each shard seeds its own server and database in the global setup. The
+  # tests are dealt out in turn (tools/ci/e2e_shard.py), not split by file or
+  # into runs of neighbours, which left one shard with all the slow sweeps.
   if [ -n "${shard}" ]; then
+    local listing test_list
+    listing="$(mktemp)" test_list="$(mktemp)"
+    PLAYWRIGHT_JSON_OUTPUT_NAME="${listing}" \
+      pnpm --filter @agent-workspace/web exec playwright test --list --reporter=json || return
+    python3 -I tools/ci/e2e_shard.py "${shard}" <"${listing}" >"${test_list}" || return
+    head -n 1 "${test_list}"
     E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
       E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
-      pnpm --filter @agent-workspace/web exec playwright test --fully-parallel --shard="${shard}" || return
+      pnpm --filter @agent-workspace/web exec playwright test --test-list "${test_list}" || return
   else
     E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
       E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
@@ -576,14 +581,12 @@ if runs rust-build && [ "${part}" != all ]; then
   : "${nextest_archive:?the rust-build part needs CI_NEXTEST_ARCHIVE}"
   mkdir -p "$(dirname "${nextest_archive}")"
   step "install cargo-nextest" install_tool cargo-nextest
-  # The server library and its unit tests take about 5 GB each to compile.
-  # Under a memory cap (CI_MEMORY_MAX), or where swap couldn't be added
-  # (CI_BUILD_IN_ORDER, from tools/ci/swap.sh), the library and binaries first
-  # and the tests after; with swap they build side by side.
+  # The server library and its unit tests take about 5 GB each to compile, so
+  # the library and binaries come first and the tests after: built side by
+  # side they got a 16 GB runner shut down, and with swap added they built no
+  # faster than in order.
   if has rust; then
-    if [ -n "${CI_MEMORY_MAX:-}" ] || [ -n "${CI_BUILD_IN_ORDER:-}" ]; then
-      step "rust build" cargo build --workspace
-    fi
+    step "rust build" cargo build --workspace
     step "rust test build" cargo nextest archive --workspace --archive-file "${nextest_archive}"
   fi
   # Built with the tests already (cargo builds a package's binaries for its

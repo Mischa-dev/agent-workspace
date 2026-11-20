@@ -147,8 +147,12 @@ class AreaValidationTests(unittest.TestCase):
         self.assertTrue(any(c.startswith("createdb ") for c in tests), tests)
         for call in ("pnpm lint", "pnpm typecheck", "pnpm test", "pnpm build"):
             self.assertIn(call, web)
-        self.assertIn(
-            "pnpm --filter @agent-workspace/web exec playwright test --fully-parallel --shard=1/3",
+        # The shard's tests are listed, dealt out (e2e_shard.py) and run from
+        # that list.
+        self.assertIn("pnpm --filter @agent-workspace/web exec playwright test --list --reporter=json", e2e)
+        self.assertTrue(any(c.startswith("python3 -I tools/ci/e2e_shard.py 1/3") for c in e2e), e2e)
+        self.assertTrue(
+            any(c.startswith("pnpm --filter @agent-workspace/web exec playwright test --test-list ") for c in e2e),
             e2e,
         )
         # Each part runs only its own checks: no cargo build in the e2e or web
