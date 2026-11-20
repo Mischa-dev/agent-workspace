@@ -150,7 +150,7 @@ describe('settings addresses', () => {
       return standard ? standard(input, init) : jsonResponse({})
     })
     window.sessionStorage.clear()
-    window.history.replaceState({}, '', '/settings/workspace/email')
+    window.history.replaceState({}, '', '/w/-/settings/email')
     render(<App />)
 
     // Both workspaces' email settings are loaded once, so later switches show them at once.
