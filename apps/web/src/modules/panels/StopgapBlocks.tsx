@@ -224,6 +224,7 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
             label={label}
             onChange={(event) => set(name, numeric ? (event.target.value === '' ? '' : Number(event.target.value)) : event.target.value)}
             required={required.has(name)}
+            step={field.type === 'number' ? 'any' : undefined}
             type={numeric ? 'number' : 'text'}
             value={text(values[name])}
           />

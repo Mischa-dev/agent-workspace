@@ -527,7 +527,13 @@ async fn collection_additions(
             .find(|field| field.name.eq_ignore_ascii_case(name.trim()))
     };
     let mut additions = Additions::default();
+    // Only additions: a selector that names an existing field or view would
+    // change it, which the preview never showed.
     for field in wanted.fields {
+        let field = crate::collections::definition::FieldWrite {
+            field: None,
+            ..field
+        };
         let Some(name) = field.name.clone() else {
             continue;
         };
@@ -555,6 +561,7 @@ async fn collection_additions(
                 .as_deref()
                 .is_some_and(|name| !views.contains(&name.trim().to_lowercase()))
         })
+        .map(|view| crate::collections::definition::ViewWrite { view: None, ..view })
         .collect();
     Ok(additions)
 }
