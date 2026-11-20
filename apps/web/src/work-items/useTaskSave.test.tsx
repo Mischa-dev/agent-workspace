@@ -62,7 +62,8 @@ describe('useTaskSave', () => {
 
     act(() => result.current.save('priority', { priority: 'high' }))
     await waitFor(() => expect(result.current.stopped).toHaveLength(1))
-    act(() => result.current.retry('priority'))
+    // The same patch again, as the description's retry button sends it.
+    act(() => result.current.retry('priority', { priority: 'high' }))
     await waitFor(() => expect(result.current.stopped).toHaveLength(0))
     expect(mutateAsync).not.toHaveBeenCalled()
     const [first, second] = vi.mocked(callOp).mock.calls

@@ -365,8 +365,9 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
       state: 'waiting',
       theirs: null,
       message: null,
-      // A changed patch is a new request.
-      sent: patch ? null : entry.sent,
+      // A changed patch is a new request; the same one again (a retry from
+      // the description's own button) keeps the request id.
+      sent: patch && JSON.stringify(patch) !== JSON.stringify(entry.patch) ? null : entry.sent,
     })
     publish()
     enqueue(entry.id)
