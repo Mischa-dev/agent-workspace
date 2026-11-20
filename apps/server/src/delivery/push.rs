@@ -491,6 +491,29 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
             None
         };
         let skip = !row.deliverable || (delivery.webhook_format != "standard" && body.is_none());
+        // A2.14: over a hard budget on deliveries, a push waits for the
+        // next period instead of failing (counted once, so a retry after a
+        // failed post doesn't count again).
+        if !skip
+            && let Some(until) = Box::pin(crate::budgets::admit_delivery(
+                &mut transaction,
+                &row.event,
+                delivery.account_id,
+                &format!("delivery:{}:{}", delivery.id, row.event.position),
+            ))
+            .await?
+        {
+            sqlx::query(
+                "UPDATE deliveries SET next_attempt_at = $3 \
+                 WHERE connection_id = $1 AND event_position = $2",
+            )
+            .bind(delivery.id)
+            .bind(row.event.position)
+            .bind(until)
+            .execute(&mut *transaction)
+            .await?;
+            continue;
+        }
         let next = if skip { None } else { Some(CLAIM_SECONDS) };
         sqlx::query(
             r#"

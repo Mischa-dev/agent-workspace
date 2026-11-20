@@ -218,6 +218,7 @@ impl<T> BatchResult<T> {
                     retry_category,
                 },
                 ToolResult::Conflict { message } => Self::Conflict { message },
+                ToolResult::LimitReached { message, .. } => Self::denied(message),
             },
         }
     }

@@ -916,6 +916,7 @@ fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
         ToolResult::TemporarilyUnavailable { message } => {
             ToolResult::TemporarilyUnavailable { message }
         }
+        ToolResult::LimitReached { message, limit } => ToolResult::LimitReached { message, limit },
     }
 }
 

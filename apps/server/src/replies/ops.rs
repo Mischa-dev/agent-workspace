@@ -85,8 +85,18 @@ macro_rules! reply_op {
 
             async fn run(call: &mut OpCall<'_>, input: $input) -> Result<$output, OpError> {
                 let principal = principal_for(call.ctx, None);
-                let answer =
-                    tool_answer($command(call.state, &principal, input).await.into_tool())?;
+                // A2.15: answering a request is made for its asker.
+                let acting = crate::replies::asker::acting_for_request(
+                    call.state,
+                    call.ctx.caller.account_id,
+                    &input.request_id,
+                )
+                .await;
+                let answer = tool_answer(
+                    crate::access::acting::within(acting, $command(call.state, &principal, input))
+                        .await
+                        .into_tool(),
+                )?;
                 call.audited_by_command();
                 Ok(answer)
             }
@@ -226,18 +236,28 @@ impl Operation for ReplySend {
         input: ReplySendInput,
     ) -> Result<ResolutionProjection, OpError> {
         let principal = principal_for(call.ctx, None);
+        // A2.15: a reply is made for the request's asker.
+        let acting = crate::replies::asker::acting_for_request(
+            call.state,
+            call.ctx.caller.account_id,
+            &input.request_id,
+        )
+        .await;
         let answer = tool_answer(
-            replies::reply_send(
-                call.state,
-                &principal,
-                ReplySendArguments {
-                    request_id: input.request_id,
-                    generation: input.generation,
-                    text: input.text,
-                    final_reply: input.final_reply,
-                    attachment_ids: input.attachment_ids,
-                    client_request_id: call.ctx.request_id.clone(),
-                },
+            crate::access::acting::within(
+                acting,
+                replies::reply_send(
+                    call.state,
+                    &principal,
+                    ReplySendArguments {
+                        request_id: input.request_id,
+                        generation: input.generation,
+                        text: input.text,
+                        final_reply: input.final_reply,
+                        attachment_ids: input.attachment_ids,
+                        client_request_id: call.ctx.request_id.clone(),
+                    },
+                ),
             )
             .await
             .into_tool(),

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { callOp } from '../api/ops'
+import { callOp, heldForReview } from '../api/ops'
 import { toastError } from '../app/mutations'
-import { Button, Dialog, ErrorState, TextArea, formatRelative } from '../ui'
+import { Banner, Button, Dialog, ErrorState, TextArea, formatRelative } from '../ui'
 
 /**
  * A channel's or thread's memory page (A2.16): what anyone working there,
@@ -32,12 +32,21 @@ export function MemoryDialog({
   const [draft, setDraft] = useState<string | null>(null)
   const body = draft ?? page?.body ?? ''
   const [saving, setSaving] = useState(false)
+  // A team guard held the save for review: the draft stays until it's allowed.
+  const [held, setHeld] = useState(false)
 
   const save = () => {
     setSaving(true)
     void callOp('memory_page_set', { conversation: conversationId, body, expectedVersion: page?.version ?? 0 })
-      .then(() => queryClient.invalidateQueries({ queryKey: key }))
-      .then(onClose)
+      .then(async (saved) => {
+        if (heldForReview(saved)) {
+          setHeld(true)
+          return
+        }
+        setHeld(false)
+        await queryClient.invalidateQueries({ queryKey: key })
+        onClose()
+      })
       .catch((reason: unknown) => toastError('Memory wasn’t saved', reason))
       .finally(() => setSaving(false))
   }
@@ -57,6 +66,11 @@ export function MemoryDialog({
       open={open}
       title="Memory"
     >
+      {held ? (
+        <Banner title="Waiting for review." tone="warning">
+          This change needs a reviewer’s OK first. Keep this open, and once it’s allowed, press Save again.
+        </Banner>
+      ) : null}
       {memory.isError ? <ErrorState error={memory.error} onRetry={() => void memory.refetch()} title="This didn’t load" /> : null}
       {memory.isSuccess ? (
         <TextArea
