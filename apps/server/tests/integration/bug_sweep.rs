@@ -172,7 +172,7 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_owns_or_only_belong
     let (mara, _) = add_person(setup, &[&project], "mara").await;
     let state = &fixture.state;
     let transport = |actor: Uuid| async move {
-        mail::transport_for_actor(state, actor)
+        crate::support::as_member(actor, mail::transport_for_actor(state, actor))
             .await
             .expect("transport")
             .and_then(|transport| transport.organization_id)
@@ -290,7 +290,7 @@ async fn joining_another_workspace_doesnt_route_reset_mail_through_it() {
     let pool = &setup.pool;
     let state = &fixture.state;
     let transport = |actor: Uuid| async move {
-        mail::transport_for_actor(state, actor)
+        crate::support::as_member(actor, mail::transport_for_actor(state, actor))
             .await
             .expect("transport")
             .and_then(|transport| transport.organization_id)

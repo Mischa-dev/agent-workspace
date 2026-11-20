@@ -656,9 +656,11 @@ async fn any_revision_comes_back_as_a_new_one() {
     .await
     .expect("age the snapshots");
     let state = crate::support::app::state_on(&setup.pool);
-    let moved = agent_workspace_server::sheets::history::compact_snapshots(&state)
-        .await
-        .expect("compact");
+    let moved = crate::support::as_server_job(
+        agent_workspace_server::sheets::history::compact_snapshots(&state),
+    )
+    .await
+    .expect("compact");
     assert!(moved > 0, "old snapshots move out");
     let inline = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM sheet_snapshots WHERE sheet_id::text = $1 AND payload_key IS NULL",

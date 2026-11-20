@@ -451,6 +451,8 @@ async fn finish_callback(
         Ok(attempt) => attempt,
         Err(reason) => return (None, Err(reason)),
     };
+    // The rest reads as the person who started it.
+    crate::tenancy::signed_in(attempt.actor_id);
     let project_id = Some(attempt.project_id);
     if query.error.is_some() {
         return (project_id, Err("denied"));
@@ -499,6 +501,19 @@ async fn finish_callback(
 /// Use up a connect attempt. It must exist, belong to this browser, be
 /// unused and unexpired; any mismatch reads as expired.
 async fn take_attempt(
+    state: &AppState,
+    oauth_state: &str,
+    browser: Option<&str>,
+) -> Result<Attempt, &'static str> {
+    // The browser's cookie, not a session, finds the attempt: its account is known only once it is read.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(take_attempt_here(state, oauth_state, browser)),
+    )
+    .await
+}
+
+async fn take_attempt_here(
     state: &AppState,
     oauth_state: &str,
     browser: Option<&str>,

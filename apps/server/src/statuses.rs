@@ -455,6 +455,11 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 /// job), telling the screens that show them in the same transaction, as an
 /// explicit clear does. Returns how many went.
 pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
+    // Server-wide: due statuses of every account, told to every workspace that shows them.
+    crate::tenancy::system("statuses.clear", Box::pin(clear_due_here(pool, limit))).await
+}
+
+async fn clear_due_here(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let cleared = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
         r#"

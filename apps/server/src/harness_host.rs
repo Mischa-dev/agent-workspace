@@ -66,7 +66,8 @@ fn app_failed(error: crate::error::AppError) -> HarnessError {
 
 impl HarnessHost for ServerHost {
     fn account_secret(&self, account_id: Uuid) -> HarnessFuture<'_, Option<SecretValue>> {
-        Box::pin(async move {
+        // A harness on the built-in host works for runs of every workspace.
+        Box::pin(crate::tenancy::system("runs.host", async move {
             let owner = self.owner(account_id).await?;
             let name = account_secret_name(account_id);
             if secrets::find(&self.pool, owner, &name)
@@ -86,7 +87,7 @@ impl HarnessHost for ServerHost {
             )
             .await
             .map_err(app_failed)
-        })
+        }))
     }
 
     fn store_account_secret<'a>(
@@ -94,7 +95,8 @@ impl HarnessHost for ServerHost {
         account_id: Uuid,
         value: &'a SecretValue,
     ) -> HarnessFuture<'a, ()> {
-        Box::pin(async move {
+        // A harness on the built-in host works for runs of every workspace.
+        Box::pin(crate::tenancy::system("runs.host", async move {
             let owner = self.owner(account_id).await?;
             let keys = self.keys()?;
             let mut connection = crate::db::scoped_tx(&self.pool).await.map_err(failed)?;
@@ -114,11 +116,12 @@ impl HarnessHost for ServerHost {
             .map_err(app_failed)?;
             connection.commit().await.map_err(failed)?;
             Ok(())
-        })
+        }))
     }
 
     fn delete_account_secret(&self, account_id: Uuid) -> HarnessFuture<'_, ()> {
-        Box::pin(async move {
+        // A harness on the built-in host works for runs of every workspace.
+        Box::pin(crate::tenancy::system("runs.host", async move {
             let owner = self.owner(account_id).await?;
             if let Some(id) = secrets::find(&self.pool, owner, &account_secret_name(account_id))
                 .await
@@ -127,7 +130,7 @@ impl HarnessHost for ServerHost {
                 secrets::delete(&self.pool, id).await.map_err(app_failed)?;
             }
             Ok(())
-        })
+        }))
     }
 
     fn harness_secrets<'a>(
@@ -135,7 +138,8 @@ impl HarnessHost for ServerHost {
         account_id: Uuid,
         names: &'a [String],
     ) -> HarnessFuture<'a, Vec<(String, SecretValue)>> {
-        Box::pin(async move {
+        // A harness on the built-in host works for runs of every workspace.
+        Box::pin(crate::tenancy::system("runs.host", async move {
             if names.is_empty() {
                 return Ok(Vec::new());
             }
@@ -162,11 +166,12 @@ impl HarnessHost for ServerHost {
                 }
             }
             Ok(found)
-        })
+        }))
     }
 
     fn repository_access<'a>(&'a self, worktree: &'a Path) -> HarnessFuture<'a, RepositoryAccess> {
-        Box::pin(async move {
+        // A harness on the built-in host works for runs of every workspace.
+        Box::pin(crate::tenancy::system("runs.host", async move {
             let path = worktree.to_string_lossy().into_owned();
             let (project_id, repository_id, owner, name) =
                 sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
@@ -196,6 +201,6 @@ impl HarnessHost for ServerHost {
                 url: format!("https://github.com/{owner}/{name}"),
                 token: SecretValue::new(token.expose_secret()),
             })
-        })
+        }))
     }
 }

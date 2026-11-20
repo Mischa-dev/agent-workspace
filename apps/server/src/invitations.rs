@@ -646,6 +646,23 @@ async fn lock_invitation_for_mutation(
 async fn resolve_invitation(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ApiJson(request): ApiJson<ResolveInvitationRequest>,
+) -> Result<Json<ResolvedInvitation>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(resolve_invitation_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn resolve_invitation_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<ResolveInvitationRequest>,
 ) -> Result<Json<ResolvedInvitation>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
@@ -671,6 +688,23 @@ async fn resolve_invitation(
 }
 
 async fn accept_new_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AcceptNewInvitationRequest>,
+) -> Result<Response, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(accept_new_user_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn accept_new_user_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(mut request): ApiJson<AcceptNewInvitationRequest>,
@@ -823,6 +857,25 @@ async fn accept_new_user(
 }
 
 async fn accept_existing_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(request): ApiJson<AcceptExistingInvitationRequest>,
+) -> Result<Response, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(accept_existing_user_here(
+            State(state),
+            headers,
+            principal,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn accept_existing_user_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,

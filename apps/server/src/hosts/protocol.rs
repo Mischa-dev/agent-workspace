@@ -77,7 +77,7 @@ pub async fn authenticate(pool: &PgPool, token: &str) -> Result<HostRow, HostErr
         "SELECT interim_token_digest, id FROM hosts WHERE interim_token_prefix = $1",
     )
     .bind(prefix)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?;
     let Some((stored, host_id)) = row else {
         return Err(HostError::Unauthorized);
@@ -86,7 +86,7 @@ pub async fn authenticate(pool: &PgPool, token: &str) -> Result<HostRow, HostErr
     if stored.len() != candidate.len() || !bool::from(stored.as_slice().ct_eq(&candidate)) {
         return Err(HostError::Unauthorized);
     }
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let host = super::get(&mut connection, host_id)
         .await?
         .ok_or(HostError::Unauthorized)?;
@@ -296,7 +296,7 @@ pub async fn enrol(state: &crate::AppState, request: EnrolRequest) -> Result<Enr
     let software = optional_line(request.host.software.as_deref(), 80, "host.software")?;
     let version = optional_line(request.host.version.as_deref(), 40, "host.version")?;
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let enrolment = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<Uuid>, Uuid)>(
         r#"
         SELECT id, owner_account_id, owner_workspace_id, created_by_account_id
@@ -652,7 +652,7 @@ pub async fn describe(
     bounded(&described, 128 * 1024, "agents")?;
     let accounts = super::windows::described_accounts(&request.accounts)?;
 
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query(
         r#"
         UPDATE hosts
@@ -777,7 +777,7 @@ pub async fn heartbeat(
             "List at most 200 agents and 500 runs in one heartbeat.",
         ));
     }
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query(
         r#"
         UPDATE hosts
@@ -898,7 +898,7 @@ pub async fn notice(
     request: NoticeRequest,
 ) -> Result<NoticeReply, HostError> {
     let reference = one_line(&request.host_agent_ref, 200, "hostAgentRef")?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let (account_id, lineage) = bound_agent(&mut transaction, host.id, &reference).await?;
     let mut request_ids = Vec::new();
     let mut interrupted_run_ids = Vec::new();

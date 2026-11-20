@@ -151,6 +151,19 @@ async fn drain_with(
     fence: Option<(&Cluster, &Lease)>,
     builtin: &agent_workspace_host_protocol::HostClient,
 ) -> Result<(), AppError> {
+    // Claims runs of every workspace, each checked against its run's space.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(drain_with_here(state, fence, builtin)),
+    )
+    .await
+}
+
+async fn drain_with_here(
+    state: &AppState,
+    fence: Option<(&Cluster, &Lease)>,
+    builtin: &agent_workspace_host_protocol::HostClient,
+) -> Result<(), AppError> {
     while claim_next(state, fence).await? {
         if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
             return Err(AppError::LeaseLost);

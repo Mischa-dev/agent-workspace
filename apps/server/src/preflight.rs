@@ -104,6 +104,27 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         ),
     );
 
+    // H1.15: what the release feed last named, when newer than this build.
+    if migrations_table_exists(pool).await?
+        && sqlx::query_scalar::<_, bool>("SELECT to_regclass('server_release_checks') IS NOT NULL")
+            .fetch_one(crate::db::scoped(pool))
+            .await?
+        && let Some(newer) = crate::releases::newer(pool).await?
+    {
+        report.push(
+            Level::Warn,
+            format!(
+                "release {} is out (running {}){}",
+                newer.version,
+                crate::releases::RUNNING,
+                newer
+                    .notes_url
+                    .map(|notes| format!("; notes: {notes}"))
+                    .unwrap_or_default()
+            ),
+        );
+    }
+
     let mail_workspaces = if migrations_table_exists(pool).await?
         && sqlx::query_scalar::<_, bool>(
             "SELECT to_regclass('workspace_mail_settings') IS NOT NULL",

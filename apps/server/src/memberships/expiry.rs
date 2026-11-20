@@ -33,6 +33,11 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 /// Turns off up to `limit` memberships whose time has come, each in its own
 /// transaction; returns how many it looked at.
 pub async fn expire_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
+    // Due memberships are found across every workspace.
+    crate::tenancy::system("memberships.expire", Box::pin(expire_due_here(pool, limit))).await
+}
+
+async fn expire_due_here(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
     let mut looked = 0;
     for _ in 0..limit {
         let mut tx = crate::db::scoped_tx(pool).await?;

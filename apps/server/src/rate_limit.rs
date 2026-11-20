@@ -118,6 +118,12 @@ pub static RECENT_OAUTH_CLIENTS: Recent = Recent {
 pub static WORKOS_STARTS: Bucket = exact("workos.starts", 20, MINUTE);
 /// Starts from callers with no known address, across all of them.
 pub static WORKOS_STARTS_GLOBAL: Bucket = exact("workos.starts.global", 600, MINUTE);
+// Single sign-on starts and callbacks: each one asks the issuer for its
+// discovery document and stores a ten-minute attempt row.
+pub static OIDC_CEREMONIES: Bucket = exact("oidc.ceremonies", 20, MINUTE);
+/// OIDC starts and callbacks from callers with no known address, across all
+/// of them.
+pub static OIDC_CEREMONIES_GLOBAL: Bucket = exact("oidc.ceremonies.global", 600, MINUTE);
 pub static WEBHOOK_ATTEMPTS: Bucket = exact("webhooks.attempts", 300, MINUTE);
 /// Reports sent to one bug report link: enough for a burst of real
 /// reports, not for a loop to flood a project.
@@ -560,6 +566,23 @@ impl RateLimiters {
             .await
     }
 
+    /// A single sign-on start or callback from `address` (the caller's,
+    /// when known); callers with no address share one budget.
+    pub async fn check_oidc_ceremony(&self, address: Option<&str>) -> Result<(), AppError> {
+        match address {
+            Some(address) => {
+                self.limits
+                    .check(&OIDC_CEREMONIES, LimitKey::Address(address))
+                    .await
+            }
+            None => {
+                self.limits
+                    .check(&OIDC_CEREMONIES_GLOBAL, LimitKey::Global)
+                    .await
+            }
+        }
+    }
+
     /// A password reset request from `address` (the caller's, when known)
     /// for `normalized_key` (a login name or an email address, lower case).
     /// The sender's budget comes first (or, with no address, the one all
@@ -746,6 +769,8 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&OAUTH_REFRESH_FAILURES_PER_CLIENT, LimitScope::Client),
     (&WORKOS_STARTS, LimitScope::Address),
     (&WORKOS_STARTS_GLOBAL, LimitScope::ServerUnattributed),
+    (&OIDC_CEREMONIES, LimitScope::Address),
+    (&OIDC_CEREMONIES_GLOBAL, LimitScope::ServerUnattributed),
     (&WEBHOOK_ATTEMPTS, LimitScope::Server),
     (&BUG_REPORTS, LimitScope::Link),
     (&INCOMING_HOOK_DELIVERIES, LimitScope::Link),

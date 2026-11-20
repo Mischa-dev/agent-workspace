@@ -116,7 +116,13 @@ impl Operation for PageFileUpload {
         })
         .await?;
         let state = call.state;
-        let staged = files::stage_prepared(state, authorized, prepared).await?;
+        let destination = Destination::Thing {
+            project_id: authorized,
+            thing: ThingKind::Page,
+            thing_id: page_id,
+            purpose: Purpose::Inline,
+        };
+        let staged = files::stage_prepared(state, destination, prepared).await?;
         let size = staged.incoming();
         let checked = async {
             let tx = call.tx().await?;
@@ -146,30 +152,15 @@ impl Operation for PageFileUpload {
             if usize::try_from(size).unwrap_or(usize::MAX) > limit {
                 return Err(OpError::TooLarge { limit_bytes: limit });
             }
-            Ok(space_id)
+            Ok(())
         }
         .await;
-        let space_id = match checked {
-            Ok(space_id) => space_id,
-            Err(error) => {
-                files::abandon_staged(state, &staged).await;
-                return Err(error);
-            }
-        };
+        if let Err(error) = checked {
+            files::abandon_staged(state, &staged).await;
+            return Err(error);
+        }
         let tx = call.tx().await?;
-        let row = files::store_prepared(
-            state,
-            tx,
-            uploader,
-            Destination::Thing {
-                project_id: space_id,
-                thing: ThingKind::Page,
-                thing_id: page_id,
-                purpose: Purpose::Inline,
-            },
-            staged,
-        )
-        .await?;
+        let row = files::store_prepared(state, tx, uploader, destination, staged).await?;
         call.audit_target("page", page_id, json!({"file": row.id}));
         let view = row.view();
         Ok(PageFileUploaded {

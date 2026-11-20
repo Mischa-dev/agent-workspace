@@ -198,7 +198,14 @@ impl Operation for WhiteboardAsk {
         .await?;
         // The picture's bytes go to the store before any transaction opens;
         // a retry that finds the first picture takes them away again.
-        let staged = files::stage_prepared(state, project_id, prepared).await?;
+        // The board's comments are read by whoever sees the board, not by
+        // members alone.
+        let destination = Destination::Conversation {
+            project_id,
+            conversation_id: comments_id,
+            members_only: false,
+        };
+        let staged = files::stage_prepared(state, destination, prepared).await?;
         let mut transaction = match crate::db::scoped_tx(&state.pool).await {
             Ok(transaction) => transaction,
             Err(error) => {
@@ -230,10 +237,7 @@ impl Operation for WhiteboardAsk {
                     state,
                     &mut transaction,
                     caller.actor_id,
-                    Destination::Conversation {
-                        project_id,
-                        conversation_id: comments_id,
-                    },
+                    destination,
                     staged,
                 )
                 .await?;

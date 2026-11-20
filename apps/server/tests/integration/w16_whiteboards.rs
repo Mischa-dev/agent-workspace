@@ -1254,9 +1254,12 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
     let sees = |actor: uuid::Uuid| {
         let pool = setup.pool.clone();
         async move {
-            agent_workspace_server::whiteboards::visible_to(&pool, board, actor)
-                .await
-                .expect("visible_to")
+            crate::support::as_member(
+                actor,
+                agent_workspace_server::whiteboards::visible_to(&pool, board, actor),
+            )
+            .await
+            .expect("visible_to")
         }
     };
     assert!(sees(owner_id).await);
@@ -1599,9 +1602,11 @@ async fn board_changes_are_listed_and_undone() {
     .await
     .expect("age the versions");
     let state = crate::support::app::state_on(&setup.pool);
-    let compacted = agent_workspace_server::whiteboards::store::compact_revisions(&state)
-        .await
-        .expect("compact");
+    let compacted = crate::support::as_server_job(
+        agent_workspace_server::whiteboards::store::compact_revisions(&state),
+    )
+    .await
+    .expect("compact");
     assert!(compacted > 0, "old versions move out");
     let inline = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM whiteboard_revisions WHERE whiteboard_id::text = $1 AND payload_key IS NULL AND jsonb_array_length(elements) > 0",
@@ -1729,12 +1734,13 @@ async fn board_images_live_in_the_file_store() {
         Some(2),
         "{listed}"
     );
-    let more = agent_workspace_server::whiteboards::store::move_images(
-        &state,
-        std::time::Duration::from_secs(30),
-    )
-    .await
-    .expect("move");
+    let more =
+        crate::support::as_server_job(agent_workspace_server::whiteboards::store::move_images(
+            &state,
+            std::time::Duration::from_secs(30),
+        ))
+        .await
+        .expect("move");
     assert!(!more);
     let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboard_files")
         .fetch_one(&setup.pool)

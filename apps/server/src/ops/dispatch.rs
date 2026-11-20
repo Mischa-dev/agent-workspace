@@ -206,7 +206,7 @@ async fn space_keys_to_ids(
         .bind(&key)
         .bind(request.caller.confined_space)
         .bind(request.workspace)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged("space key", &error.into()))?;
         if let ([id], Some(slot)) = (found.as_slice(), input.pointer_mut(field)) {
@@ -407,9 +407,7 @@ async fn admit<O: Operation>(
     target: &Target,
 ) -> Result<Admitted, OpError> {
     let writes = O::KIND.writes();
-    let mut connection = state
-        .pool
-        .acquire()
+    let mut connection = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     // A call that can't name its workspace needs none named when the
@@ -617,6 +615,7 @@ async fn pipeline<O: Operation>(
             .map(|key| key.as_str().to_owned())
             .or(request.request_id),
         op: O::NAME,
+        across_workspaces: O::ACROSS_WORKSPACES,
         preview: request.preview,
     };
 
@@ -954,21 +953,40 @@ fn denied_error<O: Operation>(
 }
 
 /// Begin a call's transaction narrowed to the call's workspace
-/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20) and the connected
-/// app it acts through.
+/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20), or for an operation
+/// across the caller's workspaces to those, and the connected app it acts
+/// through.
 pub(super) async fn begin(
     state: &AppState,
     ctx: &OpContext,
 ) -> Result<Transaction<'static, Postgres>, OpError> {
-    let mut tx = crate::tenancy::scoped(
+    let member = || crate::tenancy::Tenancy::Member {
+        account: ctx.caller.account_id,
+        workspaces: None,
+    };
+    let scope = if ctx.across_workspaces {
+        member()
+    } else if ctx.workspace_id == crate::spaces::DIRECT {
+        // A DM or group is in no workspace: the call keeps the scope the
+        // caller arrived with (a run's credential stays in its run's
+        // workspace), so what it keeps from the DM lands in a workspace of
+        // theirs, such as a decision in their default workspace.
+        match crate::tenancy::current() {
+            Some(
+                arrived @ (crate::tenancy::Tenancy::Member { .. }
+                | crate::tenancy::Tenancy::Workspace { .. }),
+            ) => arrived,
+            _ => member(),
+        }
+    } else {
         crate::tenancy::Tenancy::Workspace {
             account: Some(ctx.caller.account_id),
             workspace: ctx.workspace_id,
-        },
-        crate::db::scoped_tx(&state.pool),
-    )
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+        }
+    };
+    let mut tx = crate::tenancy::scoped(scope, crate::db::scoped_tx(&state.pool))
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
     crate::domain::set_via_grant(&mut tx, ctx.caller.via_grant_id)
         .await
         .map_err(|error| OpError::logged(ctx.op, &error))?;

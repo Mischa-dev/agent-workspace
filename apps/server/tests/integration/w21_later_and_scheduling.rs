@@ -340,11 +340,14 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
     .fetch_one(pool)
     .await
     .expect("reminder");
-    let view = notifications::get_many(
-        pool,
-        agent_workspace_server::addresses::Addresses::LEGACY,
+    let view = crate::support::as_member(
         mara,
-        &[notification],
+        notifications::get_many(
+            pool,
+            agent_workspace_server::addresses::Addresses::LEGACY,
+            mara,
+            &[notification],
+        ),
     )
     .await
     .expect("notification")
@@ -359,10 +362,13 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
     );
 
     // Snooze from the phone moves it an hour on; a later run reminds again.
-    let minted = push::actions::mint(pool, setup.organization_id, mara, &view)
-        .await
-        .expect("mint")
-        .expect("a reminder offers actions");
+    let minted = crate::support::as_job(
+        setup.organization_id,
+        push::actions::mint(pool, setup.organization_id, mara, &view),
+    )
+    .await
+    .expect("mint")
+    .expect("a reminder offers actions");
     let payload = push::payload_with_actions(&view, Some(&minted));
     let actions = payload["actions"]
         .as_array()
@@ -388,10 +394,13 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
     assert_eq!(reminded, Some(moved));
 
     // Done from the phone finishes it.
-    let minted = push::actions::mint(pool, setup.organization_id, mara, &view)
-        .await
-        .expect("mint")
-        .expect("still offers actions");
+    let minted = crate::support::as_job(
+        setup.organization_id,
+        push::actions::mint(pool, setup.organization_id, mara, &view),
+    )
+    .await
+    .expect("mint")
+    .expect("still offers actions");
     let (status, body) = act(setup, json!({"token": minted.token, "action": "done"})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["outcome"], "done", "{body}");
