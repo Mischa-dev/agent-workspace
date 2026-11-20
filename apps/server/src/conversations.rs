@@ -539,7 +539,7 @@ impl ConversationWorkItemReferenceView {
         if let Some(project_id) = self.project_id
             && self.href.is_empty()
         {
-            self.href = Target::task(project_id, self.id).legacy_path();
+            self.href = Target::task(project_id, self.id).href();
         }
         self
     }
@@ -2243,7 +2243,7 @@ pub(crate) async fn append_message_command_with(
                 title: Some(title),
                 status_category: Some(status_category),
                 archived_at,
-                href: Target::task(conversation.place(), id).legacy_path(),
+                href: Target::task(conversation.place(), id).href(),
                 project_id: conversation.project_id,
             },
         )

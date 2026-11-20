@@ -698,9 +698,9 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     assert_eq!(repository["openPullRequests"], 4, "{listed}");
     assert_eq!(repository["activeRuns"], 3, "{listed}");
     assert!(
-        repository["settingsUrl"]
-            .as_str()
-            .is_some_and(|url| url.ends_with("/settings?tab=repositories")),
+        repository["settingsUrl"].as_str().is_some_and(
+            |url| url.contains("/w/-/settings/spaces/") && url.ends_with("?tab=repositories")
+        ),
         "{listed}"
     );
     let archived = sqlx::query_scalar::<_, Uuid>(

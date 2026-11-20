@@ -78,7 +78,8 @@ pub(crate) async fn href_of_conversation(
     .bind(conversation_id)
     .fetch_optional(&mut *connection)
     .await?
-    .flatten())
+    .flatten()
+    .map(|legacy| crate::addresses::anywhere(&legacy)))
 }
 
 /// Refuses a message into a thing's comments, or a thread in them, once the

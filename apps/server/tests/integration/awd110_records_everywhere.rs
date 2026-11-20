@@ -124,8 +124,13 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
                 .expect("collection")
                 .to_owned()
         });
-    let href = format!("/projects/{work}/collections/{collection_id}?record={checkpoint}");
-    assert_eq!(hits[0]["path"], href, "{found}");
+    let href = format!("/s/{work}/collections/{collection_id}?record={checkpoint}");
+    assert!(
+        hits[0]["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/w/") && path.ends_with(&href)),
+        "{found}"
+    );
     let by_agent = call("search", json!({"query": "zeppelin", "kinds": ["records"]})).await;
     assert_eq!(by_agent["outcome"], "ok", "{by_agent}");
     assert_eq!(
@@ -141,7 +146,12 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
     let thing = &opened["value"]["thing"];
     assert_eq!(thing["id"], checkpoint.as_str(), "{opened}");
     assert_eq!(thing["title"], "Playtest notes › Checkpoint skipped");
-    assert_eq!(thing["href"], href.as_str());
+    assert!(
+        thing["href"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/w/") && path.ends_with(&href)),
+        "{opened}"
+    );
     let links = opened["value"]["links"].as_array().expect("links");
     assert!(
         links
