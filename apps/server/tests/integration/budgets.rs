@@ -309,7 +309,6 @@ async fn a_deliveries_budget_holds_pushes_until_the_next_period() {
                 arguments: json!({
                     "name": "Runner",
                     "webhookUrl": "https://hooks.example.test/rook",
-                    "webhookFormat": "standard",
                     "clientRequestId": "rook-runner",
                 }),
             },

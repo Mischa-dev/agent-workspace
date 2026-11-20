@@ -49,15 +49,13 @@ A webhook is a connection with an address: the same delivery agents get
   app (or script) set up keeps to that app's limit, and stops, saying why,
   when the app is disconnected; so does one that keeps failing for 48 hours
   and 20 deliveries.
-- Body (the `standard` format): `{"type", "timestamp", "id", "cursor",
+- Body: `{"type", "timestamp", "id", "cursor",
   "workspace", "recipient", "reason", "actor", "data"}`. It carries ids,
   kinds and field names, never text: fetch the thing with your own access.
 - Signing: Standard Webhooks. `webhook-id`, `webhook-timestamp` and
   `webhook-signature: v1,<base64 HMAC-SHA256 of "<id>.<timestamp>.<raw
   body>">`, keyed with the base64-decoded part of the `whsec_` secret. The
-  older `X-Workspace-Delivery`, `X-Workspace-Event`, `X-Workspace-Timestamp`
-  and `X-Workspace-Signature: sha256=<hex HMAC of "<timestamp>.<body>">` (keyed
-  with the whole secret) headers are sent too. The secret is shown once at creation or rotation and
+  secret is shown once at creation or rotation and
   stored encrypted. The id is the same on every retry and on a redelivery,
   so a receiver can drop repeats.
 - Targets pass the same address checks as agent wakeups: https, no private

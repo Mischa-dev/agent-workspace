@@ -11,11 +11,9 @@ tests check that what it sends matches them.
 | `poll-page.json` | `GET /api/v1/events` (and the `event_list` operation). |
 | `catalogue-entry.json` | One entry of `GET /api/v1/events/catalogue`. |
 | `stream.txt` | The same address with `Accept: text/event-stream`. |
-| `webhook-standard.json` | A push to a `standard` connection. |
-| `webhook-typed_v1.json` | A push to an older `typed_v1` connection. |
-| `webhook-inbox_v1.json` | A push to an older `inbox_v1` connection. |
+| `webhook-standard.json` | A webhook push. |
 
-Each webhook fixture holds the `secret` that signed it, the `headers` sent and
+The webhook fixture holds the `secret` that signed it, the `headers` sent and
 the raw `body`, so a verifier can be tested on them as they are. The secret is
 the published Standard Webhooks test secret, not a real one.
 
@@ -36,14 +34,10 @@ the published Standard Webhooks test secret, not a real one.
 
 ## Verifying a push
 
-Standard Webhooks (`standard` connections): `webhook-signature` is one or
+Standard Webhooks: `webhook-signature` is one or
 more space-separated `v1,<base64>` values, each an HMAC-SHA256 of
 `{webhook-id}.{webhook-timestamp}.{body}` keyed by the base64-decoded secret
 after `whsec_`. Accept the push if any one matches.
-
-The older header (every format): `x-workspace-signature` is `sha256=<hex>` of
-an HMAC-SHA256 of `{x-workspace-timestamp}.{body}` keyed by the whole secret
-string.
 
 Refuse a timestamp more than five minutes from your clock.
 

@@ -936,6 +936,7 @@ fn report_share(
         Some(cost)
             if currency
                 .unwrap_or("USD")
+                .trim()
                 .eq_ignore_ascii_case(&catalog_currency) =>
         {
             Some((cost, catalog_currency))
@@ -1185,6 +1186,10 @@ mod tests {
         );
         // A cost in another currency can't be added: the catalog prices it.
         assert_eq!(report_share(catalog(), Some(0.5), Some("EUR")), catalog());
+        assert_eq!(
+            report_share(catalog(), Some(0.5), Some(" usd ")),
+            Some((0.5, "USD".to_owned()))
+        );
         assert_eq!(report_share(None, Some(0.5), None), None);
     }
 }

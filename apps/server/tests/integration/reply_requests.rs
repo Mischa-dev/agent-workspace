@@ -1071,7 +1071,6 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{webhook}");
-    assert_eq!(webhook["connection"]["wakeupFormat"], "typed");
     let (_, dm) = owner
         .call(
             &app,
@@ -1172,10 +1171,6 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .expect("drop schema");
 }
 
-/// Typed wakeups say what happened and where, signed, without message text;
-/// webhooks from before typed wakeups keep getting `inbox.available`. That
-/// format is a connected-client contract (the always-on runtime): see
-/// docs/compatibility/connected-clients.md before changing it.
 /// A2.8: anyone's mention asks, and loops end by how deep the chain of asks
 /// is and by the conversation's turns, never by who wrote the message.
 #[tokio::test]
@@ -1366,8 +1361,8 @@ async fn webhooks_say_what_happened_without_message_text() {
                             .to_owned()
                     };
                     sink.lock().await.push((
-                        header("x-workspace-timestamp"),
-                        header("x-workspace-signature"),
+                        format!("{}.{}", header("webhook-id"), header("webhook-timestamp")),
+                        header("webhook-signature"),
                         body,
                     ));
                     StatusCode::NO_CONTENT
@@ -1420,19 +1415,28 @@ async fn webhooks_say_what_happened_without_message_text() {
     owner
         .say(&app, &dm_id, "wake-1", "zeppelin budget please")
         .await;
-    let (timestamp, signature, body) = next_wakeup(&received, 1).await;
+    let (signed, signature, body) = next_push_of(&received, "reply.requested").await;
     let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
-    assert_eq!(wakeup["event"], "reply.requested", "{wakeup}");
-    assert_eq!(wakeup["conversationId"], dm_id.as_str(), "{wakeup}");
-    assert_eq!(wakeup["agentId"], mara.actor_id.as_str(), "{wakeup}");
-    assert!(wakeup["sessionRef"].is_null(), "{wakeup}");
+    assert_eq!(wakeup["data"]["conversationId"], dm_id.as_str(), "{wakeup}");
+    assert_eq!(
+        wakeup["recipient"]["accountId"],
+        mara.actor_id.as_str(),
+        "{wakeup}"
+    );
     assert!(!body.contains("zeppelin"), "no message text: {body}");
+    // Standard Webhooks: v1,<base64 HMAC of "id.timestamp.body">, keyed by
+    // the secret's bytes after whsec_.
+    let (id, timestamp) = signed.split_once('.').expect("id and timestamp");
     assert_eq!(
         signature,
-        format!("sha256={}", hmac_hex(&secret, &timestamp, &body))
+        agent_workspace_server::delivery::sign::standard(&secret, id, timestamp, &body)
+            .expect("sign")
     );
 
-    let request_id = wakeup["replyRequestId"].as_str().expect("id").to_owned();
+    let request_id = wakeup["data"]["replyRequestId"]
+        .as_str()
+        .expect("id")
+        .to_owned();
     let (status, _) = owner
         .call(
             &app,
@@ -1443,152 +1447,13 @@ async fn webhooks_say_what_happened_without_message_text() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, _, body) = next_wakeup(&received, 2).await;
+    let (_, _, body) = next_push_of(&received, "reply.cancelled").await;
     let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
-    assert_eq!(wakeup["event"], "reply.cancelled", "{wakeup}");
-    assert_eq!(wakeup["replyRequestId"], request_id.as_str(), "{wakeup}");
-
-    // A webhook from before typed wakeups gets the old body.
-    sqlx::query(
-        "UPDATE agent_connections SET webhook_format = 'inbox_v1' \
-         WHERE source_connection_id = $1::uuid",
-    )
-    .bind(&mara.connection_id)
-    .execute(&pool)
-    .await
-    .expect("legacy format");
-    owner
-        .say(&app, &dm_id, "wake-2", "and the hangar lease")
-        .await;
-    let (_, _, body) = next_wakeup(&received, 3).await;
-    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
-    assert_eq!(wakeup["event"], "inbox.available", "{wakeup}");
-    assert!(wakeup.get("conversationId").is_none(), "{wakeup}");
-
-    shutdown.send(true).expect("stop worker");
-    worker.await.expect("worker");
-    agent_workspace_server::test_support::drop_schema(&admin, &schema)
-        .await
-        .expect("drop schema");
-}
-
-/// P0.18: saving a webhook from before typed wakeups (a new address, a new
-/// secret) keeps its `inbox.available` format, so a runner that reads only
-/// that keeps working; it switches only when asked to.
-#[tokio::test]
-async fn saving_an_old_webhook_keeps_its_wake_format() {
-    let Some(Fixture {
-        admin,
-        schema,
-        pool,
-        app,
-        owner,
-        space,
-    }) = fixture("reply_wake_format").await
-    else {
-        return;
-    };
-    let received = Arc::new(tokio::sync::Mutex::new(
-        Vec::<(String, String, String)>::new(),
-    ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let address = listener.local_addr().expect("address");
-    let sink = Arc::clone(&received);
-    tokio::spawn(async move {
-        let runner = axum::Router::new().route(
-            "/wake",
-            axum::routing::post(move |body: String| {
-                let sink = Arc::clone(&sink);
-                async move {
-                    sink.lock().await.push((String::new(), String::new(), body));
-                    StatusCode::NO_CONTENT
-                }
-            }),
-        );
-        axum::serve(listener, runner).await.expect("serve");
-    });
-    let origin = format!("http://{address}");
-    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
-    let webhook_path = format!(
-        "/api/v1/projects/{space}/external-agents/{}/webhook",
-        mara.connection_id
+    assert_eq!(
+        wakeup["data"]["replyRequestId"],
+        request_id.as_str(),
+        "{wakeup}"
     );
-    // Saved through the page, then pointed at the local receiver, which
-    // only a trusted origin may reach.
-    let save = |body: Value| {
-        let (app, owner, path, pool, connection, origin) = (
-            app.clone(),
-            &owner,
-            webhook_path.clone(),
-            pool.clone(),
-            mara.connection_id.clone(),
-            origin.clone(),
-        );
-        async move {
-            let (status, saved) = owner.call(&app, "POST", &path, None, body).await;
-            assert_eq!(status, StatusCode::OK, "{saved}");
-            sqlx::query(
-                "UPDATE agent_connections SET webhook_url = $2 WHERE source_connection_id = $1::uuid",
-            )
-            .bind(&connection)
-            .bind(format!("{origin}/wake"))
-            .execute(&pool)
-            .await
-            .expect("local webhook");
-            saved
-        }
-    };
-    save(json!({ "url": "https://runner.example/wake" })).await;
-    sqlx::query(
-        "UPDATE agent_connections SET webhook_format = 'inbox_v1' \
-         WHERE source_connection_id = $1::uuid",
-    )
-    .bind(&mara.connection_id)
-    .execute(&pool)
-    .await
-    .expect("a webhook from before typed wakeups");
-    let saved = save(json!({ "url": "https://runner.example/wake-again" })).await;
-    assert_eq!(saved["connection"]["wakeupFormat"], "inbox", "{saved}");
-    let (status, refused) = owner
-        .call(
-            &app,
-            "POST",
-            &webhook_path,
-            None,
-            json!({ "url": "https://runner.example/wake", "wakeupFormat": "inbox" }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
-
-    let (shutdown, worker) = spawn_pusher(
-        test_state_trusting(pool.clone(), &origin),
-        mara.connection_id.clone(),
-    );
-    let (_, dm) = owner
-        .call(
-            &app,
-            "POST",
-            "/api/v1/direct/dms",
-            None,
-            json!({ "actorId": mara.actor_id }),
-        )
-        .await;
-    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
-    owner.say(&app, &dm_id, "format-1", "first question").await;
-    let (_, _, body) = next_wakeup(&received, 1).await;
-    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
-    assert_eq!(wakeup["event"], "inbox.available", "{wakeup}");
-
-    // Switched on purpose, it gets typed wakeups.
-    let saved =
-        save(json!({ "url": "https://runner.example/wake", "wakeupFormat": "typed" })).await;
-    assert_eq!(saved["connection"]["wakeupFormat"], "typed", "{saved}");
-    owner.say(&app, &dm_id, "format-2", "second question").await;
-    let (_, _, body) = next_wakeup(&received, 2).await;
-    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
-    assert_eq!(wakeup["event"], "reply.requested", "{wakeup}");
 
     shutdown.send(true).expect("stop worker");
     worker.await.expect("worker");
@@ -1759,24 +1624,21 @@ fn spawn_pusher(
 }
 
 /// Wait for the `count`th wakeup the test runner received.
-async fn next_wakeup(
+/// The first push of one event type (a connection hears more than reply
+/// events).
+async fn next_push_of(
     received: &tokio::sync::Mutex<Vec<(String, String, String)>>,
-    count: usize,
+    event_type: &str,
 ) -> (String, String, String) {
     for _ in 0..100 {
-        if let Some(wakeup) = received.lock().await.get(count - 1) {
-            return wakeup.clone();
+        if let Some(push) = received.lock().await.iter().find(|(_, _, body)| {
+            serde_json::from_str::<Value>(body).is_ok_and(|body| body["type"] == event_type)
+        }) {
+            return push.clone();
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    panic!("wakeup {count} never arrived");
-}
-
-fn hmac_hex(secret: &str, timestamp: &str, body: &str) -> String {
-    use hmac::{Hmac, Mac};
-    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("key");
-    mac.update(format!("{timestamp}.{body}").as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    panic!("no {event_type} push arrived");
 }
 
 /// The newest reply request on a conversation's timeline, as a browser sees it.

@@ -89,8 +89,16 @@ impl Transport for InProcess {
     }
 }
 
-/// The built-in host's client: every builtin row's commands, in process.
+/// The built-in host's client: every builtin row's commands, in process,
+/// or, in the host's own program (A1.17), over HTTP to the server with the
+/// install's token.
 pub fn client(state: &AppState) -> HostClient {
+    if let Some(remote) = &state.config.builtin_host_remote {
+        // The program made the same client once at its start, so this
+        // can't fail here.
+        return HostClient::new(&remote.server_url, remote.token.expose())
+            .expect("the built-in host's client was made at its start");
+    }
     let origin = state
         .config
         .public_origin

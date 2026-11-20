@@ -79,11 +79,6 @@ export function signStandard(secret: string, id: string, timestamp: string, body
   return `v1,${createHmac('sha256', key).update(`${id}.${timestamp}.${body}`).digest('base64')}`
 }
 
-/** The older signature: `sha256=` and the hex HMAC of `{timestamp}.{body}`, keyed by the whole secret. */
-export function signLegacy(secret: string, timestamp: string, body: string): string {
-  return `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`
-}
-
 function same(a: string, b: string): boolean {
   const left = Buffer.from(a)
   const right = Buffer.from(b)
@@ -92,9 +87,8 @@ function same(a: string, b: string): boolean {
 
 /**
  * Checks a push (in constant time, against each secret, so a rotation's old
- * and new secret both work) and its age, and returns its event. A push to an
- * older `typed_v1` connection comes back in the same shape as any other
- * event. Throws `PushError` for anything that isn't a genuine, fresh push.
+ * and new secret both work) and its age, and returns its event. Throws
+ * `PushError` for anything that isn't a genuine, fresh push.
  */
 export function verifyPush(options: {
   secret: string | string[]
@@ -109,19 +103,14 @@ export function verifyPush(options: {
   const fresh = (timestamp: string) =>
     /^\d{1,12}$/.test(timestamp) && Math.abs(now - Number(timestamp)) <= (options.toleranceSeconds ?? PUSH_TOLERANCE_SECONDS)
   const id = header(options.headers, 'webhook-id')
-  const timestamp = header(options.headers, 'webhook-timestamp') ?? header(options.headers, 'x-workspace-timestamp')
-  const standard = header(options.headers, 'webhook-signature')
-  const legacy = header(options.headers, 'x-workspace-signature')
-  if (!timestamp || (!standard && !legacy)) throw new PushError('missing signature')
+  const timestamp = header(options.headers, 'webhook-timestamp')
+  const signatures = header(options.headers, 'webhook-signature')
+  if (!id || !timestamp || !signatures) throw new PushError('missing signature')
   if (!fresh(timestamp)) throw new PushError('stale push')
   let genuine = false
   for (const secret of secrets) {
-    if (standard && id) {
-      const expected = signStandard(secret, id, timestamp, options.body)
-      genuine ||= standard.split(' ').some((given) => same(given, expected))
-    } else if (legacy) {
-      genuine ||= same(legacy, signLegacy(secret, timestamp, options.body))
-    }
+    const expected = signStandard(secret, id, timestamp, options.body)
+    genuine ||= signatures.split(' ').some((given) => same(given, expected))
   }
   if (!genuine) throw new PushError('bad signature')
   let parsed: Record<string, unknown>
@@ -130,29 +119,10 @@ export function verifyPush(options: {
   } catch {
     throw new PushError('body is not JSON', 400)
   }
-  const event = typeof parsed?.type === 'string' ? (parsed as unknown as WorkspaceEvent) : fromLegacy(parsed)
-  if (!event) throw new PushError('not an event', 400)
-  if (id && id !== event.id) throw new PushError('delivery mismatch', 400)
+  if (typeof parsed?.type !== 'string') throw new PushError('not an event', 400)
+  const event = parsed as unknown as WorkspaceEvent
+  if (id !== event.id) throw new PushError('delivery mismatch', 400)
   return event
-}
-
-/** An older `typed_v1` or `inbox_v1` wakeup, as an event. */
-function fromLegacy(body: Record<string, unknown>): WorkspaceEvent | null {
-  if (typeof body?.event !== 'string' || typeof body.deliveryId !== 'string') return null
-  const type = body.event === 'inbox.available' ? 'reply.requested' : body.event
-  const { event: _event, deliveryId, agentId, projectId, replyRequestId: request, ...rest } = body
-  return {
-    type,
-    timestamp: new Date().toISOString(),
-    id: deliveryId,
-    cursor: null,
-    recipient: typeof agentId === 'string' ? { accountId: agentId } : null,
-    data: {
-      ...rest,
-      ...(typeof projectId === 'string' && { spaceId: projectId }),
-      ...(typeof request === 'string' && { thing: { kind: 'reply_request', id: request } }),
-    },
-  }
 }
 
 /** Remembers recent event ids, so a repeat is handled once. */

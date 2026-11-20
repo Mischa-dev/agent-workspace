@@ -66,15 +66,11 @@ test('a genuine push verifies; a tampered, stale, unsigned or wrongly keyed one 
   assert.equal(verifyPush({ secret, headers: new Headers(headers), body }).type, 'reply.requested')
 })
 
-test('the published fixtures verify: a standard push and an older typed one', () => {
+test('the published fixture verifies', () => {
   const standard = JSON.parse(fixture('webhook-standard.json')) as { secret: string; headers: Record<string, string>; body: string }
   const now = Number(standard.headers['webhook-timestamp'])
   const event = verifyPush({ secret: standard.secret, headers: standard.headers, body: standard.body, now })
   assert.equal(event.type, 'message.mentioned')
-  const typed = JSON.parse(fixture('webhook-typed_v1.json')) as typeof standard
-  const legacy = verifyPush({ secret: typed.secret, headers: typed.headers, body: typed.body, now })
-  assert.equal(legacy.type, 'reply.requested')
-  assert.deepEqual(legacy.data.thing, { kind: 'reply_request', id: '01a2b3c4-0000-7000-8000-0000000000f1' })
 })
 
 test('a test push is answered and claims nothing', () => {

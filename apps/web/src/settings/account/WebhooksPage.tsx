@@ -344,7 +344,6 @@ function WebhookDialog({
         {
           name: name.trim(),
           webhookUrl: url.trim(),
-          webhookFormat: 'standard',
           reachesAll: false,
           subscriptions: subscriptions(),
         },

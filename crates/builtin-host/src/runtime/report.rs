@@ -7,7 +7,10 @@
 use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter, StreamDelta};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{Duration, Instant, sleep},
+};
 use uuid::Uuid;
 
 use super::requests::Outcome;
@@ -15,6 +18,42 @@ use crate::RuntimeError as AppError;
 
 /// The longest step payload sent whole; a bigger one keeps only its name.
 const MAX_PAYLOAD_BYTES: usize = 60_000;
+
+/// How long a report waits out a server it can't reach, such as one
+/// restarting while the host (its own program) carries on with the run.
+/// Every report carries its key, so one sent twice is taken once.
+const UNREACHABLE_FOR: Duration = Duration::from_secs(120);
+const FIRST_WAIT: Duration = Duration::from_millis(200);
+const LONGEST_WAIT: Duration = Duration::from_secs(5);
+
+/// Whether a call may go through if tried again shortly: no answer at all,
+/// or a server that is starting or stopping.
+fn passing(error: &ClientError) -> bool {
+    matches!(
+        error,
+        ClientError::Http(_) | ClientError::Refused(502..=504, _)
+    )
+}
+
+/// Calls `call` until it is answered, or a passing failure has lasted
+/// [`UNREACHABLE_FOR`].
+async fn patiently<T, F, Fut>(mut call: F) -> Result<T, ClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ClientError>>,
+{
+    let deadline = Instant::now() + UNREACHABLE_FOR;
+    let mut wait = FIRST_WAIT;
+    loop {
+        match call().await {
+            Err(error) if passing(&error) && Instant::now() + wait < deadline => {
+                sleep(wait).await;
+                wait = (wait * 2).min(LONGEST_WAIT);
+            }
+            answer => return answer,
+        }
+    }
+}
 
 /// A run's reports, for as long as the host works on it. Its credential is
 /// fetched again from the run's start when it runs out.
@@ -70,8 +109,7 @@ impl RunReports {
         run_id: Uuid,
         start_command_id: Uuid,
     ) -> Result<RunReporter, AppError> {
-        let start = client
-            .command(start_command_id)
+        let start = patiently(|| client.command(start_command_id))
             .await
             .map_err(unavailable)?;
         let credential = start.workspace_credential.ok_or(AppError::Conflict(
@@ -99,11 +137,18 @@ impl RunReports {
         on_run: bool,
     ) -> Result<Value, AppError> {
         let send = async |reporter: RunReporter, input: Value| {
-            if on_run {
-                reporter.operation(name, input, key).await
-            } else {
-                reporter.call_as_agent(name, &input, key).await
-            }
+            patiently(|| {
+                let reporter = reporter.clone();
+                let input = input.clone();
+                async move {
+                    if on_run {
+                        reporter.operation(name, input, key).await
+                    } else {
+                        reporter.call_as_agent(name, &input, key).await
+                    }
+                }
+            })
+            .await
         };
         let reporter = self.reporter.lock().await.clone();
         let answer = match send(reporter, input.clone()).await {
@@ -379,6 +424,33 @@ fn client_id(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_report_waits_out_a_restarting_server_but_not_a_refusal() {
+        let mut tries = 0;
+        let answer = patiently(|| {
+            tries += 1;
+            let tried = tries;
+            async move {
+                match tried {
+                    1 => Err(ClientError::Http("connection refused".to_owned())),
+                    2 => Err(ClientError::Refused(503, String::new())),
+                    _ => Ok(tried),
+                }
+            }
+        })
+        .await;
+        assert!(matches!(answer, Ok(3)));
+
+        let mut tries = 0;
+        let refused = patiently(|| {
+            tries += 1;
+            async { Err::<(), _>(ClientError::Refused(409, String::new())) }
+        })
+        .await;
+        assert!(matches!(refused, Err(ClientError::Refused(409, _))));
+        assert_eq!(tries, 1, "a refusal is final");
+    }
 
     #[test]
     fn a_long_reply_in_the_thread_keeps_its_text() {

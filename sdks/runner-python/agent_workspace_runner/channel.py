@@ -30,7 +30,6 @@ __all__ = [
     "ToolError",
     "ChannelRefused",
     "sign_standard",
-    "sign_legacy",
     "verify_push",
     "event_thing",
     "reply_request_id",
@@ -132,15 +131,15 @@ def _bytes(body: str | bytes) -> bytes:
 
 def sign_standard(secret: str, webhook_id: str, timestamp: str, body: str | bytes) -> str:
     """The Standard Webhooks signature: ``v1,`` and the base64 HMAC of ``{id}.{timestamp}.{body}``."""
-    key = base64.b64decode(secret[6:]) if secret.startswith("whsec_") else secret.encode()
+    key = _key(secret[6:]) if secret.startswith("whsec_") else secret.encode()
     digest = hmac.new(key, f"{webhook_id}.{timestamp}.".encode() + _bytes(body), hashlib.sha256).digest()
     return "v1," + base64.b64encode(digest).decode()
 
 
-def sign_legacy(secret: str, timestamp: str, body: str | bytes) -> str:
-    """The older signature: ``sha256=`` and the hex HMAC of ``{timestamp}.{body}``, keyed by the whole secret."""
-    digest = hmac.new(secret.encode(), timestamp.encode() + b"." + _bytes(body), hashlib.sha256).hexdigest()
-    return f"sha256={digest}"
+def _key(encoded: str) -> bytes:
+    """A ``whsec_`` secret's key: base64 in either alphabet, padded or not."""
+    normal = encoded.replace("-", "+").replace("_", "/")
+    return base64.b64decode(normal + "=" * (-len(normal) % 4))
 
 
 def verify_push(
@@ -152,59 +151,33 @@ def verify_push(
 ) -> dict[str, Any]:
     """Checks a push (in constant time, against each secret) and its age, and returns its event.
 
-    A push to an older ``typed_v1`` connection comes back in the same shape
-    as any other event. Raises ``PushError`` for anything that isn't a
-    genuine, fresh push.
+    Raises ``PushError`` for anything that isn't a genuine, fresh push.
     """
     secrets = [secret] if isinstance(secret, str) else list(secret)
     webhook_id = _header(headers, "webhook-id")
-    timestamp = _header(headers, "webhook-timestamp") or _header(headers, "x-workspace-timestamp")
-    standard = _header(headers, "webhook-signature")
-    legacy = _header(headers, "x-workspace-signature")
-    if not timestamp or not (standard or legacy):
+    timestamp = _header(headers, "webhook-timestamp")
+    signatures = _header(headers, "webhook-signature")
+    if not webhook_id or not timestamp or not signatures:
         raise PushError("missing signature")
     current = time.time() if now is None else now
     if not re.fullmatch(r"\d{1,12}", timestamp) or abs(current - int(timestamp)) > tolerance_seconds:
         raise PushError("stale push")
     genuine = False
     for candidate in secrets:
-        if standard and webhook_id:
-            expected = sign_standard(candidate, webhook_id, timestamp, body).encode()
-            genuine = genuine or any(hmac.compare_digest(given.encode(), expected) for given in standard.split(" "))
-        elif legacy:
-            genuine = genuine or hmac.compare_digest(legacy.encode(), sign_legacy(candidate, timestamp, body).encode())
+        expected = sign_standard(candidate, webhook_id, timestamp, body).encode()
+        genuine = genuine or any(hmac.compare_digest(given.encode(), expected) for given in signatures.split(" "))
     if not genuine:
         raise PushError("bad signature")
     try:
         parsed = json.loads(body)
     except ValueError:
         raise PushError("body is not JSON", 400) from None
-    event = parsed if isinstance(parsed, dict) and isinstance(parsed.get("type"), str) else _from_legacy(parsed)
-    if event is None:
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("type"), str):
         raise PushError("not an event", 400)
-    if webhook_id and webhook_id != event["id"]:
+    event = parsed
+    if webhook_id != event["id"]:
         raise PushError("delivery mismatch", 400)
     return event
-
-
-def _from_legacy(body: Any) -> dict[str, Any] | None:
-    """An older ``typed_v1`` or ``inbox_v1`` wakeup, as an event."""
-    if not isinstance(body, dict) or not isinstance(body.get("event"), str) or not isinstance(body.get("deliveryId"), str):
-        return None
-    rest = {k: v for k, v in body.items() if k not in ("event", "deliveryId", "agentId", "projectId", "replyRequestId")}
-    data: dict[str, Any] = dict(rest)
-    if isinstance(body.get("projectId"), str):
-        data["spaceId"] = body["projectId"]
-    if isinstance(body.get("replyRequestId"), str):
-        data["thing"] = {"kind": "reply_request", "id": body["replyRequestId"]}
-    return {
-        "type": "reply.requested" if body["event"] == "inbox.available" else body["event"],
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "id": body["deliveryId"],
-        "cursor": None,
-        "recipient": {"accountId": body["agentId"]} if isinstance(body.get("agentId"), str) else None,
-        "data": data,
-    }
 
 
 class Deduper:

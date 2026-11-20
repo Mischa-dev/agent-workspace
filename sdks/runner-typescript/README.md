@@ -102,10 +102,9 @@ await channel.connect({ signal })
 | `edit`, `delete`, `react`, `typing` | `message_edit`, `message_delete`, `message_react`, and `reply_progress` for the working line. |
 | `download(fileId)`, `upload(...)` | Files through a short-lived link, and into a conversation. |
 
-`verifyPush({ secret, headers, body })` checks Standard Webhooks signatures
-(and the older `x-workspace-signature`), against several secrets during a
-rotation. A push to an older `typed_v1` connection comes back as an event
-like any other. The tests run against `sdks/fixtures/delivery`.
+`verifyPush({ secret, headers, body })` checks Standard Webhooks signatures,
+against several secrets during a rotation. The tests run against
+`sdks/fixtures/delivery`.
 
 ## Lower-level pieces
 

@@ -412,6 +412,12 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (automation_write below; tests/integration/incoming_hooks.rs)",
     ),
     (
+        "POST /api/v1/host/builtin/enrol",
+        "the install's built-in host program exchanging the one-time code the server \
+         wrote for its token, once; no session, no workspace, and any other code is refused \
+         (tests/integration/a1_host_program.rs)",
+    ),
+    (
         "POST /api/v1/host/commands/{command_id}/ack",
         "a host answering one of its own commands with its own token; another host's \
          command is not found (tests/integration/a1_host_protocol.rs)",
@@ -2069,8 +2075,8 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .await
             .expect("delivery connection");
         sqlx::query(
-            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
-             webhook_format = 'standard' WHERE id = $1",
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net' \
+             WHERE id = $1",
         )
         .bind(made.id)
         .execute(&mut *database)
