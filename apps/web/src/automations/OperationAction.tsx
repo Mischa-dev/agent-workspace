@@ -5,7 +5,7 @@ import { describeError } from '../app/mutations'
 import { FormPieceFields } from '../pieces/FormPiece'
 import { firstMissing, type FormValue, type FormValues } from '../pieces/formFields'
 import { Banner, ListSkeleton, SelectField } from '../ui'
-import { automationKeys, getOperationDocument } from './api'
+import { automationKeys, getOperationDocument, type OpenApiSchema } from './api'
 import {
   AUTOMATION_OPERATIONS,
   fieldName,
@@ -23,6 +23,16 @@ function byModule(entries: readonly CatalogueEntry[]) {
   const groups = new Map<string, CatalogueEntry[]>()
   for (const entry of entries) groups.set(entry.module, [...(groups.get(entry.module) ?? []), entry])
   return [...groups.entries()]
+}
+
+/** Why these values can't become the operation's input, or null when they can. */
+function unconvertible(schema: OpenApiSchema, values: FormValues, spaceId: string): string | null {
+  try {
+    operationInput(schema, values, spaceId)
+    return null
+  } catch (reason) {
+    return describeError(reason).message
+  }
 }
 
 /**
@@ -59,19 +69,18 @@ export function OperationAction({
   const values = typed && typed.operation === action.operation ? typed.values : schema ? operationFormValues(schema, action.input) : {}
 
   const known = AUTOMATION_OPERATIONS.some((entry) => entry.name === action.operation)
-  const problem = !action.operation ? 'Choose an operation to run.' : schema ? firstMissing(fields, values) : null
+  // What stops saving: an answer it needs, or one that won't convert (such as
+  // JSON cut short), worked out from what's shown so the saved input never
+  // lags behind it.
+  const problem = !action.operation ? 'Choose an operation to run.' : schema ? (firstMissing(fields, values) ?? unconvertible(schema, values, spaceId)) : null
   useEffect(() => onProblem(problem), [problem, onProblem])
 
   const change = (id: string, value: FormValue) => {
     if (!schema) return
     const next = { ...values, [id]: value }
     setTyped({ operation: action.operation, values: next })
-    try {
-      onChange({ ...action, input: operationInput(schema, next, spaceId) })
-      onProblem(firstMissing(fields, next))
-    } catch (reason) {
-      onProblem(describeError(reason).message)
-    }
+    // Unconvertible values leave the saved input as it was; `problem` blocks saving until they're fixed.
+    if (unconvertible(schema, next, spaceId) === null) onChange({ ...action, input: operationInput(schema, next, spaceId) })
   }
 
   const id = `rule-action-${index}-operation`

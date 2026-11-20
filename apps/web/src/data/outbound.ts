@@ -141,6 +141,8 @@ function setEntries(next: OutboundEntry[]) {
 /** Reads what's kept for whoever is signed in, once; anyone else's goes. */
 function load() {
   const owner = localDraftOwner()
+  // Nobody known yet (the session is still being read): touch nothing kept.
+  if (owner === null) return Promise.resolve()
   if (loadedFor !== owner) {
     // Someone else signed in: start from what's kept for them.
     loaded = null
@@ -243,11 +245,12 @@ export async function queueOp<N extends OpName>(
  * later one follows on from it: the person's own changes don't clash with
  * each other. Someone else's change still refuses the first of them.
  */
-function followOn(entry: OutboundEntry, reached: ReadonlyMap<string, number>): unknown {
-  const version = entry.thing ? reached.get(entry.thing) : undefined
-  const input = entry.input as { expectedVersion?: unknown } | null
-  if (version === undefined || !input || typeof input.expectedVersion !== 'number') return entry.input
-  return { ...input, expectedVersion: version }
+async function followOn(thing: string, version: number) {
+  for (const later of entries.filter((entry) => entry.thing === thing)) {
+    const input = later.input as { expectedVersion?: unknown } | null
+    if (!input || typeof input.expectedVersion !== 'number' || input.expectedVersion === version) continue
+    await keep({ ...later, input: { ...input, expectedVersion: version } })
+  }
 }
 
 export type FlushResult = { sent: OutboundEntry[]; refused: OutboundEntry[] }
@@ -265,16 +268,17 @@ export function flushOutbound(): Promise<FlushResult> {
     await load()
     const owner = localDraftOwner()
     const held = new Set<string>()
-    const reached = new Map<string, number>()
-    for (const entry of [...entries]) {
-      if (entry.owner !== owner) continue
+    for (const { id } of [...entries]) {
+      // As kept now: an earlier write in this run may have moved its version on.
+      const entry = entries.find((candidate) => candidate.id === id)
+      if (!entry || entry.owner !== owner) continue
       if (entry.refused || (entry.thing && held.has(entry.thing))) {
         if (entry.thing) held.add(entry.thing)
         continue
       }
       let answer: unknown
       try {
-        answer = await callOp(entry.op, followOn(entry, reached) as never, { requestId: entry.id, retries: 0 })
+        answer = await callOp(entry.op, entry.input as never, { requestId: entry.id, retries: 0 })
       } catch (error) {
         if (isConnectionError(error) || localDraftOwner() !== owner) return result
         const refused = { ...entry, refused: describeError(error).message }
@@ -284,7 +288,8 @@ export function flushOutbound(): Promise<FlushResult> {
         continue
       }
       const version = (answer as { version?: unknown } | null)?.version
-      if (entry.thing && typeof version === 'number') reached.set(entry.thing, version)
+      // Kept before this one is forgotten, so a run cut off after it still sends the next at the version it reached.
+      if (entry.thing && typeof version === 'number') await followOn(entry.thing, version)
       await forget(entry.id)
       result.sent.push(entry)
     }

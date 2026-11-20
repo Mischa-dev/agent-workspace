@@ -129,6 +129,8 @@ export function useQueueWorkItemUpdate() {
   const queryClient = useQueryClient()
   const invalidate = useInvalidateWorkItems()
   return useMutation({
+    // Runs with no connection too: keeping the edit on the device is the point.
+    networkMode: 'always',
     mutationFn: queueWorkItemUpdate,
     onSuccess: (item) => {
       if (!item) return
