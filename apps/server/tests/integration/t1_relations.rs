@@ -176,9 +176,12 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await
     .expect("jobs");
     assert_eq!(waiting, 1, "one queued job covers every change");
-    computed::recalculate_space(&setup.pool, project_id)
-        .await
-        .expect("recalculate");
+    crate::support::as_job(
+        setup.organization_id,
+        computed::recalculate_space(&setup.pool, project_id),
+    )
+    .await
+    .expect("recalculate");
     let fresh = query("Builds").await;
     assert_eq!(value_of(&fresh, "Build 1", "Hours"), json!(16), "{fresh}");
     assert_eq!(value_of(&fresh, "Build 2", "Hours"), json!(11));
@@ -375,9 +378,12 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
 
     // One batch, then the run "stops": the job for the next batch is queued
     // with where it had got to.
-    computed::recompute_collection(&setup.pool, project_id, collection, None)
-        .await
-        .expect("first batch");
+    crate::support::as_job(
+        setup.organization_id,
+        computed::recompute_collection(&setup.pool, project_id, collection, None),
+    )
+    .await
+    .expect("first batch");
     let done = || async {
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM collection_records WHERE collection_id = $1 \
@@ -411,9 +417,12 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
         let after = payload["after"]
             .as_str()
             .and_then(|id| id.parse::<Uuid>().ok());
-        computed::recompute_collection(&setup.pool, project_id, collection, after)
-            .await
-            .expect("next batch");
+        crate::support::as_job(
+            setup.organization_id,
+            computed::recompute_collection(&setup.pool, project_id, collection, after),
+        )
+        .await
+        .expect("next batch");
     }
     assert_eq!(done().await, 1200);
     let doubled = sqlx::query_scalar::<_, Value>(

@@ -113,10 +113,11 @@ async fn a_cycle_closes_rolls_unfinished_work_over_and_counts_its_days() {
         .await
         .expect("task")
     };
-    let planned =
-        agent_workspace_server::work_items::cycles::run_due(pool, ends_on, Uuid::now_v7())
-            .await
-            .expect("plan");
+    let planned = crate::support::as_server_job(
+        agent_workspace_server::work_items::cycles::run_due(pool, ends_on, Uuid::now_v7()),
+    )
+    .await
+    .expect("plan");
     assert_eq!(planned, 1);
     let mut numbers = Vec::new();
     for key in &keys {
@@ -160,9 +161,13 @@ async fn a_cycle_closes_rolls_unfinished_work_over_and_counts_its_days() {
     );
 
     // Run again the same day, nothing more happens.
-    let again = agent_workspace_server::work_items::cycles::run_due(pool, ends_on, Uuid::now_v7())
-        .await
-        .expect("plan again");
+    let again = crate::support::as_server_job(agent_workspace_server::work_items::cycles::run_due(
+        pool,
+        ends_on,
+        Uuid::now_v7(),
+    ))
+    .await
+    .expect("plan again");
     assert_eq!(again, 0);
 
     // An ended cycle takes no more tasks.

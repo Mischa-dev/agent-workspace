@@ -247,6 +247,13 @@ pub(crate) async fn as_job<F: std::future::Future>(workspace: uuid::Uuid, work: 
     .await
 }
 
+/// Runs `work` as the job runner runs a job queued for no workspace (a
+/// periodic sweep): the server's own work, server-wide. For tests that
+/// call such a job's function directly instead of through the queue.
+pub(crate) async fn as_server_job<F: std::future::Future>(work: F) -> F::Output {
+    agent_workspace_server::tenancy::system("jobs.server", work).await
+}
+
 /// Runs `work` as `account` would in a request of theirs: in the scope of
 /// every workspace they belong to. For tests that call a function a
 /// signed-in request runs.
