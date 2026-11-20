@@ -39,7 +39,7 @@ test('a rule built from pickers and an operation’s form, tried without writing
   const csrf = (await page.context().cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
   const op = async <T>(name: string, input: Record<string, unknown>): Promise<T> => {
     const response = await page.request.post(`/api/v2/ops/${name}`, {
-      headers: { 'x-csrf-token': csrf, origin: new URL(page.url()).origin },
+      headers: { 'x-csrf-token': csrf, 'idempotency-key': `automations-${name}-${Date.now()}`, origin: new URL(page.url()).origin },
       data: input,
     })
     expect(response.ok(), await response.text()).toBe(true)
@@ -52,4 +52,7 @@ test('a rule built from pickers and an operation’s form, tried without writing
   expect(rules.runs).toBe(0)
   expect(rules.rule.actions[0]).toMatchObject({ kind: 'run_operation', operation: 'task_comment_create', input: { taskId: '{{task.key}}' } })
   expect(rules.rule.conditions.filters?.statusId).toBeTruthy()
+
+  // The seeded project is shared with later specs, whose screenshots show it with no rules.
+  await op('automation_delete', { projectId, ruleId: rule.id })
 })

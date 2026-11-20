@@ -702,7 +702,7 @@ fn check_shape(
             Action::RunOperation { operation, input } => {
                 let offered = crate::ops::registry()
                     .get(operation)
-                    .is_some_and(|entry| entry.meta.automation);
+                    .is_some_and(|entry| entry.meta.runs_in_rules());
                 if !offered {
                     return Err(AppError::Validation("actions.operation"));
                 }

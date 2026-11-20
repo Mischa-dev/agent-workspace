@@ -49,32 +49,16 @@ pub fn writes(registry: &Registry) -> String {
     super::pretty(&Value::Array(operations))
 }
 
-/// The operations a rule may run (marked for automations, not a read and not
-/// an automation's own, and not one that needs the version of what it
-/// changes, which a rule has no way to know when it fires), with only what
+/// The operations a rule may run (`OpMeta::runs_in_rules`), with only what
 /// the builder's picker shows.
 pub fn automations(registry: &Registry) -> String {
     let operations = registry
         .entries()
-        .filter(|entry| {
-            let meta = &entry.meta;
-            meta.automation
-                && !["query", "describe"].contains(&meta.kind.key())
-                && !meta.name.starts_with("automation_")
-                && !needs_version(&(entry.meta.input_schema)())
-        })
+        .filter(|entry| entry.meta.runs_in_rules())
         .map(|entry| {
             let meta = &entry.meta;
             json!({ "name": meta.name, "title": meta.title, "module": meta.module, "kind": meta.kind.key() })
         })
         .collect::<Vec<_>>();
     super::pretty(&Value::Array(operations))
-}
-
-/// Whether an operation's input requires `expectedVersion`.
-fn needs_version(schema: &Value) -> bool {
-    schema
-        .get("required")
-        .and_then(Value::as_array)
-        .is_some_and(|required| required.iter().any(|field| field == "expectedVersion"))
 }

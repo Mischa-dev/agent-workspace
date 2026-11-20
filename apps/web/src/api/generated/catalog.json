@@ -2148,7 +2148,7 @@
     "title": "Unbind an agent from a host"
   },
   {
-    "automation": true,
+    "automation": false,
     "destructive": false,
     "emits": [
       "host.enrolment_created"
