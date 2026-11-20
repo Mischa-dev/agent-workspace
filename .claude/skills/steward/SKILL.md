@@ -50,10 +50,14 @@ helpers.
 
 ## When CI is red
 
-- GitHub's CI runs `tools/ci/checks.sh` on a GitHub-hosted `ubuntu-latest`
-  runner (`.github/workflows/ci.yml`), never on our own machines; jobs queue
-  when several branches push at once. A queued job is not a failure. Locally,
-  `tools/ci/run.sh` runs the same checks on the laptop or the Red Hat host.
+- GitHub's CI runs `tools/ci/checks.sh` on GitHub-hosted `ubuntu-latest`
+  runners (`.github/workflows/ci.yml`), never on our own machines, split into
+  parallel jobs: `lint`, `web`, `rust-build`, four `rust-tests` slices and
+  three `e2e` shards; `ci` passes when they all do. Jobs queue when several
+  branches push at once; a queued job is not a failure. A failing job's
+  part reruns locally with `CI_PART=<part> CI_SHARD=<k/n>` (see the top of
+  `checks.sh`); `tools/ci/run.sh` runs every part on the laptop or the Red Hat
+  host.
 - Read the failing step's log. Reproduce it locally with the same command
   before changing anything, then show it passing.
 - Tests that need PostgreSQL skip without `AGENT_WORKSPACE_DATABASE_URL`;
