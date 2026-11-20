@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { toastError } from '../../app/mutations'
@@ -15,8 +15,6 @@ import {
   type Trigger,
 } from '../../automations/api'
 import '../../automations/automations.css'
-import { TryRuleDialog } from '../../automations/TryRuleDialog'
-import { AUTOMATION_OPERATIONS } from '../../automations/operationForm'
 import { IncomingHooksSection } from '../../automations/IncomingHooksSection'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
@@ -44,7 +42,27 @@ import {
   type ChipTone,
 } from '../../ui'
 import type { SettingsPageProps } from '../types'
-import { RuleDialog } from './AutomationRuleDialog'
+
+// The rule builder, the try-out and the operations a rule may run load when
+// they're first needed: the operation catalogue grows with every module.
+const RuleDialog = lazy(() => import('./AutomationRuleDialog').then((module) => ({ default: module.RuleDialog })))
+const TryRuleDialog = lazy(() => import('../../automations/TryRuleDialog').then((module) => ({ default: module.TryRuleDialog })))
+
+/** Operation titles by name, once the catalogue has loaded. */
+function useOperationTitles(wanted: boolean): Map<string, string> {
+  const [titles, setTitles] = useState<Map<string, string>>(() => new Map())
+  useEffect(() => {
+    if (!wanted) return
+    let live = true
+    void import('../../automations/operationForm').then(({ AUTOMATION_OPERATIONS }) => {
+      if (live) setTitles(new Map(AUTOMATION_OPERATIONS.map((entry) => [entry.name, entry.title])))
+    })
+    return () => {
+      live = false
+    }
+  }, [wanted])
+  return titles
+}
 
 const RUN_STATE: Record<AutomationRun['state'], { label: string; tone: ChipTone }> = {
   pending: { label: 'Running', tone: 'muted' },
@@ -125,7 +143,7 @@ function describeSetField(field: Extract<RuleAction, { kind: 'set_field' }>['fie
   }
 }
 
-function describeAction(action: RuleAction): string {
+function describeAction(action: RuleAction, titles: Map<string, string>): string {
   switch (action.kind) {
     case 'launch':
       return 'launch an agent'
@@ -140,7 +158,7 @@ function describeAction(action: RuleAction): string {
     case 'post_message':
       return 'post a message'
     case 'run_operation':
-      return `run “${AUTOMATION_OPERATIONS.find((entry) => entry.name === action.operation)?.title ?? action.operation}”`
+      return `run “${titles.get(action.operation) ?? action.operation}”`
     case 'ask_agent':
       return 'ask an agent'
   }
@@ -160,6 +178,9 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
     queryFn: () => listRules(projectId),
     enabled: Boolean(project),
   })
+  const titles = useOperationTitles(
+    (rules.data?.rules ?? []).some((rule) => rule.actions.some((action) => action.kind === 'run_operation')),
+  )
   const [editing, setEditing] = useState<AutomationRule | 'new' | null>(null)
   const [deleting, setDeleting] = useState<AutomationRule | null>(null)
   const [history, setHistory] = useState<AutomationRule | null>(null)
@@ -299,7 +320,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
                   <span className="aw-row__metaline aw-wrap">
                     <span>
                       {describeTrigger(rule.trigger)}
-                      {rule.viewName ? ` in “${rule.viewName}”` : ''}, {rule.actions.map(describeAction).join(', then ')}
+                      {rule.viewName ? ` in “${rule.viewName}”` : ''}, {rule.actions.map((action) => describeAction(action, titles)).join(', then ')}
                     </span>
                     <span>By {rule.ownerName ?? 'someone who left'}</span>
                     <span title={rule.lastFiredAt ? formatFullDate(rule.lastFiredAt) : undefined}>
@@ -337,28 +358,30 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
         </EmptyState>
       )}
       <IncomingHooksSection manage={manage} projectId={projectId} />
-      {editing && (
-        <RuleDialog
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null)
-            void refresh()
-          }}
-          projectId={projectId}
-          rule={editing === 'new' ? null : editing}
-        />
-      )}
-      {trying && (
-        <TryRuleDialog
-          onClose={() => setTrying(null)}
-          onRan={() => {
-            setTrying(null)
-            void refresh()
-          }}
-          projectId={projectId}
-          rule={trying}
-        />
-      )}
+      <Suspense fallback={null}>
+        {editing && (
+          <RuleDialog
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              setEditing(null)
+              void refresh()
+            }}
+            projectId={projectId}
+            rule={editing === 'new' ? null : editing}
+          />
+        )}
+        {trying && (
+          <TryRuleDialog
+            onClose={() => setTrying(null)}
+            onRan={() => {
+              setTrying(null)
+              void refresh()
+            }}
+            projectId={projectId}
+            rule={trying}
+          />
+        )}
+      </Suspense>
       {history && <HistoryDialog onClose={() => setHistory(null)} projectId={projectId} rule={history} />}
       <ConfirmDialog
         busy={remove.isPending}
