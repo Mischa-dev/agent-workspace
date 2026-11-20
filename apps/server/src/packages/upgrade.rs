@@ -176,6 +176,8 @@ struct OldObject {
     local_hash: Option<String>,
     now: Option<String>,
     owner: Option<Uuid>,
+    /// A page or skill moved out of the install's space since.
+    moved: bool,
 }
 
 /// A plan, with what applying it needs.
@@ -312,11 +314,15 @@ pub(crate) async fn plan(
     let objects = sqlx::query_as::<_, OldObject>(&format!(
         "SELECT object.package_key AS key, object.object_kind AS kind, object.object_id AS id, \
                 object.action, object.installed_hash, object.local_hash, \
-                ({LOCAL_HASH_SQL}) AS now, ({OWNER_SQL}) AS owner \
+                ({LOCAL_HASH_SQL}) AS now, ({OWNER_SQL}) AS owner, \
+                (object.object_kind IN ('page', 'skill') AND EXISTS ( \
+                    SELECT 1 FROM project_pages page WHERE page.id = object.object_id \
+                      AND page.project_id IS DISTINCT FROM $2)) AS moved \
          FROM package_objects object WHERE object.install_id = $1 \
          ORDER BY object.object_kind, object.package_key"
     ))
     .bind(old.id)
+    .bind(old.space_id)
     .fetch_all(&mut *connection)
     .await
     .map_err(|error| OpError::logged(NAME, &error.into()))?;
@@ -362,6 +368,10 @@ pub(crate) async fn plan(
                 if object.now.is_none() {
                     item.reason =
                         because("It was archived or turned off here, so it stays that way.");
+                } else if object.moved {
+                    // Upgrades write only in the install's space.
+                    item.reason =
+                        because("It was moved to another space here, so it stays as it is.");
                 } else if planned.action == "skip" {
                     item.reason = planned.reason.clone();
                 } else if new_hash == Some(&object.installed_hash) {
@@ -527,7 +537,13 @@ async fn collection_additions(
             .find(|field| field.name.eq_ignore_ascii_case(name.trim()))
     };
     let mut additions = Additions::default();
+    // Only additions: a selector that names an existing field or view would
+    // change it, which the preview never showed.
     for field in wanted.fields {
+        let field = crate::collections::definition::FieldWrite {
+            field: None,
+            ..field
+        };
         let Some(name) = field.name.clone() else {
             continue;
         };
@@ -555,6 +571,7 @@ async fn collection_additions(
                 .as_deref()
                 .is_some_and(|name| !views.contains(&name.trim().to_lowercase()))
         })
+        .map(|view| crate::collections::definition::ViewWrite { view: None, ..view })
         .collect();
     Ok(additions)
 }
@@ -650,23 +667,45 @@ pub(crate) async fn upgrade(
         let field = format!("package.collection:{}", object.key);
         take_new(tx, who, &growing, "collection", object.id, body, &field).await?;
     }
-    // New parts name the collections this install already has by their
-    // package key, whatever they are called now.
-    let kept_collections = objects
+    // A role taken under a new name is the same role: rename it first, so
+    // the install's name-based roles step changes it rather than making
+    // another one beside it.
+    for object in objects
         .iter()
-        .filter(|object| object.kind == "collection" && object.action != "detached")
-        .map(|object| (object.key.clone(), object.id))
+        .filter(|object| object.kind == "role" && object.action != "detached")
+    {
+        let at = (object.kind.clone(), object.key.clone());
+        let Some((_, true)) = finals.get(&at) else {
+            continue;
+        };
+        let Some(body) = package
+            .contents
+            .iter()
+            .find(|part| part.kind.key() == "role" && part.key == object.key)
+            .and_then(|part| part.body.as_ref())
+            .filter(|body| !super::format::is_default_reference(body))
+        else {
+            continue;
+        };
+        let Some(name) = body["name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        rename_role(tx, who.workspace, object.id, name, &object.key).await?;
+    }
+    // New parts name what this install already has (collections, pages,
+    // forms, automations and the rest) by their package key, whatever
+    // they are called now.
+    let kept = objects
+        .iter()
+        .filter(|object| object.action != "detached")
+        .map(|object| ((object.kind.clone(), object.key.clone()), object.id))
         .collect::<HashMap<_, _>>();
-    let installed = apply::install_keeping(
-        tx,
-        who,
-        package,
-        document,
-        &place,
-        &install_plan,
-        &kept_collections,
-    )
-    .await?;
+    let installed =
+        apply::install_keeping(tx, who, package, document, &place, &install_plan, &kept).await?;
     let new_install = installed.install_id;
     let space = installed.space_id.or(old.space_id);
 
@@ -727,7 +766,7 @@ pub(crate) async fn upgrade(
                 let body = part.and_then(|part| part.body.clone()).unwrap_or_default();
                 let field = format!("package.{label}");
                 let applied = match object.kind.as_str() {
-                    // Taken by the install above.
+                    // Taken by the install above, renamed first if it must be.
                     "role" => true,
                     kind => {
                         let place = Applying {
@@ -1129,6 +1168,59 @@ async fn take_new(
         }
         _ => Ok(false),
     }
+}
+
+/// Gives an installed custom role the name its new version has, so the
+/// install's roles step finds it by that name. A built-in role keeps its
+/// name; another role already called that is a conflict to sort out first.
+async fn rename_role(
+    tx: &mut Transaction<'static, Postgres>,
+    workspace: Uuid,
+    role: Uuid,
+    name: &str,
+    key: &str,
+) -> Result<(), InstallError> {
+    let current = sqlx::query_as::<_, (String, bool)>(
+        "SELECT name, built_in FROM workspace_roles WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(role)
+    .bind(workspace)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|error| OpError::logged("package_upgrade", &error.into()))?;
+    let Some((current, built_in)) = current else {
+        return Ok(());
+    };
+    if built_in || current.to_lowercase() == name.to_lowercase() {
+        return Ok(());
+    }
+    let taken = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM workspace_roles WHERE organization_id = $1 \
+         AND lower(name) = lower($2) AND id <> $3)",
+    )
+    .bind(workspace)
+    .bind(name)
+    .bind(role)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|error| OpError::logged("package_upgrade", &error.into()))?;
+    if taken {
+        return Err(apply::invalid_at(
+            format!("package.role:{key}"),
+            format!(
+                "The new version calls the role \"{current}\" \"{name}\", and another role \
+                 here has that name: rename one of them first."
+            ),
+        )
+        .into());
+    }
+    sqlx::query("UPDATE workspace_roles SET name = $2, updated_at = now() WHERE id = $1")
+        .bind(role)
+        .bind(name)
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged("package_upgrade", &error.into()))?;
+    Ok(())
 }
 
 #[cfg(test)]

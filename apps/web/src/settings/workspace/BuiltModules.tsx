@@ -354,8 +354,10 @@ function BuilderForm({
             description: description.trim(),
             icon,
             nav: nav.filter((entry) => !shownBefore.has(navPoints(entry.target))),
+            // Only entries the builder offers can be taken off here; a
+            // form's entry, or a part from another space, stays.
             removeNav: [...shownBefore.entries()]
-              .filter(([points]) => !points || !sidebar.some((part) => partKey(part) === points))
+              .filter(([points]) => points !== null && choices.some((part) => partKey(part) === points) && !sidebar.some((part) => partKey(part) === points))
               .map(([, id]) => id),
           },
           { workspaceId },

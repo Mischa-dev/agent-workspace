@@ -221,7 +221,11 @@ impl Operation for GuardWrite {
                 let operations = match input.operations {
                     // An old name stands for the operations it now runs
                     // (`page_write` is `page_create` and `page_update`).
-                    Some(values) => canonical_names(words("operations", values, 50)?),
+                    Some(values) => words(
+                        "operations",
+                        canonical_names(words("operations", values, 50)?),
+                        50,
+                    )?,
                     None => existing
                         .map(|guard| guard.operations.clone())
                         .unwrap_or_default(),
