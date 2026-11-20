@@ -281,7 +281,7 @@ pub async fn socket(State(state): State<AppState>, upgrade: WebSocketUpgrade) ->
             let keys = KeyringKeys(&state.config);
             crate::tenancy::system(
                 "realtime.connections",
-                serve(socket, &router, receiver, &keys),
+                serve(socket, &router, receiver, &keys, &state.pool),
             )
             .await;
         })
@@ -320,11 +320,22 @@ fn ticket_in(text: &str, kind: &str) -> Option<String> {
         .flatten()
 }
 
+/// Whether a ticket's session is still signed in.
+async fn session_open(pool: &sqlx::PgPool, session: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND revoked_at IS NULL)",
+    )
+    .bind(session)
+    .fetch_one(crate::db::scoped(pool))
+    .await
+}
+
 async fn serve(
     mut socket: WebSocket,
     router: &LiveRouter,
     mut receiver: broadcast::Receiver<Delivery>,
     keys: &(dyn PublicKeys + Sync),
+    pool: &sqlx::PgPool,
 ) {
     let now = || chrono::Utc::now().timestamp();
     let hello = match tokio::time::timeout(HELLO_WAIT, socket.recv()).await {
@@ -340,6 +351,21 @@ async fn serve(
         close(&mut socket, CLOSE_TICKET, "ticket").await;
         return;
     };
+    // Signed out since the ticket was cut, on any instance: a revoke reaches
+    // the window only once the log has it, and a cookie rotated at sign-in
+    // stages none, so the session itself is asked once here. Fresh tickets
+    // on an open connection come from `api`, which asks it too.
+    match session_open(pool, ticket.session).await {
+        Ok(true) => {}
+        Ok(false) => {
+            close(&mut socket, CLOSE_TICKET, "signed_out").await;
+            return;
+        }
+        Err(_) => {
+            close(&mut socket, CLOSE_RESTART, "try_again").await;
+            return;
+        }
+    }
     let mut last = ticket.from;
     // While stale: when the grace runs out, and the position of the newest
     // change to what this connection may hear (a new ticket must be cut at
