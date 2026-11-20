@@ -59,6 +59,9 @@ fn spawn_host(root: &Path, database_url: &str, server: &str, code_file: &Path) -
     command
         .env("AGENT_WORKSPACE_DATABASE_URL", database_url)
         .env("AGENT_WORKSPACE_HOST_SERVER_URL", server)
+        // The demo executor is development-only; CI runs the tests with
+        // AGENT_WORKSPACE_ENV=test, which the program would inherit.
+        .env("AGENT_WORKSPACE_ENV", "development")
         .env("AGENT_WORKSPACE_HOST_CODE_PATH", code_file)
         .env("AGENT_WORKSPACE_HEALTH_ADDR", "127.0.0.1:0")
         .env("AGENT_WORKSPACE_LOG_FILTER", "warn")
