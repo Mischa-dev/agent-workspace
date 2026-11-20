@@ -275,6 +275,15 @@ async fn conversation_of(
         .bind(caller)
         .fetch_optional(&mut **transaction)
         .await?,
+        // A conversation's memory page (A2.16) is that conversation's: a
+        // change to it goes only to reviewers who can read it.
+        "page" => sqlx::query_scalar::<_, Uuid>(
+            "SELECT memory_for_id FROM project_pages \
+             WHERE id = $1 AND memory_for_kind = 'conversation'",
+        )
+        .bind(target_id)
+        .fetch_optional(&mut **transaction)
+        .await?,
         _ => None,
     })
 }

@@ -91,10 +91,46 @@ pub async fn dispatch(
     let Some(call) = registry().get(name).map(|entry| entry.call) else {
         return Answer::error(&OpError::not_found("That operation"));
     };
+    // Boxed, as below: an operation's future is already deep (automations
+    // call operations from inside operations).
+    let (request, input) = match Box::pin(asked_for(state, request, input)).await {
+        Ok(asked) => asked,
+        Err(error) => return Answer::error(&error),
+    };
     // K1.25: every write the operation makes says which credential it came
     // through, and for a run's token, the run and who asked for it.
     let acting = crate::access::acting::Acting::of(&request.caller);
     crate::access::acting::within(acting, call(state, request, input)).await
+}
+
+/// A2.15: any operation may say what it acts on (`context`), and is then
+/// made for that one's asker (`replies::asker`). A run's credential already
+/// says who asked, which `context` doesn't change.
+async fn asked_for(
+    state: &AppState,
+    mut request: DispatchRequest,
+    mut input: Value,
+) -> Result<(DispatchRequest, Value), OpError> {
+    let Some(context) = input
+        .as_object_mut()
+        .and_then(|fields| fields.remove("context"))
+        .filter(|context| !context.is_null())
+    else {
+        return Ok((request, input));
+    };
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(|error| OpError::logged("context", &error.into()))?;
+    let asker =
+        crate::replies::asker::resolve(&mut connection, request.caller.account_id, context).await?;
+    connection
+        .commit()
+        .await
+        .map_err(|error| OpError::logged("context", &error.into()))?;
+    if request.caller.requested_by.is_none() {
+        request.caller.requested_by = asker;
+    }
+    Ok((request, input))
 }
 
 /// A space's key (such as "AWD") in the input's `spaceId` or `projectId`
@@ -595,6 +631,23 @@ async fn pipeline<O: Operation>(
         audited: false,
         after_commit: Vec::new(),
     };
+    // A2.14: a call through the API or an agent tool spends its caller's
+    // budgets (the app's own pages are bounded by people's hands). Before
+    // the call's transaction opens: see `budgets::admit_call`. A read that
+    // spans workspaces is in none, so no workspace's budget counts it.
+    if matches!(ctx.edge, Edge::Mcp { .. } | Edge::PublicApi { .. })
+        && !request.preview
+        && !ctx.workspace_id.is_nil()
+    {
+        Box::pin(crate::budgets::admit_call(
+            &state.pool,
+            ctx.workspace_id,
+            ctx.space_id,
+            ctx.caller.account_id,
+            writes,
+        ))
+        .await?;
+    }
     let mut reservation = None;
     if let Some(key) = key.as_ref()
         && O::IDEMPOTENCY == Idempotency::Dispatcher

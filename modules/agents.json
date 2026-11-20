@@ -11,6 +11,7 @@
   "permissions": ["agents.manage", "agents.manage_any", "hosts.manage", "agents.create"],
   "tools": {
     "agent_list": "query",
+    "agent_scope_get": "describe",
     "agent_template_list": "query",
     "agent_create": "create",
     "agent_managers_set": "change",
@@ -40,6 +41,7 @@
     "agent_action_get": "describe",
     "external_event_poll": "query",
     "event_list": "query",
+    "app_consent_set": "change",
     "event_kind_list": "query",
     "connection_list": "query",
     "connection_create": "create",
@@ -66,7 +68,7 @@
     "/api/v1/events*"
   ],
   "events": { "emits": ["agent.paused", "agent.resumed", "account.managers_changed", "account.ref_changed", "reply.requested", "reply.followup", "reply.cancelled", "schedule.due", "connection.push_disabled", "connection.changed", "schedule.changed", "guards.changed"], "listens": ["message.created", "task.updated", "run.finished"] },
-  "notifications": ["connection_problem", "agent_unresponsive", "budget_warning"],
+  "notifications": ["connection_problem", "agent_unresponsive"],
   "search": [],
   "automations": { "triggers": [], "actions": ["ask_agent"] },
   "things": [],
@@ -75,7 +77,7 @@
   "web": { "folder": "agents" },
   "slots": {
     "pages": ["/messages/agents"],
-    "parts": ["area.agents", "talk.agent_mentions", "workspace.hosts"],
+    "parts": ["area.agents", "talk.agent_mentions", "workspace.hosts", "workspace.budgets"],
     "sidebar": [],
     "home": [],
     "settings": ["project/agents", "workspace/hosts", "account/hosts", "account/webhooks"],

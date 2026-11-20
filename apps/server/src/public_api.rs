@@ -272,10 +272,11 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// An output schema's descriptions cut to their first sentence: the
-/// result's shape is the reference, and the operation's own description and
-/// its arguments say the rest. Kept whole, results take most of the
-/// document.
+/// A schema's descriptions cut to their first sentence: the result's shape
+/// is the reference, and the operation's own description says the rest.
+/// Kept whole, results take most of the document. An argument's first
+/// sentence says what it is; its full text is in the agent tool's schema
+/// (`tools/list`), which is where the longer guidance is read.
 fn brief(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -464,9 +465,13 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     }
     // The shared branches together (paused, started, each refusal) are the
     // same list for most operations: one `oneOf` of them, named once.
-    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+    let (kept, mut shared): (Vec<Value>, Vec<Value>) = branches
         .drain(..)
         .partition(|branch| !is_shared_branch(branch));
+    // What the edge answers before any operation runs (401, 413, 429) is
+    // one more branch of the same list, rather than a response named again
+    // under every path.
+    shared.push(json!({ "$ref": "#/components/schemas/Error" }));
     if shared.len() < 2 {
         branches.extend(kept);
         branches.extend(shared);
@@ -740,6 +745,7 @@ pub(crate) fn document() -> Value {
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
         drop_optional_nulls(&mut input);
+        brief(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()

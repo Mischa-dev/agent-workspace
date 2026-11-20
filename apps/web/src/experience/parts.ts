@@ -66,6 +66,7 @@ export const PART_IDS = [
   'workspace.inbox_views',
   'workspace.runs',
   'workspace.hosts',
+  'workspace.budgets',
 ] as const
 
 export type PartId = (typeof PART_IDS)[number]

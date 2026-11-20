@@ -101,6 +101,33 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .expect("pair");
     assert!(pair["inverse"].is_string(), "{pair}");
 
+    // The definition (what a workspace template keeps) names the rollup's
+    // fields, and writing it again makes the same rollup.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Builds"}),
+    )
+    .await;
+    let kept = described["value"]["definition"]["fields"].clone();
+    let hours = kept
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == "Hours")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        hours["rollup"],
+        json!({"relation": "Tested by", "field": "Hours", "aggregate": "sum"}),
+        "{described}"
+    );
+    let again = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Builds again", "fields": kept}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+
     let written = call(
         "record_write",
         json!({
