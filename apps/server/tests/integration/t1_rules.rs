@@ -54,6 +54,7 @@ async fn field_rules_hold_on_every_way_in() {
                  "rules": {"default": "Nut"}},
                 {"name": "Owner", "type": "person", "rules": {"default": "me"}},
                 {"name": "Added", "type": "date", "rules": {"default": "today"}},
+                {"name": "Note", "type": "text", "rules": {"default": "today"}},
                 {"name": "Price", "type": "number", "rules": {"buildersOnly": true}},
             ],
         }),
@@ -70,6 +71,52 @@ async fn field_rules_hold_on_every_way_in() {
     .await;
     assert_ne!(wrong["outcome"], "ok", "{wrong}");
 
+    // The definition (what a workspace template keeps) has the rules, a
+    // choice's default by its option's name.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Parts"}),
+    )
+    .await;
+    let kept = described["value"]["definition"]["fields"]
+        .as_array()
+        .expect("fields")
+        .clone();
+    let rules_of = |name: &str| {
+        kept.iter()
+            .find(|field| field["name"] == name)
+            .map(|field| field["rules"].clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(rules_of("Kind")["default"], json!("Nut"), "{described}");
+    assert_eq!(
+        rules_of("Price")["buildersOnly"],
+        json!(true),
+        "{described}"
+    );
+    assert_eq!(rules_of("Added")["default"], json!("today"), "{described}");
+
+    // A default whose option was archived since is left out of the
+    // definition, which only writes out active options; the other rules stay.
+    for change in [
+        json!({"projectId": "WORK", "name": "Bins", "fields": [
+            {"name": "Kind", "type": "single_choice", "options": [{"name": "Bolt"}, {"name": "Nut"}],
+             "rules": {"default": "Nut", "required": true}}]}),
+        json!({"projectId": "WORK", "collection": "Bins", "fields": [
+            {"field": "Kind", "options": [{"name": "Bolt"}]}]}),
+    ] {
+        let changed = call("collection_write", change).await;
+        assert_eq!(changed["outcome"], "ok", "{changed}");
+    }
+    let bins = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Bins"}),
+    )
+    .await;
+    let kind = &bins["value"]["definition"]["fields"][0];
+    assert_eq!(kind["rules"]["required"], json!(true), "{bins}");
+    assert!(kind["rules"]["default"].is_null(), "{bins}");
+
     // Defaults fill what's left out; a value given wins.
     let written =
         write(json!([{"title": "Hex bolt", "fields": {"Code": "HEX-1", "Kind": "Bolt"}}])).await;
@@ -83,6 +130,8 @@ async fn field_rules_hold_on_every_way_in() {
         json!(chrono::Utc::now().date_naive().to_string()),
         "{written}"
     );
+    // Only a date field's "today" is a date.
+    assert_eq!(fields["Note"], json!("today"), "{written}");
 
     // Unique ignores case, and holds within one batch.
     for (records, why) in [
@@ -173,6 +222,45 @@ async fn field_rules_hold_on_every_way_in() {
     .await;
     assert!(!status.is_success(), "{status} {refused}");
     assert!(refused.to_string().contains("Price"), "{refused}");
+
+    // A two-way relation whose other side only builders set: setting this
+    // side would set that one, so rita is refused here too.
+    let suppliers = call(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Suppliers",
+               "fields": [{"name": "Supplies", "type": "relation", "target": "record:Parts",
+                           "twoWay": true, "pairName": "Supplied by"}]}),
+    )
+    .await;
+    assert_eq!(suppliers["outcome"], "ok", "{suppliers}");
+    let guarded = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Parts",
+               "fields": [{"field": "Supplied by", "rules": {"buildersOnly": true}}]}),
+    )
+    .await;
+    assert_eq!(guarded["outcome"], "ok", "{guarded}");
+    let suppliers =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM collections WHERE name = 'Suppliers'")
+            .fetch_one(pool)
+            .await
+            .expect("suppliers");
+    let (_, refused) = op(json!({"collection": suppliers, "title": "Acme",
+                                  "fields": {"Supplies": ["Hex bolt M8"]}}))
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(refused.to_string().contains("Supplied by"), "{refused}");
+    let (_, made) = op(json!({"collection": suppliers, "title": "Acme"})).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let paired = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM collection_records WHERE collection_id = $1 \
+         AND field_values ? (SELECT id::text FROM field_definitions WHERE name = 'Supplied by')",
+    )
+    .bind(parts)
+    .fetch_one(pool)
+    .await
+    .expect("paired");
+    assert_eq!(paired, 0, "no part was paired");
 
     // Making a field unique while two records share a value is refused.
     let shared = write(json!([

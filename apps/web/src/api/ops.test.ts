@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { describeError } from '../ui/errorText'
 import { ApiError } from './errors'
 import type { OpErrorOutcome } from './generated/operations'
-import { callOp, newRequestId, OUTCOME_SENTENCES, opKey, opQuery } from './ops'
+import { callOp, heldForReview, newRequestId, OUTCOME_SENTENCES, opKey, opQuery } from './ops'
 
 // The names and inputs are cast: the test is about the call, whichever
 // operations the registry holds.
@@ -147,5 +147,14 @@ describe('useOp with an overlay', () => {
     const shown = renderHook(() => toasts.useToasts())
     expect(shown.result.current.map((toast) => toast.title)).toContain('Someone changed this first')
     toasts.clearToasts()
+  })
+})
+
+describe('heldForReview', () => {
+  it('names the review request a guard holds a write under, and nothing else', () => {
+    expect(heldForReview({ status: 'pending_review', requestId: 'req-1' })).toBe('req-1')
+    expect(heldForReview({ status: 'paused' })).toBeNull()
+    expect(heldForReview({ pageId: 'p', version: 2 })).toBeNull()
+    expect(heldForReview(null)).toBeNull()
   })
 })

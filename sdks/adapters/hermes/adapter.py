@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 PLATFORM = "agent_workspace"
 # Workspace caps a message well above this; long answers stay one message.
 MAX_MESSAGE_LENGTH = 30_000
+# How many waiting requests one pick-up reads (the most inbox_list gives).
+INBOX_PAGE = 50
 
 
 def _runner():
@@ -105,6 +107,11 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         # Requests claimed in a conversation that is still answering an
         # earlier one: each is handed over, in order, once the one before ends.
         self._waiting: Dict[str, list] = {}
+        # Requests stopped while their claim was still on its way.
+        self._cancelled_while_claiming: set = set()
+        # The last pick-up came back full: more may wait behind it.
+        self._backlog = False
+        self._picking_up: Optional[asyncio.Task] = None
 
     @property
     def name(self) -> str:
@@ -143,17 +150,28 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         self._stop.clear()
         self._channel.on("reply.*", self._heard)
         # Requests already waiting first, so a restart misses nothing.
-        try:
-            waiting = await asyncio.to_thread(self._call, "inbox_list", {})
-            for item in (waiting or {}).get("requests") or []:
-                if item.get("status") in ("pending", "claimed"):
-                    asyncio.create_task(self._take(item["requestId"]))
-        except Exception as error:  # noqa: BLE001
-            logger.warning("Agent Workspace: inbox_list failed: %r", error)
+        await self._pick_up_waiting()
         self._reader = threading.Thread(target=self._read, name="agent-workspace-events", daemon=True)
         self._reader.start()
         self._mark_connected()
         return True
+
+    async def _pick_up_waiting(self) -> None:
+        """Claims the requests already waiting. Past one page, it reads again
+        each time a turn ends, until the backlog is gone."""
+        try:
+            waiting = await asyncio.to_thread(self._call, "inbox_list", {"limit": INBOX_PAGE})
+            requests = (waiting or {}).get("requests") or []
+            self._backlog = len(requests) >= INBOX_PAGE
+            for item in requests:
+                if item.get("status") in ("pending", "claimed"):
+                    asyncio.create_task(self._take(item["requestId"]))
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Agent Workspace: inbox_list failed: %r", error)
+
+    def _pick_up_more(self) -> None:
+        if self._backlog and (self._picking_up is None or self._picking_up.done()):
+            self._picking_up = asyncio.ensure_future(self._pick_up_waiting())
 
     def _read(self) -> None:
         try:
@@ -191,12 +209,16 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
             await self._claim_and_hand_over(request_id)
         finally:
             self._claiming.discard(request_id)
+            self._cancelled_while_claiming.discard(request_id)
 
     async def _claim_and_hand_over(self, request_id: str) -> None:
         try:
             claim = await asyncio.to_thread(self._call, "reply_claim", {"requestId": request_id})
         except Exception as error:  # noqa: BLE001  (someone else took it, or it was withdrawn)
             logger.info("Agent Workspace: couldn't claim %s: %r", request_id, error)
+            return
+        if request_id in self._cancelled_while_claiming:
+            logger.info("Agent Workspace: %s was stopped before its turn began", request_id)
             return
         request = claim["request"]
         asked = next(
@@ -255,6 +277,9 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         """A person pressed Stop: the work ends and nothing more is sent."""
         held = self._held.get(request_id)
         if not held:
+            if request_id in self._claiming:
+                # Stop came before the claim's answer: the turn must not start.
+                self._cancelled_while_claiming.add(request_id)
             return
         held.stopped = True
         held.pending = None
@@ -390,6 +415,7 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
 
     def _forget(self, held: Held) -> None:
         self._held.pop(held.request_id, None)
+        self._pick_up_more()
         if self._answering.get(held.conversation_id) == held.request_id:
             self._answering.pop(held.conversation_id, None)
             waiting = self._waiting.get(held.conversation_id) or []

@@ -1623,6 +1623,25 @@ async fn fill(
     }
 
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    // An archive made before pages had records (T1.36) brings pages
+    // without them: each gets its record now, as a new page would. Still
+    // as part of the import, so the record guard lets it in and nothing is
+    // news.
+    sqlx::query("SELECT set_config('aw.importing', 'on', true)")
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query(
+        "SELECT page_record_make(page) FROM project_pages page \
+         JOIN projects space ON space.id = page.project_id \
+         WHERE space.organization_id = $1 \
+           AND NOT EXISTS (SELECT 1 FROM collection_records record WHERE record.id = page.id)",
+    )
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query("SELECT set_config('aw.importing', '', true)")
+        .execute(&mut *connection)
+        .await?;
     lifecycle::finish_import(&mut connection, workspace).await?;
     sqlx::query(
         "UPDATE workspace_transfers SET state = 'succeeded', counts = $2, finished_at = now(), \
