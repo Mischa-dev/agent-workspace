@@ -154,10 +154,10 @@ raising a number.
    `realtime::ephemeral::publish`, never the in-process hub; the realtime
    socket speaks protocol 2 only. (K5 moves the existing ones.)
 6. **Links and events are shared pieces.** Don't create another link table
-   (`*_links`, `*_references`); add a kind to `work_item_links` or
-   `thing_references` until K3's link store lands. A write that other people,
-   agents, webhooks or other tabs should notice enqueues an outbox event in the
-   same transaction.
+   (`*_links`, `*_references`); add a kind to the link store (`links`,
+   written through `links::put_explicit` and read with `links::for_thing`).
+   A write that other people, agents, webhooks or other tabs should notice
+   emits an event (`events::emit`) in the same transaction.
 7. **Every conversation read goes through `conversation_visible_to`.** It is
    the only gate (K1 owns its body; K4 and C1 each own one helper inside it;
    never `CREATE OR REPLACE` it or a helper you don't own). Since K4.4 it is
