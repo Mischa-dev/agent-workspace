@@ -36,6 +36,8 @@ export type AgentUsageLine = { accountId: string; cachedInputTokens: number; con
 
 export type Aggregate = ("sum" | "average" | "min" | "max") | "count" | "count_values" | "count_unique" | "earliest" | "latest" | "percent_checked" | "percent_empty" | "list"
 
+export type Align = "left" | "center" | "right"
+
 export type AnswerEntry = { columns: string[]; durationMs?: number | null; error?: string | null; parameters: unknown; ranAt?: string | null; reviewed: boolean; rowCount: number; rows: unknown[]; running: boolean; truncated: boolean }
 
 export type ArchiveParts = "archive" | "keep"
@@ -82,7 +84,15 @@ export type CarriedValue = { field: string; followsMove?: boolean; targetField: 
 
 export type Category = ("all" | "mentions" | "tasks" | "runs" | "pull_requests") | "threads" | "usage"
 
+export type CellLine = { cell: string; conditionalStyle?: CellStyle | null; display?: string | null; formula?: string | null; kind?: string | null; numberFormat?: string | null; style?: CellStyle | null; value: unknown }
+
+export type CellStyle = { align?: Align | null; bold?: boolean; color?: string | null; fill?: string | null; italic?: boolean; strike?: boolean; underline?: boolean; wrap?: boolean }
+
+export type CellWrite = { cell: string; ifRevision?: number | null; input: string; tab?: string | null }
+
 export type ChangeSetView = { actor?: string | null; actorId: string; createdAt: string; id: string; proposalId?: string | null; thingId: string; thingKind: string; touched: unknown; undoable: boolean; undoes?: string | null; undoneBy?: string | null; updatedAt: string; versionFrom: number; versionTo: number }
+
+export type ChangedCellLine = { cell: string; cleared?: boolean; display?: string | null; formula?: string | null; tab: string; value: unknown }
 
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
 
@@ -104,6 +114,10 @@ export type ClaimSession = { externalRef: string; harness: string; state: string
 
 export type ClaimValue = { claimedAt: string; claimedBy: string; expiresAt: string; handoff?: HandoffNote | null; note?: string | null; taskId: string }
 
+export type CollectionLine = { actsLikeTask?: boolean; archived: boolean; builtin?: string | null; createdAt: string; description?: string; id: string; name: string; position: number; records: number; startStatusId?: string | null; taskStatuses?: string[] | null; titleName: string; updatedAt: string; url: string; version: number }
+
+export type CollectionSummary = { actsLikeTask?: boolean; archived: boolean; builtin?: string | null; createdAt: string; description?: string; id: string; name: string; position: number; records: number; startStatusId?: string | null; taskStatuses?: string[] | null; titleName: string; updatedAt: string; version: number }
+
 export type ColumnWrite = { field: string; hidden?: boolean; width?: number | null }
 
 export type CommentItem = { at: string; author: string; files?: FileSummary[]; id: string; replyToCommentId?: string | null; text: string; via?: string | null }
@@ -111,6 +125,10 @@ export type CommentItem = { at: string; author: string; files?: FileSummary[]; i
 export type CommentLine = { at: string; author?: string | null; authorKind: string; deleted?: boolean; edited?: boolean; id: string; text: string }
 
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
+
+export type ConditionalFormatsWrite = { rules: ConditionalRule[]; tab?: string | null }
+
+export type ConditionalRule = ({ value: unknown; when: "lessThan" } | { value: unknown; when: "greaterThan" } | { value: unknown; when: "atLeast" } | { value: unknown; when: "atMost" } | { value: unknown; when: "equals" } | { value: unknown; when: "notEquals" } | { value: unknown; value2: unknown; when: "between" } | { value: unknown; value2: unknown; when: "notBetween" } | { text: string; when: "textContains" } | { text: string; when: "textDoesNotContain" } | { text: string; when: "textBeginsWith" } | { text: string; when: "textEndsWith" } | { when: "empty" } | { when: "notEmpty" } | { when: "errors" } | { formula: string; when: "formula" } | { percent?: boolean; rank: number; when: "top" } | { percent?: boolean; rank: number; when: "bottom" } | { when: "aboveAverage" } | { when: "belowAverage" } | { when: "duplicates" } | ({ high: string; low: string; mid?: string | null; when: "colorScale" })) & { range: string; style?: RuleStyle }
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
@@ -242,7 +260,11 @@ export type FormSummary = { archived?: boolean; audience: Audience; collectionId
 
 export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[]; intro?: string | null; thanks?: string | null }
 
+export type FormatWrite = { align?: string | null; bold?: boolean | null; clear?: boolean | null; color?: string | null; fill?: string | null; italic?: boolean | null; numberFormat?: string | null; range: string; strike?: boolean | null; tab?: string | null; underline?: boolean | null; wrap?: boolean | null }
+
 export type FormulaView = { result: ResultType; source: string }
+
+export type GroupLine = { count: number; name: string; value?: number | null }
 
 export type GroupView = { description: string; handle: string; id: string; memberCount: number; memberIds?: string[] | null; name: string }
 
@@ -494,6 +516,8 @@ export type ProjectTemplateLine = { archived: boolean; canEdit: boolean; channel
 
 export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; preview: unknown; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
 
+export type ProposedCellLine = { after: string; before: string; cell: string; tab: string }
+
 export type PublicField = { collection?: string | null; description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
 
 export type PublicOption = { color: string; id: string; name: string }
@@ -517,6 +541,14 @@ export type ReactionSummary = { byYou: boolean; count: number; emoji: string; na
 export type RecipeView = { id: string; title: string }
 
 export type Recipients = "owner" | "assignee" | "project_admins"
+
+export type RecordHistory = { history: RecordHistoryEntry[]; number: number }
+
+export type RecordHistoryEntry = { acceptedBy?: string | null; action: string; actor: string; actorId: string; at: string; changes: unknown; id: string; version: number; via?: string | null }
+
+export type RecordLine = { archived?: boolean; fields?: Record<string, unknown>; group?: string | null; id: string; number: number; title: string; updatedAt: string; updatedBy: string; version: number }
+
+export type RecordWriteEntry = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown> | null; record?: string | null; title?: string | null }
 
 export type RecurringView = { collectionId: string; enabled: boolean; every: number; frequency: string; id: string; lastRecordId?: string | null; lastRunAt?: string | null; monthDay?: number | null; nextRunAt?: string | null; ownerId: string; ownerName?: string | null; pausedReason?: string | null; startsOn: string; templateId: string; templateName: string; timeOfDay: string; timezone: string; version: number; weekdays?: number[] }
 
@@ -572,11 +604,17 @@ export type RollupInput = { aggregate: string; field?: string | null; relation: 
 
 export type RollupView = { aggregate: Aggregate; relation: string; result: ResultType; target?: string | null }
 
+export type RowLine = { row: number; values: Record<string, unknown> }
+
+export type RowWrite = { keyColumn?: string | null; tab?: string | null; values: Record<string, unknown> }
+
 export type Rule = { action: RuleAction; enabled: boolean; filter: unknown; id: string; name: string; position: number; version: number }
 
 export type RuleAction = { kind: RuleActionKind; status?: string | null; to?: string | null }
 
 export type RuleActionKind = "accept" | "assign" | "keep"
+
+export type RuleStyle = { bold?: boolean; color?: string | null; fill?: string | null; italic?: boolean; strike?: boolean; underline?: boolean }
 
 export type RulesInput = { buildersOnly?: boolean; default?: unknown; max?: number | null; min?: number | null; pattern?: string | null; required?: boolean; unique?: boolean }
 
@@ -636,7 +674,17 @@ export type SharedLink = { expiresAt?: string | null; id: string }
 
 export type SharedSpace = { id: string; name: string }
 
+export type SheetImport = { csv?: string | null; fileId?: string | null }
+
+export type SheetLine = { archived: boolean; cells: number; createdAt: string; description?: string; id: string; name: string; revision: number; tabs: string[]; updatedAt: string; url: string }
+
 export type SheetMatch = { cell: string; input: string; shown: string; tab: string }
+
+export type SheetSortKey = { column: string; descending?: boolean }
+
+export type SheetSortWrite = { by: SheetSortKey[]; range: string; tab?: string | null }
+
+export type SheetSummary = { archived: boolean; cells: number; createdAt: string; description?: string; id: string; name: string; revision: number; tabs: string[]; updatedAt: string }
 
 export type SheetViewOut = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
 
@@ -692,6 +740,10 @@ export type SuggestionLine = { appliedVersion?: number | null; at: string; autho
 
 export type SuggestionMade = { message: string; status: string; suggestionId: string }
 
+export type TabLine = { conditionalFormats?: ConditionalRule[]; frozenRows: number; id: string; name: string; used?: string; validations?: unknown[] }
+
+export type TabWrite = { add?: string | null; columnWidths?: Record<string, unknown> | null; count?: number | null; deleteColumnsAt?: string | null; deleteRowsAt?: number | null; frozenRows?: number | null; insertColumnsAt?: string | null; insertRowsAt?: number | null; position?: number | null; remove?: boolean | null; rename?: string | null; tab?: string | null }
+
 export type TaskFieldValue = { name: string; type: FieldType; value: unknown }
 
 export type TaskHistory = { entries: TaskHistoryEntry[]; olderCursor?: string | null; total: number }
@@ -717,6 +769,8 @@ export type ThemeDocument = { css?: string; dark: ThemeMode; format: number; lig
 export type ThemeMode = { base: string; tokens?: Record<string, string> }
 
 export type ThemeSummary = { darkBase: string; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThingArgument = { id: string; kind: string }
 
 export type ThingDecl = { fields?: FieldDecl[]; href: string; kind: string; many: string; one: string }
 
@@ -748,11 +802,17 @@ export type UnattributedUsageLine = { accountId: string; cost?: number | null; c
 
 export type UpdatedTask = { archived: boolean; changedFields?: string[]; id: string; index: number; key: string; status: string; url: string; version: number }
 
+export type ValidationRule = ({ allow: "list"; choices: string[] } | { allow: "checkbox" } | ({ allow: "number"; max?: number | null; min?: number | null; whole?: boolean }) | ({ allow: "date"; from?: string | null; to?: string | null }) | ({ allow: "textLength"; max?: number | null; min?: number | null })) & ({ hint?: string | null; range: string; strict?: boolean })
+
+export type ValidationsWrite = { rules: ValidationRule[]; tab?: string | null }
+
 export type View = ("snoozed" | "archived") | "inbox" | "unread"
 
 export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
 export type ViewFilter = { column: string; op: FilterOp; value?: unknown; values?: unknown[] }
+
+export type ViewLine = { id: string; name: string; type: string; version: number }
 
 export type ViewSort = { column: string; descending?: boolean }
 
@@ -989,6 +1049,22 @@ export type ChannelListOutput = { channels: BrowsedChannel[] }
 export type ChannelUpdateInput = { autoJoin?: boolean | null; channelId: string; description?: string | null; expectedVersion?: number | null; topic?: string | null }
 
 export type ChannelUpdateOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+
+export type CollectionCreateInput = { actsLikeTask?: boolean | null; archived?: boolean | null; clientRequestId?: string | null; collection?: string | null; description?: string | null; expectedVersion?: number | null; fields?: FieldWrite[] | null; name?: string | null; position?: number | null; projectId: string; startStatus?: string | null; taskStatuses?: string[] | null; titleName?: string | null; views?: ViewWrite[] | null }
+
+export type CollectionCreateOutput = { changes: string[]; collection: CollectionSummary; created: boolean; idempotentReplay?: boolean; url: string }
+
+export type CollectionGetInput = { collection: string; includeArchived?: boolean | null; projectId: string }
+
+export type CollectionGetOutput = { archivedRecords: number; canBuild: boolean; canEditRecords: boolean; collection: CollectionSummary; definition: Record<string, unknown>; fields: FieldView[]; url: string; views: ViewLine[] }
+
+export type CollectionListInput = { includeArchived?: boolean | null; projectId: string }
+
+export type CollectionListOutput = { canBuild: boolean; collections: CollectionLine[] }
+
+export type CollectionUpdateInput = { actsLikeTask?: boolean | null; archived?: boolean | null; clientRequestId?: string | null; collection?: string | null; description?: string | null; expectedVersion?: number | null; fields?: FieldWrite[] | null; name?: string | null; position?: number | null; projectId: string; startStatus?: string | null; taskStatuses?: string[] | null; titleName?: string | null; views?: ViewWrite[] | null }
+
+export type CollectionUpdateOutput = { changes: string[]; collection: CollectionSummary; created: boolean; idempotentReplay?: boolean; url: string }
 
 export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
 
@@ -1286,9 +1362,17 @@ export type FieldUpdateInput = { archived?: boolean | null; description?: string
 
 export type FieldUpdateOutput = { changedFields: string[]; created: boolean; field: FieldView; note?: string | null }
 
+export type FileDeleteInput = { fileId: string }
+
+export type FileDeleteOutput = { fileId: string; removed: boolean }
+
 export type FileLinkGetInput = { fileId: string }
 
 export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
+export type FileListInput = { messageId?: string | null; taskId?: string | null }
+
+export type FileListOutput = { files: FileSummary[] }
 
 export type FileSourceGetInput = { moduleId: string; ref: string }
 
@@ -1297,6 +1381,10 @@ export type FileSourceGetOutput = { kind: FileKind; mime?: string | null; modifi
 export type FileSourceListInput = { cursor?: string | null; folder?: string | null; moduleId: string }
 
 export type FileSourceListOutput = { items: FileItem[]; nextCursor?: string | null }
+
+export type FileUploadInput = { clientRequestId?: string | null; contentType?: string | null; conversationId?: string | null; dataBase64?: string | null; forComment?: boolean | null; name: string; taskId?: string | null; text?: string | null; thing?: ThingArgument | null }
+
+export type FileUploadOutput = { commentId?: string | null; contentType: string; fileId: string; height?: number | null; idempotentReplay?: boolean; name: string; size: number; width?: number | null }
 
 export type FileUploadFinishInput = { uploadId: string }
 
@@ -1842,6 +1930,14 @@ export type RecordCreateInput = { collection: string; fields?: Record<string, un
 
 export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
 
+export type RecordCreateManyInput = { clientRequestId?: string | null; collection: string; projectId: string; records: RecordWriteEntry[] }
+
+export type RecordCreateManyOutput = { changed: number; collection: string; created: number; idempotentReplay?: boolean; records: RecordLine[]; unchanged: number }
+
+export type RecordListInput = { archived?: string | null; collection: string; cursor?: string | null; fields?: string[] | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; includeHistory?: boolean | null; limit?: number | null; measure?: MeasureOp | null; measureField?: string | null; projectId: string; records?: string[] | null; search?: string | null; sort?: SortWrite[] | null; view?: string | null }
+
+export type RecordListOutput = { collection: string; groups?: GroupLine[]; history?: RecordHistory[]; nextCursor?: string | null; records: RecordLine[]; titleName: string; total: number; value?: number | null }
+
 export type RecordTemplateCreateInput = { collection: string; fields?: Record<string, unknown>; name: string; title: string }
 
 export type RecordTemplateCreateOutput = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
@@ -1857,6 +1953,10 @@ export type RecordTemplateUpdateOutput = { archived?: boolean; collectionId: str
 export type RecordUpdateInput = { archived?: boolean | null; expectedVersion?: number | null; fields?: Record<string, unknown>; note?: string | null; record: string; title?: string | null }
 
 export type RecordUpdateOutput = { changed: string[]; collectionId: string; id: string; number: number; proposalId?: string | null; proposed?: unknown[]; title: string; version: number }
+
+export type RecordUpdateManyInput = { clientRequestId?: string | null; collection: string; projectId: string; records: RecordWriteEntry[] }
+
+export type RecordUpdateManyOutput = { changed: number; collection: string; created: number; idempotentReplay?: boolean; records: RecordLine[]; unchanged: number }
 
 export type RecurringCreateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
@@ -2086,6 +2186,18 @@ export type SheetChartSetInput = { chartId?: string | null; remove?: boolean; sh
 
 export type SheetChartSetOutput = { chartId?: string | null; charts: Chart[] }
 
+export type SheetCreateInput = { archived?: boolean | null; cells?: CellWrite[]; clientRequestId?: string | null; conditionalFormats?: ConditionalFormatsWrite[]; description?: string | null; formats?: FormatWrite[]; import?: SheetImport | null; name?: string | null; projectId: string; rows?: RowWrite[]; sheet?: string | null; sorts?: SheetSortWrite[]; tabs?: TabWrite[]; validations?: ValidationsWrite[] }
+
+export type SheetCreateOutput = { archived: boolean; cellsChanged: number; changed?: ChangedCellLine[]; created: boolean; formatsChanged?: number; id: string; idempotentReplay?: boolean; name: string; proposalId?: string | null; proposed?: ProposedCellLine[]; revision: number; url: string; valuesChanged: number }
+
+export type SheetGetInput = { asRows?: boolean | null; limit?: number | null; offset?: number | null; projectId: string; range?: string | null; sheet: string; tab?: string | null; where?: Record<string, unknown> | null }
+
+export type SheetGetOutput = { canEdit: boolean; cells?: CellLine[]; headers?: string[]; matchingRows?: number | null; namedRanges?: NamedRange[]; range?: string; rows?: RowLine[]; sheet: SheetSummary; tab: string; tabs: TabLine[]; truncated: boolean; url: string }
+
+export type SheetListInput = { includeArchived?: boolean | null; projectId: string }
+
+export type SheetListOutput = { canEdit: boolean; sheets: SheetLine[] }
+
 export type SheetRangeSetInput = { name: string; range?: string | null; remove?: boolean; sheetId: string }
 
 export type SheetRangeSetOutput = { ranges: NamedRange[] }
@@ -2097,6 +2209,10 @@ export type SheetRowAddOutput = { revision: number; row: number; sheetId: string
 export type SheetSearchInput = { inFormulas?: boolean; limit?: number | null; matchCase?: boolean; query: string; sheetId: string; tab?: string | null; wholeCell?: boolean }
 
 export type SheetSearchOutput = { matches: SheetMatch[]; revision: number; truncated: boolean }
+
+export type SheetUpdateInput = { archived?: boolean | null; cells?: CellWrite[]; clientRequestId?: string | null; conditionalFormats?: ConditionalFormatsWrite[]; description?: string | null; formats?: FormatWrite[]; import?: SheetImport | null; name?: string | null; projectId: string; rows?: RowWrite[]; sheet?: string | null; sorts?: SheetSortWrite[]; tabs?: TabWrite[]; validations?: ValidationsWrite[] }
+
+export type SheetUpdateOutput = { archived: boolean; cellsChanged: number; changed?: ChangedCellLine[]; created: boolean; formatsChanged?: number; id: string; idempotentReplay?: boolean; name: string; proposalId?: string | null; proposed?: ProposedCellLine[]; revision: number; url: string; valuesChanged: number }
 
 export type SheetViewCreateInput = { filters?: ViewFilter[]; hiddenColumns?: string[]; name: string; shared?: boolean; sheetId: string; sort?: ViewSort[]; tab?: string | null }
 
@@ -2573,6 +2689,10 @@ export type Operations = {
   channel_leave: { input: ChannelLeaveInput; output: ChannelLeaveOutput }
   channel_list: { input: ChannelListInput; output: ChannelListOutput }
   channel_update: { input: ChannelUpdateInput; output: ChannelUpdateOutput }
+  collection_create: { input: CollectionCreateInput; output: CollectionCreateOutput }
+  collection_get: { input: CollectionGetInput; output: CollectionGetOutput }
+  collection_list: { input: CollectionListInput; output: CollectionListOutput }
+  collection_update: { input: CollectionUpdateInput; output: CollectionUpdateOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
@@ -2647,9 +2767,12 @@ export type Operations = {
   field_create: { input: FieldCreateInput; output: FieldCreateOutput }
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
+  file_delete: { input: FileDeleteInput; output: FileDeleteOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  file_list: { input: FileListInput; output: FileListOutput }
   file_source_get: { input: FileSourceGetInput; output: FileSourceGetOutput }
   file_source_list: { input: FileSourceListInput; output: FileSourceListOutput }
+  file_upload: { input: FileUploadInput; output: FileUploadOutput }
   file_upload_finish: { input: FileUploadFinishInput; output: FileUploadFinishOutput }
   file_upload_start: { input: FileUploadStartInput; output: FileUploadStartOutput }
   follow_list: { input: FollowListInput; output: FollowListOutput }
@@ -2786,10 +2909,13 @@ export type Operations = {
   pull_request_merge: { input: PullRequestMergeInput; output: PullRequestMergeOutput }
   pull_request_refresh: { input: PullRequestRefreshInput; output: PullRequestRefreshOutput }
   record_create: { input: RecordCreateInput; output: RecordCreateOutput }
+  record_create_many: { input: RecordCreateManyInput; output: RecordCreateManyOutput }
+  record_list: { input: RecordListInput; output: RecordListOutput }
   record_template_create: { input: RecordTemplateCreateInput; output: RecordTemplateCreateOutput }
   record_template_list: { input: RecordTemplateListInput; output: RecordTemplateListOutput }
   record_template_update: { input: RecordTemplateUpdateInput; output: RecordTemplateUpdateOutput }
   record_update: { input: RecordUpdateInput; output: RecordUpdateOutput }
+  record_update_many: { input: RecordUpdateManyInput; output: RecordUpdateManyOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
   recurring_record_create: { input: RecurringRecordCreateInput; output: RecurringRecordCreateOutput }
   recurring_record_delete: { input: RecurringRecordDeleteInput; output: RecurringRecordDeleteOutput }
@@ -2847,9 +2973,13 @@ export type Operations = {
   setting_update: { input: SettingUpdateInput; output: SettingUpdateOutput }
   sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }
   sheet_chart_set: { input: SheetChartSetInput; output: SheetChartSetOutput }
+  sheet_create: { input: SheetCreateInput; output: SheetCreateOutput }
+  sheet_get: { input: SheetGetInput; output: SheetGetOutput }
+  sheet_list: { input: SheetListInput; output: SheetListOutput }
   sheet_range_set: { input: SheetRangeSetInput; output: SheetRangeSetOutput }
   sheet_row_add: { input: SheetRowAddInput; output: SheetRowAddOutput }
   sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
+  sheet_update: { input: SheetUpdateInput; output: SheetUpdateOutput }
   sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }
   sheet_view_delete: { input: SheetViewDeleteInput; output: SheetViewDeleteOutput }
   sheet_view_list: { input: SheetViewListInput; output: SheetViewListOutput }

@@ -2238,7 +2238,7 @@ pub(crate) struct TaskCreateArguments {
     pub estimate: Option<f64>,
     /// Custom field values by field name (see field_list), such as
     /// {"Risk": "High", "Owner": "@ana", "Shipped": true}. In a collection
-    /// that acts like a task, its own fields (see collection_describe).
+    /// that acts like a task, its own fields (see collection_get).
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
     /// name or ID (project_open lists them). Left out, it's a plain task.

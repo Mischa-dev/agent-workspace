@@ -405,6 +405,92 @@ async fn guards_hold_tools_called_by_their_old_names() {
     assert_eq!(next["value"]["status"], "pending_review", "{next}");
 }
 
+/// A2.27: a guard on records sees a bulk record write as a change to
+/// records, though the call is aimed at its space; the same for a
+/// collection's and a sheet's writes, under their new and old names.
+#[tokio::test]
+async fn guards_on_records_collections_and_sheets_see_their_writes() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_kinds")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let made = tool(
+        &world,
+        rook,
+        "collection_create",
+        json!({"projectId": space, "name": "Bugs", "fields": [{"name": "Size", "type": "number"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let collection = made["value"]["collection"]["id"].clone();
+    let records = json!({"projectId": space, "collection": collection,
+                         "records": [{"title": "Crash"}]});
+
+    let guard = op(
+        &world,
+        "guard_set",
+        json!({"name": "Records stay put", "action": "deny", "targetKinds": ["record"]}),
+    )
+    .await;
+    for name in ["record_create_many", "record_write"] {
+        let refused = tool(&world, rook, name, records.clone()).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+        assert!(
+            refused.to_string().contains("Records stay put"),
+            "{name}: {refused}"
+        );
+    }
+    // A collection's own change isn't a record's.
+    let described = tool(
+        &world,
+        rook,
+        "collection_update",
+        json!({"projectId": space, "collection": collection, "description": "Triage"}),
+    )
+    .await;
+    assert_eq!(described["outcome"], "ok", "{described}");
+    op(
+        &world,
+        "guard_set",
+        json!({"guardId": guard["guard"]["id"], "remove": true}),
+    )
+    .await;
+    let added = tool(&world, rook, "record_create_many", records).await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Shapes stay put", "action": "deny",
+               "targetKinds": ["collection", "sheet"]}),
+    )
+    .await;
+    for (name, arguments) in [
+        (
+            "collection_update",
+            json!({"projectId": space, "collection": collection, "description": "Later"}),
+        ),
+        (
+            "sheet_create",
+            json!({"projectId": space, "name": "Budget"}),
+        ),
+        ("sheet_write", json!({"projectId": space, "name": "Budget"})),
+    ] {
+        let refused = tool(&world, rook, name, arguments).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+        assert!(
+            refused.to_string().contains("Shapes stay put"),
+            "{name}: {refused}"
+        );
+    }
+}
+
 /// A conversation's memory page is that conversation's: a change to it held
 /// for review goes only to reviewers who can read the conversation, and
 /// with none who can, it is refused rather than shown to the others.

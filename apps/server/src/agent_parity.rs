@@ -1331,52 +1331,52 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/collections",
-            Tool("collection_write"),
+            Tool("collection_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
-            Tool("record_write"),
+            Tool("record_create_many"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
-            Tool("record_write"),
+            Tool("record_update_many"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}",
-            Tool("sheet_write"),
+            Tool("sheet_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/import",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
-            Tool("sheet_write"),
+            Tool("sheet_update"),
         ),
         (
             Post,

@@ -4,7 +4,7 @@
 //! are on (AWD-75), the layout everyone starts with (AWD-66), roles to add or
 //! change and the one new members get (AWD-74), and can bring a starter
 //! project with its channels and collections. A collection comes as the
-//! definition `collection_describe` returns (AWD-90), made when the template
+//! definition `collection_get` returns (AWD-90), made when the template
 //! is used.
 //!
 //! The built-in templates are built-in packages
@@ -137,7 +137,7 @@ pub struct TemplateProject {
     /// Channel names, such as "general".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<String>,
-    /// Collections, each as collection_describe returns it.
+    /// Collections, each as collection_get returns it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub collections: Vec<CollectionDefinition>,
 }
@@ -204,7 +204,7 @@ pub struct TemplateView {
     /// What it sets: modules (ids on), layout (a preset id), roles (name,
     /// description, baseRole, permissions, agentLimit, modulesOff,
     /// defaults), defaultRole, and project (name, key, channels, and
-    /// collections as collection_describe returns them).
+    /// collections as collection_get returns them).
     #[schemars(with = "Value")]
     pub definition: TemplateDefinition,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1184,7 +1184,7 @@ fn key_candidates(key: &str) -> Vec<String> {
 
 /// The starter project's channels and collections, where they aren't there
 /// yet. A collection that is there gets the template's fields and views
-/// added, as collection_write does with a definition.
+/// added, as collection_update does with a definition.
 /// The starter project being filled, and whether this use made it.
 pub(crate) struct StarterProject {
     pub(crate) organization_id: Uuid,
@@ -1325,7 +1325,7 @@ pub(crate) async fn starter_contents(
             ))
         })?;
         // A collection whose records act like tasks is switched on too, as
-        // collection_write would (T1.25).
+        // collection_update would (T1.25).
         let switched = wanted.acts_like_task && !collection.acts_like_task;
         if switched {
             if let Some(refused) =

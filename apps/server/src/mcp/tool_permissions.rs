@@ -15,8 +15,8 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CollectionsBuild, CollectionsEdit, MembersView, RunsLaunch,
-    SheetsEdit, TasksCreate, TasksEdit, TasksView, WhiteboardsEdit,
+    self, ChannelsCreate, MembersView, RunsLaunch, TasksCreate, TasksEdit, TasksView,
+    WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -25,27 +25,12 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("conversation_open", None),
     ("conversation_read", None),
     ("conversation_start", Some(ChannelsCreate)),
-    ("file_upload", Some(ChannelsPost)),
-    ("file_list", None),
     ("file_read", None),
-    ("file_delete", None),
     ("agent_list", None),
     ("inbox_list", None),
     ("session_bind", None),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them
     // is the workflow's permission. Values are set through task_update.
-    // Collections (AWD-90): anyone in the project reads them; records need
-    // collections.edit, and fields and views collections.build.
-    ("collection_list", None),
-    ("collection_describe", None),
-    ("collection_write", Some(CollectionsBuild)),
-    ("record_query", None),
-    ("record_write", Some(CollectionsEdit)),
-    // Sheets (AWD-54): anyone in the project reads them; sheets.edit
-    // changes them.
-    ("sheet_list", None),
-    ("sheet_read", None),
-    ("sheet_write", Some(SheetsEdit)),
     ("thing_open", None),
     ("whiteboard_list", None),
     ("whiteboard_read", None),
@@ -61,22 +46,12 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("external_event_poll", None),
 ];
 
-/// Tools another permission also opens, for the use the handler then
-/// checks itself: uploading to a task needs only "edit tasks" (the handler
-/// checks "post messages" for a conversation upload).
-const ALSO_OPENED_BY: &[(&str, Permission)] = &[("file_upload", TasksEdit)];
-
 /// Whether a caller holding `reach` may use a tool at all. A tool missing
 /// from the table is never reachable.
 pub(super) fn reachable(tool: &str, reach: crate::policy::PermissionSet) -> bool {
     match needs(tool) {
         Ok(None) => true,
-        Ok(Some(permission)) => {
-            reach.contains(permission)
-                || ALSO_OPENED_BY
-                    .iter()
-                    .any(|(name, also)| *name == tool && reach.contains(*also))
-        }
+        Ok(Some(permission)) => reach.contains(permission),
         Err(()) => false,
     }
 }
@@ -123,14 +98,6 @@ mod tests {
     fn archiving_alone_opens_the_task_update_tools() {
         let archive_only = PermissionSet::from_keys(&["tasks.view", "tasks.delete"]);
         assert!(!super::reachable("task_comment", archive_only));
-    }
-
-    #[test]
-    fn editing_tasks_alone_opens_file_upload() {
-        let task_editor = PermissionSet::from_keys(&["tasks.view", "tasks.edit"]);
-        assert!(super::reachable("file_upload", task_editor));
-        let reader = PermissionSet::from_keys(&["tasks.view"]);
-        assert!(!super::reachable("file_upload", reader));
     }
 
     #[test]

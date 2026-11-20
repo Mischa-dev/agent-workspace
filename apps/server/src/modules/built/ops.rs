@@ -187,10 +187,10 @@ pub struct InlineCollection {
     /// What the title column is called (default Name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_name: Option<String>,
-    /// Its fields, as collection_write takes them.
+    /// Its fields, as collection_create takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<definition::FieldWrite>,
-    /// Its views, as collection_write takes them.
+    /// Its views, as collection_create takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<definition::ViewWrite>,
 }

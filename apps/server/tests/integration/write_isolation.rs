@@ -659,9 +659,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_update",
     "bug_report_link_create",
     "bug_report_link_update",
-    "collection_write",
+    "collection_create",
+    "collection_update",
     "proposal_decide",
-    "record_write",
+    "record_create_many",
+    "record_update_many",
     "record_create",
     "record_update",
     "form_create",
@@ -674,7 +676,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_record_delete",
     "conversation_tab_set",
     "button_press",
-    "sheet_write",
+    "sheet_create",
+    "sheet_update",
     "sheet_view_create",
     "sheet_view_update",
     "sheet_view_delete",
@@ -7616,7 +7619,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "expectedVersion": version("field_definitions", bx.field),
         })]),
         mcp_case(
-            "collection_write",
+            "collection_create",
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp own collection",
+                "fields": [{"name": "Net mcp field", "type": "number"}],
+            }),
+            vec![json!({"projectId": b.project, "name": "Net mcp collection"})],
+        ),
+        mcp_case(
+            "collection_update",
             json!({
                 "projectId": a.project,
                 "collection": a.collection,
@@ -7626,7 +7638,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"projectId": a.project, "collection": b.collection, "description": "Net"}),
                 json!({"projectId": b.project, "collection": b.collection, "description": "Net"}),
-                json!({"projectId": b.project, "name": "Net mcp collection"}),
             ],
         )
         .rejecting(vec![
@@ -7649,12 +7660,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             }),
         ]),
         mcp_case(
-            "record_write",
+            "record_create_many",
             json!({
                 "projectId": a.project,
                 "collection": a.collection,
                 "records": [
-                    {"record": "#1", "fields": {"Notes": "Net mcp"}},
                     {"title": "Net mcp record", "fields": {"Tester": "me", "Build": a.task, "Spec": a.page}},
                 ],
             }),
@@ -7664,11 +7674,26 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": b.record, "title": "Net"}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Tester": b.rook}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        mcp_case(
+            "record_update_many",
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "records": [{"record": "#1", "fields": {"Notes": "Net mcp"}}],
+            }),
+            vec![
+                json!({"projectId": a.project, "collection": b.collection, "records": [{"record": "#1", "title": "Net"}]}),
+                json!({"projectId": b.project, "collection": b.collection, "records": [{"record": "#1", "title": "Net"}]}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": b.record, "title": "Net"}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": "#1", "fields": {"Tester": b.rook}}]}),
             // T1.36: a space's Pages records are its own pages only.
             json!({"projectId": a.project, "collection": "Pages", "records": [{"record": b.page, "fields": {}}]}),
         ]),
@@ -7770,7 +7795,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "field": a.collection_button, "record": b.record}),
         ]),
         mcp_case(
-            "sheet_write",
+            "sheet_create",
+            json!({"projectId": a.project, "name": "Net mcp own sheet"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp sheet"})],
+        ),
+        mcp_case(
+            "sheet_update",
             json!({
                 "projectId": a.project,
                 "sheet": a.sheet,
@@ -7781,7 +7811,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": a.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
                 json!({"projectId": b.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
                 json!({"projectId": a.project, "sheet": b.sheet, "archived": true}),
-                json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
         ),
         // C1.16: a sheet's filter views live on its tabs; B's sheet and

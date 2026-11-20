@@ -14,8 +14,8 @@ pub const BUILTIN: &str = "pages";
 
 /// What to say when a write asks to change the Pages collection itself.
 pub const READ_ONLY_MESSAGE: &str = "Pages is the built-in collection of this space's pages: its \
-     name and settings don't change. Add fields to it with collection_write, and set a page's \
-     fields with record_write (the record's ID is the page's).";
+     name and settings don't change. Add fields to it with collection_update, and set a page's \
+     fields with record_update_many (the record's ID is the page's).";
 
 /// What to say when a write asks to add, retitle or archive one of its
 /// records.

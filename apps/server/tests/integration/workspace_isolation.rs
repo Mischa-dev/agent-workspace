@@ -2122,12 +2122,12 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "invite_link_list",
     "job_get",
     "collection_list",
-    "collection_describe",
+    "collection_get",
     "formula_preview",
     "button_get",
-    "record_query",
+    "record_list",
     "sheet_list",
-    "sheet_read",
+    "sheet_get",
     "sheet_search",
     "sheet_view_list",
     "sheet_chart_get",
@@ -2380,7 +2380,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "sheet_read",
+            "sheet_get",
             vec![
                 json!({"projectId": "WORK", "sheet": "Budget"}),
                 json!({"projectId": a.project, "sheet": a.sheet, "range": "A1:B3"}),
@@ -2393,7 +2393,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "collection_describe",
+            "collection_get",
             vec![
                 json!({"projectId": "WORK", "collection": "Playtests"}),
                 json!({"projectId": a.project, "collection": a.collection, "includeArchived": true}),
@@ -2423,7 +2423,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "record_query",
+            "record_list",
             vec![
                 json!({"projectId": "WORK", "collection": "Playtests"}),
                 json!({"projectId": "WORK", "collection": a.collection, "records": ["#1", a.record], "includeHistory": true}),

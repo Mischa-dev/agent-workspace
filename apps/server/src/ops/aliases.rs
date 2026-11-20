@@ -71,7 +71,8 @@ fn whole_workspace_in(mut arguments: JsonObject) -> JsonObject {
     arguments
 }
 
-/// `page_write` marked a retried create in its value.
+/// `page_write` (and the sheet, collection and record `_write` tools)
+/// marked a retried write in its value.
 fn page_written(_canonical: &str, mut value: Value, replayed: bool) -> Value {
     if replayed && let Some(object) = value.as_object_mut() {
         object.insert("idempotentReplay".to_owned(), Value::Bool(true));
@@ -158,6 +159,24 @@ macro_rules! written {
             sunset: None,
         }
     };
+}
+
+/// `record_write` added the entries that name no record and changed the
+/// rest; a batch that names any is an update, which adds the others too.
+fn record_write_runs(arguments: &JsonObject) -> &'static str {
+    let names_one = arguments
+        .get("records")
+        .and_then(Value::as_array)
+        .is_some_and(|records| {
+            records
+                .iter()
+                .any(|entry| entry.get("record").is_some_and(|record| !record.is_null()))
+        });
+    if names_one {
+        "record_update_many"
+    } else {
+        "record_create_many"
+    }
 }
 
 /// The old workspace tools named a project as `projectId`; the operations
@@ -367,8 +386,49 @@ pub const ALIASES: &[Alias] = &[
     run_renamed!("page_comments" => "page_comment_list"),
     run_renamed!("page_comment" => "page_comment_create"),
     run_renamed!("page_suggestions" => "page_suggestion_list"),
-    written!("sheet_write", "sheetId" => "sheet_create", "sheet_update"),
-    written!("collection_write", "collectionId" => "collection_create", "collection_update"),
+    // K2.11: the sheet and collection tools answered in the envelope.
+    run_renamed!("sheet_read" => "sheet_get"),
+    Alias {
+        name: "sheet_write",
+        canonical: |arguments| {
+            if arguments.get("sheet").is_some_and(|named| !named.is_null()) {
+                "sheet_update"
+            } else {
+                "sheet_create"
+            }
+        },
+        runs: &["sheet_create", "sheet_update"],
+        adapt_in: same_in,
+        adapt_out: page_written,
+        sunset: None,
+    },
+    run_renamed!("collection_describe" => "collection_get"),
+    Alias {
+        name: "collection_write",
+        canonical: |arguments| {
+            if arguments
+                .get("collection")
+                .is_some_and(|named| !named.is_null())
+            {
+                "collection_update"
+            } else {
+                "collection_create"
+            }
+        },
+        runs: &["collection_create", "collection_update"],
+        adapt_in: same_in,
+        adapt_out: page_written,
+        sunset: None,
+    },
+    run_renamed!("record_query" => "record_list"),
+    Alias {
+        name: "record_write",
+        canonical: record_write_runs,
+        runs: &["record_create_many", "record_update_many"],
+        adapt_in: same_in,
+        adapt_out: page_written,
+        sunset: None,
+    },
     written!("view_write", "view" => "view_create", "view_update"),
     written!("label_write", "label" => "label_create", "label_update"),
     written!("field_write", "field" => "field_create", "field_update"),

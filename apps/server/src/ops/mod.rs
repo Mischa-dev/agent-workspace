@@ -176,6 +176,10 @@ pub trait Operation: Send + Sync + 'static {
     /// transaction's scope is every workspace the caller belongs to, not
     /// only the one it is called in.
     const ACROSS_WORKSPACES: bool = false;
+    /// The kind of thing the workspace's guards see it change, when its
+    /// target is wider than what it writes (a bulk record write aimed at
+    /// its space is still a change to records).
+    const GUARD_KIND: Option<&'static str> = None;
 
     type Input: DeserializeOwned + Serialize + JsonSchema + Targeted + Send + 'static;
     type Output: Serialize + JsonSchema + Send + 'static;

@@ -1256,7 +1256,7 @@ async fn turned_off_for_maker(pool: &PgPool, link: &ReportLink) -> Result<bool, 
 }
 
 /// A form's answer (AWD-110): one record in its collection, made by
-/// `record_write` as the link's maker, of only the fields the form asks.
+/// `record_create_many` as the link's maker, of only the fields the form asks.
 async fn receive_answer(
     state: &AppState,
     link: &ReportLink,
@@ -1368,14 +1368,14 @@ async fn receive_answer(
     let result = mcp::call_tool_direct(
         state,
         link_principal(link, "Form"),
-        "record_write",
+        "record_create_many",
         arguments,
     )
     .await
     .map_err(|error| match error {
         mcp::DirectCallError::Refused(error) => error,
         mcp::DirectCallError::UnknownTool | mcp::DirectCallError::InvalidArguments(_) => {
-            AppError::Internal("form record_write call")
+            AppError::Internal("form record_create_many call")
         }
     });
     let result = match result {
@@ -1391,7 +1391,7 @@ async fn receive_answer(
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or("none");
-        tracing::warn!(outcome, "form answer refused by record_write");
+        tracing::warn!(outcome, "form answer refused by record_create_many");
         // A value the collection refuses (an option that's gone, a bad
         // date) says why; anything else stays general.
         let message = match outcome {
@@ -1403,8 +1403,24 @@ async fn receive_answer(
         };
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
+    // A call set aside is still `ok` but kept nothing: the maker's account
+    // is paused, or a guard holds record writes for review (and only the
+    // same call made again once it's allowed goes through, which a form's
+    // sender won't make). Neither is an answer received.
+    let set_aside = ["paused", "pendingReview"]
+        .iter()
+        .any(|key| result.get(*key).and_then(Value::as_bool) == Some(true));
+    if set_aside || result.pointer("/value/records").is_none() {
+        give_back_todays_answer(&state.pool, link.id).await?;
+        tracing::warn!(set_aside, "form answer not kept by record_create_many");
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers right now.",
+        ));
+    }
+    // The operation's envelope says a retry was answered from the first call.
     let duplicate = result
-        .pointer("/value/idempotentReplay")
+        .get("replayed")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if duplicate {

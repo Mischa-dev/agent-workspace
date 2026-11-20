@@ -397,7 +397,7 @@ pub struct RecordLine {
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
-    /// What record_write's expectedVersion takes.
+    /// What record_update_many's expectedVersion takes.
     pub version: i64,
     pub updated_at: String,
     /// Who changed it last.
@@ -441,6 +441,7 @@ impl RecordLine {
 /// One change to a record, newest first.
 #[derive(Clone, Debug, FromRow, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "RecordHistoryEntry")]
 pub struct HistoryEntry {
     #[schemars(with = "String")]
     pub id: Uuid,

@@ -120,7 +120,7 @@ pub enum ContentKind {
     Channels,
     /// A built module's definition.
     Module,
-    /// `collection_describe`'s definition.
+    /// `collection_get`'s definition.
     Collection,
     /// A form on a collection, without its link.
     Form,

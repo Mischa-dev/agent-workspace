@@ -38,6 +38,7 @@ pub mod task_like;
 pub mod task_query;
 pub mod task_writes;
 pub mod tasks;
+pub mod tool_ops;
 /// A collection's views and how records are found: the one views engine
 /// (T1.5), kept at their old paths.
 pub use crate::views::{definition as views, query};

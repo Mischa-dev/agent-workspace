@@ -11,8 +11,9 @@
   "permissions": ["sheets.edit", "sheets.comment", "sheets.suggest", "sheets.edit_own"],
   "tools": {
     "sheet_list": "query",
-    "sheet_read": "query",
-    "sheet_write": "change",
+    "sheet_get": "describe",
+    "sheet_create": "create",
+    "sheet_update": "change",
     "sheet_search": "query",
     "sheet_view_list": "query",
     "sheet_view_create": "create",

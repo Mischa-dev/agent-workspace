@@ -21,6 +21,7 @@ macro_rules! tool_op {
             $(home: $home:literal,)?
             $(resource: $resource:expr,)?
             $(audited: $audited:literal,)?
+            $(guard_kind: $guard_kind:literal,)?
             $(shown_once: [$($shown:literal),*],)?
             title: $title:literal,
             description: $description:expr,
@@ -43,6 +44,7 @@ macro_rules! tool_op {
             $(const HOME_WORKSPACE_BY_DEFAULT: bool = $home;)?
             $(const RESOURCE: Option<crate::ops::ResourceAddress> = Some($resource);)?
             $(const SHOWN_ONCE: &'static [&'static str] = &[$($shown),*];)?
+            $(const GUARD_KIND: Option<&'static str> = Some($guard_kind);)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -105,7 +107,25 @@ macro_rules! run_tool {
     }};
 }
 
-pub(crate) use {run_tool, tool_op};
+/// Runs a write tool's command that keeps its own retry key, with the
+/// call's request id, so the key is reserved in the command's transaction
+/// with the write (`Idempotency::Command`). The command's own replay mark
+/// becomes the envelope's; its value is the first answer's.
+macro_rules! keyed {
+    ($call:ident, $command:path, $arguments:expr) => {{
+        let mut arguments = $arguments;
+        arguments.client_request_id =
+            Some(crate::mcp::task_commands::command_request_id($call.ctx));
+        if $call.ctx.request_id.is_some() {
+            $call.key_honoured();
+        }
+        let mut value = crate::ops::wrapped::run_tool!($call, $command, arguments)?;
+        $call.mark_replayed(::std::mem::take(&mut value.idempotent_replay));
+        Ok(value)
+    }};
+}
+
+pub(crate) use {keyed, run_tool, tool_op};
 
 /// The space a credential was made in (`$1`, an MCP secret or an app's
 /// grant, held by `$2`): where a call naming none acted before operations.
