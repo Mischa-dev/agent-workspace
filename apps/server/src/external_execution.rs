@@ -869,5 +869,5 @@ fn request_href(project_id: Uuid, request_id: Uuid) -> String {
         project_id,
         crate::addresses::Place::ExternalRequest(request_id),
     )
-    .legacy_path()
+    .href()
 }

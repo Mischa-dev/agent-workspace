@@ -908,7 +908,15 @@ async fn take_new(
             } else {
                 ContentKind::Page
             };
-            crate::memory::update_page(tx, who.writer, id, &apply::page_input(kind, body)).await?;
+            // A page moved out of the package's space since reads as missing.
+            crate::memory::update_page(
+                tx,
+                who.writer,
+                space()?,
+                id,
+                &apply::page_input(kind, body),
+            )
+            .await?;
             Ok(true)
         }
         "agent" => {

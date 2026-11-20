@@ -794,7 +794,7 @@ async fn import_view(
     Ok(ImportView {
         href: crate::addresses::with_query(
             crate::addresses::Target::space(record.project_id, crate::addresses::Place::Tasks)
-                .legacy_path(),
+                .href(),
             "sort=updated",
         ),
         options: record.options(),

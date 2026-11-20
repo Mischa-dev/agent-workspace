@@ -522,15 +522,28 @@ async fn put_file_http(
         return Err(AppError::Validation("mimeType"));
     }
     let data = store::decode_data_url(&upload.data_url, &upload.mime_type)?;
+    // Only for a board the caller may edit, the bytes go to the file store
+    // before the write's transaction opens; it checks again.
+    let workspace = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        access(&mut transaction, &caller, id, true).await?;
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM whiteboards WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await?
+    };
+    let staged = crate::files::stage_content(&state, workspace, &data).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     access(&mut transaction, &caller, id, true).await?;
     let stored = store::put_file(
+        &state,
         &mut transaction,
         &caller,
         id,
         &upload.id,
         &upload.mime_type,
         &data,
+        &staged,
     )
     .await?;
     transaction.commit().await?;
@@ -552,7 +565,7 @@ async fn get_file_http(
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
-    Ok(Json(store::get_file(&state.pool, id, &file_id).await?))
+    Ok(Json(store::get_file(&state, id, &file_id).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -577,7 +590,7 @@ async fn preview_http(
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
     let elements = store::live_elements(&state.pool, id).await?;
-    let files = store::files_for(&state.pool, id, &elements).await?;
+    let files = store::files_for(&state, id, &elements).await?;
     let rendered = render::svg(
         &elements,
         &files,
@@ -616,7 +629,14 @@ async fn restore_http(
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
-    let outcome = store::restore_revision(&mut transaction, &caller, id, revision).await?;
+    let outcome = store::restore_revision(
+        &crate::files::FileStore::from_config(&state.config),
+        &mut transaction,
+        &caller,
+        id,
+        revision,
+    )
+    .await?;
     super::audit(
         &mut transaction,
         &caller,

@@ -562,6 +562,7 @@ struct LinkedThreadView {
     parent_channel_name: String,
     archived_at: Option<String>,
     newest_run_state: Option<String>,
+    #[serde(deserialize_with = "crate::addresses::deserialize_anywhere")]
     href: String,
 }
 
@@ -577,6 +578,7 @@ struct LinkedRepositoryView {
     trusted: bool,
     available: bool,
     archived_at: Option<String>,
+    #[serde(deserialize_with = "crate::addresses::deserialize_anywhere")]
     href: String,
 }
 
@@ -700,6 +702,7 @@ struct WorkItemReferenceView {
     title: String,
     status_category: String,
     archived_at: Option<String>,
+    #[serde(deserialize_with = "crate::addresses::deserialize_anywhere")]
     href: String,
 }
 
@@ -3213,7 +3216,7 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
         title: row.title,
         status_category: row.status_category,
         archived_at: row.archived_at,
-        href: crate::addresses::Target::task(project_id, row.id).legacy_path(),
+        href: crate::addresses::Target::task(project_id, row.id).href(),
     }
 }
 
@@ -4466,10 +4469,9 @@ fn message_content_error(_error: MessageContentError) -> AppError {
 }
 
 fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {
-    let location = HeaderValue::from_str(
-        &crate::addresses::Target::task(item.project_id, item.id).legacy_path(),
-    )
-    .map_err(|_| AppError::Internal("construct Work Item Location header"))?;
+    let location =
+        HeaderValue::from_str(&crate::addresses::Target::task(item.project_id, item.id).href())
+            .map_err(|_| AppError::Internal("construct Work Item Location header"))?;
     Ok((status, [(LOCATION, location)], Json(item)).into_response())
 }
 

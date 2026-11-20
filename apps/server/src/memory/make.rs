@@ -64,6 +64,14 @@ pub struct PageMakeInput {
     /// new page takes their place; change_undo puts them back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub r#move: bool,
+    /// A whiteboard: the page has a heading per frame, with the notes on
+    /// the board (labelled shapes and texts) as bullets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whiteboard_id: Option<IdRef>,
+    /// With messages or a threadId: also say in that conversation that you
+    /// made them into this page.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub say_so: bool,
 }
 
 impl Targeted for PageMakeInput {
@@ -80,7 +88,10 @@ impl Targeted for PageMakeInput {
             (None, Some(message), ..) => Target::thing("message", message.id()),
             (None, None, Some(thread), _) => Target::thing("conversation", thread.id()),
             (None, None, None, Some(page)) => Target::thing("page", page.id()),
-            (None, None, None, None) => Target::Workspace(None),
+            (None, None, None, None) => match self.whiteboard_id {
+                Some(board) => Target::thing("whiteboard", board.id()),
+                None => Target::Workspace(None),
+            },
         }
     }
 }
@@ -107,9 +118,10 @@ impl Operation for PageMake {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Make a page from messages or blocks";
     const DESCRIPTION: &'static str = "Make a page from messages (quoted in order, with a link \
-        back), a whole thread, or blocks of another page (copied, or moved so a link to the new \
-        page takes their place; change_undo puts them back). The page shows what it was made \
-        from. From a DM or group, name the space.";
+        back), a whole thread, blocks of another page (copied, or moved so a link to the new \
+        page takes their place; change_undo puts them back), or a whiteboard (a heading per \
+        frame, its notes as bullets). The page shows what it was made from; with saySo the \
+        conversation says you made it. From a DM or group, name the space.";
     const EMITS: &'static [&'static str] = &["page.updated"];
 
     type Input = PageMakeInput;
@@ -118,11 +130,13 @@ impl Operation for PageMake {
     async fn run(call: &mut OpCall<'_>, input: PageMakeInput) -> Result<PageMade, OpError> {
         let sources = usize::from(!input.messages.is_empty())
             + usize::from(input.thread_id.is_some())
-            + usize::from(input.page_id.is_some());
+            + usize::from(input.page_id.is_some())
+            + usize::from(input.whiteboard_id.is_some());
         if sources != 1 {
             return Err(OpError::invalid(
                 "messages",
-                "Make a page from one thing: messages, a threadId, or a pageId with blocks.",
+                "Make a page from one thing: messages, a threadId, a pageId with blocks, or a \
+                 whiteboardId.",
             ));
         }
         let space_id = call.ctx.space_id.ok_or_else(|| {
@@ -134,16 +148,27 @@ impl Operation for PageMake {
         let workspace_id = call.ctx.workspace_id;
         let writer = Writer::from(call.ctx);
         let caller = call.ctx.caller.clone();
+        let board_caller = crate::whiteboards::Caller::from(call.ctx);
         let addresses = Addresses::of(call.state);
         let tx = call.tx().await?;
         reach_source(tx, &caller, workspace_id, &input).await?;
+        // The conversation the messages are in, and the one message when it
+        // was one, for the line that says so (C1.25).
+        let mut said_in: Option<(Uuid, Option<Uuid>)> = None;
         let made = if let Some(page_id) = input.page_id {
             from_blocks(tx, writer, page_id.id(), &input.blocks).await?
+        } else if let Some(board) = input.whiteboard_id {
+            from_board(tx, &board_caller, board.id()).await?
         } else {
             let quoted = match input.thread_id {
                 Some(thread) => thread_messages(tx, writer.actor_id, thread.id()).await?,
                 None => picked_messages(tx, writer.actor_id, &input.messages).await?,
             };
+            if let [one] = quoted.as_slice() {
+                said_in = Some((one.conversation_id, Some(one.id)));
+            } else if let Some(first) = quoted.first() {
+                said_in = Some((first.conversation_id, None));
+            }
             quote(addresses, &quoted)?
         };
         let title_seed = input
@@ -165,6 +190,19 @@ impl Operation for PageMake {
             .execute(&mut **tx)
             .await
             .map_err(AppError::from)?;
+        if let (true, Some((conversation, message))) = (input.say_so, said_in) {
+            crate::conversations::system_entries::post(
+                tx,
+                conversation,
+                &crate::conversations::system_entries::SystemEvent::MadeInto {
+                    actor_id: writer.actor_id,
+                    thing_kind: "page".to_owned(),
+                    thing_id: id,
+                    message_id: message,
+                },
+            )
+            .await?;
+        }
         let path = addresses.in_workspace(workspace_id, &Address::page(space_id, id));
         let source_version = match (input.page_id, input.r#move) {
             (Some(source), true) => Some(
@@ -227,7 +265,14 @@ async fn reach_source(
             },
             "That page",
         ),
-        (None, None, None) => return Ok(()),
+        (None, None, None) => match input.whiteboard_id {
+            Some(board) => (
+                Target::thing("whiteboard", board.id()),
+                Need::SEE,
+                "That board",
+            ),
+            None => return Ok(()),
+        },
     };
     let located =
         crate::ops::target::locate(tx, &source, caller.account_id, Some(workspace_id)).await?;
@@ -239,6 +284,37 @@ async fn reach_source(
         .await?
         .map(|_| ())
         .map_err(|_| OpError::not_found(what))
+}
+
+/// A board as a page: its title, and a heading per frame with its notes as
+/// bullets (C1.32). A board the caller can't see is not found.
+async fn from_board(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &crate::whiteboards::Caller,
+    board_id: Uuid,
+) -> Result<Made, OpError> {
+    crate::whiteboards::access(tx, caller, board_id, false)
+        .await
+        .map_err(|_| OpError::not_found("That board"))?;
+    let title = sqlx::query_scalar::<_, String>("SELECT title FROM whiteboards WHERE id = $1")
+        .bind(board_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(AppError::from)?;
+    let elements = crate::whiteboards::store::load_rows(tx, board_id).await?;
+    let sections = crate::whiteboards::outline::sections(&elements);
+    if sections.is_empty() {
+        return Err(OpError::invalid(
+            "whiteboardId",
+            "That board has nothing written on it yet.",
+        ));
+    }
+    Ok(Made {
+        title,
+        body: crate::whiteboards::outline::markdown(&sections),
+        from: board_id,
+        blocks: Vec::new(),
+    })
 }
 
 /// What a page is made of: its first title, its Markdown, the thing it

@@ -99,9 +99,12 @@ async fn mentions_reach_the_person_once_and_follow_the_message() {
     );
     assert_eq!(item["read"], false);
     assert_eq!(item["count"], 1);
-    assert_eq!(
-        item["href"],
-        format!("/projects/{project}/channels/{general}#message-{first}")
+    assert!(
+        item["href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.ends_with(&format!("/s/{project}/chat/{general}#message-{first}"))),
+        "{item}"
     );
     assert_eq!(page["unreadCount"], 1);
     assert_eq!(attention(&setup, &mara_browser, &project).await, 1);
@@ -242,7 +245,7 @@ async fn private_conversations_notify_only_people_inside() {
         items(&page)[0]["href"]
             .as_str()
             .expect("href")
-            .starts_with(&format!("/messages/{group}#message-"))
+            .starts_with(&format!("/w/-/dm/{group}#message-"))
     );
     assert_eq!(items(&page)[0]["projectName"], "Messages");
     let item = items(&page)[0].clone();
@@ -310,9 +313,12 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     assert_eq!(items(&page).len(), 1, "{page}");
     assert_eq!(items(&page)[0]["kind"], "assigned");
     assert_eq!(items(&page)[0]["title"], "Owner assigned you TSK-1");
-    assert_eq!(
-        items(&page)[0]["href"],
-        format!("/projects/{project}/work-items/{task}")
+    assert!(
+        items(&page)[0]["href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.ends_with(&format!("/s/{project}/tasks/{task}"))),
+        "{page}"
     );
 
     // Read it, so the comment is what brings the count back.
@@ -788,7 +794,7 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
         .filter(|item| {
             item["href"]
                 .as_str()
-                .is_some_and(|href| href.starts_with(&format!("/messages/{group}")))
+                .is_some_and(|href| href.starts_with(&format!("/w/-/dm/{group}")))
         })
         .collect::<Vec<_>>();
     assert_eq!(in_group.len(), 1, "{page}");

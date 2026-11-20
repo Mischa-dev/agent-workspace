@@ -603,6 +603,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "data_query_update",
     "decision_record",
     "page_make",
+    "page_file_upload",
+    "page_move",
     "environment_archive",
     "environment_check",
     "environment_create",
@@ -666,6 +668,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_view_update",
     "sheet_view_delete",
     "sheet_range_set",
+    "sheet_chart_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -821,6 +824,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "view_update",
     "whiteboard_create",
     "whiteboard_duplicate",
+    "whiteboard_to_tasks",
+    "whiteboard_ask",
+    "sheet_row_add",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -7675,6 +7681,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "template": b.record_template,
                    "clientRequestId": "net-from-template-cross"}),
         ]),
+        // C2.22: a sheet row from a message, only into a sheet here and
+        // only from a message here.
+        mcp_case(
+            "sheet_row_add",
+            json!({"sheetId": a.sheet, "fromMessageId": a.message}),
+            vec![json!({"sheetId": b.sheet, "values": {"Item": "Net"}})],
+        )
+        .rejecting(vec![
+            json!({"sheetId": a.sheet, "fromMessageId": b.message}),
+        ]),
         // T1.41: a record changed (or a change proposed) only here.
         mcp_case(
             "record_update",
@@ -7779,6 +7795,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sheet_range_set",
             json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
             vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
+        // C1.18: B's sheet can't be given a chart from A.
+        mcp_case(
+            "sheet_chart_set",
+            json!({"sheetId": a.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart"}),
+            vec![json!({"sheetId": b.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart-b"})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
@@ -8034,7 +8056,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
-        ),
+        )
+        // C2.22: a sticky is made only from a message here.
+        .rejecting(vec![json!({"whiteboardId": a.whiteboard, "fromMessageId": b.message,
+            "operations": [{"op": "add", "type": "rectangle", "id": "netmsg", "text": "Net"}]})]),
         // C1.11: a proposal goes only on a board the caller can see.
         mcp_case(
             "whiteboard_propose",
@@ -8063,6 +8088,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "title": "Net mcp copy"}),
             vec![json!({"whiteboardId": b.whiteboard, "title": "Net mcp copy"})],
         ),
+        // C1.32: B's board's notes don't become tasks in A, nor A's in B.
+        mcp_case(
+            "whiteboard_to_tasks",
+            json!({"whiteboardId": a.whiteboard, "clientRequestId": "net-board-tasks"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "clientRequestId": "net-board-tasks-b"}),
+                json!({"whiteboardId": b.whiteboard, "spaceId": a.project, "clientRequestId": "net-board-tasks-c"}),
+                json!({"whiteboardId": a.whiteboard, "spaceId": b.project, "clientRequestId": "net-board-tasks-d"}),
+            ],
+        )
+        .without_own("A's board has no notes; notes into tasks are checked in w16_whiteboards"),
+        // C1.31: nobody asks about B's board from A, or asks B's account
+        // about A's board.
+        mcp_case(
+            "whiteboard_ask",
+            json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": ax.wren,
+                   "question": "Net?"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+                json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+            ],
+        )
+        .without_own("A's board has no elements; asking is checked in discussion and privacy_inside_workspace"),
         mcp_case(
             "whiteboard_link",
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": a.subtask}),
@@ -8318,7 +8368,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
             json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
+            // C1.32: nor from B's board.
+            json!({"whiteboardId": b.whiteboard, "projectId": a.project, "clientRequestId": "net-page-make-e"}),
         ]),
+        // C1.33: a file kept on B's page can't come from A.
+        mcp_case(
+            "page_file_upload",
+            json!({"pageId": a.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file"}),
+            vec![json!({"pageId": b.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file-b"})],
+        ),
+        // C1.37: B's page can't be moved, and A's page can't be moved into B.
+        mcp_case(
+            "page_move",
+            json!({"pageId": a.page, "toSpaceId": a.project, "expectedVersion": 1}),
+            vec![
+                json!({"pageId": b.page, "toSpaceId": a.project, "expectedVersion": version("project_pages", &b.page)}),
+                json!({"pageId": a.page, "toSpaceId": b.project, "expectedVersion": version("project_pages", &a.page)}),
+            ],
+        )
+        .without_own("moving A's page away would leave the cases after it without it; moves are checked in w20_files"),
         mcp_case(
             "task_link_many",
             json!({"links": [{"taskId": a.subtask, "blockedBy": [sp.task]}]}),

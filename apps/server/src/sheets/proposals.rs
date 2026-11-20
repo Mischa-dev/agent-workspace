@@ -7,8 +7,9 @@
 //! formula lands exactly where the real write would put it. Accepting
 //! applies the chosen cells as the author's write, and is refused when any
 //! of them changed since, so it never undoes a change the author hadn't
-//! seen. Only cell contents can be proposed; tabs, rows and looks need
-//! edit access.
+//! seen. Rows and columns inserted or deleted later move a waiting
+//! proposal's cells with them (a deleted cell can't be accepted). Only cell
+//! contents can be proposed; tabs, rows and looks need edit access.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Postgres, Transaction};
@@ -39,6 +40,9 @@ pub struct ProposedCell {
     pub before: String,
     /// The input it proposes; empty clears the cell.
     pub after: String,
+    /// Its row or column was deleted since it was proposed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
 }
 
 impl ProposedCell {
@@ -145,6 +149,7 @@ pub async fn propose(
                 column: cell.column,
                 before,
                 after,
+                gone: false,
             });
         }
     }
@@ -197,6 +202,7 @@ pub async fn propose(
         author.actor_id,
     )
     .await?;
+    crate::proposals::announce_fact(transaction, id, false).await?;
     Ok(Proposed::Made { id, cells })
 }
 
@@ -291,6 +297,13 @@ pub async fn decide(
                 )));
             }
             for cell in &chosen {
+                if cell.gone {
+                    return Ok(Err(Refusal::Stale(format!(
+                        "{} on {} was deleted since it was proposed.",
+                        cell.address(),
+                        cell.tab
+                    ))));
+                }
                 let now = sqlx::query_scalar::<_, Option<String>>(
                     "SELECT (SELECT input FROM sheet_cells \
                               WHERE tab_id = tab.id AND row_number = $3 AND column_number = $4) \
@@ -376,6 +389,84 @@ pub async fn decide(
     Ok(Ok(Decided { status, version }))
 }
 
+/// Moves the cells of `sheet_id`'s waiting proposals on `tab_id` with the
+/// rows and columns a write inserted or deleted, in the write's
+/// transaction, so accepting one later sets the cells the author meant. A
+/// cell whose row or column went stays in its place in the list (parts are
+/// numbered by it) and can't be accepted.
+pub async fn follow_moves(
+    connection: &mut sqlx::PgConnection,
+    sheet_id: Uuid,
+    tab_id: Uuid,
+    moves: &[crate::discussion::anchors::GridMove],
+) -> Result<(), AppError> {
+    if moves.is_empty() {
+        return Ok(());
+    }
+    let waiting = sqlx::query_as::<_, (Uuid, sqlx::types::Json<Vec<ProposedCell>>)>(
+        "SELECT id, change -> 'cells' FROM proposals \
+         WHERE thing_kind = 'sheet' AND thing_id = $1 AND status = 'pending' \
+           AND change -> 'cells' @> jsonb_build_array(jsonb_build_object('tabId', $2::text)) \
+         ORDER BY id FOR UPDATE",
+    )
+    .bind(sheet_id)
+    .bind(tab_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    for (id, sqlx::types::Json(mut cells)) in waiting {
+        if !move_cells(&mut cells, tab_id, moves) {
+            continue;
+        }
+        sqlx::query(
+            "UPDATE proposals SET change = jsonb_set(change, '{cells}', $2::jsonb), \
+                    updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(serde_json::to_value(&cells).map_err(|_| AppError::Internal("proposed cells"))?)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Moves the cells on `tab_id` (see [`follow_moves`]); whether any moved.
+fn move_cells(
+    cells: &mut [ProposedCell],
+    tab_id: Uuid,
+    moves: &[crate::discussion::anchors::GridMove],
+) -> bool {
+    let mut moved = false;
+    for cell in cells
+        .iter_mut()
+        .filter(|cell| cell.tab_id == tab_id && !cell.gone)
+    {
+        // Anchors count from 0; cells from 1.
+        let anchor = serde_json::json!({
+            "kind": "cell",
+            "row": i64::from(cell.row) - 1,
+            "column": i64::from(cell.column) - 1,
+        });
+        let place = crate::discussion::anchors::follow(&anchor, moves).and_then(|anchor| {
+            let row = i32::try_from(anchor.get("row")?.as_i64()? + 1).ok()?;
+            let column = i32::try_from(anchor.get("column")?.as_i64()? + 1).ok()?;
+            Some((row, column))
+        });
+        match place {
+            Some((row, column)) if (row, column) == (cell.row, cell.column) => {}
+            Some((row, column)) => {
+                cell.row = row;
+                cell.column = column;
+                moved = true;
+            }
+            None => {
+                cell.gone = true;
+                moved = true;
+            }
+        }
+    }
+    moved
+}
+
 /// Tells the sheet's readers its proposals changed (ids only).
 async fn announce(
     transaction: &mut Transaction<'_, Postgres>,
@@ -397,4 +488,66 @@ async fn announce(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discussion::anchors::GridMove;
+
+    fn cell(tab_id: Uuid, row: i32, column: i32) -> ProposedCell {
+        ProposedCell {
+            tab_id,
+            tab: "Plan".to_owned(),
+            row,
+            column,
+            before: String::new(),
+            after: "x".to_owned(),
+            gone: false,
+        }
+    }
+
+    #[test]
+    fn waiting_cells_move_with_rows_and_columns() {
+        let tab = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        let mut cells = vec![
+            cell(tab, 5, 2),
+            cell(tab, 2, 2),
+            cell(other, 5, 2),
+            cell(tab, 7, 1),
+        ];
+        // Two rows inserted above row 4 (anchors count from 0), then row 9 deleted.
+        let moves = [
+            GridMove {
+                rows: true,
+                insert: true,
+                at: 3,
+                count: 2,
+            },
+            GridMove {
+                rows: true,
+                insert: false,
+                at: 8,
+                count: 1,
+            },
+        ];
+        assert!(move_cells(&mut cells, tab, &moves));
+        assert_eq!(
+            (cells[0].row, cells[0].column, cells[0].gone),
+            (7, 2, false)
+        );
+        assert_eq!((cells[1].row, cells[1].gone), (2, false));
+        assert_eq!((cells[2].row, cells[2].gone), (5, false));
+        // Row 7 became 9, which the delete took.
+        assert!(cells[3].gone);
+        // A column inserted to the right of everything moves nothing.
+        let far = [GridMove {
+            rows: false,
+            insert: true,
+            at: 20,
+            count: 1,
+        }];
+        assert!(!move_cells(&mut cells, tab, &far));
+    }
 }

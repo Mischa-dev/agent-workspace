@@ -86,6 +86,10 @@ export type ChangeSetView = { actor?: string | null; actorId: string; createdAt:
 
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
 
+export type Chart = { id: string; source: string; style: string; title: string }
+
+export type ChartPoint = { label: string; value: number }
+
 export type ChartStyle = ("bar" | "line" | "donut") | "number"
 
 export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; style?: ChartStyle | null }
@@ -254,7 +258,7 @@ export type HandoffNote = { at: string; by: string; note: string; via?: string |
 
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
-export type HistoryEntry = { acceptedBy?: string | null; actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+export type HistoryEntry = { acceptedBy?: string | null; actor?: string | null; actorId?: string | null; at: string; changeSetId?: string | null; changed: string[]; requestedBy?: string | null; requestedById?: string | null; runId?: string | null; summary: string; version: number; via?: string | null }
 
 export type HookDeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
 
@@ -344,6 +348,8 @@ export type LinkedTask = { id: string; key: string; status: string; title: strin
 
 export type LinkedThread = { id: string; name: string; url: string }
 
+export type MadeTask = { elementId: string; id: string; key: string; title: string }
+
 export type ManifestSummary = { accountName: string; description: string; digest: string; events: string[]; frameOrigins: string[]; key: string; kinds: string[]; name: string; operations: OperationSummary[]; panels: PanelSummary[]; publisher?: string | null; scopes: ScopeView[]; version: string }
 
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
@@ -423,6 +429,8 @@ export type OwnerView = { id: string; kind: string; name: string }
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
 
 export type PackageTarget = "space" | "workspace"
+
+export type PageCrumbLine = { id: string; title: string }
 
 export type PageEditInput = { blockId?: string | null; hash?: string | null; markdown?: string | null; op: string; position?: number | null }
 
@@ -734,7 +742,7 @@ export type TriageAction = "accept" | "decline" | "duplicate" | "snooze"
 
 export type TriagedTask = { snoozedUntil?: string | null; status: string; taskId: string; version: number }
 
-export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ collectionId: string; filters?: FilterWrite[]; kind: "record_matches"; viewId?: string | null }) | ({ collectionId: string; field: string; filters?: FilterWrite[]; kind: "field_changed"; to?: string[]; viewId?: string | null }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ eventType?: string | null; kind: "module_event" }) | { hookId: string; kind: "incoming_hook" } | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
+export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ collectionId: string; filters?: FilterWrite[]; kind: "record_matches"; viewId?: string | null }) | ({ collectionId: string; field: string; filters?: FilterWrite[]; kind: "field_changed"; to?: string[]; viewId?: string | null }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ eventType?: string | null; kind: "module_event" }) | ({ kind: "comment_posted"; thingId?: string | null; thingKind?: string | null }) | ({ kind: "proposal_made"; thingId?: string | null; thingKind?: string | null }) | { hookId: string; kind: "incoming_hook" } | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
@@ -1690,21 +1698,29 @@ export type PageCommentUpdateInput = { commentId: string; delete?: boolean | nul
 
 export type PageCommentUpdateOutput = { commentId: string; threadId: string; url: string }
 
-export type PageCreateInput = { archived?: boolean | null; body?: string | null; clientRequestId?: string | null; expectedVersion?: number | null; fromTemplateId?: string | null; isGuide?: boolean | null; isTemplate?: boolean | null; note?: string | null; pageId?: string | null; pinToConversationId?: string | null; projectId?: string | null; restoreVersion?: number | null; skillDescription?: string | null; threadId?: string | null; title?: string | null }
+export type PageCreateInput = { archived?: boolean | null; body?: string | null; clientRequestId?: string | null; expectedVersion?: number | null; fromTemplateId?: string | null; isGuide?: boolean | null; isTemplate?: boolean | null; note?: string | null; pageId?: string | null; parentPageId?: string | null; pinToConversationId?: string | null; projectId?: string | null; restoreVersion?: number | null; skillDescription?: string | null; threadId?: string | null; title?: string | null }
 
-export type PageCreateOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; isGuide: boolean; isTemplate?: boolean; openComments?: number; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
+export type PageCreateOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; inside?: PageCrumbLine[]; isGuide: boolean; isTemplate?: boolean; openComments?: number; pagesInside?: PageCrumbLine[]; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
+
+export type PageFileUploadInput = { contentType?: string | null; dataBase64?: string | null; name: string; pageId: string; text?: string | null }
+
+export type PageFileUploadOutput = { contentType: string; embed: string; fileId: string; name: string; size: number }
 
 export type PageGetInput = { pageId: string; version?: number | null }
 
-export type PageGetOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; isGuide: boolean; isTemplate?: boolean; openComments?: number; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
+export type PageGetOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; inside?: PageCrumbLine[]; isGuide: boolean; isTemplate?: boolean; openComments?: number; pagesInside?: PageCrumbLine[]; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
 
 export type PageListInput = { includeArchived?: boolean | null; projectId: string }
 
 export type PageListOutput = { pages: PageLineValue[] }
 
-export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null }
+export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; saySo?: boolean; spaceId?: string | null; threadId?: string | null; title?: string | null; whiteboardId?: string | null }
 
 export type PageMakeOutput = { id: string; sourceVersion?: number | null; spaceId: string; title: string; url: string }
+
+export type PageMoveInput = { expectedVersion: number; pageId: string; parentPageId?: string | null; toSpaceId: string }
+
+export type PageMoveOutput = { id: string; spaceId: string; version: number }
 
 export type PageSuggestionDecideInput = { decision: string; pageId: string; suggestionId: string }
 
@@ -1718,9 +1734,9 @@ export type PageTemplateListInput = { spaceId: string }
 
 export type PageTemplateListOutput = { templates: PageTemplateView[] }
 
-export type PageUpdateInput = { archived?: boolean | null; body?: string | null; clientRequestId?: string | null; expectedVersion?: number | null; fromTemplateId?: string | null; isGuide?: boolean | null; isTemplate?: boolean | null; note?: string | null; pageId?: string | null; pinToConversationId?: string | null; projectId?: string | null; restoreVersion?: number | null; skillDescription?: string | null; threadId?: string | null; title?: string | null }
+export type PageUpdateInput = { archived?: boolean | null; body?: string | null; clientRequestId?: string | null; expectedVersion?: number | null; fromTemplateId?: string | null; isGuide?: boolean | null; isTemplate?: boolean | null; note?: string | null; pageId?: string | null; parentPageId?: string | null; pinToConversationId?: string | null; projectId?: string | null; restoreVersion?: number | null; skillDescription?: string | null; threadId?: string | null; title?: string | null }
 
-export type PageUpdateOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; isGuide: boolean; isTemplate?: boolean; openComments?: number; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
+export type PageUpdateOutput = { archived: boolean; body: string; history: RevisionLine[]; id: string; idempotentReplay?: boolean; inside?: PageCrumbLine[]; isGuide: boolean; isTemplate?: boolean; openComments?: number; pagesInside?: PageCrumbLine[]; pendingSuggestions?: number; projectId: string; skillDescription?: string | null; stale: boolean; suggestion?: SuggestionMade | null; title: string; truncated?: boolean; updatedAt: string; url: string; version: number }
 
 export type PageUpdateBlocksInput = { edits: PageEditInput[]; expectedVersion?: number | null; note?: string | null; pageId: string; suggest?: boolean | null; threadId?: string | null }
 
@@ -2062,9 +2078,21 @@ export type SettingUpdateInput = { expectedVersion?: number | null; key: string;
 
 export type SettingUpdateOutput = { done: string; setting: Resolved; version?: number | null }
 
+export type SheetChartGetInput = { chartId: string; sheetId: string; withoutPicture?: boolean }
+
+export type SheetChartGetOutput = { found: boolean; id: string; measure?: string | null; points: ChartPoint[]; source: string; style: string; svg?: string | null; title: string; total?: number | null }
+
+export type SheetChartSetInput = { chartId?: string | null; remove?: boolean; sheetId: string; source?: string | null; style?: ChartStyle | null; title?: string | null }
+
+export type SheetChartSetOutput = { chartId?: string | null; charts: Chart[] }
+
 export type SheetRangeSetInput = { name: string; range?: string | null; remove?: boolean; sheetId: string }
 
 export type SheetRangeSetOutput = { ranges: NamedRange[] }
+
+export type SheetRowAddInput = { fromMessageId?: string | null; saySo?: boolean; sheetId: string; tab?: string | null; values?: Record<string, unknown> }
+
+export type SheetRowAddOutput = { revision: number; row: number; sheetId: string }
 
 export type SheetSearchInput = { inFormulas?: boolean; limit?: number | null; matchCase?: boolean; query: string; sheetId: string; tab?: string | null; wholeCell?: boolean }
 
@@ -2382,6 +2410,10 @@ export type ViewUpdateInput = { config?: unknown; expectedVersion?: number | nul
 
 export type ViewUpdateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
+export type WhiteboardAskInput = { accountId: string; elementIds: string[]; question: string; whiteboardId: string }
+
+export type WhiteboardAskOutput = { conversationId: string; fileId: string; messageId: string; threadId: string }
+
 export type WhiteboardCreateInput = { fromTemplateId?: string | null; linkTo?: LinkArgument | null; operations?: Operation[] | null; projectId?: string | null; title: string; workspaceId?: string | null }
 
 export type WhiteboardCreateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
@@ -2394,7 +2426,7 @@ export type WhiteboardLinkInput = { remove?: boolean | null; targetId: string; t
 
 export type WhiteboardLinkOutput = { changed: boolean; linked: boolean; links: LinkView[]; whiteboardId: string }
 
-export type WhiteboardProposeInput = { elements: unknown[]; note?: string | null; whiteboardId: string }
+export type WhiteboardProposeInput = { elements: unknown[]; note?: string | null; readVersions?: Record<string, number>; whiteboardId: string }
 
 export type WhiteboardProposeOutput = { elements: number; proposalId?: string | null }
 
@@ -2402,11 +2434,15 @@ export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
 
+export type WhiteboardToTasksInput = { elementIds?: string[]; spaceId?: string | null; whiteboardId: string }
+
+export type WhiteboardToTasksOutput = { createdLabels: string[]; tasks: MadeTask[] }
+
 export type WhiteboardUpdateInput = { deleted?: boolean | null; expectedVersion?: number | null; isTemplate?: boolean | null; projectId?: string | null; restoreRevision?: number | null; title?: string | null; whiteboardId: string; workspaceWide?: boolean | null }
 
 export type WhiteboardUpdateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
 
-export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; expectedSceneSeq?: number | null; operations: Operation[]; whiteboardId: string }
+export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; expectedSceneSeq?: number | null; fromMessageId?: string | null; operations: Operation[]; saySo?: boolean; whiteboardId: string }
 
 export type WhiteboardUpdateElementsOutput = { changed: string[]; proposalId?: string | null; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
@@ -2715,9 +2751,11 @@ export type Operations = {
   page_comment_list: { input: PageCommentListInput; output: PageCommentListOutput }
   page_comment_update: { input: PageCommentUpdateInput; output: PageCommentUpdateOutput }
   page_create: { input: PageCreateInput; output: PageCreateOutput }
+  page_file_upload: { input: PageFileUploadInput; output: PageFileUploadOutput }
   page_get: { input: PageGetInput; output: PageGetOutput }
   page_list: { input: PageListInput; output: PageListOutput }
   page_make: { input: PageMakeInput; output: PageMakeOutput }
+  page_move: { input: PageMoveInput; output: PageMoveOutput }
   page_suggestion_decide: { input: PageSuggestionDecideInput; output: PageSuggestionDecideOutput }
   page_suggestion_list: { input: PageSuggestionListInput; output: PageSuggestionListOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
@@ -2807,7 +2845,10 @@ export type Operations = {
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
   setting_list: { input: SettingListInput; output: SettingListOutput }
   setting_update: { input: SettingUpdateInput; output: SettingUpdateOutput }
+  sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }
+  sheet_chart_set: { input: SheetChartSetInput; output: SheetChartSetOutput }
   sheet_range_set: { input: SheetRangeSetInput; output: SheetRangeSetOutput }
+  sheet_row_add: { input: SheetRowAddInput; output: SheetRowAddOutput }
   sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
   sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }
   sheet_view_delete: { input: SheetViewDeleteInput; output: SheetViewDeleteOutput }
@@ -2887,11 +2928,13 @@ export type Operations = {
   view_list: { input: ViewListInput; output: ViewListOutput }
   view_pin: { input: ViewPinInput; output: ViewPinOutput }
   view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }
+  whiteboard_ask: { input: WhiteboardAskInput; output: WhiteboardAskOutput }
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }
   whiteboard_propose: { input: WhiteboardProposeInput; output: WhiteboardProposeOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
+  whiteboard_to_tasks: { input: WhiteboardToTasksInput; output: WhiteboardToTasksOutput }
   whiteboard_update: { input: WhiteboardUpdateInput; output: WhiteboardUpdateOutput }
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
   workflow_get: { input: WorkflowGetInput; output: WorkflowGetOutput }

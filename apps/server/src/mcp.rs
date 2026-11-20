@@ -576,7 +576,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a sheet (leave sheet out and give a name), or change one: rename, describe, archive or restore it; add, rename, move or remove tabs, insert or delete rows and columns, freeze header rows and set column widths (tabs); set cells as you'd type them, formulas starting with \"=\" (cells); add or update rows by header, found by a key column such as ID (rows); sort blocks by their columns (sorts); set number formats and styles on blocks (formats); and colour cells by rules such as \"less than 0 is red\" (conditionalFormats). Formulas are worked out on the server and the computed values come back. All or nothing; a cell given ifRevision is refused if someone changed it since. Needs sheets.edit.",
+        description = "Create a sheet (leave sheet out and give a name), or change one: rename, describe, archive or restore it; add, rename, move or remove tabs, insert or delete rows and columns, freeze header rows and set column widths (tabs); set cells as you'd type them, formulas starting with \"=\" (cells); add or update rows by header, found by a key column such as ID (rows); sort blocks by their columns (sorts); set number formats and styles on blocks (formats); colour cells by rules such as \"less than 0 is red\" (conditionalFormats); and limit what cells hold, with dropdowns (validations). Formulas are worked out on the server and the computed values come back. All or nothing; a cell given ifRevision is refused if someone changed it since. Needs sheets.edit.",
         annotations(
             title = "Write a sheet",
             read_only_hint = false,

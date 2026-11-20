@@ -6,13 +6,17 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { callOp, newRequestId, opPrefix } from '../api/ops'
+import { callOp, newRequestId, opPrefix, opQuery } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { useRecentEdits } from '../changes/useRecentEdits'
+import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
 import { useShellPage } from '../shell/shellStore'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { usePageTitle } from '../shell/documentTitleModel'
+import { projectLocationHref } from '../projects/locations'
 import { useTheme } from '../theme/themeContext'
 import {
   AvatarStack,
@@ -45,6 +49,8 @@ import {
   type Editor,
 } from './api'
 import { HistoryDialog, LinksDialog } from './BoardPanels'
+import { AskDialog, BoardPins, SelectionActions } from './ElementComments'
+import { anchorFor, pinnedThreads, sameIds, type BoardSelection, type BoardViewport, type ElementsAnchor } from './pins'
 import { RenameDialog } from './dialogs'
 import { saveLabel, type SaveState } from './sync'
 import './whiteboards.css'
@@ -100,6 +106,20 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const workspaceExperience = useWorkspaceExperience(detail.data?.whiteboard.projectId ? null : detail.data?.whiteboard.organizationId)
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null)
   const now = useNow()
+  // Recent edits (C1.10): what others just drew is outlined in their name;
+  // the toggle shows the last day's. A new drawing from anyone looks again.
+  const [allEdits, setAllEdits] = useState(false)
+  const lastDrawn = editors.reduce((latest, editor) => (editor.at > latest ? editor.at : latest), '')
+  const showsRecent = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('page.recent_edits')
+  const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits, enabled: showsRecent })
+  // Comments on elements (C1.31): pins where threads were started, and
+  // comment or ask about what's selected.
+  const commentsShown = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
+  const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'whiteboard', id: whiteboardId } }), enabled: commentsShown })
+  const [selection, setSelection] = useState<BoardSelection | null>(null)
+  const [viewport, setViewport] = useState<BoardViewport | null>(null)
+  const [commenting, setCommenting] = useState<{ anchor: ElementsAnchor; threadId?: string } | null>(null)
+  const [asking, setAsking] = useState<BoardSelection | null>(null)
   usePageTitle(detail.data?.whiteboard.title ?? null)
   if (detail.isPending || scene.isPending) return <PageSkeleton cards={1} label="Loading whiteboard" />
   if (detail.isError || scene.isError || !detail.data || !scene.data) {
@@ -116,7 +136,19 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const { whiteboard, canEdit, links } = detail.data
   const editable = canEdit && !whiteboard.deleted
   const suggesting = !canEdit && Boolean(detail.data.canSuggest) && !whiteboard.deleted
-  const showComments = (whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
+  const showComments = commentsShown
+  const pinned = showComments && comments.data ? pinnedThreads(comments.data.threads) : []
+  const commentingThread = !commenting || !comments.data
+    ? null
+    : (comments.data.threads.find((thread) =>
+        commenting.threadId ? thread.id === commenting.threadId : pinned.some((entry) => entry.thread.id === thread.id && sameIds(entry.anchor.elementIds, commenting.anchor.elementIds)),
+      ) ?? null)
+  const commentOnSelection = () => {
+    if (!selection) return
+    const anchor = anchorFor(selection)
+    const found = pinned.find((entry) => sameIds(entry.anchor.elementIds, anchor.elementIds))
+    setCommenting({ anchor, threadId: found?.thread.id })
+  }
   // Who else has drawn here lately; you're not in your own list.
   const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId && editor.actorId !== viewerId)
   const agents = others.filter((editor) => actorKind(editor.kind) === 'agent' && now - new Date(editor.at).getTime() < DRAWING_MS)
@@ -145,7 +177,8 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
     if (!elements.length) return
     setSending(true)
     try {
-      const sent = await callOp('whiteboard_propose', { whiteboardId: whiteboard.id, elements }, { requestId: newRequestId() })
+      const readVersions = draftRef.current?.readVersions() ?? {}
+      const sent = await callOp('whiteboard_propose', { whiteboardId: whiteboard.id, elements, readVersions }, { requestId: newRequestId() })
       await draftRef.current?.discard()
       void queryClient.invalidateQueries({ queryKey: opPrefix('proposal_list') })
       showToast(
@@ -161,6 +194,22 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   }
   const discard = () =>
     draftRef.current?.discard().catch((reason: unknown) => toastError('The board wasn’t reset', reason))
+  // A board's notes become tasks, or the board a page, in its project (C1.32).
+  const notesToTasks = (projectId: string) =>
+    callOp('whiteboard_to_tasks', { whiteboardId: whiteboard.id }, { requestId: newRequestId() })
+      .then((made) => {
+        showToast({
+          tone: 'success',
+          title: made.tasks.length === 1 ? 'Made one task' : `Made ${made.tasks.length} tasks`,
+          description: 'Each is labelled with its frame and links back here.',
+          action: { label: 'Open tasks', onSelect: () => navigate(projectLocationHref(projectId, { kind: 'work_items' })) },
+        })
+      })
+      .catch((reason: unknown) => toastError('No tasks were made', reason))
+  const toPage = (projectId: string) =>
+    callOp('page_make', { whiteboardId: whiteboard.id, spaceId: projectId }, { requestId: newRequestId() })
+      .then((made) => navigate(projectLocationHref(made.spaceId, { kind: 'page', pageId: made.id })))
+      .catch((reason: unknown) => toastError('The page wasn’t made', reason))
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
@@ -210,6 +259,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             <span className="aw-sr-only">Recently edited by {others.map((editor) => editor.name).join(', ')}</span>
           </span>
         ) : null}
+        {whiteboard.projectId && showsRecent ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
         {proposals.length ? (
           <Button onClick={() => setPanel('proposals')} size="sm">
             {`Proposals (${proposals.length})`}
@@ -228,6 +278,12 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'Rename', icon: 'pencil', disabled: !editable, onSelect: () => setPanel('rename') },
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
+            ...(whiteboard.projectId && !whiteboard.deleted && projectExperience.shows('whiteboard.convert')
+              ? [
+                  { label: 'Make tasks from notes', icon: 'checklist' as const, onSelect: () => void notesToTasks(whiteboard.projectId as string) },
+                  { label: 'Make a page from board', icon: 'list' as const, onSelect: () => void toPage(whiteboard.projectId as string) },
+                ]
+              : []),
             {
               label: whiteboard.isTemplate ? 'Stop using as a template' : 'Use as a template',
               icon: 'copy',
@@ -272,26 +328,77 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           {saveFailure.message} Keep this page open so they aren’t lost.
         </Banner>
       ) : null}
+      {showsRecent && recent.newest ? (
+        <div className="aw-wb__recent">
+          <RecentEditsBar canUndo={editable} change={recent.newest} kind="whiteboard" />
+        </div>
+      ) : null}
       <div className="aw-wb__canvas">
         <Suspense fallback={<PageSkeleton cards={1} decorative label="Loading the canvas" />}>
           <BoardCanvas
             dark={isDarkPreset(preset)}
             draftRef={draftRef}
             editable={editable}
+            edited={recent.shown}
             initial={scene.data}
             onDraft={setDraftCount}
             onEditors={setEditors}
             onSaveFailure={setSaveFailure}
             onSaveState={setSaveState}
+            onSelection={setSelection}
+            onViewport={setViewport}
+            paused={sending}
             suggesting={suggesting}
             whiteboardId={whiteboard.id}
           />
         </Suspense>
+        {showComments ? (
+          <>
+            <BoardPins onOpen={(entry) => setCommenting({ anchor: entry.anchor, threadId: entry.thread.id })} pinned={pinned} viewport={viewport} />
+            <SelectionActions
+              canAsk={!whiteboard.deleted && Boolean(comments.data?.acceptsComments)}
+              onAsk={() => setAsking(selection)}
+              onComment={commentOnSelection}
+              selection={selection}
+              viewport={viewport}
+            />
+          </>
+        ) : null}
       </div>
       {showComments && panel === 'comments' ? (
         <SidePanel onClose={() => setPanel(null)} title="Comments">
           <ThingCommentsPanel kind="whiteboard" thingId={whiteboard.id} viewerId={viewerId} />
         </SidePanel>
+      ) : null}
+      {showComments && commenting && comments.data ? (
+        <SidePanel
+          onClose={() => setCommenting(null)}
+          title={commenting.anchor.elementIds.length === 1 ? 'Comments on an element' : `Comments on ${commenting.anchor.elementIds.length} elements`}
+        >
+          <AnchoredThreadPanel
+            acceptsComments={comments.data.acceptsComments}
+            anchor={commenting.anchor}
+            kind="whiteboard"
+            onStarted={(threadId) => setCommenting((open) => (open ? { ...open, threadId } : open))}
+            spaceId={comments.data.spaceId ?? whiteboard.projectId ?? ''}
+            thingId={whiteboard.id}
+            thread={commentingThread}
+            viewerId={viewerId}
+          />
+        </SidePanel>
+      ) : null}
+      {asking ? (
+        <AskDialog
+          onAsked={(threadId) => {
+            setAsking(null)
+            setCommenting({ anchor: anchorFor(asking), threadId })
+          }}
+          onClose={() => setAsking(null)}
+          selection={asking}
+          spaceId={comments.data?.spaceId ?? whiteboard.projectId ?? ''}
+          viewerId={viewerId}
+          whiteboardId={whiteboard.id}
+        />
       ) : null}
       {panel === 'proposals' ? (
         <BoardProposalsDialog canDecide={editable} onClose={() => setPanel(null)} proposals={proposals} userId={viewerId} />

@@ -78,7 +78,8 @@ pub(crate) async fn href_of_conversation(
     .bind(conversation_id)
     .fetch_optional(&mut *connection)
     .await?
-    .flatten())
+    .flatten()
+    .map(|legacy| crate::addresses::anywhere(&legacy)))
 }
 
 /// Refuses a message into a thing's comments, or a thread in them, once the
@@ -89,22 +90,7 @@ pub(crate) async fn ensure_subject_takes_messages(
     conversation_id: Uuid,
     sender: Uuid,
 ) -> Result<(), AppError> {
-    let subject = sqlx::query_as::<_, (String, Uuid)>(
-        r#"
-        -- visibility: the sender holds the conversation, checked by the send
-        SELECT COALESCE(parent.subject_kind, conversation.subject_kind),
-               COALESCE(parent.subject_id, conversation.subject_id)
-        FROM conversations conversation
-        LEFT JOIN conversations parent
-          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
-        WHERE conversation.id = $1
-          AND COALESCE(parent.subject_id, conversation.subject_id) IS NOT NULL
-          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
-        "#,
-    )
-    .bind(conversation_id)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let subject = subject_of_conversation(connection, conversation_id).await?;
     let Some((kind, thing_id)) = subject else {
         return Ok(());
     };
@@ -122,27 +108,39 @@ pub(crate) async fn ensure_subject_takes_messages(
     Ok(())
 }
 
+/// The thing a comments conversation (or a thread in one) is about: its
+/// kind and id; `None` for any other conversation. Ids only.
+pub(crate) async fn subject_of_conversation(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+) -> Result<Option<(String, Uuid)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, Uuid)>(
+        r#"
+        -- visibility: the caller wrote to or holds the conversation, checked
+        SELECT COALESCE(parent.subject_kind, conversation.subject_kind),
+               COALESCE(parent.subject_id, conversation.subject_id)
+        FROM conversations conversation
+        LEFT JOIN conversations parent
+          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
+        WHERE conversation.id = $1
+          AND COALESCE(parent.subject_id, conversation.subject_id) IS NOT NULL
+          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
 /// The kind of thing a conversation discusses: its comments conversation,
 /// or a thread under one. `None` for any other conversation.
 pub(crate) async fn subject_kind_of(
     connection: &mut PgConnection,
     conversation_id: Uuid,
 ) -> Result<Option<SubjectKind>, AppError> {
-    let kind = sqlx::query_scalar::<_, String>(
-        r#"
-        -- visibility: the caller holds the conversation, checked by its lock
-        SELECT COALESCE(parent.subject_kind, conversation.subject_kind)
-        FROM conversations conversation
-        LEFT JOIN conversations parent
-          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
-        WHERE conversation.id = $1
-          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
-        "#,
-    )
-    .bind(conversation_id)
-    .fetch_optional(&mut *connection)
-    .await?;
-    Ok(kind.as_deref().and_then(SubjectKind::parse))
+    Ok(subject_of_conversation(connection, conversation_id)
+        .await?
+        .and_then(|(kind, _)| SubjectKind::parse(&kind)))
 }
 
 /// The thing's comments conversation and its project, made if it doesn't
@@ -249,6 +247,28 @@ pub(crate) async fn hand_over(
     }
 }
 
+/// A message a thing is made from (C2.22): one the actor can read, in a
+/// conversation of `space`. Its id, conversation and text, or None.
+pub(crate) async fn message_in_space(
+    connection: &mut sqlx::PgConnection,
+    message_id: Uuid,
+    space: Uuid,
+    actor: Uuid,
+) -> Result<Option<(Uuid, Uuid, String)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        "SELECT message.id, message.conversation_id, message.plain_text \
+         FROM messages message \
+         WHERE message.id = $1 AND message.project_id = $2 \
+           AND message.removed_at IS NULL \
+           AND conversation_visible_to(message.conversation_id, $3)",
+    )
+    .bind(message_id)
+    .bind(space)
+    .bind(actor)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
 /// Posts a comment on a thing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post(
@@ -334,6 +354,18 @@ pub(crate) async fn post(
             (thread_id, "thread", Some(thread_id))
         }
     };
+    // Files uploaded to the thing's discussion go with a comment posted in
+    // a thread under it.
+    if conversation_id != comments_id {
+        crate::files::rehome_thread_uploads(
+            &mut transaction,
+            comments_id,
+            conversation_id,
+            actor.actor_id,
+            attachments,
+        )
+        .await?;
+    }
     // A task's comment files were uploaded to the task (`?for=comment`);
     // they go with the comment's conversation now.
     if kind == SubjectKind::Task {

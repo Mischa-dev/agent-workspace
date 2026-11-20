@@ -1,8 +1,10 @@
 //! Drawing a board without a browser, so agents can look at what they made
 //! and the boards list can show previews.
 //!
-//! This is a clean rendition (no hand-drawn wobble) of Excalidraw's shapes:
-//! enough to check layout, labels and connections. PNGs are drawn from the
+//! Shapes and lines follow Excalidraw's sloppiness: at 0 they're drawn clean,
+//! and above it with a hand-drawn wobble (two loose strokes, as Excalidraw's
+//! rough.js draws them), steady for an element because it comes from the
+//! element's seed. Text and images stay clean. PNGs are drawn from the
 //! same SVG with resvg, using the Inter font bundled in `assets/fonts`
 //! (OFL-1.1), so the output doesn't depend on fonts installed on the host.
 
@@ -114,6 +116,184 @@ fn fill(element: &Object, defs: &mut String, dark: bool) -> String {
         }
         _ => background,
     }
+}
+
+/// How sloppy an element is drawn: Excalidraw's roughness, 0 to 2.
+fn roughness(element: &Object) -> f64 {
+    number(element, "roughness").clamp(0.0, 2.0)
+}
+
+/// A steady stream of wobbles for one element, from its seed (or its id).
+struct Wobble(u64);
+
+impl Wobble {
+    fn of(element: &Object) -> Self {
+        let seed = element
+            .get("seed")
+            .and_then(Value::as_u64)
+            .filter(|seed| *seed != 0)
+            .unwrap_or_else(|| {
+                // FNV-1a over the id, for an element without a seed.
+                id(element)
+                    .bytes()
+                    .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+                    })
+            });
+        Self(seed | 1)
+    }
+
+    /// The next wobble, between -1 and 1 (xorshift64*).
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        let value = self.0.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 11;
+        value as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    }
+}
+
+/// How far a stroke of `length` strays at `roughness`: up to 2 units per
+/// step of roughness, less on short strokes so they keep their shape.
+fn stray(length: f64, roughness: f64) -> f64 {
+    roughness * (length / 20.0).clamp(0.25, 2.0)
+}
+
+/// Straight strokes through `points` drawn twice, loosely, as a hand would:
+/// each segment a slightly bowed curve whose ends overshoot a little.
+fn sketched_segments(
+    points: &[(f64, f64)],
+    closed: bool,
+    roughness: f64,
+    wobble: &mut Wobble,
+) -> String {
+    let mut path = String::new();
+    let count = if closed {
+        points.len()
+    } else {
+        points.len().saturating_sub(1)
+    };
+    for _pass in 0..2 {
+        for index in 0..count {
+            let from = points[index];
+            let to = points[(index + 1) % points.len()];
+            let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+            let length = dx.hypot(dy);
+            if length < 1e-6 {
+                continue;
+            }
+            let off = stray(length, roughness);
+            // Across the stroke, to bow it.
+            let (nx, ny) = (-dy / length, dx / length);
+            let mut end = |point: (f64, f64)| {
+                (
+                    point.0 + wobble.next() * off * 0.5,
+                    point.1 + wobble.next() * off * 0.5,
+                )
+            };
+            let start = end(from);
+            let finish = end(to);
+            let bow = wobble.next() * off;
+            let c1 = (
+                from.0 + dx * 0.33 + nx * (bow + wobble.next() * off * 0.3),
+                from.1 + dy * 0.33 + ny * (bow + wobble.next() * off * 0.3),
+            );
+            let c2 = (
+                from.0 + dx * 0.67 + nx * (bow + wobble.next() * off * 0.3),
+                from.1 + dy * 0.67 + ny * (bow + wobble.next() * off * 0.3),
+            );
+            let _ = write!(
+                path,
+                "M{} {} C{} {} {} {} {} {} ",
+                fmt(start.0),
+                fmt(start.1),
+                fmt(c1.0),
+                fmt(c1.1),
+                fmt(c2.0),
+                fmt(c2.1),
+                fmt(finish.0),
+                fmt(finish.1)
+            );
+        }
+    }
+    path.trim_end().to_owned()
+}
+
+/// A curved outline through `points` (closed) drawn twice, each time
+/// through points nudged a little, so the two strokes don't quite meet.
+fn sketched_curve(points: &[(f64, f64)], roughness: f64, wobble: &mut Wobble) -> String {
+    let (min_x, max_x, min_y, max_y) = points.iter().fold(
+        (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
+        |(a, b, c, d), point| {
+            (
+                a.min(point.0),
+                b.max(point.0),
+                c.min(point.1),
+                d.max(point.1),
+            )
+        },
+    );
+    let off = stray((max_x - min_x).min(max_y - min_y), roughness) * 0.6;
+    let mut path = String::new();
+    for _pass in 0..2 {
+        let mut nudged = points
+            .iter()
+            .map(|point| (point.0 + wobble.next() * off, point.1 + wobble.next() * off))
+            .collect::<Vec<_>>();
+        // Close it, overshooting the start a little the way a hand does.
+        nudged.push(nudged[0]);
+        nudged.push(nudged[1]);
+        let _ = write!(path, "{} ", smooth_path(&nudged));
+    }
+    path.trim_end().to_owned()
+}
+
+/// A rounded line through `points` drawn twice through nudged points.
+fn sketched_bend(points: &[(f64, f64)], roughness: f64, wobble: &mut Wobble) -> String {
+    let mut path = String::new();
+    for _pass in 0..2 {
+        let nudged = points
+            .windows(2)
+            .map(|pair| (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1))
+            .chain(std::iter::once(0.0))
+            .zip(points)
+            .map(|(length, point)| {
+                let off = stray(length.max(20.0), roughness) * 0.5;
+                (point.0 + wobble.next() * off, point.1 + wobble.next() * off)
+            })
+            .collect::<Vec<_>>();
+        let _ = write!(path, "{} ", smooth_path(&nudged));
+    }
+    path.trim_end().to_owned()
+}
+
+/// Points around an ellipse, for sketching it.
+fn ellipse_points(cx: f64, cy: f64, rx: f64, ry: f64) -> Vec<(f64, f64)> {
+    (0..16)
+        .map(|step| {
+            let angle = f64::from(step) / 16.0 * std::f64::consts::TAU;
+            (cx + rx * angle.cos(), cy + ry * angle.sin())
+        })
+        .collect()
+}
+
+/// Points around a rounded rectangle (`radius` > 0), for sketching it.
+fn rounded_rect_points(b: &Bounds, radius: f64) -> Vec<(f64, f64)> {
+    let corners = [
+        (b.right() - radius, b.y + radius, -90.0),
+        (b.right() - radius, b.bottom() - radius, 0.0),
+        (b.x + radius, b.bottom() - radius, 90.0),
+        (b.x + radius, b.y + radius, 180.0),
+    ];
+    corners
+        .iter()
+        .flat_map(|(cx, cy, start)| {
+            [0.0, 45.0, 90.0].map(|step: f64| {
+                let angle = (start + step).to_radians();
+                (cx + radius * angle.cos(), cy + radius * angle.sin())
+            })
+        })
+        .collect()
 }
 
 /// A smooth path through points (Catmull-Rom as cubic Béziers), the way
@@ -296,12 +476,28 @@ fn element_svg(
     }
     open.push('>');
     svg.push_str(&open);
-    let common = format!(
-        r#" stroke="{}" stroke-width="{}"{}"#,
-        escape(&stroke),
-        fmt(stroke_width),
-        dash(element)
-    );
+    let rough = roughness(element);
+    let mut wobble = Wobble::of(element);
+    // A sloppy shape is filled clean, then outlined by hand.
+    let common = if rough > 0.0 {
+        r#" stroke="none""#.to_owned()
+    } else {
+        format!(
+            r#" stroke="{}" stroke-width="{}"{}"#,
+            escape(&stroke),
+            fmt(stroke_width),
+            dash(element)
+        )
+    };
+    let sketch = |svg: &mut String, path: String| {
+        let _ = write!(
+            svg,
+            r#"<path d="{path}" fill="none" stroke="{}" stroke-width="{}" stroke-linecap="round" stroke-linejoin="round"{}/>"#,
+            escape(&stroke),
+            fmt(stroke_width),
+            dash(element)
+        );
+    };
     match kind(element) {
         "rectangle" | "embeddable" => {
             let radius = if element
@@ -322,6 +518,20 @@ fn element_svg(
                 fmt(radius),
                 fill(element, defs, dark)
             );
+            if rough > 0.0 {
+                let outline = if radius > 0.0 {
+                    sketched_curve(&rounded_rect_points(&b, radius), rough, &mut wobble)
+                } else {
+                    let corners = [
+                        (b.x, b.y),
+                        (b.right(), b.y),
+                        (b.right(), b.bottom()),
+                        (b.x, b.bottom()),
+                    ];
+                    sketched_segments(&corners, true, rough, &mut wobble)
+                };
+                sketch(svg, outline);
+            }
             if kind(element) == "embeddable"
                 && let Some(link) = text_field(element, "link")
             {
@@ -346,6 +556,10 @@ fn element_svg(
                 fmt(b.height / 2.0),
                 fill(element, defs, dark)
             );
+            if rough > 0.0 {
+                let around = ellipse_points(cx, cy, b.width / 2.0, b.height / 2.0);
+                sketch(svg, sketched_curve(&around, rough, &mut wobble));
+            }
         }
         "diamond" => {
             let _ = write!(
@@ -361,6 +575,10 @@ fn element_svg(
                 fmt(cy),
                 fill(element, defs, dark)
             );
+            if rough > 0.0 {
+                let corners = [(cx, b.y), (b.right(), cy), (cx, b.bottom()), (b.x, cy)];
+                sketch(svg, sketched_segments(&corners, true, rough, &mut wobble));
+            }
         }
         "frame" | "magicframe" => {
             let _ = write!(
@@ -410,19 +628,46 @@ fn element_svg(
                 } else {
                     stroke_width
                 };
-                let _ = write!(
-                    svg,
-                    r#"<path d="{path}{}" fill="{}" stroke="{}" stroke-width="{}" stroke-linecap="round" stroke-linejoin="round"{}/>"#,
-                    if closed { " Z" } else { "" },
+                if rough > 0.0 && element_kind != "freedraw" {
                     if closed {
-                        fill(element, defs, dark)
+                        let _ = write!(
+                            svg,
+                            r#"<path d="{path} Z" fill="{}" stroke="none"/>"#,
+                            fill(element, defs, dark)
+                        );
+                    }
+                    let outline = if rounded {
+                        let mut around = absolute.clone();
+                        if closed {
+                            around.pop();
+                            sketched_curve(&around, rough, &mut wobble)
+                        } else {
+                            sketched_bend(&around, rough, &mut wobble)
+                        }
                     } else {
-                        "none".to_owned()
-                    },
-                    escape(&stroke),
-                    fmt(width),
-                    dash(element)
-                );
+                        sketched_segments(
+                            &absolute[..absolute.len() - usize::from(closed)],
+                            closed,
+                            rough,
+                            &mut wobble,
+                        )
+                    };
+                    sketch(svg, outline);
+                } else {
+                    let _ = write!(
+                        svg,
+                        r#"<path d="{path}{}" fill="{}" stroke="{}" stroke-width="{}" stroke-linecap="round" stroke-linejoin="round"{}/>"#,
+                        if closed { " Z" } else { "" },
+                        if closed {
+                            fill(element, defs, dark)
+                        } else {
+                            "none".to_owned()
+                        },
+                        escape(&stroke),
+                        fmt(width),
+                        dash(element)
+                    );
+                }
                 if element_kind == "arrow" {
                     if let Some(head) = text_field(element, "endArrowhead") {
                         let n = absolute.len();
@@ -666,6 +911,37 @@ mod tests {
         let (bytes, width, height) = png(&rendered.svg, 1.0).expect("png");
         assert_eq!(&bytes[1..4], b"PNG");
         assert!(width > 300 && height > 80, "{width}x{height}");
+    }
+
+    #[test]
+    fn sloppy_shapes_are_sketched_and_steady() {
+        let board = |roughness: u8| {
+            let mut scene = Scene::new(Vec::new(), 1);
+            let operations: Vec<Operation> = serde_json::from_value(json!([
+                {"op": "add", "type": "rectangle", "id": "a", "roughness": roughness},
+                {"op": "add", "type": "ellipse", "id": "b", "x": 300, "roughness": roughness},
+                {"op": "add", "type": "diamond", "id": "c", "x": 600, "roughness": roughness},
+                {"op": "connect", "from": "a", "to": "b"},
+            ]))
+            .expect("operations");
+            scene.apply(&operations).expect("applies");
+            scene
+        };
+        let sloppy = board(1);
+        let drawn = svg(sloppy.elements(), &HashMap::new(), &options()).svg;
+        assert!(drawn.contains(r#"stroke="none""#), "{drawn}");
+        assert!(
+            drawn.matches(r#"fill="none" stroke="#).count() >= 3,
+            "every shape is outlined by hand: {drawn}"
+        );
+        // The same board draws the same way every time.
+        assert_eq!(
+            drawn,
+            svg(sloppy.elements(), &HashMap::new(), &options()).svg
+        );
+        png(&drawn, 1.0).expect("png");
+        let clean = svg(board(0).elements(), &HashMap::new(), &options()).svg;
+        assert!(!clean.contains(r#"stroke="none""#), "{clean}");
     }
 
     #[test]

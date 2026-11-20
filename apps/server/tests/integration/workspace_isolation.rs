@@ -2130,6 +2130,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "sheet_read",
     "sheet_search",
     "sheet_view_list",
+    "sheet_chart_get",
     "host_list",
     "account_joinable_list",
     "agent_offer_list",
@@ -3477,6 +3478,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "sheet_view_list",
             vec![json!({"sheetId": a.sheet})],
             vec![json!({"sheetId": b.sheet})],
+            vec![],
+        ),
+        // C1.18: B's sheet's charts aren't read from A.
+        case(
+            "sheet_chart_get",
+            vec![json!({"sheetId": a.sheet, "chartId": a.sheet_chart})],
+            vec![json!({"sheetId": b.sheet, "chartId": "0193a0c4-0000-7000-8000-000000000001"})],
             vec![],
         ),
     ]
