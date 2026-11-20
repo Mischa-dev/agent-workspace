@@ -52,7 +52,12 @@ fn shared(root: &Path) -> Vec<(&'static str, String)> {
 
 /// The program, started as its own process.
 fn spawn_host(root: &Path, database_url: &str, server: &str, code_file: &Path) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-workspace-host"));
+    // From a nextest archive (CI builds once and runs elsewhere) the build's
+    // path is gone; nextest names where the binary landed.
+    let program = std::env::var_os("NEXTEST_BIN_EXE_agent-workspace-host")
+        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_agent_workspace_host"))
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_agent-workspace-host").into());
+    let mut command = Command::new(program);
     for (key, value) in shared(root) {
         command.env(key, value);
     }
