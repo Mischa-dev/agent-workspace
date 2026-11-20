@@ -835,7 +835,18 @@ struct Claimed {
 
 async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppError> {
     let row = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Option<i64>, Value, bool)>(
+        sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                Value,
+                bool,
+            ),
+        >(
             "UPDATE workspace_transfers SET state = 'running', \
                  lease_until = now() + make_interval(secs => $2) \
              WHERE id = $1 AND direction = 'import' AND state IN ('queued', 'running') \
@@ -852,9 +863,11 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
     let Some((workspace, requester, store_id, key, size, cursor, copy)) = row else {
         return Ok(None);
     };
-    let (Some(store_id), Some(key), Some(size)) =
-        (store_id, key, size.and_then(|size| u64::try_from(size).ok()))
-    else {
+    let (Some(store_id), Some(key), Some(size)) = (
+        store_id,
+        key,
+        size.and_then(|size| u64::try_from(size).ok()),
+    ) else {
         return Err(AppError::Internal("the import's archive was never stored"));
     };
     Ok(Some(Claimed {
