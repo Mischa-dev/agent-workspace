@@ -99,14 +99,15 @@ describe('useTaskSave', () => {
 
     act(() => result.current.save('description', { description: 'First idea' }))
     await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
-    // The description editor opens now and records its baseline.
+    // The description editor opens now and records what it shows as its baseline.
     const base = result.current.baseFor('description')
-    expect(base).toBe(task.description)
+    expect(base).toBe('First idea')
     answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
     await waitFor(() => expect(result.current.pending('description')).toBeNull())
 
     act(() => result.current.save('description', { description: 'Second idea' }, base))
     await waitFor(() => expect(callOp).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(callOp).mock.calls[1][1]).toMatchObject({ description: 'Second idea' })
     await waitFor(() => expect(result.current.pending('description')).toBeNull())
   })
 

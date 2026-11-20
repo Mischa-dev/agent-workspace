@@ -200,6 +200,10 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
   const entries = useRef(new Map<TaskField, Entry>())
   const [shown, setShown] = useState<ReadonlyMap<TaskField, Entry>>(() => new Map())
   const lastId = useRef(0)
+  // Each field's last suggestion that became a proposal: the value it
+  // proposed, what the task held then, and the task's version. A draft
+  // opened while it was on its way started from the proposed value.
+  const proposed = useRef(new Map<TaskField, { mine: string; base: string; version: number }>())
   const fallback = useRef(item)
   useLayoutEffect(() => {
     fallback.current = item
@@ -319,6 +323,9 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     if (written.proposalId && queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine) {
       entries.current.set(entry.field, { ...queued, base: entry.base })
     }
+    if (written.proposalId && entry.mine !== null) {
+      proposed.current.set(entry.field, { mine: entry.mine, base: entry.base, version: written.version })
+    }
     change(id, null)
     if (written.proposalId) {
       showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
@@ -343,18 +350,14 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     void inOrder(`task:${taskId}`, () => attempt(id).catch(() => change(id, { state: 'failed', message: 'That didn’t save. Try again.' })))
   }
 
-  /**
-   * What the person sees for a field right now: their own change on its way,
-   * or the task's value. A suggestion never changes the task, so when
-   * suggesting the task's value is always the baseline.
-   */
+  /** What the person sees for a field right now: their own change on its way, or the task's value. */
   const baseFor = useCallback(
     (field: TaskField) => {
       const entry = entries.current.get(field)
-      if (!suggest && entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving')) return entry.mine
+      if (entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving')) return entry.mine
       return fieldValue(current(), field)
     },
-    [current, suggest],
+    [current],
   )
 
   /**
@@ -365,7 +368,13 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     setProblem(null)
     const previous = entries.current.get(field)
     // A change that replaces one not sent yet starts from what the person saw before either.
-    const from = previous?.state === 'waiting' ? previous.base : (base ?? baseFor(field))
+    let from = previous?.state === 'waiting' ? previous.base : (base ?? baseFor(field))
+    // A draft opened while a suggestion was on its way started from that
+    // suggestion, which never reached the task: while the task is still the
+    // version it answered with, the draft starts from what it held then.
+    const earlier = proposed.current.get(field)
+    const now = current()
+    if (earlier && from === earlier.mine && now.version === earlier.version && fieldValue(now, field) === earlier.base) from = earlier.base
     lastId.current += 1
     const entry: Entry = { id: lastId.current, field, patch, mine: patchValue(field, patch), base: from, state: 'waiting', theirs: null, message: null, sent: null }
     entries.current.set(field, entry)
