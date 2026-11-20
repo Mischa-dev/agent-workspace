@@ -18,7 +18,6 @@ const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("github.rs", "A1.17"),
     ("mcp/code.rs", "A1.17"),
     ("provider.rs", "A1.17"),
-    ("recovery.rs", "A1.17"),
     ("scheduler.rs", "A1.17"),
     ("usage/history.rs", "A1.17"),
 ];
@@ -28,7 +27,6 @@ const LEGACY_RUN_SQL: &[(&str, &str)] = &[
 const LEGACY_STATE_LISTS: &[(&str, &str)] = &[
     ("github.rs", "A1.17"),
     ("provider.rs", "A1.17"),
-    ("recovery.rs", "A1.17"),
     ("scheduler.rs", "A1.17"),
 ];
 

@@ -477,7 +477,7 @@ impl turn::TurnHost for BuiltinTurns {
 /// followed again instead of being interrupted. Returns whether it was.
 pub(crate) async fn follow_recovered_run(
     state: &AppState,
-    fence: crate::recovery::HostFence<'_>,
+    fence: crate::hosts::builtin::recovery::HostFence<'_>,
     run_id: Uuid,
     worktree: PathBuf,
 ) -> Result<bool, AppError> {
@@ -525,7 +525,7 @@ pub(crate) async fn follow_recovered_run(
     }
     let reports = Arc::new(report::open(state, run_id).await?);
     // Following took a while: take the run back only while the host is ours.
-    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
+    let mut transaction = crate::hosts::builtin::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
     reports.moved("working", None).await?;
@@ -717,7 +717,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
 
 pub(crate) async fn complete_recovered_run(
     state: &AppState,
-    fence: crate::recovery::HostFence<'_>,
+    fence: crate::hosts::builtin::recovery::HostFence<'_>,
     run_id: Uuid,
     message: &str,
     previous_state: &str,
@@ -737,7 +737,7 @@ pub(crate) async fn complete_recovered_run(
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let reports = report::open(state, run_id).await?;
-    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
+    let mut transaction = crate::hosts::builtin::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
     if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {

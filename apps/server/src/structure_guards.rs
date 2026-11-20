@@ -201,8 +201,8 @@ const ACCOUNT_KIND_CHECKS_CEILING: usize = 192;
 const RUST_ROLE_CHECKS_CEILING: usize = 36;
 const ACCESS_BYPASSES_CEILING: usize = 67;
 const ACCOUNT_KIND_STRINGS_CEILING: usize = 48;
-const AGENT_RUNS_SQL_CEILING: usize = 111;
-const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 6;
+const AGENT_RUNS_SQL_CEILING: usize = 105;
+const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 5;
 const CONVERSATION_INSERTS_CEILING: usize = 6;
 const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
@@ -231,7 +231,7 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
 // A1.17 (G10): set to today's total when the guard landed.
-const SERVER_RUNS_AGENTS_CEILING: usize = 66;
+const SERVER_RUNS_AGENTS_CEILING: usize = 62;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is

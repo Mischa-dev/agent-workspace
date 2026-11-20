@@ -6,14 +6,12 @@
   "account_kind_strings": {},
   "active_run_states_literal": {
     "github.rs": 3,
-    "provider.rs": 2,
-    "recovery.rs": 1
+    "provider.rs": 2
   },
   "agent_runs_sql": {
     "github.rs": 8,
     "mcp/code.rs": 6,
     "provider.rs": 17,
-    "recovery.rs": 6,
     "scheduler.rs": 15,
     "usage/history.rs": 1
   },
@@ -158,7 +156,6 @@
     "mcp/runs.rs": 1,
     "migration_preflight.rs": 1,
     "preflight.rs": 1,
-    "recovery.rs": 4,
     "repositories.rs": 1,
     "retention.rs": 6,
     "run_log.rs": 1,

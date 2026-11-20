@@ -19,6 +19,7 @@ pub mod assistant;
 pub mod capacity;
 pub mod driver;
 pub mod http;
+pub mod recovery;
 pub mod report;
 pub mod requests;
 pub mod transport;
