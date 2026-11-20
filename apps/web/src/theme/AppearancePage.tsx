@@ -354,7 +354,7 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
                 title="Your themes"
               >
                 {workspaces.length > 1 && workspaceId ? (
-                  <SelectField label="Workspace" onChange={(event) => setPicked(event.target.value)} value={workspaceId}>
+                  <SelectField label="Themes from" onChange={(event) => setPicked(event.target.value)} value={workspaceId}>
                     {workspaces.map((entry) => (
                       <option key={entry.id} value={entry.id}>
                         {entry.name}
