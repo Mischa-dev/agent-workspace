@@ -117,7 +117,7 @@ pub(super) fn blank_content() -> Value {
 }
 
 /// The files on these messages, which the caller can already see.
-pub(super) async fn message_attachments(
+pub(crate) async fn message_attachments(
     state: &AppState,
     message_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<FileSummary>>, AppError> {
@@ -165,9 +165,9 @@ struct AttachmentRow {
 // ---------------------------------------------------------------------------
 // file_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FileListArguments {
+pub(crate) struct FileListArguments {
     /// A message ID or link: its files.
     pub message_id: Option<String>,
     /// A task ID, key (such as AW-12) or link: its files and its comments'.
@@ -176,11 +176,11 @@ pub(super) struct FileListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FileListValue {
+pub(crate) struct FileListValue {
     pub files: Vec<FileSummary>,
 }
 
-pub(super) async fn file_list(
+pub(crate) async fn file_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FileListArguments,
@@ -255,30 +255,30 @@ async fn list_message(
 // ---------------------------------------------------------------------------
 // file_read
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FileDeleteArguments {
+pub(crate) struct FileDeleteArguments {
     /// The file's ID, from file_upload or file_list.
     pub file_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DeletedFile {
+pub(crate) struct DeletedFile {
     pub file_id: String,
     pub removed: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FileReadArguments {
+pub(crate) struct FileReadArguments {
     /// The file's ID, from file_list or a message's attachments.
     pub file_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FileReadValue {
+pub(crate) struct FileReadValue {
     #[serde(flatten)]
     pub file: FileSummary,
     /// The file's text, for text files (UTF-8).
@@ -300,7 +300,7 @@ pub(super) struct FileReadValue {
     pub download_expires_at: Option<String>,
 }
 
-pub(super) async fn file_read(
+pub(crate) async fn file_read(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FileReadArguments,
@@ -433,7 +433,7 @@ fn read_result(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FileUploadArguments {
+pub(crate) struct FileUploadArguments {
     /// Upload for a message in this conversation (channel, thread, DM or
     /// group). Send it by passing the returned fileId in message_send's (or
     /// reply_send's) attachmentIds; unsent uploads are removed after a day.
@@ -445,7 +445,7 @@ pub(super) struct FileUploadArguments {
     pub for_comment: Option<bool>,
     /// Or keep the file on a collection record you can edit:
     /// {"kind": "record", "id": "<record ID>"}, then name its fileId in one
-    /// of the record's file fields with record_write. (page_file_upload
+    /// of the record's file fields with record_update_many. (page_file_upload
     /// keeps a file on a page.)
     pub thing: Option<ThingArgument>,
     /// The file name people see, such as report.md or screenshot.png.
@@ -465,14 +465,14 @@ pub(super) struct FileUploadArguments {
 /// A thing a file can belong to.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ThingArgument {
+pub(crate) struct ThingArgument {
     /// "record".
     pub kind: String,
     /// Its ID.
     pub id: String,
 }
 
-pub(super) async fn file_upload(
+pub(crate) async fn file_upload(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FileUploadArguments,
@@ -643,7 +643,7 @@ pub(super) async fn file_upload(
 /// you haven't sent yet, or one of a task's own files (not a comment's) when
 /// you may edit the task. Files sent with a message go with the message
 /// (message_delete), and a comment's with the comment (task_comment_delete).
-pub(super) async fn file_delete(
+pub(crate) async fn file_delete(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: FileDeleteArguments,

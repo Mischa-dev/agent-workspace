@@ -190,7 +190,7 @@ pub enum Trigger {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Option<String>")]
         view_id: Option<Uuid>,
-        /// Field filters, as record_query takes them.
+        /// Field filters, as record_list takes them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         filters: Vec<FilterWrite>,
     },

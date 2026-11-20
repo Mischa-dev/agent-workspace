@@ -67,7 +67,7 @@
         },
         {
           "const": "collection",
-          "description": "`collection_describe`'s definition.",
+          "description": "`collection_get`'s definition.",
           "type": "string"
         },
         {

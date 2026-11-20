@@ -768,6 +768,66 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "collection_create",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Create collection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "collection_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open collection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "collection_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List collections"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "collection_update",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Update collection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "message.created"
     ],
     "idempotent": true,
@@ -1901,6 +1961,22 @@
     "title": "Update field"
   },
   {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "file.removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "file_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove file"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1913,6 +1989,20 @@
     "preview": false,
     "proposable": false,
     "title": "Link to a file"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "file_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List files"
   },
   {
     "automation": false,
@@ -1941,6 +2031,22 @@
     "preview": false,
     "proposable": false,
     "title": "List a file source's files"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.attached"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "file_upload",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Upload file"
   },
   {
     "automation": true,
@@ -4034,6 +4140,36 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "record_create_many",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Add records"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "record_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List records"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "collection.updated"
     ],
     "idempotent": true,
@@ -4093,6 +4229,23 @@
     "preview": false,
     "proposable": true,
     "title": "Update a record"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.created",
+      "record.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "record_update_many",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update records"
   },
   {
     "automation": true,
@@ -4980,6 +5133,50 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "sheet.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_create",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create sheet"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read sheet"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List sheets"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "sheet.ranges_changed"
     ],
     "idempotent": true,
@@ -5021,6 +5218,22 @@
     "preview": false,
     "proposable": false,
     "title": "Find in a sheet"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update sheet"
   },
   {
     "automation": true,

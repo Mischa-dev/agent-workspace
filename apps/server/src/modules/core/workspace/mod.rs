@@ -37,6 +37,7 @@ impl CoreModule for Module {
         module.operations(crate::events::activity::register_ops);
         module.operations(crate::links::ops::register_ops);
         module.operations(crate::files::ops::register_ops);
+        module.operations(crate::files::tool_ops::register_ops);
         module.operations(crate::export::ops::register_ops);
         module.operations(crate::metering::ops::register_ops);
         module.operations(crate::budgets::ops::register_ops);

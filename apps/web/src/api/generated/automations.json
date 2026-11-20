@@ -133,6 +133,18 @@
   },
   {
     "kind": "create",
+    "module": "collections",
+    "name": "collection_create",
+    "title": "Create collection"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "collection_update",
+    "title": "Update collection"
+  },
+  {
+    "kind": "create",
     "module": "messages",
     "name": "comment_create",
     "title": "Comment"
@@ -346,6 +358,18 @@
     "module": "tasks",
     "name": "field_update",
     "title": "Update field"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "file_delete",
+    "title": "Remove file"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "file_upload",
+    "title": "Upload file"
   },
   {
     "kind": "create",
@@ -788,6 +812,12 @@
   {
     "kind": "create",
     "module": "collections",
+    "name": "record_create_many",
+    "title": "Add records"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
     "name": "record_template_create",
     "title": "Create a record template"
   },
@@ -802,6 +832,12 @@
     "module": "collections",
     "name": "record_update",
     "title": "Update a record"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "record_update_many",
+    "title": "Update records"
   },
   {
     "kind": "create",
@@ -1032,6 +1068,12 @@
     "title": "Chart a sheet range"
   },
   {
+    "kind": "create",
+    "module": "sheets",
+    "name": "sheet_create",
+    "title": "Create sheet"
+  },
+  {
     "kind": "change",
     "module": "sheets",
     "name": "sheet_range_set",
@@ -1042,6 +1084,12 @@
     "module": "sheets",
     "name": "sheet_row_add",
     "title": "Add a sheet row"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_update",
+    "title": "Update sheet"
   },
   {
     "kind": "create",

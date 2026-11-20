@@ -92,9 +92,10 @@
     "public_api.rs": 1
   },
   "hand_built_links": {
-    "mcp.rs": 2,
+    "collections/tool_ops.rs": 1,
     "page_docs/parity.rs": 1,
     "page_docs/testing.rs": 1,
+    "sheets/tool_ops.rs": 1,
     "work_items.rs": 2
   },
   "log_readers": {

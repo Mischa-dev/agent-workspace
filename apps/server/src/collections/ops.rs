@@ -113,7 +113,7 @@ impl Operation for RecordCreate {
         back to the message, takes its first line as the title unless you give one, and with \
         saySo the conversation says you made it. Pass template to start from a record template \
         (record_template_list). Records of a collection that acts like tasks are tasks: use \
-        task_create. record_write changes many records at once.";
+        task_create. record_update_many changes many records at once.";
 
     type Input = RecordCreateInput;
     type Output = RecordCreateOutput;
@@ -363,7 +363,7 @@ impl Operation for RecordUpdate {
         the version you read as expectedVersion. If your role only suggests on records, the \
         change becomes a proposal (proposalId) that someone who edits the record accepts or \
         rejects, from its request card or with proposal_decide; it is then written as yours. \
-        record_write changes many records at once.";
+        record_update_many changes many records at once.";
 
     type Input = RecordUpdateInput;
     type Output = RecordUpdateOutput;
@@ -663,7 +663,7 @@ impl Operation for FormulaPreview {
     const TITLE: &'static str = "Preview a formula";
     const DESCRIPTION: &'static str = "Check a formula field's formula without saving it, and \
         see its value on one record of the collection (the first, or the record numbered). \
-        Answers what to fix when it can't be saved; collection_write saves it.";
+        Answers what to fix when it can't be saved; collection_create saves it.";
 
     type Input = FormulaPreviewInput;
     type Output = FormulaPreviewOutput;

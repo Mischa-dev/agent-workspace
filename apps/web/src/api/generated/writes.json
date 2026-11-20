@@ -151,6 +151,16 @@
   },
   {
     "kind": "create",
+    "name": "collection_create",
+    "title": "Create collection"
+  },
+  {
+    "kind": "change",
+    "name": "collection_update",
+    "title": "Update collection"
+  },
+  {
+    "kind": "create",
     "name": "comment_create",
     "title": "Comment"
   },
@@ -393,6 +403,16 @@
     "kind": "change",
     "name": "field_update",
     "title": "Update field"
+  },
+  {
+    "kind": "change",
+    "name": "file_delete",
+    "title": "Remove file"
+  },
+  {
+    "kind": "create",
+    "name": "file_upload",
+    "title": "Upload file"
   },
   {
     "kind": "create",
@@ -821,6 +841,11 @@
   },
   {
     "kind": "create",
+    "name": "record_create_many",
+    "title": "Add records"
+  },
+  {
+    "kind": "create",
     "name": "record_template_create",
     "title": "Create a record template"
   },
@@ -833,6 +858,11 @@
     "kind": "change",
     "name": "record_update",
     "title": "Update a record"
+  },
+  {
+    "kind": "change",
+    "name": "record_update_many",
+    "title": "Update records"
   },
   {
     "kind": "create",
@@ -1035,6 +1065,11 @@
     "title": "Chart a sheet range"
   },
   {
+    "kind": "create",
+    "name": "sheet_create",
+    "title": "Create sheet"
+  },
+  {
     "kind": "change",
     "name": "sheet_range_set",
     "title": "Name a sheet range"
@@ -1043,6 +1078,11 @@
     "kind": "change",
     "name": "sheet_row_add",
     "title": "Add a sheet row"
+  },
+  {
+    "kind": "change",
+    "name": "sheet_update",
+    "title": "Update sheet"
   },
   {
     "kind": "create",

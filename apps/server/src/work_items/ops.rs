@@ -150,7 +150,7 @@ pub struct TaskCreateInput {
     pub estimate: Option<f64>,
     /// Custom field values by field name (see field_list), such as
     /// {"Risk": "High", "Owner": "@ana", "Shipped": true}. In a collection
-    /// that acts like a task, its own fields (see collection_describe).
+    /// that acts like a task, its own fields (see collection_get).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
@@ -1548,7 +1548,7 @@ impl Operation for InitiativeList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List initiatives";
     const DESCRIPTION: &'static str = "The workspace's initiatives: work that spans spaces, \
-        each a record of the workspace's Initiatives collection (change one with record_write \
+        each a record of the workspace's Initiatives collection (change one with record_update_many \
         there) with its milestones in the spaces you can see and their task counts. Put a \
         milestone in one with milestone_write's initiative; make one with initiative_create.";
 
@@ -1614,7 +1614,7 @@ impl Operation for InitiativeCreate {
     const DESCRIPTION: &'static str = "Start an initiative: work that spans spaces, followed \
         through its milestones. It is a record of the workspace's Initiatives collection \
         (made with Owner, Status, Target date and Health fields the first time), so it is \
-        changed with record_write there. Add milestones with milestone_write's initiative.";
+        changed with record_update_many there. Add milestones with milestone_write's initiative.";
 
     type Input = InitiativeCreateInput;
     type Output = InitiativeCreateOutput;
