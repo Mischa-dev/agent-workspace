@@ -533,7 +533,11 @@ pub(crate) async fn page_get(
             updated_at: page.updated_at,
             stale: page.stale,
             archived: page.archived,
-            inside: page.ancestors.into_iter().map(PageCrumbLine::from).collect(),
+            inside: page
+                .ancestors
+                .into_iter()
+                .map(PageCrumbLine::from)
+                .collect(),
             pages_inside: page.children.into_iter().map(PageCrumbLine::from).collect(),
             history: page
                 .revisions
