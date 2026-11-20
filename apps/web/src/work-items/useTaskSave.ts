@@ -323,8 +323,15 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     if (written.proposalId) {
       showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
     } else {
-      // Their own task, which they may change: it landed.
+      // Their own task, which they may change: it landed. As on the direct
+      // path, a change queued behind it starts from what the server stored,
+      // which may be written its own way (a URL gains https://).
       await queryClient.invalidateQueries({ queryKey: queryKeys.workItem(task.projectId, task.id) })
+      const holds = fieldValue(current(), entry.field)
+      const next = entries.current.get(entry.field)
+      if (next && next.id !== id && entry.mine !== null && next.base === entry.mine && holds !== entry.mine) {
+        entries.current.set(entry.field, { ...next, base: holds })
+      }
     }
   }
 
