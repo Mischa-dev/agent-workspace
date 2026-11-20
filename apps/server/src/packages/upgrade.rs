@@ -1012,6 +1012,8 @@ async fn take_new(
                     name,
                     description: String::new(),
                     title_name: String::new(),
+                    // Growing never turns this off.
+                    acts_like_task: false,
                     fields: additions.fields,
                     views: additions.views,
                 }],

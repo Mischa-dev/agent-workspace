@@ -323,6 +323,7 @@
 
 .aw-shortcuts dd {
   display: flex;
+  align-items: flex-start;
   gap: var(--space-1);
   margin: 0;
 }

@@ -349,11 +349,13 @@ fn middle_operations<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str
 pub const CUSTOM_FIELD_PREFIX: &str = "field:";
 
 /// The fields whose `changes` hold IDs, and what each names.
-const ID_FIELDS: [(&str, IdKind); 5] = [
+const ID_FIELDS: [(&str, IdKind); 7] = [
     ("assignee", IdKind::Member),
+    ("delegate", IdKind::Member),
     ("type", IdKind::Type),
     ("status", IdKind::Status),
     ("milestone", IdKind::Milestone),
+    ("cycle", IdKind::Cycle),
     ("parent", IdKind::Task),
 ];
 
@@ -363,6 +365,7 @@ enum IdKind {
     Type,
     Status,
     Milestone,
+    Cycle,
     Task,
 }
 
@@ -428,6 +431,9 @@ pub async fn label_changes(
             }
             IdKind::Milestone => {
                 "SELECT id, name FROM project_milestones WHERE project_id = $1 AND id = ANY($2)"
+            }
+            IdKind::Cycle => {
+                "SELECT id, COALESCE(NULLIF(name, ''), 'Cycle ' || number) FROM cycles WHERE space_id = $1 AND id = ANY($2)"
             }
             IdKind::Task => {
                 "SELECT item.id, project.project_key || '-' || item.number FROM task_rows item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = ANY($2)"

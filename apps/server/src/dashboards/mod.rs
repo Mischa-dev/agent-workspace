@@ -42,6 +42,9 @@ pub enum TileKind {
     /// A block of a sheet (a named range, or such as Summary!A1:B9) as a
     /// chart: labels from its first column, numbers from its second.
     Sheet,
+    /// A saved query's stored answer over outside data (T1.34): a table, or
+    /// with a style a chart of its first two columns.
+    Query,
 }
 
 /// A tile as stored.
@@ -65,7 +68,11 @@ pub struct Tile {
     /// "Summary!A1:B9".
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub range: String,
-    /// A sheet tile's look; a bar chart when left out.
+    /// A query tile's saved query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<Uuid>,
+    /// A sheet tile's look (a bar chart when left out); a query tile's chart
+    /// (a table when left out).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<views::ChartStyle>,
     /// Columns of twelve it spans.
@@ -312,6 +319,21 @@ pub struct Figures {
     pub groups: Vec<FigureGroup>,
     /// Any other view: its first few records' titles.
     pub records: Vec<String>,
+    /// A query tile shown as a table: its columns and first rows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<Value>,
+    /// A query tile: when its answer was stored, and whether a run is under
+    /// way, rows past its cap were left out, or its last run failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_at: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -336,6 +358,8 @@ pub enum Unseen {
     Tasks,
     /// A sheet tile's range is gone: its name was removed, or its cells.
     Range,
+    /// A query tile's query hasn't run yet (or not since it was reviewed).
+    NotRun,
 }
 
 /// A view tile's figures as `reader` sees them. `can_view_tasks` is whether
@@ -386,6 +410,12 @@ pub async fn figures(
         measure: None,
         groups: Vec::new(),
         records: Vec::new(),
+        columns: Vec::new(),
+        rows: Vec::new(),
+        ran_at: None,
+        running: false,
+        truncated: false,
+        error: None,
     };
     if chart {
         let measure = config.chart.map(|chart| chart.measure).unwrap_or_default();
@@ -559,5 +589,108 @@ pub async fn sheet_figures(
         measure: Some(format!("sum of {}", header.as_deref().unwrap_or("values"))),
         groups,
         records: Vec::new(),
+        columns: Vec::new(),
+        rows: Vec::new(),
+        ran_at: None,
+        running: false,
+        truncated: false,
+        error: None,
     }))
+}
+
+/// Rows of an answer a query tile shown as a table holds.
+pub const QUERY_TILE_ROWS: usize = 20;
+
+/// A query tile's figures as a reader sees them (T1.34): the stored answer
+/// they may see (the latest with data.connect, else the last reviewed one
+/// of a shared query), as a table, or with a style as a chart of its first
+/// column (labels) and second (numbers; the first if it's the only one).
+pub async fn query_figures(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    tile: &Tile,
+    full: bool,
+) -> Result<Result<Figures, Unseen>, AppError> {
+    use crate::outside_data;
+    let Some(query_id) = tile.query else {
+        return Ok(Err(Unseen::Gone));
+    };
+    let Some(query) = outside_data::query(&mut *connection, project_id, query_id, false)
+        .await?
+        .filter(|query| full || query.shared)
+    else {
+        return Ok(Err(Unseen::Gone));
+    };
+    let answers = outside_data::stored(&mut *connection, query_id).await?;
+    let Some(answer) = outside_data::answer_for(&query, answers, full)
+        .filter(|answer| answer.ran_at.is_some() || answer.pending_since.is_some())
+    else {
+        return Ok(Err(Unseen::NotRun));
+    };
+    let entry = outside_data::ops::answer_entry(answer, full, None);
+    let mut figures = Figures {
+        view_type: "query".to_owned(),
+        view_name: query.name.clone(),
+        collection_name: String::new(),
+        total: i64::from(entry.row_count),
+        value: None,
+        style: None,
+        measure: None,
+        groups: Vec::new(),
+        records: Vec::new(),
+        columns: Vec::new(),
+        rows: Vec::new(),
+        ran_at: entry.ran_at,
+        running: entry.running,
+        truncated: entry.truncated,
+        error: entry.error,
+    };
+    let Some(style) = tile.style else {
+        figures.columns = entry.columns;
+        figures.rows = entry.rows.into_iter().take(QUERY_TILE_ROWS).collect();
+        return Ok(Ok(figures));
+    };
+    let value_column = usize::from(entry.columns.len() > 1);
+    let mut sum = 0.0;
+    for row in &entry.rows {
+        let cells = row.as_array().map(Vec::as_slice).unwrap_or_default();
+        let number = match cells.get(value_column) {
+            Some(Value::Number(number)) => number.as_f64(),
+            Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        };
+        let Some(number) = number.filter(|number| number.is_finite()) else {
+            continue;
+        };
+        let label = match (value_column, cells.first()) {
+            (0, _) => format!("Row {}", figures.groups.len() + 1),
+            (_, Some(Value::String(text))) => text.clone(),
+            (_, Some(Value::Null) | None) => String::new(),
+            (_, Some(other)) => other.to_string(),
+        };
+        sum += number;
+        if let Some(group) = figures.groups.iter_mut().find(|group| group.name == label) {
+            group.count += 1;
+            group.value = Some(group.value.unwrap_or(0.0) + number);
+        } else if figures.groups.len() < SHEET_TILE_GROUPS {
+            figures.groups.push(FigureGroup {
+                key: label.clone(),
+                name: label,
+                color: None,
+                count: 1,
+                value: Some(number),
+            });
+        }
+    }
+    figures.view_type = "chart".to_owned();
+    figures.value = Some(sum);
+    figures.style = Some(style_name(style).to_owned());
+    figures.measure = Some(format!(
+        "sum of {}",
+        entry
+            .columns
+            .get(value_column)
+            .map_or("values", String::as_str)
+    ));
+    Ok(Ok(figures))
 }

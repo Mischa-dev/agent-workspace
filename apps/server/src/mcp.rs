@@ -113,6 +113,7 @@ pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
 pub(crate) mod task_move;
+pub(crate) mod task_proposals;
 pub(crate) mod tasks;
 mod tool_permissions;
 pub(crate) mod usage_tools;
@@ -492,7 +493,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, long_text, number, date, single_choice, multiple_choice, status (options with a category: backlog, unstarted, started, review, verification, completed, canceled), person, url, email, phone, checkbox, link (target task, page, or record:<collection name> for that collection's records), and the record's own created_time, edited_time, created_by, edited_by and auto_id, which nobody writes. A field's type never changes. Needs collections.build.",
+        description = "Create a collection with its fields and views in one call (name, fields: [{name, type, options}], views: [{name, filters, sort, groupBy, columns}]), or change one (pass collection: its name or ID). Fields and views are matched by name, so writing the same definition again changes nothing; pass field or view to rename one, remove: true to remove a view, archived: true to archive a field or the collection (nothing is deleted) and false to restore it. Field types: text, long_text, number, date, single_choice, multiple_choice, status (options with a category: backlog, unstarted, started, review, verification, completed, canceled), person, url, email, phone, checkbox, link (target task, page, or record:<collection name> for that collection's records), file (the record's own files: file_upload to the record, then name their fileIds), and the record's own created_time, edited_time, created_by, edited_by and auto_id, which nobody writes. A field's type never changes. Needs collections.build.",
         annotations(
             title = "Write collection",
             read_only_hint = false,

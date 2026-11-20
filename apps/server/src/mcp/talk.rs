@@ -494,7 +494,7 @@ pub struct ReadMark {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Person {
+pub(crate) struct PersonFound {
     pub id: String,
     pub name: String,
     pub handle: String,
@@ -506,7 +506,7 @@ pub(crate) struct Person {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PeopleValue {
-    pub people: Vec<Person>,
+    pub people: Vec<PersonFound>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -2128,7 +2128,7 @@ pub(crate) async fn people_search(
         Ok::<_, AppError>(ToolResult::ok(PeopleValue {
             people: rows
                 .into_iter()
-                .map(|row| Person {
+                .map(|row| PersonFound {
                     id: row.id.to_string(),
                     name: row.name,
                     handle: row.handle,

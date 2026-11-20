@@ -173,6 +173,8 @@ struct Write {
     reservation: IdempotencyReservation,
     actor: CommandActor,
     project_key: String,
+    /// Whether the actor may build the project's collections too.
+    can_build: bool,
 }
 
 impl Write {
@@ -229,6 +231,7 @@ async fn start_write<T: Serialize>(
     if !allows(&actor, &membership, action)? {
         return Err(AppError::Forbidden);
     }
+    let can_build = allows(&actor, &membership, Action::CollectionBuild)?;
     if membership.project_archived_at.is_some() {
         return Err(AppError::ProjectArchived);
     }
@@ -253,6 +256,7 @@ async fn start_write<T: Serialize>(
             reservation,
             actor,
             project_key,
+            can_build,
         }))),
     }
 }
@@ -305,10 +309,14 @@ fn task_fields_forbidden() -> Response {
 }
 
 fn builtin_collection() -> Response {
+    builtin_refusal(super::tasks::READ_ONLY_MESSAGE)
+}
+
+fn builtin_refusal(message: &'static str) -> Response {
     refusal(
         StatusCode::CONFLICT,
         "builtin_collection",
-        super::tasks::READ_ONLY_MESSAGE,
+        message,
         Value::Null,
     )
 }
@@ -610,6 +618,17 @@ struct UpdateCollectionRequest {
     position: Option<i32>,
     archived: Option<bool>,
     acts_like_task: Option<bool>,
+    /// The statuses its tasks use and the one they start in; both are
+    /// replaced together.
+    workflow: Option<WorkflowRequest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkflowRequest {
+    /// [] uses all of the space's statuses.
+    statuses: Vec<Uuid>,
+    start_status_id: Option<Uuid>,
 }
 
 async fn update_collection(
@@ -668,8 +687,8 @@ async fn update_collection(
         )
         .await
     );
-    if write.collection(collection_id).await?.is_tasks() {
-        return Ok(builtin_collection());
+    if let Some(message) = write.collection(collection_id).await?.read_only_message() {
+        return Ok(builtin_refusal(message));
     }
     // Switching on makes a task for each record.
     if request.acts_like_task == Some(true)
@@ -694,6 +713,13 @@ async fn update_collection(
             position: request.position,
             archived: request.archived,
             acts_like_task: request.acts_like_task,
+            workflow: request
+                .workflow
+                .as_ref()
+                .map(|workflow| super::task_like::Workflow {
+                    statuses: (!workflow.statuses.is_empty()).then(|| workflow.statuses.clone()),
+                    start: workflow.start_status_id,
+                }),
             expected_version: Some(request.expected_version),
         },
     )
@@ -798,6 +824,15 @@ struct CreateFieldRequest {
     formula: Option<String>,
     /// A button field's label and steps.
     button: Option<crate::fields::button::ButtonInput>,
+    /// A rollup field's relation, field and aggregate.
+    rollup: Option<crate::fields::rollup::RollupInput>,
+    /// A relation that's two-way: its pair on the other collection is
+    /// called `pairName` (that collection's own name when left out).
+    #[serde(default)]
+    two_way: bool,
+    pair_name: Option<String>,
+    /// The rules its values are held to.
+    rules: Option<crate::fields::rules::RulesInput>,
 }
 
 fn field_name_message() -> String {
@@ -888,6 +923,11 @@ async fn create_field(
             position: request.position,
             formula: request.formula.clone(),
             button: request.button.clone(),
+            rollup: request.rollup.clone(),
+            pair: request
+                .two_way
+                .then(|| request.pair_name.clone().unwrap_or_default()),
+            rules: request.rules.clone(),
         },
     )
     .await?
@@ -950,6 +990,10 @@ struct UpdateFieldRequest {
     formula: Option<String>,
     /// A button field's new label and steps.
     button: Option<crate::fields::button::ButtonInput>,
+    /// A rollup field's new relation, field and aggregate.
+    rollup: Option<crate::fields::rollup::RollupInput>,
+    /// Its rules, all at once.
+    rules: Option<crate::fields::rules::RulesInput>,
 }
 
 async fn update_field(
@@ -1042,6 +1086,8 @@ async fn update_field(
             archived: request.archived,
             formula: request.formula.clone(),
             button: request.button.clone(),
+            rollup: request.rollup.clone(),
+            rules: request.rules.clone(),
             expected_version: Some(request.expected_version),
         },
     )
@@ -1499,6 +1545,7 @@ async fn write_record(
         project_id,
         &collection,
         writer,
+        write.can_build,
         &definitions,
         "values",
         std::slice::from_ref(&input),

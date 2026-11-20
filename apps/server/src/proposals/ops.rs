@@ -241,6 +241,9 @@ impl Operation for ProposalDecide {
         "page.discussion.updated",
         "sheet.proposals_changed",
         "whiteboard.proposals_changed",
+        "record.proposals_changed",
+        "task.proposals_changed",
+        "task.updated",
     ];
     const TITLE: &'static str = "Decide a proposal";
     const DESCRIPTION: &'static str = "Accept, reject or withdraw a proposed change \

@@ -62,7 +62,9 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
+    write_isolation::{
+        base_tables, digest_changes, digest_ignoring, refresh_digest, table_fingerprints,
+    },
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -2159,8 +2161,19 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "comment_list",
     "dashboard_get",
     "dashboard_list",
+    "data_connection_list",
+    "data_query_list",
+    "data_query_get",
     "whiteboard_template_list",
     "milestone_list",
+    "cycle_list",
+    "triage_rule_list",
+    "initiative_list",
+    "project_status_get",
+    "form_list",
+    "form_get",
+    "record_template_list",
+    "recurring_record_list",
     "module_list",
     "module_open",
     "connected_module_list",
@@ -2604,6 +2617,37 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("milestone_list"),
+        by_project("cycle_list"),
+        by_project("triage_rule_list"),
+        by_project("project_status_get"),
+        // T1.28: B's forms neither list nor open in A.
+        by_project("form_list"),
+        case(
+            "form_get",
+            vec![json!({"form": a.form})],
+            vec![json!({"form": b.form})],
+            vec![],
+        ),
+        // T1.30: B's templates and schedules never list in A.
+        case(
+            "record_template_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        case(
+            "recurring_record_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        // T1.26: B's initiatives never list in A.
+        case(
+            "initiative_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("task_ready_list"),
         by_project("dependency_graph_get"),
         case(
@@ -2632,6 +2676,25 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "dashboard_get",
             vec![json!({"dashboard": a.dashboard})],
             vec![json!({"dashboard": b.dashboard})],
+            vec![],
+        ),
+        // T1.34: B's connections and queries neither list nor open in A.
+        case(
+            "data_connection_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "data_query_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "data_query_get",
+            vec![json!({"query": a.data_query})],
+            vec![json!({"query": b.data_query})],
             vec![],
         ),
         by_project("automation_list"),
@@ -3447,7 +3510,9 @@ async fn check_mcp(
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
-    let mut fingerprints = table_fingerprints(pool).await;
+    // The schema's tables, read once: they don't change during the sweep.
+    let tables = base_tables(pool).await;
+    let mut fingerprints = table_fingerprints(pool, &tables).await;
     let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -3508,8 +3573,15 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            fingerprints =
-                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+            fingerprints = refresh_digest(
+                pool,
+                &a_list,
+                READ_TOUCHES,
+                &tables,
+                &fingerprints,
+                &mut a_rows,
+            )
+            .await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(

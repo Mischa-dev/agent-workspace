@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useProjectExperience } from '../experience/layout'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { useShellPage } from '../shell/shellStore'
 import { useProjects } from '../projects/hooks'
 import { ButtonLink, EmptyState, ErrorState, ListSkeleton, PageHeader, Section, StatusChip, actorKind, countLabel } from '../ui'
@@ -11,9 +11,10 @@ import { useListKeys } from '../ui/listKeys'
 import { workItemHref, workItemsHref } from '../work-items/links'
 import { useOpenAsYouGo } from '../work-items/shortcutKeys'
 import { TaskPanel } from '../work-items/TaskPanel'
+import { UpdateLine } from '../work-items/UpdateLine'
 import { PriorityIcon, StatusIcon } from '../work-items/WorkItemIcons'
 import type { WorkItemPriority } from '../work-items/types'
-import { getMyWork, viewKeys, type MyWorkSection, type MyWorkTask } from './api'
+import { getMyWork, viewKeys, type MyWorkSection, type MyWorkTask, type MyWorkUpdate } from './api'
 import { dayLabel } from './dates'
 import './views.css'
 
@@ -106,6 +107,7 @@ export function MyWorkPage() {
             Tasks assigned to you, claimed by your agents or waiting for your review show up here.
           </EmptyState>
         ) : null}
+        {work.data?.updates?.length ? <UpdatesSection updates={work.data.updates} /> : null}
         {work.data && !empty ? (
           <>
             <TaskSection
@@ -146,6 +148,26 @@ export function MyWorkPage() {
         ) : null}
       </div>
     </>
+  )
+}
+
+/** The latest update of each of your projects from the last two weeks. */
+function UpdatesSection({ updates }: { updates: MyWorkUpdate[] }) {
+  const experience = useHomeExperience()
+  if (!experience.shows('workspace.project_updates')) return null
+  return (
+    <Section description="How your projects are going, from their latest updates." id="my-work-updates" title="Project updates">
+      <ul aria-label="Project updates" className="aw-mywork__updates">
+        {updates.map((update) =>
+          update.latestUpdate ? (
+            <li key={update.spaceId}>
+              <span className="aw-mywork__update-space">{update.spaceName}</span>
+              <UpdateLine spaceId={update.spaceId} update={update.latestUpdate} />
+            </li>
+          ) : null,
+        )}
+      </ul>
+    </Section>
   )
 }
 

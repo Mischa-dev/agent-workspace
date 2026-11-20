@@ -191,6 +191,7 @@ pub fn builtin_definitions() -> impl Iterator<
 /// A template, built in or saved, as people and agents read it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "WorkspaceTemplateView")]
 pub struct TemplateView {
     /// A built-in template's id (such as "software_team"), or a saved one's
     /// ID. Pass it to workspace_template_apply.
@@ -1323,6 +1324,19 @@ pub(crate) async fn starter_contents(
                 problem_found.message,
             ))
         })?;
+        // A collection whose records act like tasks is switched on too, as
+        // collection_write would (T1.25).
+        if wanted.acts_like_task && !collection.acts_like_task {
+            if let Some(refused) =
+                collections::task_like::refusal(transaction, &collection, true, false).await?
+            {
+                return Err(ApplyError::Problem(problem(
+                    format!("{at}.actsLikeTask"),
+                    refused,
+                )));
+            }
+            collections::task_like::switch(transaction, collection.id, actor_id, true).await?;
+        }
         if created {
             changes.push(format!("Made the {name} collection in {project_key}."));
         } else if !applied.is_empty() {
@@ -1470,8 +1484,8 @@ async fn project_snapshot(
             continue;
         };
         // The Tasks collection comes with every project; its tasks travel
-        // as tasks.
-        if collection.is_tasks() {
+        // as tasks. The Pages collection's records are its pages.
+        if collection.is_tasks() || collection.is_pages() {
             continue;
         }
         let fields =

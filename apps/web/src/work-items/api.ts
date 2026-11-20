@@ -55,6 +55,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
   const itemType = record(item.itemType)
   const status = record(item.status)
   const assignee = item.assignee === null ? null : record(item.assignee)
+  const delegate = item.delegate ? record(item.delegate) : null
   const capabilities = record(item.capabilities)
   return {
     id: string(item.id),
@@ -79,6 +80,16 @@ export function normalizeWorkItem(value: unknown): WorkItem {
             handle: string(assignee.handle),
             kind: string(assignee.kind),
             active: boolean(assignee.active),
+          },
+    delegate:
+      delegate === null
+        ? null
+        : {
+            actorId: string(delegate.actorId),
+            displayName: string(delegate.displayName),
+            handle: string(delegate.handle),
+            kind: string(delegate.kind),
+            active: true,
           },
     version: number(item.version),
     archivedAt: nullableString(item.archivedAt),

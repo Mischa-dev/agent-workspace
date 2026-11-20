@@ -307,6 +307,10 @@ pub struct CollectionUpdatedPayload {
     pub collection_id: Uuid,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub record_ids: Vec<Uuid>,
+    /// "computed" when only worked-out values changed (rollups after a
+    /// related record changed); absent for a write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
 
 /// The most records one `collection.updated` names; a larger change names
@@ -1199,9 +1203,37 @@ pub async fn enqueue_collection_updated(
         OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
             collection_id,
             record_ids,
+            cause: None,
         }),
     )
     .await
+}
+
+/// [`enqueue_collection_updated`] on a connection inside the caller's
+/// transaction, saying why (`cause`, such as "computed" or "paired").
+pub async fn enqueue_records_changed(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    record_ids: &[Uuid],
+    cause: &str,
+) -> Result<Uuid, AppError> {
+    let mut record_ids = record_ids.to_vec();
+    record_ids.sort_unstable();
+    record_ids.dedup();
+    if record_ids.len() > MAX_COLLECTION_EVENT_RECORDS {
+        record_ids.clear();
+    }
+    let event = NewOutboxEvent::new(
+        project_id,
+        OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
+            collection_id,
+            record_ids,
+            cause: Some(cause.to_owned()),
+        }),
+    )
+    .map_err(|_| AppError::Internal("construct typed outbox event"))?;
+    enqueue_on(connection, &event).await
 }
 
 /// Enqueue `project.modules.updated`: a space's own module switches

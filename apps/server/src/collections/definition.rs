@@ -51,8 +51,8 @@ pub struct FieldWrite {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// For a new field: text, long_text, number, date, single_choice,
-    /// multiple_choice, status, person, url, email, phone, checkbox or link;
-    /// created_time, edited_time, created_by, edited_by or auto_id, which
+    /// multiple_choice, status, person, url, email, phone, checkbox, link or
+    /// file (the record's own files, uploaded to it first); created_time, edited_time, created_by, edited_by or auto_id, which
     /// show the record's own and take no values; formula, worked out from
     /// the record's other fields (give `formula`); or button, which runs
     /// operations when pressed (give `button`). It never changes.
@@ -85,6 +85,22 @@ pub struct FieldWrite {
     /// operation and its arguments, filled from the record when pressed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button: Option<fields::button::ButtonInput>,
+    /// A rollup field's rollup: the relation it reads, the related records'
+    /// field, and how to put their values together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollup: Option<fields::rollup::RollupInput>,
+    /// For a new relation field: also add its pair on the other collection,
+    /// listing the records that name each of its records, kept in step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub two_way: Option<bool>,
+    /// A two-way relation's pair's name (the other collection's field);
+    /// this collection's name when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_name: Option<String>,
+    /// The rules its values are held to, all at once (a rule left out is
+    /// off): required, unique, default, min, max, pattern, buildersOnly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<fields::rules::RulesInput>,
 }
 
 /// A filter by field name, as agents write one.
@@ -209,6 +225,9 @@ pub struct CollectionDefinition {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub title_name: String,
+    /// Its records act like tasks (T1.25).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub acts_like_task: bool,
     pub fields: Vec<FieldWrite>,
     pub views: Vec<ViewWrite>,
 }
@@ -372,6 +391,7 @@ pub async fn describe(
         name: collection.name.clone(),
         description: collection.description.clone(),
         title_name: collection.title_name.clone(),
+        acts_like_task: collection.acts_like_task,
         fields: definitions
             .iter()
             .filter(|field| !field.archived)
@@ -920,7 +940,7 @@ pub async fn apply(
                     ProblemKind::Invalid,
                     format!("{at}.type"),
                     format!(
-                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by, auto_id, formula or button."
+                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, file, created_time, edited_time, created_by, edited_by, auto_id, formula or button."
                     ),
                 ));
             };
@@ -975,6 +995,10 @@ pub async fn apply(
                     position: write.position,
                     formula: write.formula.clone(),
                     button: write.button.clone(),
+                    rollup: write.rollup.clone(),
+                    pair: (write.two_way == Some(true))
+                        .then(|| write.pair_name.clone().unwrap_or_default()),
+                    rules: write.rules.clone(),
                 },
             )
             .await?
@@ -1080,6 +1104,8 @@ pub async fn apply(
                 archived: write.archived,
                 formula: write.formula.clone(),
                 button: write.button.clone(),
+                rollup: write.rollup.clone(),
+                rules: write.rules.clone(),
                 expected_version: None,
             },
         )
@@ -1430,6 +1456,9 @@ mod tests {
                 collection: None,
                 formula: None,
                 button: None,
+                inverse: None,
+                rollup: None,
+                rules: None,
             },
             position: 0,
             archived: false,

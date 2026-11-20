@@ -319,6 +319,61 @@ pub static TASK_ASSIGNED: EventType = addressed(
     Some("task"),
     "A task was assigned to you",
 );
+pub static TASK_DELEGATED: EventType = addressed(
+    "task.delegated",
+    "tasks",
+    Some("task"),
+    "A task was handed to you to do",
+);
+pub static TASK_PROPOSALS_CHANGED: EventType = fact(
+    "task.proposals_changed",
+    "tasks",
+    Some("task"),
+    "A change to a task was proposed, or a proposal on it decided",
+);
+pub static TASK_TRIAGED: EventType = fact(
+    "task.triaged",
+    "tasks",
+    Some("task"),
+    "A task was accepted, declined, marked a duplicate or snoozed in triage",
+)
+.automatable();
+pub static TRIAGE_RULES_CHANGED: EventType = fact(
+    "triage.rules_changed",
+    "tasks",
+    None,
+    "A space's triage rules were added, changed, moved or removed",
+);
+pub static CYCLES_CHANGED: EventType = fact(
+    "cycles.changed",
+    "tasks",
+    None,
+    "A space's cycle settings changed, or a cycle was renamed",
+);
+pub static SPACE_STATUS_CHANGED: EventType = fact(
+    "space.status_changed",
+    "tasks",
+    None,
+    "A space's health, target date or lead changed, or someone posted an update",
+);
+pub static CYCLE_STARTED: EventType = fact(
+    "cycle.started",
+    "tasks",
+    None,
+    "A space's next cycle started",
+);
+pub static CYCLE_ENDED: EventType = fact(
+    "cycle.ended",
+    "tasks",
+    None,
+    "A space's cycle ended, its unfinished tasks rolled into the next",
+);
+pub static TASK_SNOOZE_ENDED: EventType = addressed(
+    "task.snooze_ended",
+    "tasks",
+    Some("task"),
+    "A task you snoozed is back in triage",
+);
 pub static COMMENT_MENTIONED: EventType = addressed(
     "comment.mentioned",
     "tasks",
@@ -473,6 +528,21 @@ pub static DASHBOARD_UPDATED: EventType = fact(
 )
 .legacy(&["dashboard.updated"]);
 
+// --- outside data (T1.34) ---------------------------------------------------
+pub static DATA_CONNECTION_CHANGED: EventType = fact(
+    "data_connection.changed",
+    "collections",
+    Some("data_connection"),
+    "An outside data connection was made, changed or removed",
+);
+pub static DATA_QUERY_CHANGED: EventType = fact(
+    "data_query.changed",
+    "collections",
+    Some("data_query"),
+    "A saved outside data query was made, changed, reviewed, shared or removed, or a run of \
+     it stored its answer",
+);
+
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
     "whiteboard.scene_changed",
@@ -526,6 +596,20 @@ pub static RECORD_UPDATED: EventType = fact(
     "A record in a collection changed",
 )
 .automatable();
+
+pub static RECORD_PROPOSALS_CHANGED: EventType = fact(
+    "record.proposals_changed",
+    "collections",
+    Some("record"),
+    "A change to a record was proposed, or a proposal on it decided",
+);
+
+pub static RECORD_VERSION_RESTORED: EventType = fact(
+    "record.version_restored",
+    "collections",
+    Some("record"),
+    "An earlier version of a record was put back",
+);
 
 // --- code ------------------------------------------------------------------
 pub static PULL_REQUEST_CHECKS_FAILED: EventType = fact(
@@ -871,6 +955,15 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_CREATED,
         &TASK_UPDATED,
         &TASK_ASSIGNED,
+        &TASK_DELEGATED,
+        &TASK_PROPOSALS_CHANGED,
+        &TASK_TRIAGED,
+        &TASK_SNOOZE_ENDED,
+        &TRIAGE_RULES_CHANGED,
+        &CYCLES_CHANGED,
+        &SPACE_STATUS_CHANGED,
+        &CYCLE_STARTED,
+        &CYCLE_ENDED,
         &COMMENT_MENTIONED,
         &TASK_PLACEMENT_CHANGED,
         &TASK_COMMENTED,
@@ -894,6 +987,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_RANGES_CHANGED,
         &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
+        &DATA_CONNECTION_CHANGED,
+        &DATA_QUERY_CHANGED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
@@ -901,6 +996,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
         &RECORD_UPDATED,
+        &RECORD_PROPOSALS_CHANGED,
+        &RECORD_VERSION_RESTORED,
         &PULL_REQUEST_CHECKS_FAILED,
         &PULL_REQUEST_CHECKS_PASSED,
         &PULL_REQUEST_MERGED,

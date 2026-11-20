@@ -65,6 +65,61 @@ pub(crate) struct MyWork {
     pub claimed: MyWorkSection,
     /// Tasks in review that you asked for or watch, assigned to someone else.
     pub review: MyWorkSection,
+    /// The latest update of each of your spaces from the last two weeks,
+    /// newest first (T1.43).
+    pub updates: Vec<SpaceUpdate>,
+}
+
+/// A space's latest update, as My work lists it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceUpdate {
+    pub space_name: String,
+    pub space_key: String,
+    #[serde(flatten)]
+    pub status: super::project_status::SpaceStatus,
+}
+
+/// How far back My work shows an update.
+const UPDATES_WITHIN_DAYS: i32 = 14;
+
+/// The latest update of each of `projects` from the last two weeks, that
+/// `reader` can read, newest first.
+async fn my_updates(
+    pool: &PgPool,
+    reader: Uuid,
+    projects: &[Uuid],
+) -> Result<Vec<SpaceUpdate>, AppError> {
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    let recent = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT status.space_id, project.name, project.project_key
+        FROM space_statuses status
+        JOIN projects project ON project.id = status.space_id
+        WHERE status.space_id = ANY($1)
+          AND status.latest_update_at > now() - make_interval(days => $2)
+        ORDER BY status.latest_update_at DESC
+        LIMIT 20
+        "#,
+    )
+    .bind(projects)
+    .bind(UPDATES_WITHIN_DAYS)
+    .fetch_all(&mut *connection)
+    .await?;
+    let spaces: Vec<Uuid> = recent.iter().map(|(space, _, _)| *space).collect();
+    let mut statuses = super::project_status::statuses_of(&mut connection, reader, &spaces).await?;
+    Ok(recent
+        .into_iter()
+        .filter_map(|(space_id, space_name, space_key)| {
+            let status = statuses.remove(&space_id)?;
+            status.latest_update.as_ref()?;
+            Some(SpaceUpdate {
+                space_name,
+                space_key,
+                status,
+            })
+        })
+        .collect())
 }
 
 /// The tasks the My work sections read. `$1` is the reader, `$2` the
@@ -213,6 +268,7 @@ pub(crate) async fn my_work(
             "item.updated_at, item.id",
         )
         .await?,
+        updates: my_updates(pool, reader, projects).await?,
     })
 }
 
