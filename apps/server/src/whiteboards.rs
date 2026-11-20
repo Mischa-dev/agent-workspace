@@ -941,11 +941,7 @@ pub async fn links(
                END AS title,
                CASE WHEN link.target_kind = 'work_item' AND item.id IS NOT NULL
                  THEN project.project_key || '-' || item.number::text END AS key,
-               CASE link.target_kind
-                 WHEN 'project' THEN '/projects/' || project.id::text
-                 WHEN 'work_item' THEN '/projects/' || project.id::text || '/work-items/' || link.target_id::text
-                 ELSE '/projects/' || project.id::text || '/pages/' || link.target_id::text
-               END AS url
+               '' AS url
         FROM whiteboard_links link
         JOIN projects project ON project.id = link.target_project_id AND project.archived_at IS NULL
         LEFT JOIN task_rows item ON link.target_kind = 'work_item' AND item.id = link.target_id
@@ -962,6 +958,15 @@ pub async fn links(
     .bind(caller.confined_project)
     .fetch_all(crate::db::scoped(pool))
     .await?;
+    for link in &mut links {
+        use crate::addresses::{Place, Target};
+        let place = match link.target_kind.as_str() {
+            "project" => Place::Home,
+            "work_item" => Place::Task(link.target_id),
+            _ => Place::Page(link.target_id),
+        };
+        link.url = Target::space(link.project_id, place).href();
+    }
     // A linked task's title is its current one: shown only with "see tasks"
     // in its project (role, and an app's agent limit), as task_open would;
     // otherwise the link keeps its key.

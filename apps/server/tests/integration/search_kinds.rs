@@ -112,7 +112,11 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
     // A workspace board lives in the workspace's own space (K4.10).
     assert!(hit["projectId"].is_string(), "{hit}");
     assert_ne!(hit["projectId"], work, "{hit}");
-    assert_eq!(hit["path"], format!("/whiteboards/{board}"), "{hit}");
+    assert_eq!(
+        hit["path"],
+        format!("/w/{}/whiteboards/{board}", setup.organization_id),
+        "{hit}"
+    );
     assert_eq!(hit["workspaceId"], setup.organization_id.to_string());
     let owner = hits(&setup, &setup.browser, "wombat").await;
     assert!(found(&owner, "sheet", &sheet), "{owner:?}");

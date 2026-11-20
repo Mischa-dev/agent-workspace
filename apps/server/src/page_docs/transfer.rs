@@ -417,7 +417,8 @@ enum EmbedTarget {
 }
 
 /// What an embed's same-origin path names, as the web's `embedTarget` reads
-/// it: `/projects/{p}/sheets/{s}?tab=&range=`, or a board at
+/// it: `/w/{ws}/s/{p}/sheets/{s}?tab=&range=` (or today's
+/// `/projects/{p}/sheets/{s}`), or a board at
 /// `…/whiteboards/{id}`.
 fn embed_target(href: &str) -> Option<EmbedTarget> {
     let base = url::Url::parse("https://app.invalid/").ok()?;
@@ -430,7 +431,8 @@ fn embed_target(href: &str) -> Option<EmbedTarget> {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     match segments.as_slice() {
-        ["projects", project, "sheets", sheet] => {
+        // Either shape of address, as the web reads it.
+        ["projects", project, "sheets", sheet] | ["w", _, "s", project, "sheets", sheet] => {
             let query = |name: &str| {
                 url.query_pairs()
                     .find(|(key, _)| key == name)
@@ -665,6 +667,15 @@ mod tests {
                 sheet_id: id,
                 tab_id: None,
                 range: Some("A1:B2".to_owned()),
+            })
+        );
+        assert_eq!(
+            embed_target(&format!("/w/acme/s/{id}/sheets/{id}")),
+            Some(EmbedTarget::Sheet {
+                project_id: id,
+                sheet_id: id,
+                tab_id: None,
+                range: None,
             })
         );
         assert_eq!(

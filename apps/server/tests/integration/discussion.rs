@@ -144,9 +144,12 @@ async fn things_have_discussions_as_visible_as_they_are() {
         .as_str()
         .expect("comments")
         .to_owned();
-    assert_eq!(
-        posted["value"]["href"],
-        format!("/projects/{work}/sheets/{sheet}").as_str()
+    assert!(
+        posted["value"]["href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.ends_with(&format!("/s/{work}/sheets/{sheet}"))),
+        "{posted}"
     );
     let message = Uuid::parse_str(posted["value"]["messageId"].as_str().expect("message"))
         .expect("message id");
@@ -385,7 +388,8 @@ async fn things_have_discussions_as_visible_as_they_are() {
     assert!(
         told["href"]
             .as_str()
-            .is_some_and(|href| href.starts_with(&format!("/projects/{work}/sheets/{sheet}"))),
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.contains(&format!("/s/{work}/sheets/{sheet}"))),
         "Lena commented before, so Rook's answer tells her: {inbox}"
     );
 

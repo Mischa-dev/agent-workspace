@@ -111,7 +111,7 @@ pub async fn ready_tasks_in(
     .fetch_all(&mut *connection)
     .await?;
     for task in &mut tasks {
-        task.href = crate::addresses::Target::task(task.project_id, task.id).legacy_path();
+        task.href = crate::addresses::Target::task(task.project_id, task.id).href();
     }
     let project_count = sqlx::query_scalar::<_, i64>(
         r#"
