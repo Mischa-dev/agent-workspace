@@ -925,8 +925,8 @@ struct StoredImage {
 }
 
 enum ImageBytes {
-    /// In the file store under this key.
-    Stored(String),
+    /// In a file store: which one, and its key there.
+    Stored { store_id: String, key: String },
     /// Still in the old table, until the move job reaches it.
     Inline(Vec<u8>),
 }
@@ -938,9 +938,18 @@ async fn images(
     whiteboard_id: Uuid,
     file_ids: &[String],
 ) -> Result<Vec<StoredImage>, AppError> {
-    let mut found = sqlx::query_as::<_, (String, String, chrono::DateTime<chrono::Utc>, String)>(
+    let mut found = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            chrono::DateTime<chrono::Utc>,
+            String,
+            String,
+        ),
+    >(
         r#"
-        SELECT external_key, content_type, created_at, storage_key FROM files
+        SELECT external_key, content_type, created_at, store_id, storage_key FROM files
         WHERE thing_kind = 'whiteboard' AND thing_id = $1 AND external_key = ANY($2)
           AND removed_at IS NULL
         "#,
@@ -950,11 +959,11 @@ async fn images(
     .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
-    .map(|(id, mime_type, created, key)| StoredImage {
+    .map(|(id, mime_type, created, store_id, key)| StoredImage {
         id,
         mime_type,
         created,
-        bytes: ImageBytes::Stored(key),
+        bytes: ImageBytes::Stored { store_id, key },
     })
     .collect::<Vec<_>>();
     let missing = file_ids
@@ -992,8 +1001,11 @@ async fn image_bytes(
 ) -> Result<(StoredImage, Vec<u8>), AppError> {
     let bytes = match &image.bytes {
         ImageBytes::Inline(data) => data.clone(),
-        ImageBytes::Stored(key) => {
-            files::FileStore::from_config(&state.config)
+        // The row's own store: a move between stores changes it apart
+        // from the configured one.
+        ImageBytes::Stored { store_id, key } => {
+            files::FileStore::resolve(state, store_id)
+                .await?
                 .read_all(key, MAX_FILE_BYTES as u64)
                 .await?
         }
@@ -1059,7 +1071,7 @@ pub async fn files_for(
 }
 
 /// Copies a board's images to its duplicate: new rows of the copy over
-/// the same stored bytes, so nothing is copied (C1.29). Images still in the
+/// the same stored bytes in the same store, so nothing is copied (C1.29). Images still in the
 /// old table are copied there, and move with the rest.
 pub async fn copy_files(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1071,11 +1083,11 @@ pub async fn copy_files(
         r#"
         INSERT INTO files (
             id, organization_id, project_id, uploaded_by_actor_id, name, content_type,
-            byte_size, sha256, storage_key, image_width, image_height, attached_at,
+            byte_size, sha256, store_id, storage_key, image_width, image_height, attached_at,
             thing_kind, thing_id, purpose, external_key
         )
         SELECT gen_random_uuid(), copy.organization_id, copy.project_id, $3, file.name,
-               file.content_type, file.byte_size, file.sha256, file.storage_key,
+               file.content_type, file.byte_size, file.sha256, file.store_id, file.storage_key,
                file.image_width, file.image_height, now(), 'whiteboard', copy.id,
                file.purpose, file.external_key
         FROM files file
