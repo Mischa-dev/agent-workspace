@@ -52,7 +52,7 @@ helpers.
 
 - GitHub's CI runs `tools/ci/checks.sh` on GitHub-hosted `ubuntu-latest`
   runners (`.github/workflows/ci.yml`), never on our own machines, split into
-  parallel jobs: `lint`, `web`, `rust-build`, four `rust-tests` slices and
+  parallel jobs: `lint`, `web`, `rust-build`, six `rust-tests` slices and
   three `e2e` shards; `ci` passes when they all do. Jobs queue when several
   branches push at once; a queued job is not a failure. A failing job's
   part reruns locally with `CI_PART=<part> CI_SHARD=<k/n>` (see the top of

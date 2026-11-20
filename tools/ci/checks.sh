@@ -425,10 +425,13 @@ run_browser_smoke() {
   # builds its own otherwise (apps/web/e2e/static-host.spec.ts).
   # One shard of the specs (CI_SHARD=k/n) when GitHub splits them across jobs;
   # each shard seeds its own server and database in the global setup.
+  # Shards split by test, not by file (--fully-parallel; still one worker, in
+  # order): the screenshot spec alone holds half the tests, and split by file
+  # one shard got nearly everything and another nothing.
   if [ -n "${shard}" ]; then
     E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
       E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
-      pnpm --filter @agent-workspace/web exec playwright test --shard="${shard}" || return
+      pnpm --filter @agent-workspace/web exec playwright test --fully-parallel --shard="${shard}" || return
   else
     E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
       E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
@@ -573,15 +576,19 @@ if runs rust-build && [ "${part}" != all ]; then
   : "${nextest_archive:?the rust-build part needs CI_NEXTEST_ARCHIVE}"
   mkdir -p "$(dirname "${nextest_archive}")"
   step "install cargo-nextest" install_tool cargo-nextest
-  # The server library and its unit tests take about 5 GB each to compile;
-  # side by side they ran a 16 GB runner out of memory. The library and
-  # binaries first, then the tests reuse the library.
+  # The server library and its unit tests take about 5 GB each to compile.
+  # Under a memory cap (CI_MEMORY_MAX), or where swap couldn't be added
+  # (CI_BUILD_IN_ORDER, from tools/ci/swap.sh), the library and binaries first
+  # and the tests after; with swap they build side by side.
   if has rust; then
-    step "rust build" cargo build --workspace
+    if [ -n "${CI_MEMORY_MAX:-}" ] || [ -n "${CI_BUILD_IN_ORDER:-}" ]; then
+      step "rust build" cargo build --workspace
+    fi
     step "rust test build" cargo nextest archive --workspace --archive-file "${nextest_archive}"
-  else
-    step "server build" cargo build -p agent-workspace-server --bin agent-workspace-server
   fi
+  # Built with the tests already (cargo builds a package's binaries for its
+  # integration tests); on its own for a web-only change.
+  step "server build" cargo build -p agent-workspace-server --bin agent-workspace-server
   if has rust; then
     step "doc tests" cargo test --workspace --doc --quiet
     step "schema snapshot" tools/db/schema-snapshot.sh

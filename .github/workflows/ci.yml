@@ -26,7 +26,7 @@ concurrency:
 #
 #   changes ─┬─ lint (quick checks, fmt, clippy, deny)
 #            ├─ web (lint, types, tests, build, budgets)
-#            └─ rust-build ─┬─ rust-tests × 4 (one slice of the tests each)
+#            └─ rust-build ─┬─ rust-tests × 6 (one slice of the tests each)
 #                           └─ e2e × 3 (one shard of the browser tests each)
 #   ci: passes when every job that ran passed. It is the required check.
 env:
@@ -145,8 +145,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Swap, so the test build fits beside the library build
+        run: tools/ci/swap.sh 12G
       - name: Rust toolchain
-        run: tools/ci/rust-toolchain.sh
+        run: |
+          tools/ci/rust-toolchain.sh
+          # Optimized dependencies for the tests (see the file).
+          cat tools/ci/cargo-ci.toml >> "${CARGO_HOME:-${HOME}/.cargo}/config.toml"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           key: build
@@ -191,13 +196,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        slice: [1, 2, 3, 4]
+        slice: [1, 2, 3, 4, 5, 6]
     services:
       postgres: *postgres
     env:
       AREAS: ${{ needs.changes.outputs.areas }}
       CI_PART: rust-tests
-      CI_SHARD: ${{ matrix.slice }}/4
+      CI_SHARD: ${{ matrix.slice }}/6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

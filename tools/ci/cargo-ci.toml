@@ -1,0 +1,8 @@
+# GitHub CI's build of the Rust tests (rust-build job): dependencies built
+# with light optimization, the workspace's own crates as they are. The tests
+# spend most of their time inside dependencies (the async runtime, sqlx,
+# serde, regex), which unoptimized run several times slower; the build cache
+# keeps the optimized dependencies between runs, so only a Cargo.lock change
+# pays to rebuild them. Local builds are unchanged.
+[profile.dev.package."*"]
+opt-level = 1
