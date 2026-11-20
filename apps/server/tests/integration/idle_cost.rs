@@ -4,6 +4,14 @@
 //! with thousands of quiet workspaces. Counted as database work, from
 //! PostgreSQL's own statistics for the test database, so the rest of the
 //! suite running beside it doesn't blur the numbers.
+//!
+//! The comparison is of table reads: the scans each table counted and the
+//! rows they read. A query per workspace is a scan per workspace; a pass
+//! over every workspace is that many rows. The database's own count of
+//! transactions is reported too, but not compared: every connection writes
+//! that one entry, so on a loaded machine a backend that finds it busy
+//! keeps its count and hands it over up to a minute later, and a window
+//! of twenty seconds took anywhere from none to three times its share.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -83,9 +91,23 @@ fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i
         .join("; ")
 }
 
+/// What the database did over one idle window.
+struct Window {
+    /// Scans of the test database's tables.
+    scans: i64,
+    /// Rows those scans read.
+    rows: i64,
+    /// Transactions, as the database counted them (reported, not compared).
+    transactions: i64,
+    /// Every row read, the catalogs' included (reported, not compared).
+    all_rows: i64,
+    /// The tables read most, and what else ran.
+    busiest: String,
+}
+
 /// What the database did over one idle window, and the tables it read
 /// most.
-async fn idle(pool: &PgPool) -> (i64, i64, String) {
+async fn idle(pool: &PgPool) -> Window {
     // A busy backend that can't take a statistics lock at once keeps its
     // counts and tries again later, for up to a minute (PostgreSQL's
     // PGSTAT_MAX_INTERVAL). The database's own entry, which every
@@ -145,15 +167,26 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
     .await
     .expect("window work")
     .unwrap_or_default();
-    (
-        transactions_after - transactions - samples,
-        rows_after - rows,
-        format!(
+    let (scans, table_rows) = after
+        .iter()
+        .map(|(table, (rows, scans))| {
+            let (rows_before, scans_before) = before.get(table).copied().unwrap_or_default();
+            (scans - scans_before, rows - rows_before)
+        })
+        .fold((0, 0), |(scans, rows), (more_scans, more_rows)| {
+            (scans + more_scans, rows + more_rows)
+        });
+    Window {
+        scans,
+        rows: table_rows,
+        transactions: transactions_after - transactions - samples,
+        all_rows: rows_after - rows,
+        busiest: format!(
             "{}; autovacuum passes {maintenance}; rollbacks {rollbacks}; \
              new sessions {connections}; {work}; sampled: {seen}",
             busiest(&before, &after)
         ),
-    )
+    }
 }
 
 /// Rolled back transactions and sessions opened on the test database so
@@ -242,14 +275,37 @@ async fn settle(pool: &PgPool) {
     tokio::time::sleep(Duration::from_secs(3)).await;
 }
 
+/// Vacuums and analyzes the test database, and hands this connection's
+/// statistics over at once.
+async fn vacuum(pool: &PgPool) {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("VACUUM (ANALYZE)")
+        .execute(&mut *connection)
+        .await
+        .expect("vacuum");
+    // VACUUM is a transaction or two for every table it goes through, a
+    // thousand or so here. A backend that can't take the statistics lock
+    // at once keeps its counts for up to ten seconds, which would land
+    // them inside the window as idle work; make this one hand them over
+    // now.
+    sqlx::query("SELECT pg_stat_force_next_flush()")
+        .execute(&mut *connection)
+        .await
+        .expect("flush statistics");
+}
+
 #[tokio::test]
 async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     let Some(cluster) = cluster("h1_42_idle_cost", 1).await else {
         return;
     };
     let pool = &cluster.pool;
+    // Both windows run on analyzed tables, so a poll is planned the same
+    // way in each: an unanalyzed table plans some polls as several index
+    // scans where an analyzed one takes one, or the other way.
+    vacuum(pool).await;
     settle(pool).await;
-    let (one_transactions, one_rows, one_tables) = idle(pool).await;
+    let one = idle(pool).await;
 
     // Ten thousand empty workspaces, made in one batch as
     // `lifecycle::create` makes one: the row, its owner and its plan. (Most
@@ -296,40 +352,41 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     // would plan the idle polls by position as scans of the whole table,
     // and autovacuum catching up inside the window is a transaction per
     // table, which is the batch insert's cost, not idle work.
-    let mut connection = pool.acquire().await.expect("connection");
-    sqlx::query("VACUUM (ANALYZE)")
-        .execute(&mut *connection)
-        .await
-        .expect("vacuum");
-    // VACUUM is a transaction or two for every table it goes through, a
-    // thousand or so here. A backend that can't take the statistics lock
-    // at once keeps its counts for up to ten seconds, which would land
-    // them inside the window as idle work; make this one hand them over
-    // now.
-    sqlx::query("SELECT pg_stat_force_next_flush()")
-        .execute(&mut *connection)
-        .await
-        .expect("flush statistics");
-    drop(connection);
+    vacuum(pool).await;
     settle(pool).await;
-    let (many_transactions, many_rows, many_tables) = idle(pool).await;
+    let many = idle(pool).await;
 
     eprintln!(
-        "idle over {}s: one workspace {one_transactions} transactions, {one_rows} rows read; \
-         {WORKSPACES} more {many_transactions} transactions, {many_rows} rows read\n\
-         busiest with one: {one_tables}\nbusiest with many: {many_tables}",
-        WINDOW.as_secs()
+        "idle over {}s: one workspace {} scans reading {} rows ({} transactions, {} rows \
+         with the catalogs); {WORKSPACES} more {} scans reading {} rows ({} transactions, \
+         {} rows with the catalogs)\nbusiest with one: {}\nbusiest with many: {}",
+        WINDOW.as_secs(),
+        one.scans,
+        one.rows,
+        one.transactions,
+        one.all_rows,
+        many.scans,
+        many.rows,
+        many.transactions,
+        many.all_rows,
+        one.busiest,
+        many.busiest,
     );
-    // A query per workspace on any pass shows as thousands of transactions;
-    // a scan of every workspace on each pass, as hundreds of thousands of
+    // A query per workspace on any pass shows as thousands of scans; a
+    // scan of every workspace on each pass, as hundreds of thousands of
     // rows. The margins leave room for timing, not for either.
     assert!(
-        many_transactions <= one_transactions * 3 / 2 + 50,
-        "transactions grew with workspaces: {one_transactions} -> {many_transactions}; \
-         busiest: {many_tables}"
+        many.scans <= one.scans * 3 / 2 + 50,
+        "scans grew with workspaces: {} -> {}; busiest: {}",
+        one.scans,
+        many.scans,
+        many.busiest
     );
     assert!(
-        many_rows <= one_rows * 2 + 4 * WORKSPACES,
-        "rows read grew with workspaces: {one_rows} -> {many_rows}; busiest: {many_tables}"
+        many.rows <= one.rows * 2 + 4 * WORKSPACES,
+        "rows read grew with workspaces: {} -> {}; busiest: {}",
+        one.rows,
+        many.rows,
+        many.busiest
     );
 }

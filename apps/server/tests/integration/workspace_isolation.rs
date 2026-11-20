@@ -62,7 +62,9 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
+    write_isolation::{
+        base_tables, digest_changes, digest_ignoring, refresh_digest, table_fingerprints,
+    },
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -3362,7 +3364,9 @@ async fn check_mcp(
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
-    let mut fingerprints = table_fingerprints(pool).await;
+    // The schema's tables, read once: they don't change during the sweep.
+    let tables = base_tables(pool).await;
+    let mut fingerprints = table_fingerprints(pool, &tables).await;
     let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -3423,8 +3427,15 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            fingerprints =
-                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+            fingerprints = refresh_digest(
+                pool,
+                &a_list,
+                READ_TOUCHES,
+                &tables,
+                &fingerprints,
+                &mut a_rows,
+            )
+            .await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
