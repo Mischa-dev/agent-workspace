@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { opQuery } from '../../api/ops'
+import { useWorkspaceExperience } from '../../experience/layout'
 import type { MeterUsage } from '../../api/generated/operations'
 import { formatBytes } from '../../files/model'
 import { EmptyState, ErrorState, ListSkeleton, PageHeader, StatusChip, formatDateTime } from '../../ui'
@@ -63,6 +64,7 @@ function MeterRow({ meter }: { meter: MeterUsage }) {
 
 export default function UsagePage({ workspace }: SettingsPageProps) {
   const report = useQuery({ ...opQuery('workspace_usage_get', {}, { workspaceId: workspace?.id }), enabled: Boolean(workspace) })
+  const experience = useWorkspaceExperience(workspace?.id)
   if (!workspace) return null
   return (
     <>
@@ -90,7 +92,7 @@ export default function UsagePage({ workspace }: SettingsPageProps) {
           </ul>
         </section>
       )}
-      <SpendLimits workspaceId={workspace.id} />
+      {experience.shows('workspace.spend_limits') ? <SpendLimits workspaceId={workspace.id} /> : null}
     </>
   )
 }

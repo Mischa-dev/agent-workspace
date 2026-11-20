@@ -562,7 +562,13 @@ async fn receive_here(
             }),
         ));
     }
-    // The body counts against the workspace's storage.
+    // The body counts against the workspace's storage. Deliveries to other
+    // hooks and uploads in the same workspace take the same lock until they
+    // commit, so two can't each see room and together overfill it.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{}", target.workspace_id))
+        .execute(&mut *transaction)
+        .await?;
     match crate::metering::admit(
         &mut transaction,
         crate::metering::Ask::new(target.workspace_id, "storage_bytes", size),
