@@ -115,9 +115,13 @@ fn stream_events(
     let opening = Event::default()
         .retry(Duration::from_secs(5))
         .comment("stream open");
+    // The stream is polled outside the request that opened it: each read
+    // takes that request's scope again.
+    let scope = crate::tenancy::current().unwrap_or(crate::tenancy::Tenancy::Anonymous);
     stream::unfold((cursor, vec![opening]), move |(mut cursor, mut queued)| {
         let state = state.clone();
         let caller = caller.clone();
+        let scope = scope.clone();
         async move {
             loop {
                 if let Some(event) = queued.pop() {
@@ -126,13 +130,16 @@ fn stream_events(
                 if tokio::time::Instant::now() >= until {
                     return None;
                 }
-                let page = super::poll(
-                    &state,
-                    &caller,
-                    connection,
-                    cursor.as_deref(),
-                    super::read::MAX_LIMIT,
-                    STREAM_WAIT,
+                let page = crate::tenancy::scoped(
+                    scope.clone(),
+                    super::poll(
+                        &state,
+                        &caller,
+                        connection,
+                        cursor.as_deref(),
+                        super::read::MAX_LIMIT,
+                        STREAM_WAIT,
+                    ),
                 )
                 .await
                 .ok()?;

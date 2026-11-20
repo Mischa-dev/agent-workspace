@@ -37,6 +37,14 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
   and resolve to the expected theme. The PNGs land in
   `e2e-output/screenshots/` as artifacts; they're never compared against
   committed images.
+- `automations.spec.ts`: an automation rule built from the pickers and an
+  operation's own form, then tried, which shows what it would do and writes
+  nothing (W1.42)
+- `offline.spec.ts`: with "Read offline" on, a page and a channel opened
+  earlier still read after the connection goes and the app opens again;
+  turning it off forgets what the device kept (W1.31)
+- `perf.spec.ts`: speed on an emulated mid-range phone, release host only
+  (see below)
 - `tour/`: the UI tour (AWD-84), with its own config and seed and not part
   of CI. `tools/ui-tour/run.sh` makes 15 key screens at 1440 and 390 px in
   light and dark against a busy seeded workspace; see
@@ -76,6 +84,25 @@ so a running `pnpm dev` is left alone.
 Results, traces of failed tests, the HTML report and `server.log` go to
 `apps/web/e2e-output/` (gitignored). `npx playwright show-report e2e-output/report`
 from `apps/web` opens the report.
+
+### Speed (release host only)
+
+`perf.spec.ts` (W1.33) times the built app on an emulated mid-range phone (4x
+slower CPU, a mobile connection) against a 10,000-row collection and a busy
+channel, from the app's own `aw:route-ready` marks. It skips itself unless
+`E2E_PERF=1`, because timings need steady hardware, so it runs on the release
+host with a release server build:
+
+```bash
+cargo build --release -p agent-workspace-server
+E2E_PERF=1 E2E_SERVER_BINARY=target/release/agent-workspace-server \
+  corepack pnpm --filter @agent-workspace/web exec playwright test e2e/perf.spec.ts --project chromium
+```
+
+It always writes `e2e-output/perf/report.json` and prints each time against
+its target (the web plan's 3.9) and the stored baseline (`e2e/perf-baseline.json`).
+It fails only when a time is more than 25% over its target.
+`E2E_PERF_BASELINE=write` stores the run as the new baseline.
 
 ## How it's set up
 

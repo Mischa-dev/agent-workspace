@@ -170,6 +170,11 @@ describe('old addresses', () => {
     expect(await screen.findByLabelText('Landed')).toHaveTextContent('/w/beta/inbox?tab=all')
   })
 
+  it('opens a workspace named by its id (the server’s links where it has no slug) at its slug', async () => {
+    open('/w/org-beta/s/p1/work-items/t1?tab=history')
+    expect(await screen.findByLabelText('Landed')).toHaveTextContent('/w/beta/s/p1/work-items/t1?tab=history')
+  })
+
   it('remembers the workspace in the address for the next address without one', async () => {
     open('/w/beta/later')
     expect(await screen.findByLabelText('Landed')).toHaveTextContent('/w/beta/later')

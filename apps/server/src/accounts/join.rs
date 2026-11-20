@@ -186,6 +186,7 @@ pub struct AccountJoinView {
 
 impl Operation for AccountWorkspaceAdd {
     const NAME: &'static str = "account_workspace_add";
+    const ACROSS_WORKSPACES: bool = true;
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::MembersInvite);
@@ -530,6 +531,7 @@ pub struct JoinableView {
 
 impl Operation for AccountJoinableList {
     const NAME: &'static str = "account_joinable_list";
+    const ACROSS_WORKSPACES: bool = true;
     const KIND: OpKind = OpKind::Query;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::MembersInvite);

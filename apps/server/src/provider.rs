@@ -388,7 +388,8 @@ fn spawn_drive(
         state: state.clone(),
         reports,
     };
-    tokio::spawn(async move {
+    // The turn outlives the request or job that started it, and its scope.
+    tokio::spawn(crate::tenancy::system("runs.host", async move {
         // The model a turn's tokens were on when the harness doesn't say.
         let model =
             crate::runs::usage::builtin_scope_of(crate::db::scoped(&host.state.pool), run_id)
@@ -416,7 +417,7 @@ fn spawn_drive(
             )
             .await;
         }
-    });
+    }));
 }
 
 /// The built-in host's own record of its runs, for the turn engine: their

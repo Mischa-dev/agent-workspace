@@ -176,9 +176,12 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert_eq!(stored_digest.len(), 32);
     assert!(!String::from_utf8_lossy(&stored_digest).contains(&token));
     let safe_list = serde_json::to_string(
-        &mcp::list_credentials(&pool, seed.project_id)
-            .await
-            .expect("list safe credential metadata"),
+        &agent_workspace_server::tenancy::system(
+            "server.operator",
+            mcp::list_credentials(&pool, seed.project_id),
+        )
+        .await
+        .expect("list safe credential metadata"),
     )
     .expect("serialize credential metadata");
     assert!(!safe_list.contains(&token));

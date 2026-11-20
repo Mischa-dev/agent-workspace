@@ -121,6 +121,11 @@ fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, Stri
 
 /// Loads every registered harness into the registry.
 pub async fn reload(state: &AppState) -> Result<(), AppError> {
+    // Every workspace's registered harnesses.
+    crate::tenancy::system("harnesses.reload", Box::pin(reload_here(state))).await
+}
+
+async fn reload_here(state: &AppState) -> Result<(), AppError> {
     let rows = sqlx::query_as::<_, HarnessRow>(&format!(
         "SELECT {COLUMNS} FROM custom_harnesses ORDER BY created_at"
     ))
@@ -144,7 +149,8 @@ pub async fn reload(state: &AppState) -> Result<(), AppError> {
 pub fn spawn_reloader(state: AppState) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = reload(&state).await {
+            // Every workspace's registered harnesses.
+            if let Err(error) = crate::tenancy::system("harnesses.reload", reload(&state)).await {
                 tracing::warn!(
                     error_category = error.log_category(),
                     "registered harnesses not reloaded"

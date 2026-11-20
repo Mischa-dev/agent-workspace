@@ -100,6 +100,8 @@ pub struct OpContext {
     /// Set for every write.
     pub request_id: Option<String>,
     pub op: &'static str,
+    /// [`super::Operation::ACROSS_WORKSPACES`].
+    pub across_workspaces: bool,
     /// The call is a preview (`PREVIEW` operations): the dispatcher rolls
     /// its transaction back, and a wrapped command that writes on its own
     /// connection must only preview too.

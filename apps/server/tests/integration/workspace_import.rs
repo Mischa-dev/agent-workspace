@@ -7,10 +7,7 @@
 use std::io::{Read, Write};
 
 use agent_workspace_server::{
-    export::{
-        import::{self, ImportError, RunLimits, StartImport},
-        transfer,
-    },
+    export::import::{self, ImportError, RunLimits, StartImport},
     files::store::FileStore,
     jobs,
 };
@@ -163,7 +160,9 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(state, export).await.expect("export");
+    crate::support::run_export(state, export)
+        .await
+        .expect("export");
     let archive = folder.path().join("a.awx");
     archive_of(&fixture, export, &archive).await;
 
@@ -210,7 +209,7 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
     // Its job, run while another worker's lease on the transfer still
     // holds (one that stopped without letting go), tries again later
     // rather than finishing and leaving the workspace importing.
-    import::enqueue(state, target, resumed.transfer.id)
+    crate::support::as_job(target, import::enqueue(state, target, resumed.transfer.id))
         .await
         .expect("enqueue");
     sqlx::query(
@@ -299,6 +298,61 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
     );
     assert!(!shape(pool, target).await.is_empty());
 
+    // An archive from before pages had records (its pages' records left
+    // out) gives every page its record.
+    let older = folder.path().join("older.awx");
+    rewritten(
+        &archive,
+        &older,
+        |name, bytes| {
+            if !name.contains("collection_record") {
+                return Some((name.to_owned(), bytes));
+            }
+            let text = String::from_utf8(bytes).expect("text");
+            let kept = text
+                .lines()
+                .filter(|line| {
+                    // The page's own record, and its record's history.
+                    let row = serde_json::from_str::<Value>(line).unwrap_or_default();
+                    let row = row.get("data").unwrap_or(&row);
+                    let record = row
+                        .get("record_id")
+                        .or_else(|| row.get("id"))
+                        .and_then(Value::as_str);
+                    record != Some(a.page.as_str())
+                })
+                .map(|line| format!("{line}\n"))
+                .collect::<String>();
+            Some((name.to_owned(), kept.into_bytes()))
+        },
+        &[],
+    );
+    let backfilled = import::start_import(
+        state,
+        StartImport {
+            path: &older,
+            owner,
+            slug: None,
+        },
+    )
+    .await
+    .expect("start the older archive");
+    assert!(
+        import::run_import(state, backfilled.transfer.id, RunLimits::default())
+            .await
+            .expect("older")
+    );
+    let without = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_pages page JOIN projects space ON space.id = page.project_id \
+         WHERE space.organization_id = $1 AND page.memory_for_kind IS DISTINCT FROM 'conversation' \
+           AND NOT EXISTS (SELECT 1 FROM collection_records record WHERE record.id = page.id)",
+    )
+    .bind(backfilled.workspace_id)
+    .fetch_one(pool)
+    .await
+    .expect("pages without records");
+    assert_eq!(without, 0, "every page has its record");
+
     // Every reference points into the copy, text included.
     let copied_task = sqlx::query_scalar::<_, Uuid>(
         "SELECT copy.id FROM work_items copy, work_items original \
@@ -326,6 +380,35 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
             .iter()
             .any(|body| body.contains(&format!("/tasks/{copied_task}"))),
         "the address names the copy's task"
+    );
+    // A page's live document holds ids in binary: the copy leaves it
+    // behind, and each copied page makes a fresh one from its rewritten
+    // Markdown when opened.
+    let documents = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_page_documents WHERE workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("documents");
+    assert_eq!(documents, 0, "no live document is copied with stale ids");
+    // Field values are keyed by their field's id: the copy's keys name the
+    // copy's fields, so its records keep their values.
+    let (keys, strangers) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT count(*), count(*) FILTER (WHERE NOT EXISTS ( \
+             SELECT 1 FROM field_definitions field \
+             WHERE field.workspace_id = $1 AND field.id::text = key)) \
+         FROM collection_records record, jsonb_object_keys(record.field_values) key \
+         WHERE record.workspace_id = $1",
+    )
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("field keys");
+    assert!(keys > 0, "the fixture's record has field values");
+    assert_eq!(
+        strangers, 0,
+        "every field value names one of the copy's fields"
     );
     let originals = [a.task.to_string(), a.channel.clone(), a.page.clone()];
     for table in ["work_items", "messages", "conversations", "project_pages"] {

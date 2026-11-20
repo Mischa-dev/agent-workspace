@@ -15,6 +15,8 @@ import {
   type Trigger,
 } from '../../automations/api'
 import '../../automations/automations.css'
+import { TryRuleDialog } from '../../automations/TryRuleDialog'
+import { AUTOMATION_OPERATIONS } from '../../automations/operationForm'
 import { IncomingHooksSection } from '../../automations/IncomingHooksSection'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
@@ -138,7 +140,7 @@ function describeAction(action: RuleAction): string {
     case 'post_message':
       return 'post a message'
     case 'run_operation':
-      return action.operation === 'task_create' ? 'create a task' : `run ${action.operation}`
+      return `run “${AUTOMATION_OPERATIONS.find((entry) => entry.name === action.operation)?.title ?? action.operation}”`
     case 'ask_agent':
       return 'ask an agent'
   }
@@ -161,6 +163,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
   const [editing, setEditing] = useState<AutomationRule | 'new' | null>(null)
   const [deleting, setDeleting] = useState<AutomationRule | null>(null)
   const [history, setHistory] = useState<AutomationRule | null>(null)
+  const [trying, setTrying] = useState<AutomationRule | null>(null)
   const refresh = () =>
     queryClient.invalidateQueries({
       queryKey: automationKeys.rules(projectId),
@@ -252,6 +255,12 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
                                   onSelect: () => setEditing(rule),
                                 },
                                 {
+                                  label: 'Try it',
+                                  icon: 'list' as const,
+                                  disabled: !rule.enabled,
+                                  onSelect: () => setTrying(rule),
+                                },
+                                {
                                   label: 'Run now',
                                   icon: 'play' as const,
                                   disabled: !rule.enabled,
@@ -337,6 +346,17 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
           }}
           projectId={projectId}
           rule={editing === 'new' ? null : editing}
+        />
+      )}
+      {trying && (
+        <TryRuleDialog
+          onClose={() => setTrying(null)}
+          onRan={() => {
+            setTrying(null)
+            void refresh()
+          }}
+          projectId={projectId}
+          rule={trying}
         />
       )}
       {history && <HistoryDialog onClose={() => setHistory(null)} projectId={projectId} rule={history} />}

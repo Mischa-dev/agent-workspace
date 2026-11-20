@@ -15,9 +15,22 @@ import {
 } from '../conversations/liveMessages'
 import { cacheContext, RECONNECT, SELF_HANDLED, type Touch } from './handlers'
 import { loadTouchTable } from './handlers/load'
-import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
+import { accessChanged } from './live/access'
+import {
+  after,
+  awarenessFrame,
+  documentKey,
+  hello,
+  parseServerFrame,
+  typingFrame,
+  unwatchFrame,
+  watchFrame,
+  type DocumentRef,
+  type ServerFrame,
+} from './live/protocol'
+import { createLiveStore, NO_PRESENCE, NO_STREAMS, NO_TYPING, type Streams, type Typing } from './liveStore'
 import { modulesChanged } from './moduleSwitches'
-import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
+import { NO_LIVE_CONTROLS, type ConnectionStatus, type DocumentFrame, type LiveControls, type RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
   messageUpdate,
@@ -27,6 +40,7 @@ import {
   removedConversationId,
   streamDelta,
   terminalAgentRunId,
+  type RealtimeEnvelope,
 } from './realtimeModel'
 import { workItemChange } from './workItemEvent'
 
@@ -37,11 +51,22 @@ const MAX_RECONNECT_DELAY_MS = 10_000
 // Phones suspend a page in the background, and its socket can die without a
 // close event. After this long away, reconnect on return rather than trust it.
 const RESUME_RECONNECT_AFTER_MS = 30_000
+/**
+ * After a resuming `hello`, how long to wait for `ready` before catching up
+ * the broad way. The server answers at once, after replaying at most 5,000
+ * events.
+ */
+const RESUME_WAIT_MS = 10_000
+/** The server takes one typing frame a conversation every 3 s. */
+const TYPING_EVERY_MS = 3_000
 
 function websocketUrl() {
-  // The live origin from client-config (H1.41), as ws or wss.
-  return `${(origins.live ?? window.location.origin).replace(/^http/, 'ws')}/api/v1/realtime`
+  // The live origin from client-config (H1.41), as ws or wss; protocol 2
+  // (W1.6). A server without it ignores `v` and sends protocol 1.
+  return `${(origins.live ?? window.location.origin).replace(/^http/, 'ws')}/api/v1/realtime?v=2`
 }
+
+type Watch = { document: DocumentRef; count: number; listeners: Set<(frame: DocumentFrame) => void> }
 
 /**
  * Owns the authenticated socket lifecycle and bounded ephemeral stream state.
@@ -56,6 +81,42 @@ export function useRealtimeConnection(): RealtimeContextValue {
   const [live] = useState(() => createLiveStore())
   const [resyncGeneration, setResyncGeneration] = useState(0)
   const reconnectAttempt = useRef(0)
+  // What pages send goes to whichever socket is open; the controls stay the
+  // same object for the provider's life.
+  const send = useRef<{ controls: LiveControls }>({ controls: NO_LIVE_CONTROLS })
+  // Documents being watched live with the provider, not the socket: a page
+  // that mounts with it registers before the socket's effect runs, and every
+  // socket (each reconnect too) watches them all once it opens.
+  const [watches] = useState(() => new Map<string, Watch>())
+  const sendFrame = useRef<(frame: string) => void>(() => undefined)
+  const [controls] = useState<LiveControls>(() => ({
+    typing: (conversationId) => send.current.controls.typing(conversationId),
+    watch: (document, listener) => {
+      const key = documentKey(document)
+      let watch = watches.get(key)
+      if (!watch) {
+        watch = { document, count: 0, listeners: new Set() }
+        watches.set(key, watch)
+        sendFrame.current(watchFrame(document))
+      }
+      watch.count += 1
+      const own = listener ? (frame: DocumentFrame) => listener(frame) : undefined
+      if (own) watch.listeners.add(own)
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        const current = watches.get(key)
+        if (!current) return
+        if (own) current.listeners.delete(own)
+        current.count -= 1
+        if (current.count > 0) return
+        watches.delete(key)
+        sendFrame.current(unwatchFrame(current.document))
+      }
+    },
+    awareness: (document, state) => send.current.controls.awareness(document, state),
+  }))
 
   useEffect(() => {
     const setStreams = (change: Streams | ((current: Streams) => Streams)) =>
@@ -75,10 +136,25 @@ export function useRealtimeConnection(): RealtimeContextValue {
           ? current
           : { ...current, reactionUpdates }
       })
+    const setTyping = (change: (current: Typing) => Typing) =>
+      live.update((current) => {
+        const typing = change(current.typing)
+        return typing === current.typing ? current : { ...current, typing }
+      })
     let disposed = false
     let socket: WebSocket | undefined
     let reconnectTimer: number | undefined
     let streamFrame: number | undefined
+    // Protocol 2: the last log position heard, kept across reconnects so the
+    // next `hello` resumes from it; whether this server speaks protocol 2;
+    // the wait for `ready` after a resuming hello; and when the server asked
+    // to be called back.
+    let position: string | null = null
+    let speaksProtocol2 = false
+    let resumeTimer: number | undefined
+    let plannedDelay: number | undefined
+    let typingTimer: number | undefined
+    const typingSentAt = new Map<string, number>()
     const recentIds = new Set<string>()
     const recentOrder: string[] = []
     const pendingDeltas: Record<string, Record<string, string>> = {}
@@ -119,6 +195,67 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
     const refetchAuthenticatedState = () => {
       for (const touch of RECONNECT) void queryClient.invalidateQueries(touch.filters)
+    }
+
+    /** After a gap nothing replayed: everything shown refetches, the one broad refresh. */
+    const catchUp = () => {
+      refetchAuthenticatedState()
+      // Removals sent while the socket was down never arrive: refresh the
+      // caches that live outside a project, and older timeline pages.
+      refreshMemoryCaches(queryClient)
+      setResyncGeneration((generation) => generation + 1)
+    }
+
+    const sendNow = (frame: string) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(frame)
+    }
+
+    // Typing shows until the server's `until`; the earliest end prunes.
+    const pruneTyping = () => {
+      typingTimer = undefined
+      const now = Date.now()
+      let next = Number.POSITIVE_INFINITY
+      setTyping((current) => {
+        let changed = false
+        const kept: Typing = {}
+        for (const [conversationId, typers] of Object.entries(current)) {
+          const still = Object.fromEntries(Object.entries(typers).filter(([, until]) => until > now))
+          for (const until of Object.values(still)) next = Math.min(next, until)
+          if (Object.keys(still).length !== Object.keys(typers).length) changed = true
+          if (Object.keys(still).length) kept[conversationId] = Object.keys(still).length === Object.keys(typers).length ? typers : still
+        }
+        return changed ? kept : current
+      })
+      if (Number.isFinite(next)) typingTimer = window.setTimeout(pruneTyping, Math.max(next - now, 50))
+    }
+    const typingStopped = (conversationId: string, accountId: string) =>
+      setTyping((current) => {
+        if (!current[conversationId]?.[accountId]) return current
+        const typers = { ...current[conversationId] }
+        delete typers[accountId]
+        const next = { ...current }
+        if (Object.keys(typers).length) next[conversationId] = typers
+        else delete next[conversationId]
+        return next
+      })
+
+    const sender = send.current
+    sendFrame.current = sendNow
+    sender.controls = {
+      typing: (conversationId) => {
+        const now = Date.now()
+        if (now - (typingSentAt.get(conversationId) ?? 0) < TYPING_EVERY_MS) return
+        typingSentAt.set(conversationId, now)
+        sendNow(typingFrame(conversationId))
+      },
+      watch: controls.watch,
+      awareness: (document, state) => {
+        if (watches.has(documentKey(document))) sendNow(awarenessFrame(document, state))
+      },
+    }
+
+    const toDocument = (document: DocumentRef, frame: DocumentFrame) => {
+      for (const listener of [...(watches.get(documentKey(document))?.listeners ?? [])]) listener(frame)
     }
 
     const queueDelta = (
@@ -224,11 +361,20 @@ export function useRealtimeConnection(): RealtimeContextValue {
         reconnectAttempt.current = 0
         setConnection('live')
         resetStreams()
-        refetchAuthenticatedState()
-        // Removals sent while the socket was down never arrive: refresh the
-        // caches that live outside a project, and older timeline pages.
-        refreshMemoryCaches(queryClient)
-        setResyncGeneration((generation) => generation + 1)
+        // `hello` first (a server on protocol 1 ignores it), then the
+        // documents still open. A server known to speak protocol 2 is asked
+        // to resume from the last position heard, and its `ready` says
+        // whether anything needs refetching; otherwise the broad refresh.
+        const resume = resumable()
+        current.send(hello(resume ? position : null))
+        for (const watch of watches.values()) current.send(watchFrame(watch.document))
+        if (resume) {
+          stopWaitingForResume()
+          resumeTimer = window.setTimeout(() => {
+            resumeTimer = undefined
+            catchUp()
+          }, RESUME_WAIT_MS)
+        } else catchUp()
       })
       current.addEventListener('message', (event) => {
         if (socket !== current) return
@@ -240,62 +386,14 @@ export function useRealtimeConnection(): RealtimeContextValue {
           return
         }
 
+        const frame = parseServerFrame(wire)
+        if (frame) {
+          protocol2(current, frame)
+          return
+        }
         const envelope = parseRealtimeEnvelope(wire)
         if (envelope) {
-          // One dispatch order for durable events: (1) drop repeats, (2) change
-          // caches synchronously, so removed text is gone before any fetch,
-          // (3) invalidate so everything converges over HTTP.
-          if (!remember(envelope.eventId)) return
-          const reactions = reactionChange(envelope)
-          if (reactions) {
-            setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
-          }
-          const workItem = workItemChange(envelope)
-          if (workItem) {
-            // One at a time, in event order: a card's neighbours may be moving too.
-            // The patch code loads with the first such event; a sign-out while
-            // it loads drops the patch rather than touching the next session.
-            const generation = currentQueryScopeGeneration()
-            workItemQueue = workItemQueue
-              .then(() => import('./workItemPatches'))
-              .then(({ applyWorkItemChange }) =>
-                generation === currentQueryScopeGeneration()
-                  ? applyWorkItemChange(queryClient, envelope.projectId, workItem)
-                  : undefined,
-              )
-              .catch(() => undefined)
-          }
-          if (modulesChanged(queryClient, envelope)) return
-          if (SELF_HANDLED.has(envelope.type)) {
-            // An open board or page fetches what changed itself, and lists
-            // (and a collection's records) refetch; that code loads with the
-            // first such event.
-            void import('./liveDocuments')
-              .then(({ documentChanged }) => documentChanged(queryClient, envelope))
-              .catch(() => undefined)
-            return
-          }
-          const removedFrom = removedConversationId(envelope)
-          if (removedFrom) dropRemovedConversation(queryClient, envelope.projectId, removedFrom)
-          const update = messageUpdate(envelope)
-          if (update) {
-            setMessageUpdates((current) => rememberMessageUpdate(current, update))
-            if (update.removed) dropRemovedMessage(queryClient, update)
-          }
-          const messageId = durableMessageId(envelope)
-          const terminalRunId = terminalAgentRunId(envelope)
-          if (envelope.conversationId && messageId) {
-            clearMessageStream(envelope.conversationId, messageId)
-          } else if (envelope.conversationId && terminalRunId) {
-            clearRunStreams(envelope.conversationId, terminalRunId)
-          }
-          void touchTable
-            .then(({ touchesFor, announceRunFinished }) => {
-              invalidate(touchesFor(envelope, context))
-              announceRunFinished(envelope)
-            })
-            .catch(() => undefined)
-          if (update?.removed) refreshMemoryCaches(queryClient)
+          durable(envelope)
           return
         }
 
@@ -316,16 +414,153 @@ export function useRealtimeConnection(): RealtimeContextValue {
       current.addEventListener('close', () => {
         // A socket replaced by reconnectNow closes quietly.
         if (disposed || socket !== current) return
-        reconnectAttempt.current += 1
+        // A server that asked to be called back (draining, or a resync) isn't a failure.
+        const planned = plannedDelay
+        plannedDelay = undefined
+        if (planned === undefined) reconnectAttempt.current += 1
         setConnection('retrying')
         resetStreams()
-        refetchAuthenticatedState()
-        const delay = Math.min(
+        setTyping(() => NO_TYPING)
+        live.update((state) => (state.presence === NO_PRESENCE ? state : { ...state, presence: NO_PRESENCE }))
+        stopWaitingForResume()
+        // With a position to resume from, the next `ready` says whether
+        // anything needs refetching; otherwise everything shown does.
+        if (!resumable()) refetchAuthenticatedState()
+        const delay = planned ?? Math.min(
           1_000 * 2 ** reconnectAttempt.current,
           MAX_RECONNECT_DELAY_MS,
         )
         reconnectTimer = window.setTimeout(connect, delay)
       })
+    }
+
+    const resumable = () => speaksProtocol2 && position !== null
+    const stopWaitingForResume = () => {
+      if (resumeTimer !== undefined) window.clearTimeout(resumeTimer)
+      resumeTimer = undefined
+    }
+
+    /** A protocol 2 frame: the server speaks it, so later connections resume. */
+    const protocol2 = (current: WebSocket, frame: ServerFrame) => {
+      speaksProtocol2 = true
+      switch (frame.type) {
+        case 'ready':
+          if (after(frame.position, position)) position = frame.position
+          if (resumeTimer !== undefined) {
+            stopWaitingForResume()
+            // Resumed: what was missed came before `ready`, through the
+            // handlers. Not resumed (too far back): the broad refresh.
+            if (!frame.resumed) catchUp()
+          }
+          return
+        case 'event':
+          if (after(frame.position, position)) position = frame.position
+          {
+            const envelope = parseRealtimeEnvelope(frame.event)
+            if (envelope) durable(envelope)
+          }
+          return
+        case 'access':
+          accessChanged(queryClient, frame)
+          return
+        case 'resync':
+          // The server dropped this connection's events after `position`
+          // and closes it: come straight back and resume from there (a
+          // resume too far back refetches).
+          if (frame.position) position = frame.position
+          plannedDelay = 0
+          return
+        case 'reconnect':
+          // The server is stopping: come back when it says, spread out.
+          plannedDelay = frame.afterMs + Math.round(Math.random() * frame.afterMs * 0.5)
+          if (current.readyState === WebSocket.OPEN) current.close()
+          return
+        case 'stream.delta':
+          queueDelta(frame.conversationId, frame.messageId, frame.runId, frame.delta)
+          return
+        case 'typing':
+          if (frame.until <= Date.now()) return
+          setTyping((typing) => ({ ...typing, [frame.conversationId]: { ...typing[frame.conversationId], [frame.accountId]: frame.until } }))
+          if (typingTimer === undefined) typingTimer = window.setTimeout(pruneTyping, Math.max(frame.until - Date.now(), 50))
+          return
+        case 'presence':
+          live.update((state) =>
+            state.presence[frame.accountId] === frame.online
+              ? state
+              : { ...state, presence: { ...state.presence, [frame.accountId]: frame.online } },
+          )
+          return
+        case 'awareness':
+          toDocument(frame.document, { type: 'awareness', connection: frame.connection, accountId: frame.accountId, state: frame.state })
+          return
+        case 'document.update':
+          toDocument(frame.document, { type: 'document.update', generation: frame.generation, version: frame.version, update: frame.update })
+          return
+        default:
+          return
+      }
+    }
+
+    /**
+     * One dispatch order for durable events, from either protocol: (1) drop
+     * repeats, (2) change caches synchronously, so removed text is gone
+     * before any fetch, (3) invalidate so everything converges over HTTP.
+     */
+    const durable = (envelope: RealtimeEnvelope) => {
+      if (!remember(envelope.eventId)) return
+      const reactions = reactionChange(envelope)
+      if (reactions) {
+        setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
+      }
+      const workItem = workItemChange(envelope)
+      if (workItem) {
+        // One at a time, in event order: a card's neighbours may be moving too.
+        // The patch code loads with the first such event; a sign-out while
+        // it loads drops the patch rather than touching the next session.
+        const generation = currentQueryScopeGeneration()
+        workItemQueue = workItemQueue
+          .then(() => import('./workItemPatches'))
+          .then(({ applyWorkItemChange }) =>
+            generation === currentQueryScopeGeneration()
+              ? applyWorkItemChange(queryClient, envelope.projectId, workItem)
+              : undefined,
+          )
+          .catch(() => undefined)
+      }
+      if (modulesChanged(queryClient, envelope)) return
+      if (SELF_HANDLED.has(envelope.type)) {
+        // An open board or page fetches what changed itself, and lists
+        // (and a collection's records) refetch; that code loads with the
+        // first such event.
+        void import('./liveDocuments')
+          .then(({ documentChanged }) => documentChanged(queryClient, envelope))
+          .catch(() => undefined)
+        return
+      }
+      const removedFrom = removedConversationId(envelope)
+      if (removedFrom) dropRemovedConversation(queryClient, envelope.projectId, removedFrom)
+      const update = messageUpdate(envelope)
+      if (update) {
+        setMessageUpdates((current) => rememberMessageUpdate(current, update))
+        if (update.removed) dropRemovedMessage(queryClient, update)
+      }
+      const messageId = durableMessageId(envelope)
+      const terminalRunId = terminalAgentRunId(envelope)
+      if (envelope.conversationId && messageId) {
+        clearMessageStream(envelope.conversationId, messageId)
+      } else if (envelope.conversationId && terminalRunId) {
+        clearRunStreams(envelope.conversationId, terminalRunId)
+      }
+      void touchTable
+        .then(({ touchesFor, announceRunFinished }) => {
+          invalidate(touchesFor(envelope, context))
+          announceRunFinished(envelope)
+        })
+        .catch(() => undefined)
+      if (update?.removed) refreshMemoryCaches(queryClient)
+      // Their message is in: they've stopped typing.
+      const author = envelope.type === 'conversation.message.created' ? envelope.payload.authorActorId : undefined
+      if (envelope.conversationId && typeof author === 'string') typingStopped(envelope.conversationId, author)
     }
 
     const reconnectNow = () => {
@@ -364,13 +599,17 @@ export function useRealtimeConnection(): RealtimeContextValue {
       window.removeEventListener('online', onOnline)
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       if (streamFrame !== undefined) window.cancelAnimationFrame(streamFrame)
+      if (typingTimer !== undefined) window.clearTimeout(typingTimer)
+      stopWaitingForResume()
+      sender.controls = NO_LIVE_CONTROLS
+      sendFrame.current = () => undefined
       for (const timer of invalidationTimers.values()) window.clearTimeout(timer)
       socket?.close()
     }
-  }, [queryClient, live])
+  }, [queryClient, live, watches, controls])
 
   return useMemo(
-    () => ({ connection, resyncGeneration, live }),
-    [connection, resyncGeneration, live],
+    () => ({ connection, resyncGeneration, live, controls }),
+    [connection, resyncGeneration, live, controls],
   )
 }

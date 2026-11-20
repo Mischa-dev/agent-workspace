@@ -1523,9 +1523,12 @@ async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
         .execute(&setup.pool)
         .await
         .expect("sign in");
-    agent_workspace_server::execution_setup::activate_pending_worker(&setup.pool, profile_id)
-        .await
-        .expect("activate");
+    crate::support::as_job(
+        setup.organization_id,
+        agent_workspace_server::execution_setup::activate_pending_worker(&setup.pool, profile_id),
+    )
+    .await
+    .expect("activate");
     assert_eq!(counts(setup.pool.clone()).await, (1, 1, 1, 1));
     let (status, workers) = send(
         &app,

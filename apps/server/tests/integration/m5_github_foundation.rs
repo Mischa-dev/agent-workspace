@@ -1023,17 +1023,21 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     };
     pump().await;
 
-    apply_pull_request_automation(
-        pool,
-        AutomationJob {
-            job_id: Uuid::now_v7(),
-            project_id: project,
-            pull_request_id: pull_request,
-            integration_actor_id: integration,
-        },
-        version,
-        "merged",
-        false,
+    let workspace = crate::support::workspace_of_space(pool, project).await;
+    crate::support::as_job(
+        workspace,
+        apply_pull_request_automation(
+            pool,
+            AutomationJob {
+                job_id: Uuid::now_v7(),
+                project_id: project,
+                pull_request_id: pull_request,
+                integration_actor_id: integration,
+            },
+            version,
+            "merged",
+            false,
+        ),
     )
     .await
     .expect("automation");

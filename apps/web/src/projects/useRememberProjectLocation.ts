@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
+import { isConnectionError } from '../app/localDrafts'
 import { describeError } from '../ui'
 import { enqueueProjectNavigationUpdate } from './navigationQueue'
 import type { ProjectLocation, ProjectNavigation } from './types'
@@ -43,7 +44,8 @@ export function useRememberProjectLocation(
         setFailure((current) => (current?.key === syncKey ? null : current))
       })
       .catch((reason) => {
-        if (!active) return
+        // Offline (reading what this device kept, W1.31) isn't worth a warning: it's only a convenience.
+        if (!active || isConnectionError(reason)) return
         setFailure({
           key: syncKey,
           message: describeError(reason).message,

@@ -80,10 +80,7 @@ impl Operation for HostList {
     type Output = HostListOutput;
 
     async fn run(call: &mut OpCall<'_>, input: HostListInput) -> Result<HostListOutput, OpError> {
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
         let workspace = (!input.mine_only).then_some(call.ctx.workspace_id);
@@ -136,6 +133,8 @@ impl Operation for HostEnrolmentCreate {
         to the host's own enrol step within 15 minutes; it is shown once and never stored. Each \
         call makes a new code.";
     const EMITS: &'static [&'static str] = &["host.enrolment_created"];
+    // The code is for a person to hand to the host; a rule has no one to show it to.
+    const AUTOMATION: bool = false;
 
     type Input = HostEnrolmentCreateInput;
     type Output = EnrolmentCode;

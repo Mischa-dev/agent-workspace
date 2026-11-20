@@ -18,6 +18,7 @@ import {
   ConversationTimeline,
   OlderMessagesButton,
   PendingMessages,
+  TypingNow,
   StreamingMessageRow,
   TimelineEntries,
 } from '../conversations/Timeline'
@@ -25,6 +26,7 @@ import type { ConversationActor, ConversationTimelineEntry, ConversationWorkItem
 import { useFirstUnread } from '../conversations/useFirstUnread'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { useMessageSender } from '../conversations/useMessageSender'
+import { useProjectExperience } from '../experience/layout'
 import { useConversationTools } from '../later/useConversationTools'
 import { useStream } from '../realtime/realtimeContext'
 import { Banner, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
@@ -74,6 +76,7 @@ export function ThreadPanel({
 }) {
   const location = useLocation()
   const thread = useThread(projectId, threadId, false)
+  const typingShown = useProjectExperience(projectId).shows('talk.typing')
   const refreshThreads = useRefreshThreads()
   const stream = useStream(threadId)
   const page = thread.timeline.data
@@ -268,6 +271,7 @@ export function ThreadPanel({
           />
         </RevealInThread.Provider>
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {typingShown ? <TypingNow conversationId={threadId} entries={entries} viewerId={viewer.actorId} /> : null}
         {streaming.map(([messageId, text]) => (
           <StreamingMessageRow key={messageId} name={writer.name} seed={writer.seed} text={text} />
         ))}

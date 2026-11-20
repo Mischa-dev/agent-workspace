@@ -1553,12 +1553,14 @@ pub(crate) async fn launch_tasks(
         ),
         None => None,
     };
+    // A profile of another workspace is out of sight: not found, as one
+    // of another space here is.
     if let Some(profile) = &profile
         && sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM agent_profiles WHERE id = $1")
             .bind(profile.id)
-            .fetch_one(crate::db::scoped(&state.pool))
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
-            != project_id
+            != Some(project_id)
     {
         return Err(AppError::NotFound("agent_profile"));
     }
@@ -2494,6 +2496,11 @@ pub(crate) fn actor_kind(value: &str) -> Option<ActorKind> {
 /// free, rechecking the person's access as it goes. Blocked launches wait,
 /// so they start last.
 pub async fn drain(state: &AppState) -> Result<usize, AppError> {
+    // Starts queued launches of every workspace, each as its launcher.
+    crate::tenancy::system("runs.host", Box::pin(drain_here(state))).await
+}
+
+async fn drain_here(state: &AppState) -> Result<usize, AppError> {
     // One drain at a time; the lock goes with the transaction, so a crash
     // can't leave it held.
     let mut guard = crate::db::scoped_tx(&state.pool).await?;

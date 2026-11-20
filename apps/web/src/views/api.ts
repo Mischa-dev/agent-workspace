@@ -286,21 +286,33 @@ export function listTemplates(projectId: string) {
   )
 }
 
-export function createTemplate(projectId: string, fields: TemplateFields, idempotencyKey: string) {
-  return requestJson<TaskTemplate>(projectPath(projectId, 'task-templates'), { method: 'POST', idempotencyKey, json: fields })
+/** A template's fields as the template ops take them: the type by ID, and an empty estimate cleared. */
+function templateInput(fields: Partial<TemplateFields>) {
+  const { typeId, estimate, ...rest } = fields
+  return {
+    ...rest,
+    ...(typeId !== undefined ? { type: typeId ?? '' } : {}),
+    ...(estimate === null ? { clearEstimate: true } : estimate !== undefined ? { estimate } : {}),
+  }
 }
 
-export function updateTemplate(
+export async function createTemplate(projectId: string, fields: TemplateFields, idempotencyKey: string) {
+  const { template } = await callOp('template_create', { projectId, ...templateInput(fields) }, { requestId: idempotencyKey })
+  return template as TaskTemplate
+}
+
+export async function updateTemplate(
   projectId: string,
   template: Pick<TaskTemplate, 'id' | 'version'>,
   changes: Partial<TemplateFields> & { archived?: boolean },
   idempotencyKey: string,
 ) {
-  return requestJson<TaskTemplate>(projectPath(projectId, `task-templates/${encodeURIComponent(template.id)}`), {
-    method: 'PATCH',
-    idempotencyKey,
-    json: { expectedVersion: template.version, ...changes },
-  })
+  const { template: changed } = await callOp(
+    'template_update',
+    { projectId, template: template.id, ...templateInput(changes) },
+    { requestId: idempotencyKey, expectedVersion: template.version },
+  )
+  return changed as TaskTemplate
 }
 
 export function applyTemplate(projectId: string, templateId: string, options: { title?: string }, idempotencyKey: string) {
@@ -310,33 +322,45 @@ export function applyTemplate(projectId: string, templateId: string, options: { 
   )
 }
 
-export function createRecurring(projectId: string, templateId: string, schedule: ScheduleDraft, idempotencyKey: string) {
-  return requestJson<Recurring>(projectPath(projectId, 'recurring-tasks'), {
-    method: 'POST',
-    idempotencyKey,
-    json: { templateId, ...schedule },
-  })
+/** A schedule as the schedule ops take it: no due date and no month day as clears, not nulls. */
+function scheduleInput(schedule: Partial<ScheduleDraft>) {
+  const { monthDay, dueInDays, ...rest } = schedule
+  return {
+    ...rest,
+    ...(monthDay != null ? { monthDay } : {}),
+    ...(dueInDays === null ? { clearDueInDays: true } : dueInDays !== undefined ? { dueInDays } : {}),
+  }
 }
 
-export function updateRecurring(
+export async function createRecurring(projectId: string, templateId: string, schedule: ScheduleDraft, idempotencyKey: string) {
+  const { recurring } = await callOp(
+    'recurring_create',
+    { projectId, template: templateId, ...scheduleInput(schedule) },
+    { requestId: idempotencyKey },
+  )
+  return recurring as Recurring
+}
+
+export async function updateRecurring(
   projectId: string,
   recurring: Pick<Recurring, 'id' | 'version'>,
   changes: Partial<ScheduleDraft> & { enabled?: boolean },
   idempotencyKey: string,
 ) {
-  return requestJson<Recurring>(projectPath(projectId, `recurring-tasks/${encodeURIComponent(recurring.id)}`), {
-    method: 'PATCH',
-    idempotencyKey,
-    json: { expectedVersion: recurring.version, ...changes },
-  })
+  const { recurring: changed } = await callOp(
+    'recurring_update',
+    { projectId, recurring: recurring.id, ...scheduleInput(changes) },
+    { requestId: idempotencyKey, expectedVersion: recurring.version },
+  )
+  return changed as Recurring
 }
 
 export function deleteRecurring(projectId: string, recurring: Pick<Recurring, 'id' | 'version'>, idempotencyKey: string) {
-  return requestJson<unknown>(projectPath(projectId, `recurring-tasks/${encodeURIComponent(recurring.id)}`), {
-    method: 'DELETE',
-    idempotencyKey,
-    json: { expectedVersion: recurring.version },
-  })
+  return callOp(
+    'recurring_update',
+    { projectId, recurring: recurring.id, delete: true },
+    { requestId: idempotencyKey, expectedVersion: recurring.version },
+  )
 }
 
 // Project templates

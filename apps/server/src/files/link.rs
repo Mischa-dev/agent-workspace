@@ -1,21 +1,36 @@
-//! Short-lived file links (A2.12): `file_link_get` hands an agent, an app or a
-//! script a URL it can fetch a file from with a plain `GET`, for five
-//! minutes, without its credential. The link names who it was made for and
-//! is signed with that account's own default connection key, so nothing is
-//! stored and rotating nothing is needed; it is checked again when fetched,
-//! as that account may read the file then (a conversation it has left
-//! refuses it).
+//! Signed, short-lived file links (K5.12, A2.12): a file handed to an
+//! agent, an app, a host or a script as a URL it can fetch with a plain
+//! `GET`, without the reader's credential. `file_link_get` makes one for
+//! five minutes; `file_read` hands one out for a file too large to read.
+//! The token (`/api/v1/file-links/{token}`) names the file, which of its
+//! bytes, when it stops working and who it was made for, signed under a key
+//! derived from the secrets keyring ("file-links"), so nothing is stored.
+//!
+//! Opening a link checks the signature and the time, then the reader's
+//! access exactly as reading the file would (`readable_file`), so a link
+//! stops working the moment the file is removed or the reader loses access
+//! (a conversation it has left refuses it). The bytes stream from the app,
+//! or the request is redirected to the store's own presigned link when it
+//! has one; always as a download, never as a page on the app's origin.
 
-use axum::{Router, extract::State, response::Response, routing::get};
+use std::time::Duration;
+
+use axum::{
+    Router,
+    extract::State,
+    http::{HeaderValue, header},
+    response::{IntoResponse, Redirect, Response},
+    routing::get,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
 
-use super::{Reader, readable_file, served_content_type};
+use super::{FileRow, FileStore, Reader, readable_file, served_content_type};
 use crate::{
     AppState,
     error::{ApiPath, AppError},
@@ -23,145 +38,238 @@ use crate::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
         refs::IdRef,
     },
+    secrets,
 };
 
-const PREFIX: &str = "fl1.";
-const MAC_BYTES: usize = 16;
-/// How long a link works.
-pub const LIFETIME_SECONDS: i64 = 300;
+/// How long a link from `file_link_get` works.
+pub const LIFETIME: Duration = Duration::from_secs(5 * 60);
+/// How long a link works unless asked otherwise.
+pub const DEFAULT_TTL: Duration = Duration::from_secs(15 * 60);
+/// The longest a link works.
+pub const MAX_TTL: Duration = Duration::from_secs(60 * 60);
+const PURPOSE: &str = "file-links";
+const VERSION: u8 = 1;
+const MAC_BYTES: usize = 32;
 
-/// Who a link is for and until when: the reader it was checked as.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub fn router() -> Router<AppState> {
+    Router::new().route("/api/v1/file-links/{token}", get(open_link))
+}
+
+/// Which bytes of a file a link serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variant {
+    Original,
+    Thumbnail,
+}
+
+/// What a token says, once its signature checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Claims {
-    file_id: Uuid,
-    account_id: Uuid,
-    connection_id: Option<Uuid>,
-    confined_space: Option<Uuid>,
+    file: Uuid,
+    variant: Variant,
+    reader: Reader,
     expires: i64,
 }
 
-impl Claims {
-    fn bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(72);
-        bytes.extend_from_slice(self.file_id.as_bytes());
-        bytes.extend_from_slice(self.account_id.as_bytes());
-        bytes.extend_from_slice(self.connection_id.unwrap_or_default().as_bytes());
-        bytes.extend_from_slice(self.confined_space.unwrap_or_default().as_bytes());
-        bytes.extend_from_slice(&self.expires.to_be_bytes());
-        bytes
-    }
-
-    fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 72 {
-            return None;
-        }
-        let id = |at: usize| Uuid::from_slice(&bytes[at..at + 16]).ok();
-        let optional = |at: usize| id(at).filter(|id| !id.is_nil());
-        Some(Self {
-            file_id: id(0)?,
-            account_id: id(16)?,
-            connection_id: optional(32),
-            confined_space: optional(48),
-            expires: i64::from_be_bytes(bytes[64..72].try_into().ok()?),
-        })
-    }
-
-    fn reader(&self) -> Reader {
-        if self.connection_id.is_none() && self.confined_space.is_none() {
-            Reader::Browser {
-                actor_id: self.account_id,
-            }
-        } else {
-            Reader::Mcp {
-                actor_id: self.account_id,
-                connection_id: self.connection_id,
-                confined_project: self.confined_space,
-            }
-        }
-    }
-}
-
-fn mac(key: &[u8], payload: &[u8]) -> Option<Hmac<Sha256>> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).ok()?;
-    mac.update(b"file-link");
-    mac.update(payload);
-    Some(mac)
-}
-
-fn encode(key: &[u8], claims: &Claims) -> Option<String> {
-    let payload = claims.bytes();
-    let signature = mac(key, &payload)?.finalize().into_bytes();
-    Some(format!(
-        "{PREFIX}{}.{}",
-        URL_SAFE_NO_PAD.encode(&payload),
-        URL_SAFE_NO_PAD.encode(&signature[..MAC_BYTES])
+/// A link to `file_id` for `reader`, working for `ttl` (at most an hour).
+/// The caller has checked the reader may read the file now; the link
+/// checks again each time it is opened.
+pub(crate) fn link(
+    state: &AppState,
+    reader: Reader,
+    file_id: Uuid,
+    variant: Variant,
+    ttl: Duration,
+) -> Result<(String, chrono::DateTime<Utc>), AppError> {
+    let keys = secrets::keyring(&state.config)?;
+    let expires = Utc::now()
+        + chrono::Duration::from_std(ttl.min(MAX_TTL)).unwrap_or(chrono::Duration::minutes(15));
+    let (key_id, key) = keys.derived(None, PURPOSE)?;
+    let token = sign(
+        &key_id,
+        &key[..],
+        &Claims {
+            file: file_id,
+            variant,
+            reader,
+            expires: expires.timestamp(),
+        },
+    );
+    let origin = crate::events::public_origin(state);
+    Ok((
+        format!("{}/api/v1/file-links/{token}", origin.trim_end_matches('/')),
+        expires,
     ))
 }
 
-/// The claims a token makes, unchecked: who to look the key up for.
-fn unverified(token: &str) -> Option<(Claims, Vec<u8>, Vec<u8>)> {
-    if token.len() > 256 {
+fn sign(key_id: &str, key: &[u8], claims: &Claims) -> String {
+    let mut payload = vec![VERSION];
+    payload.push(match claims.variant {
+        Variant::Original => 0,
+        Variant::Thumbnail => 1,
+    });
+    payload.extend_from_slice(claims.file.as_bytes());
+    payload.extend_from_slice(&claims.expires.to_be_bytes());
+    match claims.reader {
+        Reader::Browser { actor_id } => {
+            payload.push(0);
+            payload.extend_from_slice(actor_id.as_bytes());
+        }
+        Reader::Mcp {
+            actor_id,
+            connection_id,
+            confined_project,
+        } => {
+            payload.push(1);
+            payload.extend_from_slice(actor_id.as_bytes());
+            for optional in [connection_id, confined_project] {
+                match optional {
+                    Some(id) => {
+                        payload.push(1);
+                        payload.extend_from_slice(id.as_bytes());
+                    }
+                    None => payload.push(0),
+                }
+            }
+        }
+    }
+    payload.extend_from_slice(key_id.as_bytes());
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key");
+    mac.update(&payload);
+    payload.extend_from_slice(&mac.finalize().into_bytes());
+    URL_SAFE_NO_PAD.encode(payload)
+}
+
+/// Reads a token; None for anything malformed, forged or expired.
+fn open(token: &str, key: impl Fn(&str) -> Option<Vec<u8>>, now: i64) -> Option<Claims> {
+    if token.len() > 512 {
         return None;
     }
-    let (payload, signature) = token.strip_prefix(PREFIX)?.split_once('.')?;
-    let payload = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let signature = URL_SAFE_NO_PAD.decode(signature).ok()?;
-    (signature.len() == MAC_BYTES).then_some(())?;
-    Some((Claims::parse(&payload)?, payload, signature))
-}
-
-fn verify(key: &[u8], payload: &[u8], signature: &[u8]) -> bool {
-    mac(key, payload).is_some_and(|mac| mac.verify_truncated_left(signature).is_ok())
-}
-
-/// The key a link for `account_id` is signed with: its default
-/// connection's own key.
-async fn key_of(state: &AppState, account_id: Uuid) -> Result<Vec<u8>, AppError> {
-    crate::db::scoped_one(&state.pool, async |connection| {
-        Ok(
-            crate::delivery::connections::default_for(connection, account_id)
-                .await?
-                .cursor_key,
-        )
+    let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
+    let (payload, signature) = bytes.split_at_checked(bytes.len().checked_sub(MAC_BYTES)?)?;
+    let mut cursor = Cursor(payload);
+    if cursor.byte()? != VERSION {
+        return None;
+    }
+    let variant = match cursor.byte()? {
+        0 => Variant::Original,
+        1 => Variant::Thumbnail,
+        _ => return None,
+    };
+    let file = cursor.uuid()?;
+    let expires = i64::from_be_bytes(cursor.take(8)?.try_into().ok()?);
+    let reader = match cursor.byte()? {
+        0 => Reader::Browser {
+            actor_id: cursor.uuid()?,
+        },
+        1 => {
+            let actor_id = cursor.uuid()?;
+            let mut optional = || match cursor.byte()? {
+                0 => Some(None),
+                1 => Some(Some(cursor.uuid()?)),
+                _ => None,
+            };
+            let connection_id = optional()?;
+            let confined_project = optional()?;
+            Reader::Mcp {
+                actor_id,
+                connection_id,
+                confined_project,
+            }
+        }
+        _ => return None,
+    };
+    let key_id = std::str::from_utf8(cursor.0).ok()?;
+    let key = key(key_id)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).ok()?;
+    mac.update(payload);
+    mac.verify_slice(signature).ok()?;
+    (expires > now).then_some(Claims {
+        file,
+        variant,
+        reader,
+        expires,
     })
-    .await
 }
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/file-links/{token}", get(fetch))
+struct Cursor<'a>(&'a [u8]);
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, count: usize) -> Option<&'a [u8]> {
+        let (taken, rest) = self.0.split_at_checked(count)?;
+        self.0 = rest;
+        Some(taken)
+    }
+
+    fn byte(&mut self) -> Option<u8> {
+        self.take(1).map(|bytes| bytes[0])
+    }
+
+    fn uuid(&mut self) -> Option<Uuid> {
+        Uuid::from_slice(self.take(16)?).ok()
+    }
 }
 
-/// The file a link names, if the link is good and its account may still
-/// read the file. Anything else is `not_found`, whatever the reason.
-async fn fetch(
+/// `GET /api/v1/file-links/{token}`: no session or credential; the token
+/// is the credential, and access is checked again now.
+async fn open_link(
     State(state): State<AppState>,
     ApiPath(token): ApiPath<String>,
 ) -> Result<Response, AppError> {
-    let gone = AppError::NotFound("file");
-    let Some((claims, payload, signature)) = unverified(&token) else {
-        return Err(gone);
-    };
-    if claims.expires < Utc::now().timestamp() {
-        return Err(gone);
-    }
-    let key = match key_of(&state, claims.account_id).await {
-        Ok(key) => key,
-        Err(AppError::NotFound(_)) => return Err(gone),
-        Err(error) => return Err(error),
-    };
-    if !verify(&key, &payload, &signature) {
-        return Err(gone);
-    }
-    let row = readable_file(&state.pool, claims.reader(), claims.file_id).await?;
-    super::http::serve(
-        &state,
-        &row.store_id,
-        &row.storage_key,
-        served_content_type(&row),
-        &row.name,
-        !row.is_inline_image(),
+    let keys = secrets::keyring(&state.config)?;
+    let claims = open(
+        &token,
+        |key_id| {
+            keys.derived(Some(key_id), PURPOSE)
+                .ok()
+                .map(|(_, key)| key.to_vec())
+        },
+        Utc::now().timestamp(),
     )
-    .await
+    .ok_or(AppError::NotFound("file"))?;
+    // The signed link reads as the account it was made for.
+    crate::tenancy::signed_in(match claims.reader {
+        Reader::Browser { actor_id } | Reader::Mcp { actor_id, .. } => actor_id,
+    });
+    let row = readable_file(&state.pool, claims.reader, claims.file).await?;
+    let (key, content_type) = match (claims.variant, &row.thumbnail_key) {
+        (Variant::Original, _) => (row.storage_key.as_str(), served_content_type(&row)),
+        (Variant::Thumbnail, Some(thumbnail)) if row.is_inline_image() => {
+            (thumbnail.as_str(), thumbnail_type(&row))
+        }
+        (Variant::Thumbnail, _) => return Err(AppError::NotFound("file")),
+    };
+    // Always a download: the link opens outside the app, and never as a
+    // page on the app's own origin.
+    let disposition = super::http::content_disposition(&row.name, true);
+    let store = FileStore::resolve(&state, &row.store_id).await?;
+    let remaining = u64::try_from(claims.expires - Utc::now().timestamp()).unwrap_or(1);
+    if let Some(url) = store.presign_get(
+        key,
+        Duration::from_secs(remaining.clamp(1, MAX_TTL.as_secs())),
+        content_type,
+        &disposition,
+    )? {
+        let mut response = Redirect::to(url.as_str()).into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return Ok(response);
+    }
+    let mut response =
+        super::http::serve(&state, &row.store_id, key, content_type, &row.name, true).await?;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn thumbnail_type(row: &FileRow) -> &'static str {
+    if row.content_type == "image/jpeg" {
+        "image/jpeg"
+    } else {
+        "image/png"
+    }
 }
 
 pub fn register_ops(registry: &mut Registry) {
@@ -214,24 +322,21 @@ impl Operation for FileLink {
     async fn run(call: &mut OpCall<'_>, input: FileLinkInput) -> Result<FileLinkView, OpError> {
         let caller = &call.ctx.caller;
         let file_id = input.file_id.id();
+        // An app acting for a person, or a connection, reads as an MCP
+        // caller does; the link reads as the same reader when opened.
         let delegated = caller.limits.is_some() || caller.via_grant_id.is_some();
-        let claims = Claims {
-            file_id,
-            account_id: caller.account_id,
-            connection_id: caller.connection_id,
-            confined_space: caller.confined_space,
-            expires: (Utc::now() + TimeDelta::seconds(LIFETIME_SECONDS)).timestamp(),
-        };
-        let reader = if delegated && claims.connection_id.is_none() {
-            // An app acting for a person reads as an MCP caller does.
-            Reader::Mcp {
-                actor_id: claims.account_id,
-                connection_id: None,
-                confined_project: claims.confined_space,
-            }
-        } else {
-            claims.reader()
-        };
+        let reader =
+            if delegated || caller.connection_id.is_some() || caller.confined_space.is_some() {
+                Reader::Mcp {
+                    actor_id: caller.account_id,
+                    connection_id: caller.connection_id,
+                    confined_project: caller.confined_space,
+                }
+            } else {
+                Reader::Browser {
+                    actor_id: caller.account_id,
+                }
+            };
         let row = crate::policy::within_agent_limits(
             caller.limits.clone(),
             readable_file(&call.state.pool, reader, file_id),
@@ -241,14 +346,9 @@ impl Operation for FileLink {
             AppError::NotFound(_) => OpError::not_found("That file"),
             other => other.into(),
         })?;
-        let key = key_of(call.state, caller.account_id).await?;
-        let token = encode(&key, &claims).ok_or(AppError::Internal("sign file link"))?;
-        let expires_at = DateTime::from_timestamp(claims.expires, 0).unwrap_or_else(Utc::now);
+        let (url, expires_at) = link(call.state, reader, file_id, Variant::Original, LIFETIME)?;
         Ok(FileLinkView {
-            url: format!(
-                "{}/api/v1/file-links/{token}",
-                crate::events::public_origin(call.state).trim_end_matches('/')
-            ),
+            url,
             expires_at,
             name: row.name,
             content_type: row.content_type,
@@ -261,39 +361,46 @@ impl Operation for FileLink {
 mod tests {
     use super::*;
 
-    fn claims() -> Claims {
+    fn claims(reader: Reader, expires: i64) -> Claims {
         Claims {
-            file_id: Uuid::now_v7(),
-            account_id: Uuid::now_v7(),
-            connection_id: Some(Uuid::now_v7()),
-            confined_space: None,
-            expires: 1_900_000_000,
+            file: Uuid::now_v7(),
+            variant: Variant::Original,
+            reader,
+            expires,
         }
     }
 
     #[test]
-    fn a_link_carries_its_reader_and_is_signed() {
+    fn a_token_opens_only_as_signed_and_in_time() {
         let key = [7_u8; 32];
-        let made = claims();
-        let token = encode(&key, &made).expect("token");
-        assert!(token.starts_with(PREFIX));
-        let (read, payload, signature) = unverified(&token).expect("parses");
-        assert_eq!(read, made);
-        assert!(verify(&key, &payload, &signature));
-        assert!(
-            !verify(&[8_u8; 32], &payload, &signature),
-            "another key refuses it"
-        );
-    }
-
-    #[test]
-    fn a_changed_link_is_refused() {
-        let key = [7_u8; 32];
-        let token = encode(&key, &claims()).expect("token");
-        let (mut read, _, signature) = unverified(&token).expect("parses");
-        read.file_id = Uuid::now_v7();
-        assert!(!verify(&key, &read.bytes(), &signature));
-        assert!(unverified("fl1.short.x").is_none());
-        assert!(unverified(&"a".repeat(300)).is_none());
+        let keys = |id: &str| (id == "k1").then(|| key.to_vec());
+        let mcp = Reader::Mcp {
+            actor_id: Uuid::now_v7(),
+            connection_id: Some(Uuid::now_v7()),
+            confined_project: None,
+        };
+        for reader in [
+            mcp,
+            Reader::Browser {
+                actor_id: Uuid::now_v7(),
+            },
+        ] {
+            let signed = claims(reader, 1_000);
+            let token = sign("k1", &key, &signed);
+            assert_eq!(open(&token, keys, 999), Some(signed));
+            assert_eq!(open(&token, keys, 1_000), None, "expired");
+            // Any change to the token breaks it.
+            let mut bytes = URL_SAFE_NO_PAD.decode(&token).expect("token");
+            for index in [2, 20, bytes.len() - 1] {
+                bytes[index] ^= 1;
+                assert_eq!(open(&URL_SAFE_NO_PAD.encode(&bytes), keys, 999), None);
+                bytes[index] ^= 1;
+            }
+            // Signed under a key the keyring doesn't have, or another key.
+            assert_eq!(open(&sign("k2", &key, &signed), keys, 999), None);
+            assert_eq!(open(&sign("k1", &[8; 32], &signed), keys, 999), None);
+        }
+        assert_eq!(open("not a token", keys, 0), None);
+        assert_eq!(open("", keys, 0), None);
     }
 }

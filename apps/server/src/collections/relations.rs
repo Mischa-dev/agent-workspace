@@ -3,7 +3,10 @@
 //! relation gains or loses a record, that record's pair gains or loses this
 //! one, in the same transaction, so the two sides always agree.
 //!
-//! The pair's records are locked in ID order before they change. Their
+//! A write that sets a two-way relation first takes the pair's lock
+//! (`lock_pairs`), before it locks any record, so two people connecting the
+//! same records from opposite sides queue instead of deadlocking; the
+//! pair's records are then locked in ID order before they change. Their
 //! worked-out values are refreshed with them, the records whose rollups
 //! read them are queued (`computed::mark_dependents`), and one
 //! `collection.updated` event names them with the cause "paired".
@@ -25,14 +28,55 @@ pub struct PairChange {
     pub records: Vec<Uuid>,
 }
 
+/// The locks a write that sets `references` (field names or IDs) takes,
+/// one for each two-way relation they name, in one order. Take them with
+/// `lock_pairs` before locking any record: a write on either side of a
+/// pair takes the same lock, so the rows the two lock can't form a cycle.
+pub fn pair_locks<'a>(
+    project_id: Uuid,
+    definitions: &[FieldDefinition],
+    references: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut keys = references
+        .filter_map(|reference| fields::find(definitions, reference))
+        .filter(|field| field.field_type == FieldType::Relation)
+        .filter_map(|field| {
+            let pair = field.config.inverse?;
+            field.config.collection?;
+            Some(format!(
+                "record-pair:{project_id}:{}:{}",
+                field.id.min(pair),
+                field.id.max(pair)
+            ))
+        })
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Takes `pair_locks`' locks, held until the transaction ends.
+pub async fn lock_pairs(connection: &mut PgConnection, keys: Vec<String>) -> Result<(), AppError> {
+    for key in keys {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Keeps the pairs of `record`'s two-way relations in step with its values
 /// going from `before` to `after` (its stored values; `before` None for a
 /// new record). Refuses, with the message, when a record would name more
-/// than `MAX_RELATED` records.
+/// than `MAX_RELATED` records, or when the pair is a field only builders
+/// change and the writer can't build (`may_build`).
+#[allow(clippy::too_many_arguments)]
 pub async fn write_pairs(
     connection: &mut PgConnection,
     project_id: Uuid,
     actor_id: Uuid,
+    may_build: bool,
     record: Uuid,
     definitions: &[FieldDefinition],
     before: Option<&Value>,
@@ -68,6 +112,27 @@ pub async fn write_pairs(
         removed.sort_unstable();
         let mut all = added.iter().chain(&removed).copied().collect::<Vec<_>>();
         all.sort_unstable();
+        // Changing this side changes the pair: a pair only builders change
+        // can't be changed from here by anyone else either.
+        if !may_build {
+            let guarded = sqlx::query_as::<_, (String, String)>(
+                "SELECT pair.name, other.name FROM field_definitions pair \
+                 JOIN collections other \
+                   ON other.project_id = pair.project_id AND other.id = pair.collection_id \
+                 WHERE pair.project_id = $1 AND pair.id = $2 \
+                   AND COALESCE((pair.config -> 'rules' ->> 'buildersOnly')::boolean, false)",
+            )
+            .bind(project_id)
+            .bind(pair)
+            .fetch_optional(&mut *connection)
+            .await?;
+            if let Some((name, other)) = guarded {
+                return Ok(Err(format!(
+                    "\"{}\" also changes \"{name}\" in {other}, which only people who can change {other}'s fields set.",
+                    field.name
+                )));
+            }
+        }
         let pair_key = pair.to_string();
         // In ID order, so two writes pairing the same records can't
         // deadlock; with the pair's values as they were, for their history.

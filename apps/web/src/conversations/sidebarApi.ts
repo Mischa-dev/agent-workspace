@@ -3,6 +3,7 @@
 // shell while the rest loads with the conversation pages. ./api re-exports
 // them; import from here only in code the shell loads.
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import type {
   ConversationActor,
   MessageContentV1,
@@ -213,21 +214,14 @@ export async function createChannel(input: {
   autoJoin?: boolean
   idempotencyKey: string
 }) {
-  const payload = asRecord(await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(input.projectId)}/channels`,
+  const created = await callOp(
+    'channel_create',
     {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: input.private
-        ? { name: input.name, private: true }
-        : input.autoJoin === false
-          ? { name: input.name, autoJoin: false }
-          : { name: input.name },
+      projectId: input.projectId,
+      name: input.name,
+      ...(input.private ? { private: true } : input.autoJoin === false ? { autoJoin: false } : {}),
     },
-  ))
-  const conversation = asRecord(payload.conversation ?? payload.channel ?? payload)
-  if (typeof conversation.id !== 'string') {
-    throw new Error('Created Channel response is malformed.')
-  }
-  return { id: conversation.id, name: string(conversation.name, input.name) }
+    { requestId: input.idempotencyKey },
+  )
+  return { id: created.id, name: created.name || input.name }
 }

@@ -64,6 +64,11 @@ export class ThingStore {
     return true
   }
 
+  /** What the server last said, at most `limit` things, the latest arrivals kept (W1.31 keeps them for reading offline). */
+  snapshot(limit: number): Thing[] {
+    return [...this.base.values()].slice(-limit)
+  }
+
   /** Take every thing in an answer (an op's value, a page of a list). */
   normalise(value: unknown): void {
     walk(value, (thing) => this.put(thing))

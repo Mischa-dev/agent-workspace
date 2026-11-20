@@ -12,9 +12,10 @@ docker compose up -d
 ```
 
 While it migrates, `/health/ready` answers 503 with the step it's on, and
-the container shows healthy once it's done. Read the release notes first:
-a release that needs something done by hand (a setting renamed, a step
-before stopping the old server) says so there.
+the container shows healthy once it's done. Read the release notes first
+(`CHANGELOG.md`, one section per numbered release): a release that needs
+something done by hand (a setting renamed, a step before stopping the old
+server) says so there.
 
 ## More than one process
 
@@ -22,7 +23,12 @@ Only processes with the `work` role migrate (`AGENT_WORKSPACE_ROLES`, see
 [configuration](configuration.md)); `api` and `live` processes start cold
 and answer `/health/ready` with 503 until the database is at their
 release's schema. So: start one `work` process of the new release first
-(or run `agent-workspace-server migrate`), then the rest. Processes drain
+(or run `agent-workspace-server migrate`), then the rest. Several `work`
+processes started at once are fine too: one takes the `server.startup`
+lease and migrates while the others answer 503 with the step `waiting`,
+then start once it's done (or exit after
+`AGENT_WORKSPACE_STARTUP_WAIT_SECONDS`, so the service manager tries
+again). Processes drain
 when stopped (readiness turns 503 at once, live connections close with a
 "reconnect" code, leases are handed back), so a rolling restart loses no
 work.

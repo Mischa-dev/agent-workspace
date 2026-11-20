@@ -137,10 +137,7 @@ impl Operation for PackageExport {
             pages: input.include_pages,
             skills: input.include_skills,
         };
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
+        let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
         let caller =
@@ -637,6 +634,7 @@ impl Operation for PackageRemove {
                         .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
                         archived += changed.len();
                         for (page, space, version) in changed {
+                            crate::collections::pages::page_record_changed(tx, space, page).await?;
                             crate::page_docs::store::page_updated(tx, space, page, version).await?;
                         }
                         continue;

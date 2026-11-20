@@ -1156,7 +1156,12 @@ async fn a_client_id_comes_back_and_a_file_link_follows_access() {
     let (status, body) = fetch().await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(&body[..], b"the plan");
-    let forged = path.replacen("fl1.", "fl1.A", 1);
+    let last = path.chars().last().expect("token");
+    let forged = format!(
+        "{}{}",
+        &path[..path.len() - 1],
+        if last == 'A' { 'B' } else { 'A' }
+    );
     let response = tower::ServiceExt::oneshot(
         world.app.clone(),
         axum::http::Request::builder()
