@@ -156,7 +156,7 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
     setBusy(true)
     setFailed(null)
     try {
-      await onAction({ id: text(record(submit.action).id), values })
+      await onAction({ id: text(record(submit.action).id), values: { ...record(record(submit.action).values), ...values } })
     } catch (error) {
       setFailed(error instanceof Error ? error.message : 'That didn’t go through.')
     } finally {
