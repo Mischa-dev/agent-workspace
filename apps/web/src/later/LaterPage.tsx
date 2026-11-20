@@ -34,7 +34,7 @@ import {
   type ScheduledMessage,
 } from './api'
 import { DraftsList } from './DraftsList'
-import { SavedRow, ScheduledRow } from './LaterRows'
+import { SavedList, ScheduledList } from './LaterRows'
 import { TimeDialog } from './TimeDialog'
 import { atPhrase, whenPhrase } from './when'
 import './later.css'
@@ -174,27 +174,23 @@ export function LaterPage() {
 
         {(tab === 'open' || tab === 'done') && saved.data ? (
           items.length ? (
-            <ul aria-label={tab === 'done' ? 'Done' : 'Saved for later'} className="aw-later__list">
-              {items.map((item) => (
-                <SavedRow
-                  busy={busy === item.id}
-                  item={item}
-                  key={item.id}
-                  now={now}
-                  onDone={(done) =>
-                    void act(
-                      item.id,
-                      () => changeSaved(item.id, { done }),
-                      { done: done ? 'Marked done' : 'Moved back to Saved', failed: done ? 'It wasn’t marked done' : 'It wasn’t moved back' },
-                      () => changeSaved(item.id, { done: !done }),
-                    )
-                  }
-                  onRemind={(at) => remind(item, at)}
-                  onRemindCustom={() => setEditing({ kind: 'remind', item })}
-                  onRemove={() => remove(item)}
-                />
-              ))}
-            </ul>
+            <SavedList
+              busyId={busy}
+              items={items}
+              label={tab === 'done' ? 'Done' : 'Saved for later'}
+              now={now}
+              onDone={(item, done) =>
+                void act(
+                  item.id,
+                  () => changeSaved(item.id, { done }),
+                  { done: done ? 'Marked done' : 'Moved back to Saved', failed: done ? 'It wasn’t marked done' : 'It wasn’t moved back' },
+                  () => changeSaved(item.id, { done: !done }),
+                )
+              }
+              onRemind={remind}
+              onRemindCustom={(item) => setEditing({ kind: 'remind', item })}
+              onRemove={remove}
+            />
           ) : tab === 'done' ? (
             <EmptyState action={<Button onClick={() => setTab('open')}>See saved items</Button>} icon="circle-check" title="Nothing done yet">
               Items you mark done wait here in case you need them again.
@@ -212,26 +208,21 @@ export function LaterPage() {
 
         {tab === 'scheduled' && scheduled.data ? (
           waiting.length ? (
-            <ul aria-label="Scheduled messages" className="aw-later__list">
-              {waiting.map((item) => (
-                <ScheduledRow
-                  busy={busy === item.id}
-                  item={item}
-                  key={item.id}
-                  now={now}
-                  onCancel={() => setDiscarding(item)}
-                  onCopy={() => copyText(item)}
-                  onEdit={() => setEditing({ kind: 'edit', item })}
-                  onReschedule={() => setEditing({ kind: 'reschedule', item })}
-                  onSendNow={() =>
-                    void act(item.id, () => sendScheduledNow(item.id), {
-                      done: 'Sent',
-                      failed: item.status === 'failed' ? 'It still didn’t send' : 'It wasn’t sent',
-                    })
-                  }
-                />
-              ))}
-            </ul>
+            <ScheduledList
+              busyId={busy}
+              items={waiting}
+              now={now}
+              onCancel={setDiscarding}
+              onCopy={copyText}
+              onEdit={(item) => setEditing({ kind: 'edit', item })}
+              onReschedule={(item) => setEditing({ kind: 'reschedule', item })}
+              onSendNow={(item) =>
+                void act(item.id, () => sendScheduledNow(item.id), {
+                  done: 'Sent',
+                  failed: item.status === 'failed' ? 'It still didn’t send' : 'It wasn’t sent',
+                })
+              }
+            />
           ) : (
             <EmptyState icon="clock" title="Nothing scheduled">
               Use the clock next to Send, or type /schedule tomorrow 9am and your message.

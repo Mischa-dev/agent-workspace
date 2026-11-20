@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { SELF_HANDLED } from '../handlers'
 import { HANDLERS } from '../handlers/table'
 import { parseLegacyRealtimeEvent, parseRealtimeEnvelope } from '../realtimeModel'
+import { parseServerFrame } from './protocol'
 import { parseFrames, replay, type Seed } from './replay'
 
 // W1.7: every recorded stream under fixtures/ (from e2e/live-streams.spec.ts,
 // re-recorded with RECORD_FRAMES=1) replays through the real live connection
-// with its seed, and meets its expectations file.
+// with its seed, and meets its expectations file. The protocol 1 streams
+// stand for a server without protocol 2 (the fallback); `resume` and
+// `resync` are protocol 2's (W1.6).
 
 type Count = number | { min: number }
 type Expectations = {
@@ -19,6 +22,8 @@ type Expectations = {
   stale?: string[]
   /** Queries neither fetched nor made stale. */
   untouched?: string[]
+  /** Frames the client sends (protocol 2), each matched on the fields given. */
+  sent?: Array<Record<string, unknown>>
 }
 
 const frames = import.meta.glob<string>('./fixtures/*.jsonl', { eager: true, import: 'default', query: '?raw' })
@@ -32,7 +37,7 @@ const fixtures = Object.keys(frames).map((path) => {
 
 describe('recorded event streams', () => {
   it('has the streams the plan names, each with a seed and expectations', () => {
-    expect(fixtures.map((fixture) => fixture.name).sort()).toEqual(['chat-burst', 'page-edits', 'reconnect', 'task-board-moves'])
+    expect(fixtures.map((fixture) => fixture.name).sort()).toEqual(['chat-burst', 'page-edits', 'reconnect', 'resume', 'resync', 'task-board-moves'])
     for (const fixture of fixtures) {
       expect(fixture.seed, `${fixture.name}.seed.json`).toBeDefined()
       expect(fixture.expect, `${fixture.name}.expect.json`).toBeDefined()
@@ -42,6 +47,14 @@ describe('recorded event streams', () => {
   it.each(fixtures.map((fixture) => [fixture.name, fixture] as const))('%s: every frame is one the client reads and handles', (_, fixture) => {
     for (const frame of fixture.frames) {
       if ('$' in frame) continue
+      const wire = parseServerFrame(frame)
+      if (wire) {
+        expect(wire.type, JSON.stringify(frame)).not.toBe('other')
+        if (wire.type !== 'event') continue
+        const event = parseRealtimeEnvelope(wire.event)
+        expect(event && (event.type in HANDLERS || SELF_HANDLED.has(event.type)), JSON.stringify(frame)).toBe(true)
+        continue
+      }
       const envelope = parseRealtimeEnvelope(frame)
       if (envelope) expect(envelope.type in HANDLERS || SELF_HANDLED.has(envelope.type), envelope.type).toBe(true)
       else expect(parseLegacyRealtimeEvent(frame), JSON.stringify(frame)).not.toBeNull()
@@ -58,6 +71,7 @@ describe('recorded event streams', () => {
       }
       for (const name of fixture.expect.stale ?? []) expect(run.invalidated, `${name} stale`).toContain(name)
       for (const name of fixture.expect.untouched ?? []) expect(run.invalidated, `${name} untouched`).not.toContain(name)
+      for (const frame of fixture.expect.sent ?? []) expect(run.sent).toContainEqual(expect.objectContaining(frame))
     },
     10_000,
   )

@@ -291,9 +291,13 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     }
     // A token belongs to a person whose account is still active; a removed
     // or disabled person's tokens act as nobody.
-    let token = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, TokenRow>(
-            r#"
+    // The token, not a session, says whose it is: read it server-wide, then
+    // act as that person.
+    let token = crate::tenancy::system(
+        "auth.link",
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_as::<_, TokenRow>(
+                r#"
         SELECT t.id, t.actor_id, t.notification_id, t.request_id, t.actions, t.used_action
         FROM notification_action_tokens t
         JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human' -- // kind-check: mechanical (push actions answer from a person's device)
@@ -302,13 +306,15 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
           ON om.organization_id = t.organization_id AND om.actor_id = t.actor_id AND om.enabled
         WHERE t.token_hash = $1 AND t.expires_at > now()
         "#,
-        )
-        .bind(token_hash(&request.token))
-        .fetch_optional(connection)
-        .await
-    })
+            )
+            .bind(token_hash(&request.token))
+            .fetch_optional(connection)
+            .await
+        }),
+    )
     .await?
     .ok_or(AppError::NotFound("notification_action"))?;
+    crate::tenancy::signed_in(token.actor_id);
     state
         .rate_limits
         .check_authenticated_write(token.id)

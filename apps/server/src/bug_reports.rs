@@ -1625,6 +1625,15 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
 }
 
 async fn form_route(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(form_route_here(State(state), Path(token))),
+    )
+    .await
+}
+
+async fn form_route_here(State(state): State<AppState>, Path(token): Path<String>) -> Response {
     if !token.starts_with(TOKEN_PREFIX) || token.len() > 128 {
         return refused(StatusCode::NOT_FOUND, "There's no form here.");
     }
@@ -1664,6 +1673,20 @@ fn open_cors(mut response: Response) -> Response {
 // HTTP
 
 async fn report_route(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(report_route_here(State(state), Path(token), headers, body)),
+    )
+    .await
+}
+
+async fn report_route_here(
     State(state): State<AppState>,
     Path(token): Path<String>,
     headers: HeaderMap,

@@ -15,6 +15,7 @@
     "automation_update": "change",
     "automation_delete": "change",
     "automation_run_start": "create",
+    "automation_preview": "query",
     "automation_history": "query",
     "incoming_hook_create": "create",
     "incoming_hook_list": "query",

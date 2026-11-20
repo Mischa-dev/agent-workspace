@@ -945,6 +945,15 @@ pub async fn write(
             current_version: None,
         }));
     }
+    // Before any record is locked: a two-way relation's pairs change too.
+    let locks = super::relations::pair_locks(
+        project_id,
+        definitions,
+        inputs
+            .iter()
+            .flat_map(|input| input.values.iter().map(|(reference, _)| reference.as_str())),
+    );
+    super::relations::lock_pairs(connection, locks).await?;
     let mut next_number = collection.next_number;
     let mut written = Vec::with_capacity(inputs.len());
     let mut touched = HashSet::new();
@@ -1037,12 +1046,7 @@ pub async fn write(
                 .iter()
                 .filter(|field| !field.archived && !given.contains(&field.id))
             {
-                let Some(default) = field
-                    .config
-                    .rules
-                    .as_ref()
-                    .and_then(fields::rules::default_written)
-                else {
+                let Some(default) = fields::rules::default_written(field) else {
                     continue;
                 };
                 if let Ok(more) = resolve_values(
@@ -1107,6 +1111,7 @@ pub async fn write(
                 connection,
                 project_id,
                 writer.actor_id,
+                may_build,
                 record.id,
                 definitions,
                 None,
@@ -1327,6 +1332,7 @@ pub async fn write(
             connection,
             project_id,
             writer.actor_id,
+            may_build,
             current.id,
             definitions,
             Some(&current.field_values),

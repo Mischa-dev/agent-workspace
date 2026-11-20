@@ -58,6 +58,8 @@ export type ReplayRun = {
   fetches: Record<string, number>
   /** Seeded queries, by name, that went stale. */
   invalidated: string[]
+  /** What the client sent once the stream started, frame by frame (W1.6). */
+  sent: unknown[]
 }
 
 export function seedKey([factory, ...args]: SeedEntry['key']): QueryKey {
@@ -82,6 +84,7 @@ class ReplaySocket extends EventTarget {
   static readonly CLOSED = 3
   static instances: ReplaySocket[] = []
   readyState = ReplaySocket.CONNECTING
+  sent: string[] = []
 
   constructor(public readonly url: string) {
     super()
@@ -93,7 +96,9 @@ class ReplaySocket extends EventTarget {
     this.dispatchEvent(new Event('open'))
   }
 
-  send() {}
+  send(data: string) {
+    this.sent.push(data)
+  }
 
   close() {
     if (this.readyState === ReplaySocket.CLOSED) return
@@ -143,6 +148,8 @@ export async function replay(frames: Frame[], seed: Seed, { settleMs = 200 } = {
       await settle(50)
     })
     for (const entry of seed.open ?? []) fetches[entry.name] = 0
+    const started = ReplaySocket.instances.length - 1
+    socket().sent = []
     for (const query of queryClient.getQueryCache().getAll()) query.reset()
     for (const entry of [...(seed.open ?? []), ...(seed.cached ?? [])]) queryClient.setQueryData(seedKey(entry.key), entry.data ?? {})
     await act(async () => {
@@ -160,7 +167,8 @@ export async function replay(frames: Frame[], seed: Seed, { settleMs = 200 } = {
       .filter((entry) => queryClient.getQueryState(seedKey(entry.key))?.isInvalidated || fetches[entry.name] > 0)
       .map((entry) => entry.name)
       .sort()
-    return { fetches, invalidated }
+    const sent = ReplaySocket.instances.slice(started).flatMap((each) => each.sent.map((frame) => JSON.parse(frame) as unknown))
+    return { fetches, invalidated, sent }
   } finally {
     for (const unsubscribe of unsubscribes) unsubscribe()
     cleanup()

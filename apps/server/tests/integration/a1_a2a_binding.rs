@@ -230,8 +230,13 @@ async fn an_a2a_agent_runs_a_task_asks_through_a_request_and_hands_back_its_resu
     .await
     .expect("job");
     assert_eq!(queued, 1, "the call waits on the job queue");
-    hosts::a2a::send(&state, start).await.expect("send");
-    hosts::a2a::send(&state, start).await.expect("send again");
+    let workspace = setup.organization_id;
+    crate::support::as_job(workspace, hosts::a2a::send(&state, start))
+        .await
+        .expect("send");
+    crate::support::as_job(workspace, hosts::a2a::send(&state, start))
+        .await
+        .expect("send again");
     {
         let agent = agent.lock().expect("agent");
         assert_eq!(agent.sends.len(), 1, "a start is sent once");
@@ -268,7 +273,7 @@ async fn an_a2a_agent_runs_a_task_asks_through_a_request_and_hands_back_its_resu
     .await;
     assert_eq!(status, StatusCode::OK, "{answered}");
     let answer = command(&setup.pool, run, "answer").await;
-    hosts::a2a::send(&state, answer)
+    crate::support::as_job(setup.organization_id, hosts::a2a::send(&state, answer))
         .await
         .expect("send the answer");
     {
@@ -307,8 +312,12 @@ async fn an_a2a_agent_runs_a_task_asks_through_a_request_and_hands_back_its_resu
     // No answer to a start: start_uncertain, never sent again.
     let lost = dispatch(&setup.pool, space, fixer, "Please lose the answer").await;
     let start = command(&setup.pool, lost, "start").await;
-    hosts::a2a::send(&state, start).await.expect("send");
-    hosts::a2a::send(&state, start).await.expect("send again");
+    crate::support::as_job(setup.organization_id, hosts::a2a::send(&state, start))
+        .await
+        .expect("send");
+    crate::support::as_job(setup.organization_id, hosts::a2a::send(&state, start))
+        .await
+        .expect("send again");
     assert_eq!(run_state(&setup.pool, lost).await, "start_uncertain");
     let tries = agent
         .lock()

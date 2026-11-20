@@ -30,6 +30,7 @@ import {
   formatShortDate,
   showToast,
 } from '../../ui'
+import { ScopedSettings } from '../ScopedSettings'
 import type { SettingsPageProps } from '../types'
 import { defaultWorkspace, useSwitchWorkspace } from '../workspaceChoice'
 import {
@@ -93,6 +94,13 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
             />
           </Section>
           {workspace.data.capabilities.rename && <RenameSection workspace={workspace.data} />}
+          <Section
+            description="When it’s allowed, each person still turns it on for themselves, in their account’s Security settings."
+            id="workspace-offline-heading"
+            title="Reading offline"
+          >
+            <ScopedSettings prefixes={['offline.']} target={{ scope: 'workspace', organizationId: summary.id }} />
+          </Section>
           {can(summary, 'settings.manage') ? <SetupSection organizationId={summary.id} /> : null}
           {session.organizations.length > 1 && <DefaultSection current={summary.id} session={session} />}
           {workspace.data.capabilities.transferOwnership && <TransferSection workspace={workspace.data} />}

@@ -42,6 +42,7 @@ import {
   ConversationTimeline,
   OlderMessagesButton,
   PendingMessages,
+  TypingNow,
   StreamingMessageRow,
   TimelineEntries,
 } from '../conversations/Timeline'
@@ -79,6 +80,7 @@ export function ThreadPage() {
   const project = useProject(projectId)
   const thread = useThread(projectId, threadId, includeArchived)
   const developerDetail = useProjectExperience(projectId).shows('tech.ids')
+  const typingShown = useProjectExperience(projectId).shows('talk.typing')
   const workItemLink = useSetWorkItemThreadLink()
   const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
@@ -486,6 +488,7 @@ export function ThreadPage() {
           </div>
         ) : null}
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {typingShown ? <TypingNow conversationId={threadId} entries={entries} viewerId={viewer.actorId} /> : null}
         {streaming.map(([messageId, text]) => (
           <StreamingMessageRow key={messageId} name={writer.name} seed={writer.seed} text={text} />
         ))}

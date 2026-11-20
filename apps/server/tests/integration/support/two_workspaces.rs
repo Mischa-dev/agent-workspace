@@ -380,7 +380,7 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
         .await;
         assert!(status.is_success(), "export: {status} {started}");
         world.export = string_at(&started, "/value/id").parse().expect("export id");
-        agent_workspace_server::export::transfer::run_export(&state, world.export)
+        crate::support::run_export(&state, world.export)
             .await
             .expect("export runs");
     }
@@ -477,7 +477,19 @@ pub(crate) async fn login_as(app: &axum::Router, login_name: &str) -> Browser {
         .iter()
         .filter_map(|value| value.to_str().ok()?.split(';').next().map(str::to_owned))
         .collect::<Vec<_>>();
-    let _ = to_bytes(response.into_body(), 100_000).await;
+    // The sign-in answers with the account's workspaces, read in the new
+    // session's own scope: under row rules an anonymous read finds none,
+    // and the web app then has nowhere to go.
+    let body = to_bytes(response.into_body(), 100_000)
+        .await
+        .expect("login body");
+    let session: Value = serde_json::from_slice(&body).expect("login JSON");
+    assert!(
+        session["organizations"]
+            .as_array()
+            .is_some_and(|workspaces| !workspaces.is_empty()),
+        "login {login_name} lists no workspace: {session}"
+    );
     let csrf = cookies
         .iter()
         .find_map(|cookie| cookie.strip_prefix("agent_workspace_csrf="))

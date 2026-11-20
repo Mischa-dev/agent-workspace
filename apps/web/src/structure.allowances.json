@@ -22,5 +22,6 @@
     "work-items/codexDeepLink.ts": 3
   },
   "web_inline_query_keys": {},
-  "web_app_shell_in_pages": {}
+  "web_app_shell_in_pages": {},
+  "web_pasted_addresses": {}
 }

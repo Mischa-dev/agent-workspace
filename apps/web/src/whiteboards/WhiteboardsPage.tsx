@@ -1,8 +1,9 @@
 import { useDeferredValue, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { GalleryPiece } from '../pieces/GalleryPiece'
 import { useShellPage } from '../shell/shellStore'
 import { useTheme } from '../theme/themeContext'
 import {
@@ -148,11 +149,15 @@ export function WhiteboardsPage() {
           )
         ) : null}
         {boards.data && boards.data.whiteboards.length > 0 ? (
-          <ul aria-label={view === 'trash' ? 'Whiteboards in the trash' : 'Whiteboards'} className="aw-boards">
-            {boards.data.whiteboards.map((board) => (
-              <BoardCard board={board} key={board.id} />
-            ))}
-          </ul>
+          <GalleryPiece
+            actions={(board) => <BoardActions board={board} />}
+            cover={(board) => <BoardCover board={board} />}
+            details={(board) => <BoardDetails board={board} />}
+            href={(board) => whiteboardPath(board.id)}
+            items={boards.data.whiteboards}
+            label={view === 'trash' ? 'Whiteboards in the trash' : 'Whiteboards'}
+            title={(board) => board.title}
+          />
         ) : null}
         {boards.data && boards.data.whiteboards.length === 200 ? (
           <Banner tone="info">Showing the 200 most recently changed whiteboards. Search to find older ones.</Banner>
@@ -177,10 +182,40 @@ export function WhiteboardsPage() {
   )
 }
 
-function BoardCard({ board }: { board: Whiteboard }) {
+function BoardCover({ board }: { board: Whiteboard }) {
+  const { shownPreset: preset } = useTheme()
+  return board.elementCount > 0 ? (
+    <img alt="" loading="lazy" src={previewUrl(board.id, board.sceneSeq, isDarkPreset(preset))} />
+  ) : (
+    <span>Nothing drawn yet</span>
+  )
+}
+
+function BoardDetails({ board }: { board: Whiteboard }) {
+  return (
+    <>
+      <p className="aw-boardcard__meta">
+        <StatusChip icon={board.projectId ? 'lock' : 'users'} tone="muted">
+          {board.projectName ?? board.organizationName}
+        </StatusChip>
+        {board.linkCount > 0 ? (
+          <StatusChip icon="link" tone="muted">
+            {countLabel(board.linkCount, 'link')}
+          </StatusChip>
+        ) : null}
+      </p>
+      <p className="aw-boardcard__meta" title={formatFullDate(board.updatedAt)}>
+        Changed {formatRelative(board.updatedAt)}
+        {board.updatedBy ? ` by ${board.updatedBy}` : ''}
+      </p>
+    </>
+  )
+}
+
+/** A card's menu: rename, copy and trash it, or restore and delete it from the trash. */
+function BoardActions({ board }: { board: Whiteboard }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { shownPreset: preset } = useTheme()
   const [renaming, setRenaming] = useState(false)
   const [purging, setPurging] = useState(false)
   const purge = useMutation({
@@ -191,7 +226,6 @@ function BoardCard({ board }: { board: Whiteboard }) {
       showToast({ tone: 'success', title: `Deleted “${board.title}” for good` })
     },
   })
-  const href = whiteboardPath(board.id)
   const refresh = () => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
   const trash = (deleted: boolean) =>
     updateWhiteboard(board.id, { deleted })
@@ -214,52 +248,26 @@ function BoardCard({ board }: { board: Whiteboard }) {
       })
       .catch((reason: unknown) => toastError('The whiteboard wasn’t copied', reason))
   return (
-    <li className="aw-boardcard">
-      <Link aria-hidden="true" className="aw-boardcard__preview" tabIndex={-1} to={href}>
-        {board.elementCount > 0 ? (
-          <img alt="" loading="lazy" src={previewUrl(board.id, board.sceneSeq, isDarkPreset(preset))} />
-        ) : (
-          <span className="aw-boardcard__blank">Nothing drawn yet</span>
-        )}
-      </Link>
-      <div className="aw-boardcard__body">
-        <div className="aw-boardcard__title">
-          <Link to={href}>{board.title}</Link>
-          <Menu
-            items={
-              board.deleted
-                ? [
-                    { label: 'Restore', icon: 'undo', onSelect: () => void trash(false) },
-                    { separator: true },
-                    { label: 'Delete forever', icon: 'trash', danger: true, onSelect: () => setPurging(true) },
-                  ]
-                : [
-                    { label: 'Rename', icon: 'pencil', onSelect: () => setRenaming(true) },
-                    { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
-                    { separator: true },
-                    { label: 'Move to trash', icon: 'trash', danger: true, onSelect: () => void trash(true) },
-                  ]
-            }
-            label={`Actions for ${board.title}`}
-            placement="bottom-end"
-            trigger={<IconButton icon="more" label={`Actions for ${board.title}`} size="sm" />}
-          />
-        </div>
-        <p className="aw-boardcard__meta">
-          <StatusChip icon={board.projectId ? 'lock' : 'users'} tone="muted">
-            {board.projectName ?? board.organizationName}
-          </StatusChip>
-          {board.linkCount > 0 ? (
-            <StatusChip icon="link" tone="muted">
-              {countLabel(board.linkCount, 'link')}
-            </StatusChip>
-          ) : null}
-        </p>
-        <p className="aw-boardcard__meta" title={formatFullDate(board.updatedAt)}>
-          Changed {formatRelative(board.updatedAt)}
-          {board.updatedBy ? ` by ${board.updatedBy}` : ''}
-        </p>
-      </div>
+    <>
+      <Menu
+        items={
+          board.deleted
+            ? [
+                { label: 'Restore', icon: 'undo', onSelect: () => void trash(false) },
+                { separator: true },
+                { label: 'Delete forever', icon: 'trash', danger: true, onSelect: () => setPurging(true) },
+              ]
+            : [
+                { label: 'Rename', icon: 'pencil', onSelect: () => setRenaming(true) },
+                { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
+                { separator: true },
+                { label: 'Move to trash', icon: 'trash', danger: true, onSelect: () => void trash(true) },
+              ]
+        }
+        label={`Actions for ${board.title}`}
+        placement="bottom-end"
+        trigger={<IconButton icon="more" label={`Actions for ${board.title}`} size="sm" />}
+      />
       <RenameDialog board={board} onClose={() => setRenaming(false)} open={renaming} />
       <ConfirmDialog
         busy={purge.isPending}
@@ -275,6 +283,6 @@ function BoardCard({ board }: { board: Whiteboard }) {
       >
         Its drawing, images and history go for good, and it comes off every task, project and page it’s on. Copies stay.
       </ConfirmDialog>
-    </li>
+    </>
   )
 }

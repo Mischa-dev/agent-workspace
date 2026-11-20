@@ -7,12 +7,12 @@ pub mod source;
 /// A signed download link (K5.12) to `file_id` for `account`, as they would
 /// read it in the browser, without the origin: what an isolation test opens.
 pub fn file_link(state: &crate::AppState, account: uuid::Uuid, file_id: uuid::Uuid) -> String {
-    let (url, _) = crate::files::links::link(
+    let (url, _) = crate::files::link::link(
         state,
         crate::files::Reader::Browser { actor_id: account },
         file_id,
-        crate::files::links::Variant::Original,
-        crate::files::links::DEFAULT_TTL,
+        crate::files::link::Variant::Original,
+        crate::files::link::DEFAULT_TTL,
     )
     .expect("a file link");
     let origin = crate::events::public_origin(state);

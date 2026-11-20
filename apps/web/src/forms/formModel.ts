@@ -8,8 +8,8 @@
 import { apiUrl } from '../api/client'
 
 export type PublicFieldType = 'text' | 'long_text' | 'number' | 'date' | 'single_choice' | 'multiple_choice' | 'status' | 'url' | 'email' | 'phone' | 'checkbox'
-/** What an internal form (T1.28) asks too: the space's people. */
-export type QuestionType = PublicFieldType | 'person' | 'people'
+/** What an internal form (T1.28) asks too: the space's people, and records of a related collection. */
+export type QuestionType = PublicFieldType | 'person' | 'people' | 'relation'
 
 /** A question shows only when an earlier answer is one of these values (option names; Yes or No for a checkbox), or, with none, is given at all. */
 export type ShowIf = { field: string; isOneOf: string[] }
@@ -24,6 +24,8 @@ export type PublicField = {
   showIf?: ShowIf
   /** A heading this question starts. */
   section?: { title: string; description: string }
+  /** A relation question: the collection whose records it picks from. */
+  collection?: string
 }
 
 export type PublicForm = {
@@ -49,7 +51,7 @@ type Wire = Record<string, unknown>
 const asRecord = (value: unknown): Wire => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Wire) : {})
 const asString = (value: unknown) => (typeof value === 'string' ? value : '')
 const TYPES: readonly PublicFieldType[] = ['text', 'long_text', 'number', 'date', 'single_choice', 'multiple_choice', 'status', 'url', 'email', 'phone', 'checkbox']
-const INTERNAL_TYPES: readonly QuestionType[] = [...TYPES, 'person', 'people']
+const INTERNAL_TYPES: readonly QuestionType[] = [...TYPES, 'person', 'people', 'relation']
 
 /** The questions as the server lists them, keeping only the types this audience is asked. */
 export function normalizeQuestions(value: unknown, audience: 'public' | 'internal' = 'public'): PublicField[] {
@@ -75,6 +77,7 @@ export function normalizeQuestions(value: unknown, audience: 'public' | 'interna
           ? { showIf: { field: condition.field, isOneOf: (Array.isArray(condition.isOneOf) ? condition.isOneOf : []).filter((word): word is string => typeof word === 'string') } }
           : {}),
         ...(asString(section.title) ? { section: { title: asString(section.title), description: asString(section.description) } } : {}),
+        ...(type === 'relation' && asString(field.collection) ? { collection: asString(field.collection) } : {}),
       },
     ]
   })

@@ -28,6 +28,15 @@ struct RecoverableRun {
 /// completion is provable. Any ambiguous state terminates as interrupted while
 /// retaining the exact worktree.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_non_terminal_runs_here(state)),
+    )
+    .await
+}
+
+async fn reconcile_non_terminal_runs_here(state: &AppState) -> Result<u64, AppError> {
     reconcile(state, None).await
 }
 
@@ -54,6 +63,19 @@ pub(crate) async fn fenced_tx(
 /// that were running, each transition fenced by the lease, then the
 /// worktrees and what finished runs still asked for.
 pub async fn reconcile_owned(
+    state: &AppState,
+    cluster: &Cluster,
+    lease: &Lease,
+) -> Result<(), AppError> {
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_owned_here(state, cluster, lease)),
+    )
+    .await
+}
+
+async fn reconcile_owned_here(
     state: &AppState,
     cluster: &Cluster,
     lease: &Lease,
@@ -278,6 +300,15 @@ async fn idle_terminal_provider_sessions(
 }
 
 pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(reconcile_registered_worktrees_here(state)),
+    )
+    .await
+}
+
+async fn reconcile_registered_worktrees_here(state: &AppState) -> Result<u64, AppError> {
     reconcile_worktrees(state, None).await
 }
 
@@ -331,6 +362,15 @@ async fn record_inspection(
 /// What finished runs still asked for is withdrawn (their finish withdraws
 /// it; this catches any a crash left open).
 pub async fn withdraw_finished_run_requests(state: &AppState) -> Result<u64, AppError> {
+    // Recovers runs of every workspace.
+    crate::tenancy::system(
+        "runs.host",
+        Box::pin(withdraw_finished_run_requests_here(state)),
+    )
+    .await
+}
+
+async fn withdraw_finished_run_requests_here(state: &AppState) -> Result<u64, AppError> {
     withdraw_requests(state, None).await
 }
 

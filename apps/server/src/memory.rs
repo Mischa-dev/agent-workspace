@@ -857,6 +857,9 @@ pub async fn update_page(
         note.as_deref(),
     )
     .await?;
+    if new_title != title || new_archived != archived {
+        crate::collections::pages::page_record_changed(transaction, project_id, page_id).await?;
+    }
     page_docs::store::page_updated(transaction, project_id, page_id, next_version).await?;
     Ok(project_id)
 }

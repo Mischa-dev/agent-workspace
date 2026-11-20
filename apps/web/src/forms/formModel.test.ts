@@ -90,6 +90,15 @@ describe('conditions and sections (T1.28)', () => {
     expect(shownFields(asked, { kind: 'bug', steps: 'Open it' }).map((field) => field.id)).toEqual(['kind', 'steps', 'more', 'who'])
   })
 
+  it('asks an internal form’s relation question, with its collection, and a public form never', () => {
+    const relation = [{ id: 'parts', name: 'Parts', type: 'relation', required: true, collection: 'c1' }]
+    expect(normalizeQuestions(relation, 'internal')).toMatchObject([{ id: 'parts', type: 'relation', collection: 'c1', required: true }])
+    expect(normalizeQuestions(relation)).toEqual([])
+    const fields = normalizeQuestions(relation, 'internal')
+    expect(missing({ titleName: 'Name', fields }, { title: 'A' })).toBe('Fill in Parts.')
+    expect(answerBody({ fields }, { title: 'A', parts: ['r1'] })).toEqual({ title: 'A', parts: ['r1'] })
+  })
+
   it('reads an unticked checkbox as No, as the server does', () => {
     const ticked = normalizeQuestions([
       { id: 'agree', name: 'Agree', type: 'checkbox' },

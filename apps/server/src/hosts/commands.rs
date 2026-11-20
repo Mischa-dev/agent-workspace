@@ -717,6 +717,11 @@ async fn reply(
 /// intervals go offline (their runs then read `not_responding`). Returns
 /// how many things changed.
 pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
+    // Server-wide: every host's commands and liveness.
+    crate::tenancy::system("runs.host", Box::pin(sweep_here(pool))).await
+}
+
+async fn sweep_here(pool: &PgPool) -> Result<usize, AppError> {
     let mut changed = 0;
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let overdue = sqlx::query_as::<_, CommandRow>(&format!(
