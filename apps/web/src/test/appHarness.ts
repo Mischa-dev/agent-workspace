@@ -171,7 +171,6 @@ export class WebSocketStub extends EventTarget {
   static readonly OPEN = 1
   static instances: WebSocketStub[] = []
   readyState = WebSocketStub.CONNECTING
-  send = vi.fn()
   close = vi.fn()
   // The page sends `hello`, watches and typing frames (W1.6).
   send = vi.fn()

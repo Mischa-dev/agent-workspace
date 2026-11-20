@@ -130,8 +130,11 @@ export function pickForOffline(queries: readonly KeptQuery[]): KeptQuery[] {
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .flatMap((query) => {
       const kind = offlineClass(query.queryKey)
-      if (!kind || counts[kind] >= CLASS_CAP[kind]) return []
-      counts[kind] += 1
+      if (!kind) return []
+      // The session opens everything else: kept whatever the cap.
+      const session = at(query.queryKey, 0) === 'session'
+      if (!session && counts[kind] >= CLASS_CAP[kind]) return []
+      if (!session) counts[kind] += 1
       return [{ ...query, data: trimmed(query.data, kind) }]
     })
 }

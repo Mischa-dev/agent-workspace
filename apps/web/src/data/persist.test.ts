@@ -91,6 +91,14 @@ describe('reading offline', () => {
     expect(picked.some((query) => query.queryKey[0] === 'account')).toBe(false)
   })
 
+  it('keeps the session however many newer shell queries there are', () => {
+    const cache = client()
+    cache.setQueryData(queryKeys.session, { authenticated: true }, { updatedAt: 1 })
+    for (let index = 0; index < 100; index += 1) cache.setQueryData(['statuses', `s${index}`], {}, { updatedAt: 1000 + index })
+    const picked = pickForOffline(cachedForOffline(cache))
+    expect(picked.some((query) => query.queryKey[0] === 'session')).toBe(true)
+  })
+
   it('shows an account’s copy at start, to that account only, and forgets it at sign-out', async () => {
     const reading = client()
     reading.setQueryData(queryKeys.timeline('p', 'c'), { messages: [{ id: 'm1' }] })
