@@ -17,7 +17,7 @@ describe('dashboard tiles', () => {
     ])
     const query: TileEntry = { id: 't4', kind: 'query', title: '', text: '', range: '', query: 'q1', style: null, width: 12, height: 2 }
     expect(tileInputs([query])).toEqual([{ id: 't4', kind: 'query', title: null, view: null, text: null, sheet: null, range: null, query: 'q1', style: null, width: 12, height: 2 }])
-    expect(tileHref('p1', query)).toBe('/projects/p1/dashboards/data?query=q1')
+    expect(tileHref('p1', query)).toBe('/w/-/s/p1/dashboards/data?query=q1')
   })
 
   it('moves a tile within the ends', () => {
