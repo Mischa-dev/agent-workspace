@@ -358,19 +358,18 @@ export function useRealtimeConnection(): RealtimeContextValue {
         setConnection('live')
         resetStreams()
         // `hello` first, then the documents still open. With a position
-        // heard before, the server is asked to resume from it, and its
-        // `ready` says whether anything needs refetching; otherwise the
-        // broad refresh.
+        // heard before, the server is asked to resume from it. Either way
+        // its `ready` says whether anything needs refetching: a fresh start
+        // refetches then, so the read covers the position the server began
+        // from. A `ready` that never comes refetches anyway.
         const resume = resumable()
         current.send(hello(resume ? position : null))
         for (const watch of watches.values()) current.send(watchFrame(watch.document))
-        if (resume) {
-          stopWaitingForResume()
-          resumeTimer = window.setTimeout(() => {
-            resumeTimer = undefined
-            catchUp()
-          }, RESUME_WAIT_MS)
-        } else catchUp()
+        stopWaitingForResume()
+        resumeTimer = window.setTimeout(() => {
+          resumeTimer = undefined
+          catchUp()
+        }, RESUME_WAIT_MS)
       })
       current.addEventListener('message', (event) => {
         if (socket !== current) return
@@ -421,12 +420,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
       switch (frame.type) {
         case 'ready':
           if (after(frame.position, position)) position = frame.position
-          if (resumeTimer !== undefined) {
-            stopWaitingForResume()
-            // Resumed: what was missed came before `ready`, through the
-            // handlers. Not resumed (too far back): the broad refresh.
-            if (!frame.resumed) catchUp()
-          }
+          stopWaitingForResume()
+          // Resumed: what was missed came before `ready`, through the
+          // handlers. Not resumed (a fresh start, or too far back): the
+          // broad refresh, read after the position the server starts from.
+          if (!frame.resumed) catchUp()
           return
         case 'event':
           if (after(frame.position, position)) position = frame.position

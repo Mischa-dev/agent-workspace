@@ -87,6 +87,17 @@ describe('the live connection on protocol 2', () => {
     expect(latest().sent[0]).toEqual({ type: 'hello', protocol: 2, client: 'web' })
   })
 
+  it('refreshes what is shown once a fresh start’s ready says where the server began', () => {
+    const queryClient = start()
+    const key = ['project', SPACE, 'work-items', 'detail', 'task-1']
+    // Read on open, before the server fixed its starting position: a change
+    // between the two would be missed, so the refresh waits for `ready`.
+    queryClient.setQueryData(key, { title: 'Plan' })
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false)
+    act(() => latest().receive({ type: 'ready', protocol: 2, position: '7', resumed: false, replayed: 0 }))
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+  })
+
   it('watches a document once however many views show it, and again after a reconnect', () => {
     start()
     const watched = () => latest().sent.filter((frame) => frame.type === 'watch' || frame.type === 'unwatch')
