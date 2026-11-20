@@ -35,6 +35,7 @@ import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
 import { useRevealInThread } from './useRevealInThread'
 import '../styles/conversation.css'
+import { spaceHref } from '../app/href'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -125,7 +126,7 @@ export function ThreadPanel({
     })
   const archived = Boolean(timeline?.conversation.archivedAt)
   const canPost = Boolean(timeline?.capabilities.sendMessage && !archived)
-  const threadHref = `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
+  const threadHref = spaceHref(projectId, `/threads/${encodeURIComponent(threadId)}`)
   const reply = useReplyTarget(threadId, searchWorkItems ? projectId : null)
   const messageActions = useMessageActions({
     projectId,
@@ -274,9 +275,8 @@ export function ThreadPanel({
           <div className="aw-timeline__card">
             <ApprovalCard
               approval={pendingApproval}
-              busyAction={runActions.busyAction}
               canRespond={pendingApproval.mayAnswer}
-              onRespond={runActions.respond}
+              onAnswered={runActions.answered}
               run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.runId) ?? activeRun}
             />
           </div>

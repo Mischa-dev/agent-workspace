@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { lazy, Suspense, type MouseEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import homeClaims from 'virtual:modules/slots/home'
@@ -94,7 +95,7 @@ export function HomePage() {
   useShellPage({ home: true, mainClassName: 'aw-main--page' })
 
   const newProject = (
-    <ButtonLink icon="plus" to="/projects/new" variant="primary">
+    <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
       New project
     </ButtonLink>
   )
@@ -128,7 +129,7 @@ export function HomePage() {
             {right.includes('tasks') ? <YourTasks /> : null}
             {homeOn('recent') ? (
             <Section
-              actions={activeProjects.length > 0 ? <MoreLink to="/projects">All projects</MoreLink> : null}
+              actions={activeProjects.length > 0 ? <MoreLink to={here('/projects')}>All projects</MoreLink> : null}
               id="recent-projects-heading"
               title="Recent projects"
             >

@@ -1,4 +1,5 @@
 // Before the canvas chunk loads: Excalidraw reads its font path as it starts.
+import { here } from '../app/href'
 import './assetPath'
 
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
@@ -126,7 +127,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
         void refresh()
         if (deleted) {
           showToast({ tone: 'success', title: `Moved “${whiteboard.title}” to the trash`, onUndo: () => trash(false) })
-          navigate('/whiteboards')
+          navigate(here('/whiteboards'))
         }
       })
       .catch((reason: unknown) =>
@@ -170,7 +171,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   return (
     <div className="aw-wb">
       <header className="aw-wb__bar">
-        <Link className="aw-wb__back" to="/whiteboards">
+        <Link className="aw-wb__back" to={here('/whiteboards')}>
           <Icon name="arrow-left" size={16} />
           <span>Whiteboards</span>
         </Link>
@@ -304,7 +305,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           onClose={() => setPanel(null)}
           onDeleted={() => {
             void refresh()
-            navigate('/whiteboards')
+            navigate(here('/whiteboards'))
           }}
           title={whiteboard.title}
         />

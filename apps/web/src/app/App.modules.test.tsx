@@ -263,7 +263,7 @@ describe('modules that are off', () => {
     // The account's Webhooks page and the workspace's Runs and models page
     // (a project has a page of that name too, which follows the project).
     const webhooks = 'a[href="/settings/account/webhooks"]'
-    const runs = 'a[href="/settings/workspace/runs"]'
+    const runs = 'a[href$="/settings/runs"]'
     withModulesOff([])
     window.history.replaceState({}, '', '/settings/account/profile')
     const first = render(<App />)
@@ -335,7 +335,7 @@ describe('modules that are off', () => {
     await layout.answer(['pages'])
     expect(await screen.findByRole('heading', { name: 'Pages is turned off' })).toBeVisible()
     expect(pagesPage()).toBeNull()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}/pages`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/pages`)
   })
 
   it('a link into a module that is on waits, keeps the address, then shows the page', async () => {
@@ -348,7 +348,7 @@ describe('modules that are off', () => {
     expect(pagesPage()).toBeNull()
     await layout.answer([])
     expect(await screen.findByRole('heading', { level: 1, name: 'Pages' })).toBeVisible()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}/pages`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/pages`)
     expect(screen.queryByRole('heading', { name: 'Pages is turned off' })).toBeNull()
   })
 
@@ -373,14 +373,14 @@ describe('modules that are off', () => {
     })
     // While the settings load, G then P does nothing.
     goPages()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`)
     // With Pages off it still does nothing.
     await layout.answer(['pages'])
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 50))
     })
     goPages()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`)
   })
 
   it('a shortcut into a module that is on works once the settings say so', async () => {
@@ -394,7 +394,7 @@ describe('modules that are off', () => {
     await waitFor(() => {
       fireEvent.keyDown(document, { key: 'g' })
       fireEvent.keyDown(document, { key: 'p' })
-      expect(window.location.pathname).toBe(`/projects/${projectAId}/pages`)
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/pages`)
     })
   })
 

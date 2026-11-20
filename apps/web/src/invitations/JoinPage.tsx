@@ -24,6 +24,7 @@ import {
 import { AuthLayout } from '../auth/AuthLayout'
 import { Banner, Button, ButtonLink, TextField } from '../ui'
 import '../auth/auth.css'
+import { spaceHref } from '../app/href'
 
 type JoinMode = 'new' | 'existing'
 
@@ -161,7 +162,7 @@ export function JoinPage() {
     try {
       const { projects } = await queryClient.fetchQuery({ queryKey: queryKeys.projects, queryFn: () => listProjects() })
       const matches = projects.filter((project) => project.name === invitation.projectName && !project.archivedAt)
-      return matches.length === 1 ? `/projects/${encodeURIComponent(matches[0].id)}` : '/home'
+      return matches.length === 1 ? spaceHref(matches[0].id) : '/home'
     } catch {
       return '/home'
     }

@@ -31,6 +31,7 @@ import { useTimeToShow } from '../telemetry/useTimeToShow'
 import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
 import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
+import { useHomeExperience } from '../experience/layout'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file' | 'whiteboard' | 'sheet'
@@ -103,6 +104,10 @@ function Snippet({ text }: { text: string }) {
 
 /** Search everything you can see: messages, threads, tasks, pages, decisions and files by name. */
 export function SearchPage() {
+  const experience = useHomeExperience()
+  // The hints name only what this workspace has (W1.39).
+  const channelsOn = experience.moduleOn('channels')
+  const tasksOn = experience.moduleOn('tasks')
   const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
   const projectId = params.get('projectId') ?? ''
@@ -226,8 +231,23 @@ export function SearchPage() {
           </section>
         ) : null}
         <p className="aw-search__help">
-          Narrow with <code>from:@name</code>, <code>in:#channel</code>, <code>during:2026-10</code>, <code>has:link</code>, <code>is:unread</code> or{' '}
-          <code>kind:task</code>.
+          Narrow with <code>from:@name</code>
+          {channelsOn ? (
+            <>
+              , <code>in:#channel</code>
+            </>
+          ) : null}
+          , <code>during:2026-10</code>, <code>has:link</code>
+          {tasksOn ? (
+            <>
+              , <code>is:unread</code> or <code>kind:task</code>
+            </>
+          ) : (
+            <>
+              {' '}or <code>is:unread</code>
+            </>
+          )}
+          .
         </p>
         {projectId ? (
           <p className="aw-search__scope">

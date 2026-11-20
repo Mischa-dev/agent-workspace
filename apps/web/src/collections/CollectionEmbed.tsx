@@ -6,6 +6,7 @@ import { Button, Icon, ListSkeleton, countLabel } from '../ui'
 import { hasFilter, recordsParams, useCollection, useRecords, type CollectionView } from './api'
 import { activeConfig, recordName, viewColumns } from './collectionModel'
 import './collectionEmbed.css'
+import { spaceHref } from '../app/href'
 
 /** The most records an embed lists, and the most columns beside the title. */
 const ROWS = 8
@@ -42,7 +43,7 @@ export default function CollectionEmbed({ collectionId, label, projectId, viewId
     )
   }
 
-  const base = `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collectionId)}`
+  const base = spaceHref(projectId, `/collections/${encodeURIComponent(collectionId)}`)
   const open = view ? `${base}?view=${encodeURIComponent(view.id)}` : base
   const columns = view ? viewColumns(body.fields, view.config).slice(0, COLUMNS) : []
   // A filter on an archived field doesn't count, as the server leaves it out.

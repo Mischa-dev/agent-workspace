@@ -1,3 +1,4 @@
+import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
 import { asRecord, capability, integer, normalizeConversationActor, nullableString, REMOVED_MESSAGE_CONTENT, string } from './sidebarApi'
 import type { FileAttachment } from '../files/model'
@@ -42,7 +43,7 @@ function normalizeWorkItemReference(
     typeof item.id !== 'string' ||
     typeof item.key !== 'string' ||
     typeof item.href !== 'string' ||
-    !item.href.startsWith('/projects/')
+    !isSpaceAddress(item.href)
   ) {
     return null
   }

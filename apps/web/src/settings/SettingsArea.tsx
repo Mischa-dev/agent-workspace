@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
@@ -13,7 +14,7 @@ import { useSettingsRegistry } from './api'
 import { isArchiving } from './archiving'
 import { accountSettingsHref, projectSettingsHref, workspaceSettingsHref } from './paths'
 import { GitHubReturnBanner } from './GitHubReturnBanner'
-import { parseSettingsPath } from './route'
+import { parseSettingsPath, workspaceSettingsSplat } from './route'
 import { GROUP_LABELS, SETTINGS_PAGES, findPage, pageModule, pagesIn, type PageModuleState, type SettingsPage } from './registry'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 import { defaultWorkspace, useViewedWorkspace } from './workspaceChoice'
@@ -56,9 +57,10 @@ function OrTurnedOff({ page, children }: { page: PageModuleState; children: Reac
   )
 }
 
-function hrefFor(entry: SettingsPage, projectId: string | null) {
+/** A settings page's address; a workspace page opens in the workspace whose settings are shown. */
+function hrefFor(entry: SettingsPage, projectId: string | null, workspaceSlug: string | undefined) {
   if (entry.group === 'account') return accountSettingsHref(entry.id)
-  if (entry.group === 'workspace') return workspaceSettingsHref(entry.id)
+  if (entry.group === 'workspace') return workspaceSettingsHref(entry.id, workspaceSlug)
   return projectId ? projectSettingsHref(projectId, entry.id) : null
 }
 
@@ -66,17 +68,26 @@ function organizationFor(session: AuthenticatedSession, project: Project | null)
   return project ? (session.organizations.find((organization) => organization.id === project.organizationId) ?? null) : null
 }
 
-/** /settings/*: one area for your account, the workspace and each project. */
+/**
+ * One area for your account (`/settings/account/...`), the workspace
+ * (`/w/:ws/settings/...`) and each space in it (`/w/:ws/settings/spaces/:id/...`).
+ */
 export default function SettingsArea() {
   const session = useAuthenticatedSession()
-  const { '*': splat = '' } = useParams()
+  const { ws, '*': splat = '' } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const route = parseSettingsPath(splat, location.search)
+  const route = parseSettingsPath(ws ? workspaceSettingsSplat(splat) : splat, location.search)
   const projectList = useProjects()
-  const projects = useMemo(() => projectList.data?.projects ?? [], [projectList.data])
   const workspace = defaultWorkspace(session)
-  const [viewedWorkspace, viewWorkspace] = useViewedWorkspace(session)
+  const [pickedWorkspace, viewWorkspace] = useViewedWorkspace(session)
+  // In a workspace's address, its settings are the ones shown, and only its spaces.
+  const addressed = ws ? (session.organizations.find((organization) => organization.slug === ws) ?? null) : null
+  const viewedWorkspace = addressed ?? pickedWorkspace
+  const projects = useMemo(
+    () => (projectList.data?.projects ?? []).filter((project) => !addressed || project.organizationId === addressed.id),
+    [projectList.data, addressed],
+  )
   const [navOpen, setNavOpen] = useState(false)
   useShellPage({ mainClassName: 'aw-main--page' })
 
@@ -136,7 +147,7 @@ export default function SettingsArea() {
     content = (
       <EmptyState
         action={
-          <ButtonLink icon="plus" to="/projects/new" variant="primary">
+          <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
             New project
           </ButtonLink>
         }
@@ -169,7 +180,7 @@ export default function SettingsArea() {
       content = <SettingsSkeleton label="Loading settings" />
     } else if (!entry || !(entry.visible?.(context) ?? true)) {
       const first = pagesIn(group, context)[0]
-      return <Navigate replace to={first ? (hrefFor(first, null) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
+      return <Navigate replace to={first ? (hrefFor(first, null, viewedWorkspace?.slug) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
     } else {
       // A new page for each workspace, so nothing typed for one is saved to the next.
       content = (
@@ -208,7 +219,8 @@ export default function SettingsArea() {
           }
           onPickWorkspace={(organizationId) => {
             viewWorkspace(organizationId)
-            if (group !== 'workspace') navigate(workspaceSettingsHref('general'))
+            const picked = session.organizations.find((organization) => organization.id === organizationId)
+            if (picked) navigate(workspaceSettingsHref(group === 'workspace' ? route.section : 'general', picked.slug))
           }}
           pickerProject={pickerProject}
           projects={projects}
@@ -299,10 +311,12 @@ function SettingsNav({
   const [query, setQuery] = useState('')
   const workspaceId = useId()
   const projectId = useId()
+  // Where Projects is off, the spaces that remain are called spaces (W1.39).
+  const spaceWord = contexts.workspace.modules?.moduleOn('projects') === false ? 'space' : 'project'
   const searching = query.trim().length > 0
 
   const link = (entry: SettingsPage) => {
-    const href = hrefFor(entry, pickerProject?.id ?? null)
+    const href = hrefFor(entry, pickerProject?.id ?? null, workspace?.slug)
     if (!href) return null
     const current = entry.group === currentGroup && entry.id === currentSection
     return (
@@ -351,13 +365,13 @@ function SettingsNav({
           )}
           {projects.length > 0 && (
             <div className="aw-settings__group">
-              <h2 className="aw-settings__grouplabel">{GROUP_LABELS.project}</h2>
+              <h2 className="aw-settings__grouplabel">{spaceWord === 'project' ? GROUP_LABELS.project : 'Space settings'}</h2>
               <div className="aw-settings__picker">
                 <label className="visually-hidden" htmlFor={projectId}>
-                  Project
+                  {spaceWord === 'project' ? 'Project' : 'Space'}
                 </label>
                 <select id={projectId} onChange={(event) => onPickProject(event.target.value)} value={pickerProject?.id ?? ''}>
-                  {!pickerProject && <option value="">Choose a project</option>}
+                  {!pickerProject && <option value="">{`Choose a ${spaceWord}`}</option>}
                   {pickerProject && !projects.some((project) => project.id === pickerProject.id) && (
                     <option value={pickerProject.id}>{pickerProject.name}</option>
                   )}
@@ -370,7 +384,7 @@ function SettingsNav({
                 <Icon name="chevron-down" size={14} />
               </div>
               {pickerProject && (
-                <ul aria-label="Project settings" className="aw-settings__links">
+                <ul aria-label={spaceWord === 'project' ? 'Project settings' : 'Space settings'} className="aw-settings__links">
                   {pagesIn('project', contexts.project).map(link)}
                 </ul>
               )}
@@ -413,13 +427,13 @@ function SettingsSearch({
       (entry) =>
         (entry.visible?.(contexts[entry.group]) ?? true) &&
         pageModule(contexts[entry.group], entry.group, entry.id)?.state !== 'off' &&
-        hrefFor(entry, pickerProjectId),
+        hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug),
     )
     const found: SearchResult[] = visible
       .filter((entry) => matches([entry.label, GROUP_LABELS[entry.group], ...entry.keywords].join(' '), terms))
       .map((entry) => ({
         id: `page:${entry.group}:${entry.id}`,
-        href: hrefFor(entry, pickerProjectId) ?? '',
+        href: hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug) ?? '',
         title: entry.label,
         detail: GROUP_LABELS[entry.group],
         icon: entry.icon,
@@ -432,7 +446,7 @@ function SettingsSearch({
         if (!definition.scopes.includes(scope)) continue
         found.push({
           id: `setting:${entry.group}:${definition.key}`,
-          href: `${hrefFor(entry, pickerProjectId)}#setting-${definition.key}`,
+          href: `${hrefFor(entry, pickerProjectId, contexts.workspace.workspace?.slug)}#setting-${definition.key}`,
           title: definition.label,
           detail: `${GROUP_LABELS[entry.group]} · ${entry.label}`,
           icon: entry.icon,

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { collectionEmbed } from '../memory/embeds/embedModel'
 import { Button, SelectField, describeError } from '../ui'
 import { useCollection, useCollections } from './api'
+import { spaceHref } from '../app/href'
 
 /**
  * Picks a collection and one of its views to show live in a page (AWD-90),
@@ -52,7 +53,7 @@ export default function CollectionEmbedPicker({
         </p>
       ) : collections.data && open.length === 0 ? (
         <p className="aw-live__note">
-          This project has no collections yet. <Link to={`/projects/${encodeURIComponent(projectId)}/collections`}>Make one in Collections</Link>.
+          This project has no collections yet. <Link to={spaceHref(projectId, `/collections`)}>Make one in Collections</Link>.
         </p>
       ) : (
         <>

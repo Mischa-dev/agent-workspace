@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 
-import { legacyPathOf } from '../app/href'
+import { here, legacyPathOf } from '../app/href'
 import { useWorkspaceHref } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { captureEntries } from '../modules/registry'
@@ -53,7 +53,7 @@ export function QuickAddPage() {
     body = (
       <EmptyState
         action={
-          <ButtonLink icon="plus" to="/projects/new" variant="primary">
+          <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
             New project
           </ButtonLink>
         }

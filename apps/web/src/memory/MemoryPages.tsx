@@ -70,6 +70,7 @@ import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import type { LiveDiscussion } from './live/LivePage'
 import './memory.css'
 import '../styles/pages.css'
+import { here, spaceHref } from '../app/href'
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
 const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />
@@ -130,7 +131,7 @@ function ProjectFrame({ children, place }: { children: (project: Project) => Rea
   )
 }
 
-const pagesHref = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/pages`
+const pagesHref = (projectId: string) => spaceHref(projectId, `/pages`)
 
 /** The workspace's own pages, outside any project: they live in its hidden space. */
 function WorkspacePagesPage() {
@@ -809,9 +810,9 @@ function sourceLink(decision: Decision) {
   if (!id) return null
   const anchor = messageId ? `#message-${messageId}` : ''
   const project = encodeURIComponent(decision.projectId)
-  if (kind === 'channel') return { label: `#${name ?? 'channel'}`, to: `/projects/${project}/channels/${encodeURIComponent(id)}${anchor}` }
-  if (kind === 'thread') return { label: name ?? 'a thread', to: `/projects/${project}/threads/${encodeURIComponent(id)}${anchor}` }
-  if (kind === 'dm' || kind === 'group') return { label: name ?? 'a direct message', to: `/messages/${encodeURIComponent(id)}${anchor}` }
+  if (kind === 'channel') return { label: `#${name ?? 'channel'}`, to: spaceHref(project, `/channels/${encodeURIComponent(id)}${anchor}`) }
+  if (kind === 'thread') return { label: name ?? 'a thread', to: spaceHref(project, `/threads/${encodeURIComponent(id)}${anchor}`) }
+  if (kind === 'dm' || kind === 'group') return { label: name ?? 'a direct message', to: here(`/messages/${encodeURIComponent(id)}${anchor}`) }
   return name ? { label: name, to: null } : null
 }
 
@@ -825,7 +826,7 @@ function decisionThing(decision: Decision): Thing {
     title: decision.title,
     status: decision.status === 'superseded' ? 'Replaced' : undefined,
     projectId: decision.projectId,
-    href: `/projects/${encodeURIComponent(decision.projectId)}/decisions#${encodeURIComponent(decision.id)}`,
+    href: spaceHref(decision.projectId, `/decisions#${encodeURIComponent(decision.id)}`),
     fields: {
       decidedAt: decision.createdAt,
       decidedBy: decision.via ? `${decision.decidedBy} via ${decision.via}` : decision.decidedBy,
@@ -966,14 +967,14 @@ function RevisionSession({ projectId, revision }: { projectId: string; revision:
   const conversation = revision.sessionConversationId
   const where =
     conversation && revision.sessionConversationKind === 'channel'
-      ? { href: `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(conversation)}`, label: `#${revision.sessionConversationName ?? 'channel'}` }
+      ? { href: spaceHref(projectId, `/channels/${encodeURIComponent(conversation)}`), label: `#${revision.sessionConversationName ?? 'channel'}` }
       : conversation && revision.sessionConversationKind === 'thread'
-        ? { href: `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(conversation)}`, label: revision.sessionConversationName ?? 'a thread' }
+        ? { href: spaceHref(projectId, `/threads/${encodeURIComponent(conversation)}`), label: revision.sessionConversationName ?? 'a thread' }
         : null
   return (
     <>
       {' · '}
-      {revision.sessionRunId ? <Link to={`/runs/${encodeURIComponent(revision.sessionRunId)}`}>{`${name} run`}</Link> : `${name} session`}
+      {revision.sessionRunId ? <Link to={here(`/runs/${encodeURIComponent(revision.sessionRunId)}`)}>{`${name} run`}</Link> : `${name} session`}
       {where ? (
         <>
           {' in '}

@@ -19,6 +19,7 @@ import { useTaskDraft } from '../work-items/taskDraft'
 import { messageFromShare, taskFromShare, type SharedContent } from './sharedContent'
 import { uploadShared } from './sharedFiles'
 import '../styles/pages.css'
+import { here, spaceHref } from '../app/href'
 
 const LAST_PROJECT = 'quick-add:project'
 /** One draft for quick add, whichever project it's going to, so changing the project keeps what's typed. */
@@ -74,7 +75,7 @@ export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: 
           setOffline(false)
           clear()
           writeLocal(LAST_PROJECT, projectId)
-          const href = `/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`
+          const href = spaceHref(item.projectId, `/work-items/${encodeURIComponent(item.id)}`)
           if (!files.length) {
             navigate(href, { replace: true })
             return
@@ -199,7 +200,7 @@ export function QuickMessageForm({
         id: conversation.id,
         kind: conversation.kind,
         label: conversationTitle(conversation, viewerId) || 'Conversation',
-        href: `/messages/${encodeURIComponent(conversation.id)}`,
+        href: here(`/messages/${encodeURIComponent(conversation.id)}`),
       })))
     }
     return byRecent(
@@ -209,7 +210,7 @@ export function QuickMessageForm({
           id: channel.id,
           kind: 'channel' as const,
           label: `#${channel.name}`,
-          href: `/projects/${encodeURIComponent(scope)}/channels/${encodeURIComponent(channel.id)}`,
+          href: spaceHref(scope, `/channels/${encodeURIComponent(channel.id)}`),
         })),
     )
   }, [direct.data, scope, sidebar.data, viewerId])
@@ -348,7 +349,7 @@ export function QuickNoteForm({
     mutationFn: async () => {
       if (mode === 'later') {
         await saveForLater({ note })
-        return '/later'
+        return here('/later')
       }
       if (!content) throw new Error('Write something to keep.')
       const conversationId = await openDm(viewerId)
@@ -358,7 +359,7 @@ export function QuickNoteForm({
         setUploaded({ conversationId, attachments })
       }
       await sendConversationMessage({ conversationId, kind: 'dm', content, idempotencyKey, attachments })
-      return `/messages/${encodeURIComponent(conversationId)}`
+      return here(`/messages/${encodeURIComponent(conversationId)}`)
     },
     onSuccess: (href) => {
       setOffline(false)

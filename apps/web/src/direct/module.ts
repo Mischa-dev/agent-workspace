@@ -22,5 +22,5 @@ export default {
   ],
   shortcuts: [{ action: 'go-messages', key: 'm', label: 'Messages', path: '/messages', rank: 50 }],
   things: [{ kind: 'conversation', label: 'Conversation', icon: 'message' }],
-  phone: true,
+  phone: { id: 'messages', space: 'home', rank: 40, icon: 'message', label: 'Messages', path: '/messages' },
 } satisfies WebModule

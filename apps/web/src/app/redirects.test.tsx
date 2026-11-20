@@ -84,6 +84,31 @@ function open(path: string) {
   )
 }
 
+function openSpaces(path: string) {
+  const router = createMemoryRouter(
+    [
+      {
+        element: <WorkspaceProvider />,
+        children: [
+          { path: '/projects/:projectId/*', element: <WorkspaceRedirect /> },
+          { path: '/settings/workspace/*', element: <WorkspaceRedirect /> },
+          { path: '/settings/projects/*', element: <WorkspaceRedirect /> },
+          { path: '/w/:ws', element: <WorkspaceBoundary />, children: [{ path: '*', element: <Landed /> }] },
+        ],
+      },
+    ],
+    { initialEntries: [path] },
+  )
+  const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AuthenticatedSessionProvider session={session}>
+        <RouterProvider router={router} />
+      </AuthenticatedSessionProvider>
+    </QueryClientProvider>,
+  )
+}
+
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
@@ -93,6 +118,8 @@ describe('old addresses', () => {
   it('lists every workspace-level route the table had before W1.14a', () => {
     const redirects = routesWithHandles()
       .filter((route) => route.handle?.layout === 'redirect' && route.path && (route.path === '/' || isWorkspacePath(route.path)))
+      // A space's old addresses and old settings links are W1.14b's, below.
+      .filter((route) => !route.path?.startsWith('/projects/:projectId') && !route.path?.startsWith('/settings/'))
       .map((route) => route.path)
     expect(redirects.filter((path) => path !== '/dm/:conversationId').sort()).toEqual([...OLD_WORKSPACE_ROUTES].sort())
   })
@@ -108,6 +135,22 @@ describe('old addresses', () => {
     const landed = matches[matches.length - 1]?.route as { handle?: { layout?: string } } | undefined
     expect(landed?.handle?.layout).not.toBe('redirect')
     expect(legacyPathOf(target.split('?')[0])).toBe(path === '/' ? '/home' : path)
+  })
+
+  // W1.14b: a space's old addresses open in the space's place under /w/<slug>/s/<id>, in the address's words.
+  it.each([
+    ['/projects/p1', '/w/beta/s/p1'],
+    ['/projects/p1/work-items/t1?tab=runs', '/w/beta/s/p1/tasks/t1?tab=runs'],
+    ['/projects/p1/channels/c1#m1', '/w/beta/s/p1/chat/c1#m1'],
+    ['/projects/p1/launches', '/w/beta/s/p1/runs'],
+    ['/projects/p1/graph', '/w/beta/s/p1/planning/graph'],
+    ['/projects/p1/settings?tab=codex', '/w/beta/settings/spaces/p1?tab=codex'],
+    ['/settings/workspace/members', '/w/beta/settings/members'],
+    ['/settings/projects/p1/automations', '/w/beta/settings/spaces/p1/automations'],
+  ])('%s opens at %s', async (old, now) => {
+    rememberWorkspace('beta')
+    openSpaces(old)
+    expect(await screen.findByLabelText('Landed')).toHaveTextContent(now)
   })
 
   it('opens the default workspace when this browser has used none', async () => {

@@ -50,5 +50,5 @@ export default {
     { action: 'go-inbox', key: 'i', label: 'Inbox', path: '/inbox', rank: 20 },
     { action: 'go-later', key: 'l', label: 'Later', path: '/later', rank: 40 },
   ],
-  phone: true,
+  phone: { id: 'inbox', space: 'home', rank: 10, icon: 'inbox', label: 'Inbox', path: '/inbox', badge: 'inbox' },
 } satisfies WebModule

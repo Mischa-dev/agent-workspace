@@ -1,3 +1,4 @@
+import { spaceHref } from '../app/href'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
@@ -84,7 +85,7 @@ export function ConversationArchivePage() {
   )
   const empty = conversations.isSuccess && !archivedChannels?.length && !archivedThreads?.length
 
-  const base = `/projects/${encodeURIComponent(projectId)}`
+  const base = spaceHref(projectId)
   return (
     <>
       <div className="aw-page aw-page--reading">
@@ -103,7 +104,7 @@ export function ConversationArchivePage() {
             <ul className="aw-archive">
               {archivedChannels.map((channel) => (
                 <li className="aw-archive__item" key={channel.id}>
-                  <Link className="aw-archive__row" to={`${base}/channels/${encodeURIComponent(channel.id)}?includeArchived=true`}>
+                  <Link className="aw-archive__row" to={`${base}/chat/${encodeURIComponent(channel.id)}?includeArchived=true`}>
                     <Icon name="hash" />
                     <span className="aw-archive__name">{channel.name}</span>
                     <ArchivedOn at={channel.archivedAt} />

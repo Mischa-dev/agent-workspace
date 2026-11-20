@@ -6,6 +6,7 @@ import { toastError } from '../../app/mutations'
 import { changePreset, createPreset, layoutKeys, refreshLayouts, removePreset, saveWorkspaceLayout, useWorkspaceLayout } from '../../experience/api'
 import { LayoutEditor, SavePresetDialog, VisualOnlyNote } from '../../experience/LayoutEditor'
 import { MyViewSection, YourLayout } from '../../experience/LayoutSections'
+import { useWorkspaceExperience } from '../../experience/layout'
 import { presetName, type Layout, type SavedPreset } from '../../experience/registry'
 import { ConfirmDialog, EmptyState, ErrorState, Icon, IconButton, Menu, PageHeader, Row, RowList, Section, SettingsSkeleton, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
@@ -18,6 +19,7 @@ export default function LayoutPage({ workspace }: SettingsPageProps) {
 function WorkspaceLayout({ name, organizationId }: { name: string; organizationId: string }) {
   const queryClient = useQueryClient()
   const layout = useWorkspaceLayout(organizationId)
+  const experience = useWorkspaceExperience(organizationId)
   const save = useMutation({
     mutationFn: ({ next, version }: { next: Layout | null; version: number }) => saveWorkspaceLayout(organizationId, next, version),
     onSuccess: (response) => {
@@ -66,6 +68,7 @@ function WorkspaceLayout({ name, organizationId }: { name: string; organizationI
           cardsLabel="Default for projects"
           fallback={{ name: 'Everything on', description: 'No default: projects show everything until they pick a layout.', layout: null }}
           key={view.version}
+          moduleOn={experience.moduleOn}
           onSave={(next) => save.mutateAsync({ next, version: view.version })}
           onSavePreset={savePreset}
           previewName="A project"

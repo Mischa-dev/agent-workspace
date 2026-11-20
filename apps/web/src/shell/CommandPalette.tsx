@@ -391,7 +391,8 @@ export function CommandPalette() {
     const found = (projectSearch.data?.projects ?? []).filter(
       (project) => !project.archivedAt && !listed.has(project.id),
     )
-    for (const project of [...projects, ...found]) {
+    // Only the workspace you're in: another workspace's projects open from its own menu (W1.39).
+    for (const project of [...projects, ...found].filter((project) => !homeId || project.organizationId === homeId)) {
       list.push({
         id: `pr:${project.id}`,
         project: project.id,
@@ -506,7 +507,7 @@ export function CommandPalette() {
             <>
               <span>↑↓ to move</span>
               <span>↵ to open</span>
-              <span>Type a task key, like {current?.key ?? 'AWD'}-12</span>
+              {(current ? projectExperience : homeExperience).moduleOn('tasks') ? <span>Type a task key, like {current?.key ?? 'AWD'}-12</span> : null}
             </>
           }
           items={visibleItems}
@@ -533,8 +534,8 @@ export function CommandPalette() {
 
 /** The view on screen (a task list or board, or a collection), whose own keys the sheet lists too. */
 function viewAt(pathname: string, search: string): KeyedView | null {
-  if (/^\/projects\/[^/]+\/collections\/[^/]+\/?$/.test(pathname)) return 'table'
-  if (!/^\/projects\/[^/]+\/work-items\/?$/.test(pathname)) return null
+  if (/^\/projects\/[^/]+\/collections\/[^/]+\/?$/.test(legacyPathOf(pathname))) return 'table'
+  if (!/^\/projects\/[^/]+\/work-items\/?$/.test(legacyPathOf(pathname))) return null
   return new URLSearchParams(search).get('view') === 'board' ? 'board' : 'list'
 }
 

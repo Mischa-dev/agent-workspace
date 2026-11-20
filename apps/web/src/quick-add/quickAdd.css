@@ -66,16 +66,15 @@
     padding-bottom: 0;
   }
 
-  /* On a phone the button sits at the bottom, full width, under the thumb. */
+  /* On a phone the button sits at the bottom, full width, under the thumb.
+     It keeps within the form's own width, which a theme may set with or
+     without side padding (Quiet has none). */
   .aw-quick__actions {
     position: sticky;
     bottom: 0;
-    margin: 0 calc(-1 * var(--space-5));
-    padding: var(--space-3) var(--space-5) calc(var(--space-3) + env(safe-area-inset-bottom));
+    padding: var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-bottom));
     background: inherit;
     border-top: 1px solid var(--content-border);
-    /* Round with the card, so the bar doesn't cover its bottom corners. */
-    border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
   }
 
   .aw-quick__actions .aw-btn {
