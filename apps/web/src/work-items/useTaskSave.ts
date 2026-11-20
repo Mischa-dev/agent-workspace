@@ -274,10 +274,11 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
         if (undo) remember(undo)
         return
       } catch (error) {
-        // A proposal's conflict carries no task; read it again.
-        const theirs =
-          conflictCurrent(error) ??
-          (suggest && isApiError(error) && error.code === 'conflict' ? await getWorkItem(task.projectId, task.id).catch(() => null) : null)
+        // A proposal's conflict carries no task; read it again, and the next
+        // try is a new request against the newer version.
+        const proposalConflict = suggest && isApiError(error) && error.code === 'conflict'
+        if (proposalConflict) change(id, { sent: null })
+        const theirs = conflictCurrent(error) ?? (proposalConflict ? await getWorkItem(task.projectId, task.id).catch(() => null) : null)
         if (!theirs) {
           change(id, { state: 'failed', message: problemFor(error, fieldName(entry.field)).message })
           return
@@ -297,13 +298,18 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
    */
   const propose = async (id: number, entry: Entry, task: WorkItem) => {
     const name = fieldName(entry.field)
-    const input = suggestedUpdate(task.id, task.version, entry.patch)
+    // An earlier try whose answer was lost goes again as it was, with its
+    // request id and version, so the server answers with the proposal it
+    // may already have made; only a refusal for the version moves it on.
+    const sent = find(id)?.sent ?? null
+    const version = sent?.version ?? task.version
+    const input = suggestedUpdate(task.id, version, entry.patch)
     if (!input) {
       change(id, { state: 'failed', message: `Only someone who edits this task can change its ${name}.` })
       return
     }
-    const requestId = entry.sent?.version === task.version ? entry.sent.requestId : newRequestId()
-    change(id, { sent: { requestId, version: task.version } })
+    const requestId = sent?.requestId ?? newRequestId()
+    change(id, { sent: { requestId, version } })
     const written = await callOp('task_update', input, { requestId })
     // A suggestion leaves the task as it was, so a change to the same field
     // queued behind this one starts from what this one started from (the

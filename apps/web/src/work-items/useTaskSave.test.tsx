@@ -58,17 +58,20 @@ describe('useTaskSave', () => {
     vi.mocked(callOp)
       .mockRejectedValueOnce(new ApiError({ status: 503, code: 'temporarily_unavailable', message: 'Try again.' }))
       .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: true, proposalId: 'p1' })
-    const { result } = setup(mutateAsync, true)
+    const { client, result } = setup(mutateAsync, true)
 
     act(() => result.current.save('priority', { priority: 'high' }))
     await waitFor(() => expect(result.current.stopped).toHaveLength(1))
-    // The same patch again, as the description's retry button sends it.
+    // An unrelated change arrives, then the same patch again, as the
+    // description's retry button sends it.
+    act(() => client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, dueDate: '2026-12-01', version: 2 }))
     act(() => result.current.retry('priority', { priority: 'high' }))
     await waitFor(() => expect(result.current.stopped).toHaveLength(0))
     expect(mutateAsync).not.toHaveBeenCalled()
     const [first, second] = vi.mocked(callOp).mock.calls
     expect(first[1]).toEqual({ taskId: task.id, expectedVersion: 1, priority: 'high' })
     expect(second[2]?.requestId).toBe(first[2]?.requestId)
+    expect(second[1]).toEqual(first[1])
   })
 
   it('sends a second suggestion for a field while the first is on its way', async () => {
