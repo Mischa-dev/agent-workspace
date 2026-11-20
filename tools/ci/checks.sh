@@ -571,6 +571,7 @@ fi
 # tests use (cargo builds a package's binaries for its integration tests).
 if runs rust-build && [ "${part}" != all ]; then
   : "${nextest_archive:?the rust-build part needs CI_NEXTEST_ARCHIVE}"
+  mkdir -p "$(dirname "${nextest_archive}")"
   step "install cargo-nextest" install_tool cargo-nextest
   # The server library and its unit tests take about 5 GB each to compile;
   # side by side they ran a 16 GB runner out of memory. The library and
