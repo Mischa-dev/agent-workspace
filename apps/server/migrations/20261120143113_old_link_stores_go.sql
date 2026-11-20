@@ -25,6 +25,28 @@ SELECT links_put_row(link_of(r)) FROM work_item_links r;
 SELECT links_put_row(link_of(r)) FROM work_item_conversation_links r;
 SELECT links_put_row(link_of(r)) FROM whiteboard_links r;
 
+-- And each keeps when it was first made: the mirrors and the copies stamped
+-- the time they ran, and a launch reuses the thread linked to its task
+-- most recently.
+UPDATE links link SET created_at = made.created_at
+FROM (
+    SELECT (old.link).from_id, (old.link).to_id, (old.link).kind,
+           min(old.created_at) AS created_at
+    FROM (
+        SELECT link_of(r) AS link, r.created_at FROM work_item_links r
+        UNION ALL
+        SELECT link_of(r), r.created_at FROM work_item_conversation_links r
+        UNION ALL
+        SELECT link_of(r), r.created_at FROM whiteboard_links r
+    ) old
+    GROUP BY 1, 2, 3
+) made
+WHERE link.origin = 'explicit'
+  AND link.from_thing_id = made.from_id
+  AND link.to_thing_id = made.to_id
+  AND link.kind = made.kind
+  AND link.created_at <> made.created_at;
+
 -- An explicit link has one store now, so nothing else can still hold it.
 CREATE OR REPLACE FUNCTION links_still_held(
     p_from UUID, p_to UUID, p_kind TEXT, p_origin TEXT, p_source_kind TEXT, p_source_id UUID
