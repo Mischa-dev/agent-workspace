@@ -378,7 +378,7 @@ pub(crate) async fn establish_session_in_transaction(
         // find no workspace of the cookie's account to stage its
         // `session.revoked` signal in; server-wide for this one statement,
         // keyed by the cookie's own digest, it does.
-        let connection: &mut sqlx::PgConnection = &mut **transaction;
+        let connection: &mut sqlx::PgConnection = transaction;
         let own_scope = crate::tenancy::widen_to_system(&mut *connection, "auth.rotate").await?;
         rotated_from_session_id = sqlx::query_scalar::<_, Uuid>(
             r#"
