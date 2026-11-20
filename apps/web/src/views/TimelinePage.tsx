@@ -19,6 +19,7 @@ import { addDays, dayFromNumber, dayLabel, dayNumber, today } from './dates'
 import { slips, spansWith, targetWith, type PendingChange } from './timelineModel'
 import './views.css'
 import '../styles/conversation.css'
+import { spaceHref } from '../app/href'
 
 type Zoom = 'weeks' | 'months' | 'quarters'
 
@@ -295,7 +296,7 @@ export function TimelinePage() {
         {timeline.isError ? <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="The timeline didn’t load" /> : null}
         {data && !rows.length ? (
           <EmptyState
-            action={<ButtonLink to={`/projects/${encodeURIComponent(projectId)}/milestones`}>Open milestones</ButtonLink>}
+            action={<ButtonLink to={spaceHref(projectId, `/milestones`)}>Open milestones</ButtonLink>}
             icon="clock"
             title="Nothing dated in this stretch"
           >
@@ -374,7 +375,7 @@ export function TimelinePage() {
                             onKeyDown={(event) => keys(event, (shift) => ({ kind: 'milestone', id: row.id, days: shift }))}
                             onPointerDown={(event) => begin(event, { kind: 'milestone', id: row.id, days: 0 })}
                             onPointerMove={move}
-                            onPointerUp={() => end(() => navigate(`/projects/${encodeURIComponent(projectId)}/work-items?milestoneId=${encodeURIComponent(row.id)}`))}
+                            onPointerUp={() => end(() => navigate(spaceHref(projectId, `/work-items?milestoneId=${encodeURIComponent(row.id)}`)))}
                             style={{ left: x(target) + scale.width / 2 }}
                             type="button"
                           />

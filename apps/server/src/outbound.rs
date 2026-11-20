@@ -372,6 +372,179 @@ impl PagePolicy {
     }
 }
 
+// --- Databases a space connects (outside data, T1.34) -----------------------
+
+/// The longest a connection to an outside database may take to open.
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// An outside database's address as a space saved it:
+/// `postgresql://user:password@host:port/database`, with `sslmode` the only
+/// setting it may add. Its `Debug` leaves the password out.
+#[derive(Clone)]
+pub struct DatabaseAddress {
+    host: String,
+    port: u16,
+    user: String,
+    password: Option<String>,
+    database: String,
+    ssl: sqlx::postgres::PgSslMode,
+}
+
+impl std::fmt::Debug for DatabaseAddress {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.shown())
+    }
+}
+
+impl DatabaseAddress {
+    /// Reads a saved address, or says what's wrong with it.
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        use sqlx::postgres::PgSslMode;
+        const SHAPE: &str = "Give the address as postgresql://user:password@host:port/database.";
+        let url = Url::parse(value.trim()).map_err(|_| SHAPE)?;
+        if !matches!(url.scheme(), "postgres" | "postgresql") {
+            return Err(SHAPE);
+        }
+        let host = match url.host() {
+            Some(Host::Domain(name)) if !name.is_empty() => name.to_owned(),
+            Some(Host::Ipv4(ip)) => ip.to_string(),
+            Some(Host::Ipv6(ip)) => ip.to_string(),
+            _ => return Err(SHAPE),
+        };
+        let user = percent_decoded(url.username());
+        if user.is_empty() {
+            return Err(
+                "The address names the user to connect as: postgresql://user:password@host/database.",
+            );
+        }
+        let database = percent_decoded(url.path().trim_start_matches('/'));
+        if database.is_empty() || database.contains('/') {
+            return Err(
+                "The address names one database: postgresql://user:password@host/database.",
+            );
+        }
+        let mut ssl = PgSslMode::Prefer;
+        for (key, setting) in url.query_pairs() {
+            if key != "sslmode" {
+                return Err("The address may only add sslmode; other settings aren't taken.");
+            }
+            ssl = match setting.as_ref() {
+                "disable" => PgSslMode::Disable,
+                "allow" => PgSslMode::Allow,
+                "prefer" => PgSslMode::Prefer,
+                "require" => PgSslMode::Require,
+                // The connection goes to the address checked, not the name,
+                // so the certificate's chain is checked and its name isn't.
+                "verify-ca" | "verify-full" => PgSslMode::VerifyCa,
+                _ => return Err("sslmode is one of disable, prefer, require or verify-ca."),
+            };
+        }
+        if url.fragment().is_some() {
+            return Err(SHAPE);
+        }
+        Ok(Self {
+            host,
+            port: url.port().unwrap_or(5432),
+            user,
+            password: url.password().map(percent_decoded),
+            database,
+            ssl,
+        })
+    }
+
+    /// What may be shown of it: `user@host:port/database`, never the
+    /// password.
+    pub fn shown(&self) -> String {
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("{}@{host}:{}/{}", self.user, self.port, self.database)
+    }
+}
+
+fn percent_decoded(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = |at: usize| {
+            bytes
+                .get(at)
+                .and_then(|byte| char::from(*byte).to_digit(16))
+        };
+        match (bytes[index], hex(index + 1), hex(index + 2)) {
+            (b'%', Some(high), Some(low)) => {
+                decoded.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
+                index += 3;
+            }
+            (byte, _, _) => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Why an outside database couldn't be reached.
+#[derive(Debug)]
+pub enum DatabaseRefusal {
+    /// Its address is private (or didn't resolve).
+    Address(Refusal),
+    /// This server's environment would offer its own client certificate.
+    ClientCertificate,
+    /// It didn't answer in time.
+    Timeout,
+    /// It answered with an error: its words.
+    Refused(String),
+}
+
+/// Opens a connection to an outside database, at the addresses its name
+/// resolves to once checked (tried in turn), with `settings` (such as
+/// `default_transaction_read_only`) set for the session. Nothing from this
+/// server's own environment is offered to it: no password file, no
+/// password, user or client certificate from `PG*` variables.
+pub async fn database_connection(
+    address: &DatabaseAddress,
+    allow_private: bool,
+    settings: &[(&str, String)],
+) -> Result<sqlx::postgres::PgConnection, DatabaseRefusal> {
+    use sqlx::{ConnectOptions, postgres::PgConnectOptions};
+    // sqlx reads these from the environment and can't be told to forget
+    // them; a server set up that way must not reach outside databases.
+    if ["PGSSLCERT", "PGSSLKEY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return Err(DatabaseRefusal::ClientCertificate);
+    }
+    let addresses = resolve(&address.host, address.port, allow_private)
+        .await
+        .map_err(DatabaseRefusal::Address)?;
+    let mut last = DatabaseRefusal::Address(Refusal::Unresolved);
+    for socket in addresses {
+        let options = PgConnectOptions::new_without_pgpass()
+            .host(&socket.ip().to_string())
+            .port(socket.port())
+            .username(&address.user)
+            .password(address.password.as_deref().unwrap_or(""))
+            .database(&address.database)
+            .ssl_mode(address.ssl)
+            .application_name("agent-workspace")
+            .statement_cache_capacity(0)
+            .options(settings.iter().map(|(key, value)| (*key, value.as_str())))
+            .disable_statement_logging();
+        match tokio::time::timeout(DATABASE_CONNECT_TIMEOUT, options.connect()).await {
+            Ok(Ok(connection)) => return Ok(connection),
+            Ok(Err(error)) => last = DatabaseRefusal::Refused(error.to_string()),
+            Err(_) => last = DatabaseRefusal::Timeout,
+        }
+    }
+    Err(last)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,7 @@ import { openCommandMenu, useCommandState } from '../shell/commandStore'
 import { showToast, useToasts } from '../ui/toastStore'
 import {
   clearAuthenticatedQueryCache,
+  confirmSession,
   getSession,
   installAuthenticatedSession,
   isAuthenticatedSession,
@@ -219,6 +220,34 @@ describe('authenticated query-cache boundary', () => {
     const { result } = renderHook(() => useToasts())
     expect(result.current).toEqual([])
     expect(renderHook(() => useCommandState()).result.current.open).toBeNull()
+  })
+
+  it('clears what another account read when the server names someone else', async () => {
+    const queryClient = new QueryClient()
+    seedPrivateCaches(queryClient)
+    // A session shown before the check, such as one kept for reading offline.
+    queryClient.setQueryData(queryKeys.session, {
+      ...authenticatedSession,
+      user: { ...authenticatedSession.user, id: 'user-b', actorId: 'actor-b' },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(sessionWire()), { headers: { 'content-type': 'application/json' } }),
+    ))
+
+    await expect(confirmSession(queryClient)).resolves.toMatchObject({ user: { actorId } })
+    expect(queryClient.getQueryData(queryKeys.projects)).toBeUndefined()
+  })
+
+  it('keeps what was read when the server names the same account', async () => {
+    const queryClient = new QueryClient()
+    seedPrivateCaches(queryClient)
+    queryClient.setQueryData(queryKeys.session, authenticatedSession)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(sessionWire()), { headers: { 'content-type': 'application/json' } }),
+    ))
+
+    await confirmSession(queryClient)
+    expect(queryClient.getQueryData(queryKeys.projects)).toBeDefined()
   })
 
   it('clears stale Actor data before installing a successful login', () => {

@@ -1,3 +1,5 @@
+import { legacyPathOf, spaceHref } from '../../app/href'
+
 /**
  * What an embed in a page shows, from its path (AWD-90). A collection's view
  * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
@@ -24,8 +26,10 @@ export function embedTarget(href: string): EmbedTarget {
     return { kind: 'link' }
   }
   if (url.origin !== 'https://app.invalid') return { kind: 'link' }
+  // Either shape of address: /w/<ws>/s/<space>/... or the old /projects/<space>/...
+  const path = legacyPathOf(url.pathname)
   try {
-    const collection = COLLECTION.exec(url.pathname)
+    const collection = COLLECTION.exec(path)
     if (collection) {
       return {
         kind: 'collection',
@@ -34,9 +38,9 @@ export function embedTarget(href: string): EmbedTarget {
         viewId: url.searchParams.get('view') || null,
       }
     }
-    const file = FILE.exec(url.pathname)
+    const file = FILE.exec(path)
     if (file) return { kind: 'file', fileId: file[1].toLowerCase() }
-    const sheet = SHEET.exec(url.pathname)
+    const sheet = SHEET.exec(path)
     if (sheet) {
       return {
         kind: 'sheet',
@@ -56,7 +60,7 @@ export function embedTarget(href: string): EmbedTarget {
 
 /** The path an embed of a collection's view keeps, and the label it starts with. */
 export function collectionEmbed(projectId: string, collection: { id: string; name: string }, view: { id: string; name: string } | null, views: number) {
-  const path = `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection.id)}`
+  const path = spaceHref(projectId, `/collections/${encodeURIComponent(collection.id)}`)
   return {
     href: view ? `${path}?view=${encodeURIComponent(view.id)}` : path,
     label: view && views > 1 ? `${collection.name} · ${view.name}` : collection.name,
@@ -69,7 +73,7 @@ export function collectionEmbed(projectId: string, collection: { id: string; nam
  * when it moves.
  */
 export function sheetEmbed(projectId: string, sheet: { id: string; name: string }, tab: { id: string; name: string } | null, tabs: number, range: string | null, name: string | null = null) {
-  const path = `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheet.id)}`
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
   const query = new URLSearchParams()
   if (name) query.set('name', name)
   else {
@@ -86,7 +90,7 @@ export function sheetEmbed(projectId: string, sheet: { id: string; name: string 
 
 /** The path an embed of a sheet's chart keeps (C1.18), and its label. */
 export function sheetChartEmbed(projectId: string, sheet: { id: string; name: string }, chart: { id: string; title: string }) {
-  const path = `/projects/${encodeURIComponent(projectId)}/sheets/${encodeURIComponent(sheet.id)}`
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
   return { href: `${path}?chart=${encodeURIComponent(chart.id)}`, label: `${sheet.name} · ${chart.title}` }
 }
 

@@ -31,6 +31,79 @@
   display: contents;
 }
 
+/* A file field's editor (T1.20): the record's files in the field, and
+   adding more. */
+.aw-fileedit {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  font: var(--t-ui);
+}
+
+.aw-fileedit p {
+  margin: 0;
+}
+
+.aw-fileedit__note {
+  font: var(--t-small);
+}
+
+.aw-fileedit__list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-fileedit__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-fileedit__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--content-fg);
+}
+
+.aw-fileedit__add {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-1-5);
+  min-height: 30px;
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.aw-fileedit__add:hover {
+  background: var(--content-hover);
+}
+
+.aw-fileedit__add:focus-within {
+  outline: var(--focus-width) solid var(--r-focus);
+  outline-offset: 1px;
+}
+
+.aw-fileedit__add:has(input:disabled) {
+  cursor: progress;
+}
+
+@media (pointer: coarse) {
+  .aw-fileedit__add {
+    min-height: 44px;
+  }
+}
+
 /* The list of collections */
 .aw-collections .aw-seg {
   margin-bottom: var(--space-4);
@@ -626,6 +699,7 @@ button.aw-collection__chiptext:hover,
 
 .aw-cforms__field {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -636,6 +710,20 @@ button.aw-collection__chiptext:hover,
 
 .aw-cforms__field:hover {
   background: var(--content-hover);
+}
+
+/* T1.28: when an asked question shows, and the heading it starts. */
+.aw-cforms__logic {
+  display: grid;
+  flex-basis: 100%;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2) var(--space-6);
+}
+
+.aw-cforms__values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
 }
 
 .aw-cforms__confirm {
@@ -798,6 +886,25 @@ button.aw-filtergroup__text:hover {
 }
 
 .aw-filtergroup__empty {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-collection-workflow {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-collection-workflow legend {
+  padding: 0;
+  font-weight: var(--weight-semibold);
+}
+
+.aw-collection-workflow__hint {
   margin: 0;
   color: var(--content-fg-muted);
   font: var(--t-small);

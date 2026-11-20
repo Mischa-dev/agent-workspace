@@ -27,7 +27,10 @@ const { areas } = vi.hoisted(() => ({
 }))
 
 vi.mock('../fields/api', () => ({ useFields: () => ({ data: { fields: [areas], canManage: false } }) }))
-vi.mock('./hooks', () => ({ useUpdateWorkItem: vi.fn(), useAssignableActors: vi.fn() }))
+vi.mock('./hooks', () => {
+  const useUpdateWorkItem = vi.fn()
+  return { useUpdateWorkItem, useQueueWorkItemUpdate: (...args: unknown[]) => useUpdateWorkItem(...args), useAssignableActors: vi.fn() }
+})
 
 const task: WorkItem = {
   id: 'task-a',

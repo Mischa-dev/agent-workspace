@@ -65,28 +65,30 @@ async fn accounts_have_one_kind_and_agents_one_owner() {
         "an agent belongs to its workspace"
     );
 
-    // Old code inserting `kind` only.
-    let worker = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker)
+    // An agent or app has its owner from the start (K1.31).
+    let ownerless = sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
+        .bind(Uuid::now_v7())
         .execute(pool)
-        .await
-        .expect("old-style insert");
+        .await;
+    assert!(ownerless.is_err(), "an agent never exists without an owner");
+
+    // An agent owned by a person; a loop is refused; a person has no owner.
+    let lena = world.people["lena"].actor;
+    let worker = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_account_id) VALUES ($1, 'execution_worker', $2)",
+    )
+    .bind(worker)
+    .bind(lena)
+    .execute(pool)
+    .await
+    .expect("a person may own an agent");
     let kind = sqlx::query_scalar::<_, String>("SELECT account_kind FROM actors WHERE id = $1")
         .bind(worker)
         .fetch_one(pool)
         .await
         .expect("kind");
     assert_eq!(kind, "agent");
-
-    // An agent owned by a person; a loop is refused; a person has no owner.
-    let lena = world.people["lena"].actor;
-    sqlx::query("UPDATE actors SET owner_account_id = $2 WHERE id = $1")
-        .bind(worker)
-        .bind(lena)
-        .execute(pool)
-        .await
-        .expect("a person may own an agent");
     let second = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO actors (id, kind, owner_account_id) VALUES ($1, 'external_agent', $2)",

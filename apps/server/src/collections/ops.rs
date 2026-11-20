@@ -34,6 +34,7 @@ pub fn register_ops(registry: &mut Registry) {
     registry.add::<ButtonGet>();
     registry.add::<ButtonPress>();
     registry.add::<RecordCreate>();
+    registry.add::<RecordUpdate>();
 }
 
 /// Add a record to a collection, made from a message if you like.
@@ -62,6 +63,10 @@ pub struct RecordCreateInput {
     /// message into this record.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub say_so: bool,
+    /// A record template of the collection to start from (T1.30): its title
+    /// and field values, under what you give.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<IdRef>,
 }
 
 impl Targeted for RecordCreateInput {
@@ -106,8 +111,9 @@ impl Operation for RecordCreate {
     const DESCRIPTION: &'static str = "Add one record to a collection, with its title and \
         field values by name. Pass fromMessageId to make it from a message: the record links \
         back to the message, takes its first line as the title unless you give one, and with \
-        saySo the conversation says you made it. Records of a collection that acts like tasks \
-        are tasks: use task_create. record_write changes many records at once.";
+        saySo the conversation says you made it. Pass template to start from a record template \
+        (record_template_list). Records of a collection that acts like tasks are tasks: use \
+        task_create. record_write changes many records at once.";
 
     type Input = RecordCreateInput;
     type Output = RecordCreateOutput;
@@ -118,6 +124,7 @@ impl Operation for RecordCreate {
     ) -> Result<RecordCreateOutput, OpError> {
         let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let actor = call.account_id();
+        let caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
         let Some(collection) = super::lock(tx, space_id, input.collection.id()).await? else {
             return Err(OpError::not_found("collection"));
@@ -168,10 +175,29 @@ impl Operation for RecordCreate {
                 })?,
             ),
         };
+        // A template's title and values, under what the input gives.
+        let mut fields = input.fields;
+        let mut template_title = None;
+        if let Some(template) = input.template {
+            let template = super::record_templates::template(tx, space_id, template.id(), false)
+                .await?
+                .filter(|template| !template.archived && template.collection_id == collection.id)
+                .ok_or_else(|| {
+                    OpError::invalid("template", "That isn't a template of this collection.")
+                })?;
+            for (name, value) in super::record_templates::values_of(&template) {
+                fields.entry(name).or_insert(value);
+            }
+            template_title = Some(super::record_templates::title_on(
+                &template.title,
+                chrono::Utc::now().date_naive(),
+            ));
+        }
         let title = input
             .title
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty())
+            .or(template_title)
             .or_else(|| source.as_ref().map(|(_, _, text)| title_from(text)));
         let project_key =
             sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
@@ -180,6 +206,15 @@ impl Operation for RecordCreate {
                 .await
                 .map_err(crate::error::AppError::from)?;
         let definitions = super::field_definitions(tx, space_id, collection.id, true).await?;
+        // Fields only builders change (T1.19).
+        let may_build = crate::access::check(
+            tx,
+            &caller,
+            crate::access::Need::permission(Perm::CollectionsBuild),
+            crate::access::Target::Space(space_id),
+        )
+        .await?
+        .is_ok();
         let written = super::records::write(
             tx,
             space_id,
@@ -188,12 +223,13 @@ impl Operation for RecordCreate {
                 actor_id: actor,
                 project_key: &project_key,
             },
+            may_build,
             &definitions,
             "fields",
             &[super::records::RecordInput {
                 record: None,
                 title,
-                values: input.fields.into_iter().collect(),
+                values: fields.into_iter().collect(),
                 archived: None,
                 expected_version: None,
             }],
@@ -248,6 +284,322 @@ impl Operation for RecordCreate {
             collection_id: collection.id,
             number: record.number,
             title: record.title,
+        })
+    }
+}
+
+/// Change one record, or propose the change (T1.41).
+pub struct RecordUpdate;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordUpdateInput {
+    /// The record: its id, or a link to it.
+    pub record: IdRef,
+    /// A new title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Values by field name or id; null clears one.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub fields: serde_json::Map<String, Value>,
+    /// true archives the record, false restores it (not proposable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    /// The version you last read: refused if it changed since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
+    /// When it becomes a proposal: a note for whoever decides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl Targeted for RecordUpdateInput {
+    fn target(&self) -> Target {
+        Target::thing("record", self.record.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordUpdateOutput {
+    #[schemars(with = "String")]
+    pub id: Uuid,
+    #[schemars(with = "String")]
+    pub collection_id: Uuid,
+    pub number: i64,
+    pub title: String,
+    /// The record's version (unchanged when it became a proposal).
+    pub version: i64,
+    /// What changed: "title", "archived" and field names. Empty for a
+    /// proposal.
+    pub changed: Vec<String>,
+    /// Set when your role only suggests here: the change waits as this
+    /// proposal for someone who edits the record (proposal_decide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub proposal_id: Option<Uuid>,
+    /// The fields the proposal sets, each with how it read before and after.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposed: Vec<Value>,
+}
+
+impl Operation for RecordUpdate {
+    const NAME: &'static str = "record_update";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "collections";
+    // Suggest is the floor: `run` asks `access::write_mode` whether the
+    // change lands (edit) or waits as a proposal (suggest only).
+    const PERMISSION: Option<Perm> = Some(Perm::CollectionsSuggest);
+    const PROPOSABLE: bool = true;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &[
+        "record.updated",
+        "record.proposals_changed",
+        "request.raised",
+    ];
+    const TITLE: &'static str = "Update a record";
+    const DESCRIPTION: &'static str = "Change one record: its title, field values by name \
+        (null clears one), or archive it. All of it is one change in the record's history. Pass \
+        the version you read as expectedVersion. If your role only suggests on records, the \
+        change becomes a proposal (proposalId) that someone who edits the record accepts or \
+        rejects, from its request card or with proposal_decide; it is then written as yours. \
+        record_write changes many records at once.";
+
+    type Input = RecordUpdateInput;
+    type Output = RecordUpdateOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RecordUpdateInput,
+    ) -> Result<RecordUpdateOutput, OpError> {
+        let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let actor = call.account_id();
+        let caller = call.ctx.caller.clone();
+        let via_grant_id = caller.via_grant_id;
+        let id = input.record.id();
+        let tx = call.tx().await?;
+        let (collection_id, creator) = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT collection_id, created_by_actor_id FROM collection_records \
+             WHERE id = $1 AND project_id = $2",
+        )
+        .bind(id)
+        .bind(space_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?
+        .ok_or_else(|| OpError::not_found("record"))?;
+        let Some(collection) = super::lock(tx, space_id, collection_id).await? else {
+            return Err(OpError::not_found("record"));
+        };
+        if collection.archived {
+            return Err(OpError::Conflict {
+                reason: ConflictReason::Archived,
+                message: format!(
+                    "\"{}\" is archived. Restore it before changing its records.",
+                    collection.name
+                )
+                .into(),
+                current: None,
+            });
+        }
+        if collection.acts_like_task {
+            return Err(OpError::Invalid {
+                field: "record".into(),
+                message: format!(
+                    "Records in \"{}\" are tasks: change them with task_update.",
+                    collection.name
+                )
+                .into(),
+            });
+        }
+        let mode = crate::access::write_mode_locked(
+            tx,
+            &caller,
+            "record",
+            space_id,
+            creator == actor,
+            Some("collections"),
+        )
+        .await?
+        .map_err(|_| OpError::from(crate::error::AppError::Forbidden))?
+        .mode;
+        let project_key =
+            sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+                .bind(space_id)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+        let may_build = crate::access::check(
+            tx,
+            &caller,
+            crate::access::Need::permission(Perm::CollectionsBuild),
+            crate::access::Target::Space(space_id),
+        )
+        .await?
+        .is_ok();
+        let writer = crate::work_item_fields::Writer {
+            actor_id: actor,
+            project_key: &project_key,
+        };
+        let record_input = super::records::RecordInput {
+            record: Some(super::records::RecordRef::Id(id)),
+            title: input.title.clone(),
+            values: input.fields.clone().into_iter().collect(),
+            archived: input.archived,
+            expected_version: input.expected_version,
+        };
+        let refused = |problem: super::records::WriteProblem| match problem.kind {
+            super::records::ProblemKind::Conflict => OpError::Conflict {
+                reason: ConflictReason::State {
+                    code: "record_changed",
+                },
+                message: problem.message.into(),
+                current: None,
+            },
+            super::records::ProblemKind::NotFound => OpError::not_found("record"),
+            _ => OpError::Invalid {
+                field: problem.field.into(),
+                message: problem.message.into(),
+            },
+        };
+        if mode == crate::access::WriteMode::Propose {
+            let record = super::records::find(
+                &mut **tx,
+                space_id,
+                collection.id,
+                super::records::RecordRef::Id(id),
+                false,
+            )
+            .await?
+            .ok_or_else(|| OpError::not_found("record"))?;
+            if let Some(expected) = input.expected_version
+                && expected != record.version
+            {
+                return Err(OpError::Conflict {
+                    reason: ConflictReason::State {
+                        code: "record_changed",
+                    },
+                    message: format!(
+                        "#{} changed since it was read (now version {}). Read it again and retry.",
+                        record.number, record.version
+                    )
+                    .into(),
+                    current: None,
+                });
+            }
+            let note = input
+                .note
+                .as_deref()
+                .map(str::trim)
+                .filter(|note| !note.is_empty());
+            if note.is_some_and(|note| note.chars().count() > 500) {
+                return Err(OpError::invalid("note", "Keep a note to 500 characters."));
+            }
+            let proposed = super::record_proposals::propose(
+                tx,
+                writer,
+                via_grant_id,
+                &collection,
+                &record,
+                may_build,
+                record_input,
+                note,
+            )
+            .await?;
+            return match proposed {
+                super::record_proposals::Proposed::Made {
+                    id: proposal,
+                    changes,
+                } => {
+                    let name = if record.title.trim().is_empty() {
+                        format!("#{}", record.number)
+                    } else {
+                        record.title.clone()
+                    };
+                    crate::proposals::raise_request(
+                        tx,
+                        proposal,
+                        &format!("Accept a change to \"{name}\" in {}?", collection.name),
+                        Some(creator),
+                    )
+                    .await?;
+                    call.audit_target("proposal", proposal, serde_json::json!({ "record": id }));
+                    Ok(RecordUpdateOutput {
+                        id,
+                        collection_id: collection.id,
+                        number: record.number,
+                        title: record.title,
+                        version: record.version,
+                        changed: Vec::new(),
+                        proposal_id: Some(proposal),
+                        proposed: changes
+                            .into_iter()
+                            .map(|mut change| {
+                                if let Some(object) = change.as_object_mut() {
+                                    object.remove("was");
+                                    object.remove("is");
+                                }
+                                change
+                            })
+                            .collect(),
+                    })
+                }
+                super::record_proposals::Proposed::Unchanged => Ok(RecordUpdateOutput {
+                    id,
+                    collection_id: collection.id,
+                    number: record.number,
+                    title: record.title,
+                    version: record.version,
+                    changed: Vec::new(),
+                    proposal_id: None,
+                    proposed: Vec::new(),
+                }),
+                super::record_proposals::Proposed::Problem(problem) => Err(refused(problem)),
+                super::record_proposals::Proposed::Refused(message) => Err(OpError::Denied {
+                    reason: crate::ops::DenyReason::Rule,
+                    message: message.into(),
+                }),
+            };
+        }
+        let definitions = super::field_definitions(tx, space_id, collection.id, true).await?;
+        let written = super::records::write(
+            tx,
+            space_id,
+            &collection,
+            writer,
+            may_build,
+            &definitions,
+            "fields",
+            &[record_input],
+        )
+        .await?
+        .map_err(refused)?;
+        let (record, changed) = match written.into_iter().next() {
+            Some(super::records::Written::Changed { record, changed }) => (record, changed),
+            Some(
+                super::records::Written::Unchanged(record)
+                | super::records::Written::Created(record),
+            ) => (record, Vec::new()),
+            None => return Err(OpError::Unavailable),
+        };
+        if !changed.is_empty() {
+            crate::outbox::enqueue_collection_updated(tx, space_id, collection.id, &[record.id])
+                .await?;
+        }
+        call.audit_target(
+            "record",
+            record.id,
+            serde_json::json!({ "changed": changed }),
+        );
+        Ok(RecordUpdateOutput {
+            id: record.id,
+            collection_id: collection.id,
+            number: record.number,
+            title: record.title,
+            version: record.version,
+            changed,
+            proposal_id: None,
+            proposed: Vec::new(),
         })
     }
 }
@@ -324,7 +676,7 @@ impl Operation for FormulaPreview {
         let collection_id = input.collection.id();
         let tx = call.tx().await?;
         let Some((title_name, acts_like_task)) = sqlx::query_as::<_, (String, bool)>(
-            "SELECT title_name, acts_like_task OR builtin IS NOT NULL FROM collections \
+            "SELECT title_name, acts_like_task FROM collections \
              WHERE project_id = $1 AND id = $2",
         )
         .bind(project_id)
@@ -601,7 +953,7 @@ fn fill(
         FieldType::CreatedBy => Value::String(record.created_by_actor_id.to_string()),
         FieldType::EditedBy => Value::String(record.updated_by_actor_id.to_string()),
         FieldType::AutoId => Value::from(record.number),
-        FieldType::Formula => match record.computed_values.get(&key) {
+        FieldType::Formula | FieldType::Rollup => match record.computed_values.get(&key) {
             Some(Value::Object(_)) | None => Value::Null,
             Some(value) => value.clone(),
         },

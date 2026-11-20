@@ -291,6 +291,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (queues, leases, retries)",
             ),
             (
+                "record_recalculations",
+                "runtime state of this server (records waiting for their rollups to be worked out again)",
+            ),
+            (
                 "event_staging",
                 "the server's event log on its way in; what happened is carried by the rows it describes",
             ),
@@ -513,6 +517,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("project_id", "projects"),
                     ("created_by_actor_id", "actors"),
+                    ("initiative_id", "collection_records"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -611,6 +616,16 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("project_id", "projects"),
                     ("type_id", "work_item_types"),
                     ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "themes",
+                table: "themes",
+                references: &[
+                    ("owner_account_id", "actors"),
+                    ("offered_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -728,6 +743,19 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("conversation_id", "conversations"),
                     ("actor_id", "actors"),
                     ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "conversation_app_consents",
+                table: "conversation_app_consents",
+                references: &[
+                    ("space_id", "projects"),
+                    ("conversation_id", "conversations"),
+                    ("app_account_id", "actors"),
+                    ("granted_by_account_id", "actors"),
+                    ("revoked_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -925,6 +953,47 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         after: &["projects", "channels", "messages"],
         kinds: &[
             KindDecl {
+                kind: "cycle_settings",
+                table: "cycle_settings",
+                references: &[("space_id", "projects"), ("updated_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "cycle_snapshots",
+                table: "cycle_snapshots",
+                references: &[("cycle_id", "cycles")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "cycles",
+                table: "cycles",
+                references: &[("space_id", "projects")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "space_statuses",
+                table: "space_statuses",
+                references: &[
+                    ("space_id", "projects"),
+                    ("lead_actor_id", "actors"),
+                    ("latest_update_id", "conversations"),
+                    ("latest_update_by_actor_id", "actors"),
+                    ("updated_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "triage_rules",
+                table: "triage_rules",
+                references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "work_item_acceptance_criteria",
                 table: "work_item_acceptance_criteria",
                 references: &[
@@ -1068,6 +1137,9 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("blocked_by_actor_id", "actors"),
                     ("milestone_id", "project_milestones"),
                     ("collection_id", "collections"),
+                    ("delegate_actor_id", "actors"),
+                    ("triaged_by_actor_id", "actors"),
+                    ("cycle_id", "cycles"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1175,6 +1247,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("record_id", "collection_records"),
                     ("actor_id", "actors"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("accepted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1189,6 +1262,42 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                     ("archived_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "record_templates",
+                table: "record_templates",
+                references: &[
+                    ("space_id", "projects"),
+                    ("collection_id", "collections"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "recurring_records",
+                table: "recurring_records",
+                references: &[
+                    ("space_id", "projects"),
+                    ("template_id", "record_templates"),
+                    ("created_by_actor_id", "actors"),
+                    ("external_agent_connection_id", "external_agent_connections"),
+                    ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("last_record_id", "collection_records"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "forms",
+                table: "forms",
+                references: &[
+                    ("space_id", "projects"),
+                    ("collection_id", "collections"),
+                    ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1241,8 +1350,33 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            KindDecl {
+                kind: "data_connections",
+                table: "data_connections",
+                references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],
+                text_references: &[],
+                // The address with its password is a secret, set again
+                // after import.
+                exclude: &["secret_id"],
+            },
+            KindDecl {
+                kind: "data_queries",
+                table: "data_queries",
+                references: &[
+                    ("space_id", "projects"),
+                    ("connection_id", "data_connections"),
+                    ("reviewed_by_actor_id", "actors"),
+                    ("created_by_actor_id", "actors"),
+                    ("updated_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "data_query_results",
+            "answers stored from a database outside the workspace; run the query again after import",
+        )],
     },
     ExportDecl {
         module: "dashboards",
@@ -1428,7 +1562,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
     ExportDecl {
         module: "automations",
         version: 1,
-        after: &["projects", "tasks"],
+        after: &["projects", "tasks", "collections"],
         kinds: &[
             KindDecl {
                 kind: "automation_rule_matches",
@@ -1436,6 +1570,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("rule_id", "automation_rules"),
                     ("work_item_id", "work_items"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "automation_record_matches",
+                table: "automation_record_matches",
+                references: &[
+                    ("space_id", "projects"),
+                    ("rule_id", "automation_rules"),
+                    ("record_id", "collection_records"),
                 ],
                 text_references: &[],
                 exclude: &[],

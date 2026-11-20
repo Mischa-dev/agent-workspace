@@ -1,15 +1,16 @@
+import { spaceHref, spaceIdOf } from '../app/href'
 import { useLocation } from 'react-router-dom'
 
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 
-export const projectPath = (projectId: string, rest = '') => `/projects/${encodeURIComponent(projectId)}${rest}`
+/** A place in a space; `rest` may use today's words (`/work-items`). */
+export const projectPath = (projectId: string, rest = '') => spaceHref(projectId, rest)
 
 /** The Project in the address bar, if any. */
 export function useRouteProject(projects: Project[]) {
   const location = useLocation()
-  const match = /^\/projects\/([^/]+)/.exec(location.pathname)
-  const id = match ? decodeURIComponent(match[1]) : ''
+  const id = spaceIdOf(location.pathname) ?? ''
   const inList = projects.find((project) => project.id === id) ?? null
   // The rail holds the first 100 Projects, and may not have loaded; the page's
   // own Project is fetched directly (the page shares this cached read).

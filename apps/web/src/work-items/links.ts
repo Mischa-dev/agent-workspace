@@ -1,9 +1,11 @@
+import { spaceHref } from '../app/href'
+
 export function workItemHref(projectId: string, workItemId: string) {
-  return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}`
+  return spaceHref(projectId, `/work-items/${encodeURIComponent(workItemId)}`)
 }
 
 export function workItemsHref(projectId: string) {
-  return `/projects/${encodeURIComponent(projectId)}/work-items`
+  return spaceHref(projectId, `/work-items`)
 }
 
 /**

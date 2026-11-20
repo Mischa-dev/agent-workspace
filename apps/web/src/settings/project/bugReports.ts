@@ -30,7 +30,16 @@ export type BugReportLink = {
 }
 
 /** What a form asks: its fields by ID, in order, after the title. */
-export type FormSettings = { intro?: string; fields: { field: string; required?: boolean }[]; thanks?: string; dailyLimit?: number }
+export type FormSettings = {
+  intro?: string
+  fields: { field: string; required?: boolean; showIf?: { field: string; isOneOf?: string[] } }[]
+  thanks?: string
+  dailyLimit?: number
+  /** Headings, each before the question it names (T1.28). */
+  sections?: { title: string; description?: string; before: string }[]
+  /** Values every record gets, for fields it doesn't ask. */
+  sets?: { field: string; value: unknown }[]
+}
 
 export type BugReportLinkList = { links: BugReportLink[]; canCreate: boolean }
 export type BugReportLinkWithUrl = { link: BugReportLink; url: string; formUrl?: string }

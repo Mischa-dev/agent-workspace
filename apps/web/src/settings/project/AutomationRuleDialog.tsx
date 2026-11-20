@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
@@ -15,7 +15,7 @@ import {
   type Trigger,
   type TriggerKind,
 } from '../../automations/api'
-import { useCollections } from '../../collections/api'
+import { useCollection, useCollections } from '../../collections/api'
 import { listPages, memoryKeys } from '../../memory/api'
 import { useSheets } from '../../sheets/api'
 import { listWhiteboards, whiteboardKeys } from '../../whiteboards/api'
@@ -26,6 +26,7 @@ import { listMembers } from '../../team/api'
 import { launchKeys } from '../../launch/hooks'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
 import '../../automations/automations.css'
+import { OperationAction } from '../../automations/OperationAction'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { opQuery } from '../../api/ops'
 import { listProjectTaskViews, viewKeys } from '../../views/api'
@@ -54,6 +55,8 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'message_posted', label: 'Someone posts a message' },
   { kind: 'record_created', label: 'A record is added to a collection' },
   { kind: 'record_changed', label: 'A record in a collection changes' },
+  { kind: 'record_matches', label: 'A record starts matching a view' },
+  { kind: 'field_changed', label: 'A field of a record changes' },
   { kind: 'page_changed', label: 'A page changes' },
   { kind: 'sheet_changed', label: 'A sheet changes' },
   { kind: 'whiteboard_changed', label: 'A whiteboard changes' },
@@ -73,25 +76,32 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'notify', label: 'Notify people' },
   { kind: 'post_message', label: 'Post a message' },
   { kind: 'ask_agent', label: 'Ask an agent' },
+  { kind: 'run_operation', label: 'Run an operation' },
 ]
 
 /** Record rules (AWD-110) and page, sheet and board rules aren't about tasks: no saved view, and only actions that don't change tasks. */
 const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'record_created' ||
   trigger.kind === 'record_changed' ||
+  trigger.kind === 'record_matches' ||
+  trigger.kind === 'field_changed' ||
   trigger.kind === 'page_changed' ||
   trigger.kind === 'sheet_changed' ||
   trigger.kind === 'whiteboard_changed' ||
   trigger.kind === 'comment_posted' ||
   trigger.kind === 'proposal_made' ||
   trigger.kind === 'incoming_hook'
-const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent']
+const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent', 'run_operation']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
   switch (kind) {
     case 'record_created':
     case 'record_changed':
       return { kind, collectionId: null }
+    case 'record_matches':
+      return { kind, collectionId: '', viewId: null }
+    case 'field_changed':
+      return { kind, collectionId: '', field: '', to: [] }
     case 'page_changed':
       return { kind, pageId: null }
     case 'sheet_changed':
@@ -141,7 +151,8 @@ function defaultAction(kind: RuleActionKind, records = false, hook = false): Rul
     case 'post_message':
       return { kind, conversationId: '', text: '' }
     case 'run_operation':
-      return { kind, operation: '', input: {} }
+      // The builder offers one operation for now: a task, named from what fired.
+      return { kind, operation: 'task_create', input: { title: records ? '{{record.title}}' : '{{task.title}}' } }
     case 'ask_agent':
       return { kind, accountId: '', prompt: records ? '{{record.title}}: ' : '{{task.key}} {{task.title}}: ', conversationId: records ? '' : null }
   }
@@ -162,11 +173,17 @@ export function RuleDialog({
   const [name, setName] = useState(rule?.name ?? '')
   const [trigger, setTrigger] = useState<Trigger>(rule?.trigger ?? defaultTrigger('pull_request_checks_failed'))
   const [viewId, setViewId] = useState(rule?.conditions.viewId ?? '')
+  const [filters, setFilters] = useState<Record<string, string>>(rule?.conditions.filters ?? {})
   const [actions, setActions] = useState<RuleAction[]>(rule?.actions ?? [defaultAction('launch')])
   const [error, setError] = useState<string | null>(null)
+  // What stops an action saving, by its place (an operation's missing answer, say).
+  const [problems, setProblems] = useState<Record<number, string | null>>({})
+  const setProblem = useCallback((index: number, problem: string | null) => {
+    setProblems((current) => (current[index] === problem ? current : { ...current, [index]: problem }))
+  }, [])
   // A half-made rule survives a stray click outside the dialog.
-  const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, actions }))
-  const dirty = JSON.stringify({ name, trigger, viewId, actions }) !== initial
+  const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, filters, actions }))
+  const dirty = JSON.stringify({ name, trigger, viewId, filters, actions }) !== initial
   const views = useQuery({
     queryKey: viewKeys.views(projectId),
     queryFn: () => listProjectTaskViews(projectId),
@@ -217,7 +234,7 @@ export function RuleDialog({
         name: name.trim(),
         trigger,
         conditions: {
-          ...(rule?.conditions.filters ? { filters: rule.conditions.filters } : {}),
+          ...(records || !Object.keys(filters).length ? {} : { filters }),
           viewId: viewId || null,
         },
         actions,
@@ -236,6 +253,11 @@ export function RuleDialog({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim() || !actions.length || (trigger.kind === 'incoming_hook' && !trigger.hookId)) return
+    const problem = actions.map((_, index) => problems[index]).find(Boolean)
+    if (problem) {
+      setError(problem)
+      return
+    }
     save.mutate()
   }
   const setAction = (index: number, action: RuleAction) =>
@@ -271,6 +293,7 @@ export function RuleDialog({
               if (isRecordTrigger(next)) {
                 // A record rule changes no tasks and reads no saved view.
                 setViewId('')
+                setFilters({})
                 setActions((current) => {
                   const kept = current.filter((action) => RECORD_ACTIONS.includes(action.kind) && !(action.kind === 'notify' && action.recipients === 'assignee'))
                   return kept.length ? kept : [defaultAction('notify', true, next.kind === 'incoming_hook')]
@@ -291,6 +314,7 @@ export function RuleDialog({
             documents={documents}
             hooks={hooks.data?.hooks ?? []}
             onChange={setTrigger}
+            projectId={projectId}
             trigger={trigger}
           />
         </fieldset>
@@ -310,6 +334,7 @@ export function RuleDialog({
             ))}
           </SelectField>
         )}
+        {records ? null : <TaskConditions filters={filters} onChange={setFilters} projectId={projectId} />}
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">Then</legend>
           {actions.map((action, index) => (
@@ -318,7 +343,10 @@ export function RuleDialog({
                 <SelectField
                   aria-label={`Action ${index + 1}`}
                   id={`rule-action-${index}`}
-                  onChange={(event) => setAction(index, defaultAction(event.target.value as RuleActionKind, records, trigger.kind === 'incoming_hook'))}
+                  onChange={(event) => {
+                    setProblem(index, null)
+                    setAction(index, defaultAction(event.target.value as RuleActionKind, records, trigger.kind === 'incoming_hook'))
+                  }}
                   value={action.kind}
                 >
                   {ACTIONS.filter((entry) => !records || RECORD_ACTIONS.includes(entry.kind)).map((entry) => (
@@ -331,7 +359,10 @@ export function RuleDialog({
                   <IconButton
                     icon="trash"
                     label={`Remove action ${index + 1}`}
-                    onClick={() => setActions((current) => current.filter((_, at) => at !== index))}
+                    onClick={() => {
+                      setActions((current) => current.filter((_, at) => at !== index))
+                      setProblems({})
+                    }}
                     size="sm"
                   />
                 )}
@@ -344,6 +375,7 @@ export function RuleDialog({
                 members={(members.data?.members ?? []).filter((member) => member.enabled)}
                 profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
+                onProblem={setProblem}
                 projectId={projectId}
                 records={records}
               />
@@ -360,7 +392,7 @@ export function RuleDialog({
             </p>
           ) : records ? (
             <p className="aw-quiet">
-              Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
+              Text can use {'{{record.title}}'}, {'{{record.url}}'}, {'{{record.number}}'}, {'{{collection.name}}'} and {'{{rule.name}}'}.
             </p>
           ) : (
             <p className="aw-quiet">
@@ -375,6 +407,63 @@ export function RuleDialog({
   )
 }
 
+/**
+ * "And only when the task…": the list filters a rule's conditions take
+ * inline (status, priority, label), so a rule like "when a task moves to
+ * review" needs no saved view. Kept beside any filters it doesn't show.
+ */
+function TaskConditions({
+  filters,
+  onChange,
+  projectId,
+}: {
+  filters: Record<string, string>
+  onChange: (filters: Record<string, string>) => void
+  projectId: string
+}) {
+  const workflow = useWorkItemWorkflow(projectId)
+  const labels = useLabels(projectId)
+  const set = (key: string, value: string) => {
+    const next = { ...filters }
+    if (value) next[key] = value
+    else delete next[key]
+    onChange(next)
+  }
+  return (
+    <fieldset className="aw-fieldset aw-rule-conditions" data-part="automation-conditions">
+      <legend className="aw-field__label">And only when the task</legend>
+      <div className="aw-rule-conditions__row">
+        <SelectField id="rule-status" label="Is in" onChange={(event) => set('statusId', event.target.value)} value={filters.statusId ?? ''}>
+          <option value="">Any status</option>
+          {workflow.data?.statuses.map((status) => (
+            <option key={status.id} value={status.id}>
+              {status.name}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField id="rule-priority" label="Has priority" onChange={(event) => set('priority', event.target.value)} value={filters.priority ?? ''}>
+          <option value="">Any priority</option>
+          {workItemPriorities.map((priority) => (
+            <option key={priority.value} value={priority.value}>
+              {priority.label}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField id="rule-label" label="Has label" onChange={(event) => set('labelIds', event.target.value)} value={filters.labelIds ?? ''}>
+          <option value="">Any label</option>
+          {labels.data
+            ?.filter((label) => !label.archived)
+            .map((label) => (
+              <option key={label.id} value={label.id}>
+                {label.name}
+              </option>
+            ))}
+        </SelectField>
+      </div>
+    </fieldset>
+  )
+}
+
 type ChannelChoice = { id: string; name: string }
 type DocumentChoice = { id: string; name: string }
 
@@ -384,13 +473,15 @@ function TriggerFields({
   documents,
   hooks,
   onChange,
+  projectId,
   trigger,
 }: {
   channels: ChannelChoice[]
-  collections: { id: string; name: string }[]
+  collections: { id: string; name: string; actsLikeTask?: boolean }[]
   documents: DocumentChoice[]
   hooks: { id: string; name: string }[]
   onChange: (trigger: Trigger) => void
+  projectId: string
   trigger: Trigger
 }) {
   switch (trigger.kind) {
@@ -426,6 +517,9 @@ function TriggerFields({
         </SelectField>
       )
     }
+    case 'record_matches':
+    case 'field_changed':
+      return <RecordTriggerFields collections={collections.filter((collection) => !collection.actsLikeTask)} onChange={onChange} projectId={projectId} trigger={trigger} />
     case 'page_changed':
     case 'sheet_changed':
     case 'whiteboard_changed': {
@@ -653,6 +747,7 @@ function ActionFields({
   index,
   members,
   onChange,
+  onProblem,
   profiles,
   projectId,
   records,
@@ -664,6 +759,7 @@ function ActionFields({
   /** Who an "Ask an agent" action can ask: the space's members. */
   members: { actorId: string; displayName: string; handle: string }[]
   onChange: (action: RuleAction) => void
+  onProblem: (index: number, problem: string | null) => void
   profiles: { id: string; name: string; handle: string }[]
   projectId: string
   /** A record rule: there's no task, so no assignee. */
@@ -843,9 +939,7 @@ function ActionFields({
         </>
       )
     case 'run_operation':
-      // Made by an agent or a script (automation_create); the builder for
-      // these comes with the operation catalogue.
-      return <p className="aw-quiet">Runs {action.operation || 'an operation'} with the input it was saved with.</p>
+      return <OperationAction action={action} index={index} onChange={onChange} onProblem={(problem) => onProblem(index, problem)} spaceId={projectId} />
   }
 }
 
@@ -897,5 +991,110 @@ function FieldValue({
         </option>
       ))}
     </SelectField>
+  )
+}
+
+/** Which records a record_matches or field_changed rule watches: a collection, a view of it, and for a field, what it changes to. */
+function RecordTriggerFields({
+  collections,
+  onChange,
+  projectId,
+  trigger,
+}: {
+  collections: { id: string; name: string }[]
+  onChange: (trigger: Trigger) => void
+  projectId: string
+  trigger: Extract<Trigger, { kind: 'record_matches' | 'field_changed' }>
+}) {
+  const body = useCollection(projectId, trigger.collectionId)
+  const fields = (body.data?.fields ?? []).filter((field) => !field.archived)
+  const views = body.data?.views ?? []
+  const field = trigger.kind === 'field_changed' ? fields.find((entry) => entry.id === trigger.field || entry.name === trigger.field) : undefined
+  const choices = field && (field.type === 'single_choice' || field.type === 'multiple_choice') ? field.options.filter((option) => !option.archived) : null
+  const to = trigger.kind === 'field_changed' ? (trigger.to ?? []) : []
+  return (
+    <>
+      <SelectField
+        id="rule-trigger-collection"
+        label="In"
+        onChange={(event) =>
+          onChange(trigger.kind === 'field_changed' ? { ...trigger, collectionId: event.target.value, field: '', to: [], viewId: null } : { ...trigger, collectionId: event.target.value, viewId: null })
+        }
+        required
+        value={trigger.collectionId}
+      >
+        <option disabled value="">
+          Choose a collection
+        </option>
+        {collections.map((collection) => (
+          <option key={collection.id} value={collection.id}>
+            {collection.name}
+          </option>
+        ))}
+      </SelectField>
+      {trigger.kind === 'field_changed' ? (
+        <>
+          <SelectField
+            id="rule-trigger-field"
+            label="Field"
+            onChange={(event) => onChange({ ...trigger, field: event.target.value, to: [] })}
+            required
+            value={field?.id ?? ''}
+          >
+            <option disabled value="">
+              Choose a field
+            </option>
+            {fields.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
+          </SelectField>
+          {choices ? (
+            <fieldset className="aw-fieldset">
+              <legend className="aw-field__label">Changes to</legend>
+              <div className="aw-rule-choices">
+                {choices.map((option) => (
+                  <Checkbox
+                    checked={to.includes(option.id) || to.includes(option.name)}
+                    key={option.id}
+                    label={option.name}
+                    onChange={(checked) =>
+                      onChange({ ...trigger, to: checked ? [...to.filter((value) => value !== option.name), option.id] : to.filter((value) => value !== option.id && value !== option.name) })
+                    }
+                  />
+                ))}
+                <p className="aw-quiet">None ticked means any change.</p>
+              </div>
+            </fieldset>
+          ) : field ? (
+            <TextField
+              hint="Left empty, any change counts."
+              id="rule-trigger-to"
+              label="Changes to"
+              onChange={(event) => onChange({ ...trigger, to: event.target.value.trim() ? [event.target.value] : [] })}
+              value={to[0] ?? ''}
+            />
+          ) : null}
+        </>
+      ) : null}
+      <SelectField
+        hint={trigger.kind === 'record_matches' ? 'It fires when a record comes into this view, not on every change while it’s there.' : 'Left out, any record counts.'}
+        id="rule-trigger-view"
+        label={trigger.kind === 'record_matches' ? 'Starts matching' : 'Only for records in'}
+        onChange={(event) => onChange({ ...trigger, viewId: event.target.value || null })}
+        required={trigger.kind === 'record_matches' && !trigger.filters?.length}
+        value={trigger.viewId ?? ''}
+      >
+        <option disabled={trigger.kind === 'record_matches' && !trigger.filters?.length} value="">
+          {trigger.kind === 'record_matches' ? (trigger.filters?.length ? 'Only its filters' : 'Choose a view') : 'Any record'}
+        </option>
+        {views.map((view) => (
+          <option key={view.id} value={view.id}>
+            {view.name}
+          </option>
+        ))}
+      </SelectField>
+    </>
   )
 }

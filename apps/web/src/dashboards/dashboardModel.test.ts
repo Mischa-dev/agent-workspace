@@ -9,12 +9,15 @@ const sheet: TileEntry = { id: 't3', kind: 'sheet', title: '', text: '', sheet: 
 
 describe('dashboard tiles', () => {
   it('writes tiles back as they were: a view by its view, a sheet by its range, a note by its text', () => {
-    const none = { sheet: null, range: null, style: null }
+    const none = { sheet: null, range: null, query: null, style: null }
     expect(tileInputs([view, note, sheet])).toEqual([
       { id: 't1', kind: 'view', title: null, view: 'v1', text: null, ...none, width: 6, height: 2 },
       { id: 't2', kind: 'text', title: 'Read me', view: null, text: 'Ship Friday', ...none, width: 12, height: 1 },
-      { id: 't3', kind: 'sheet', title: null, view: null, text: null, sheet: 's1', range: 'Totals', style: 'donut', width: 6, height: 2 },
+      { id: 't3', kind: 'sheet', title: null, view: null, text: null, sheet: 's1', range: 'Totals', query: null, style: 'donut', width: 6, height: 2 },
     ])
+    const query: TileEntry = { id: 't4', kind: 'query', title: '', text: '', range: '', query: 'q1', style: null, width: 12, height: 2 }
+    expect(tileInputs([query])).toEqual([{ id: 't4', kind: 'query', title: null, view: null, text: null, sheet: null, range: null, query: 'q1', style: null, width: 12, height: 2 }])
+    expect(tileHref('p1', query)).toBe('/w/-/s/p1/dashboards/data?query=q1')
   })
 
   it('moves a tile within the ends', () => {
@@ -33,9 +36,9 @@ describe('dashboard tiles', () => {
   })
 
   it('leads a view tile to its collection, opened on its view', () => {
-    expect(tileHref('p1', view)).toBe('/projects/p1/collections/c1?view=v1')
+    expect(tileHref('p1', view)).toBe('/w/-/s/p1/collections/c1?view=v1')
     expect(tileHref('p1', { collection: null, view: null })).toBeNull()
-    expect(tileHref('p1', sheet)).toBe('/projects/p1/sheets/s1')
+    expect(tileHref('p1', sheet)).toBe('/w/-/s/p1/sheets/s1')
   })
 
   it('reads a chart’s figures as points, counting or measuring', () => {

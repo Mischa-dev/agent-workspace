@@ -17,6 +17,7 @@ import { getWorkspace, renameWorkspace, workspaceKeys } from '../settings/worksp
 import { Banner, Button, ButtonLink, EmptyState, ListSkeleton, Row, RowList, SelectField, SettingsSkeleton, TextArea, TextField, describeError, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { onboardingKeys, STEP_TITLES, updateOnboarding, type Onboarding, type OnboardingChange, type OnboardingStepId } from './api'
+import { spaceHref } from '../app/href'
 
 type PanelProps = { onboarding: Onboarding; project: Project | null; projects: Project[] }
 type GoTo = (step: OnboardingStepId) => void
@@ -344,7 +345,7 @@ function TasksStep({ onboarding, project }: { onboarding: Onboarding; project: P
           <Button busy={create.isPending} disabled={!title.trim()} type="submit" variant="primary">
             Add task
           </Button>
-          <ButtonLink to={`/projects/${encodeURIComponent(project.id)}/work-items`} variant="ghost">
+          <ButtonLink to={spaceHref(project.id, `/work-items`)} variant="ghost">
             Open {project.name}’s tasks
           </ButtonLink>
         </div>
@@ -355,7 +356,7 @@ function TasksStep({ onboarding, project }: { onboarding: Onboarding; project: P
             <Row
               key={item.id}
               title={
-                <Link className="aw-row__link" to={`/projects/${encodeURIComponent(project.id)}/work-items/${encodeURIComponent(item.id)}`}>
+                <Link className="aw-row__link" to={spaceHref(project.id, `/work-items/${encodeURIComponent(item.id)}`)}>
                   {item.key} {item.title}
                 </Link>
               }

@@ -6,12 +6,14 @@ import {
 } from 'react'
 import {
   useQuery,
+  useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { clearLocalDrafts, setLocalDraftOwner } from '../app/localDrafts'
 import { things } from '../data/things'
+import { forgetOffline, offlineOwner } from '../data/offlinePointer'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
@@ -192,19 +194,45 @@ export async function logout() {
   // forget them first, so a failed or slow sign-out can't leave them behind.
   clearLocalDrafts()
   setLocalDraftOwner(null)
+  // And the writes waiting for the connection (W1.30), kept in IndexedDB.
+  await import('../data/outbound').then((outbound) => outbound.clearOutbound()).catch(() => undefined)
+  // And what was kept for reading offline (W1.31).
+  forgetOffline()
   await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 
 export function useSession() {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: queryKeys.session,
-    queryFn: getSession,
+    queryFn: () => confirmSession(queryClient),
     staleTime: 30_000,
     retry: false,
   })
 }
 
+/**
+ * Asks the server who is signed in. A session shown before the answer (one
+ * kept for reading offline, or a tab left open) may be someone else's: when
+ * the answer names another account, what the earlier one read is cleared,
+ * the copy kept on this device included, before the new one renders.
+ */
+export async function confirmSession(queryClient: QueryClient) {
+  const shown = queryClient.getQueryData<SessionResponse>(queryKeys.session)
+  const session = await getSession()
+  const before = isAuthenticatedSession(shown) ? shown.user.actorId : null
+  const now = isAuthenticatedSession(session) ? session.user.actorId : null
+  if (before && now && before !== now) {
+    if (offlineOwner()) forgetOffline()
+    resetQueryScope()
+    clearActorScopedQueries(queryClient)
+  }
+  return session
+}
+
 export function clearAuthenticatedQueryCache(queryClient: QueryClient) {
+  // Signed out (or the server says the session is gone): nothing stays for reading offline (W1.31).
+  if (offlineOwner()) forgetOffline()
   resetQueryScope()
   clearActorScopedQueries(queryClient)
   setLocalDraftOwner(null)

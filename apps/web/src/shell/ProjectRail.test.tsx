@@ -107,7 +107,7 @@ describe('ProjectRail', () => {
 
     await waitFor(() =>
       expect(screen.getByLabelText('Current route')).toHaveTextContent(
-        `/projects/${viewerProject.id}`,
+        `/s/${viewerProject.id}`,
       ),
     )
     expect(switchProject).not.toHaveBeenCalled()

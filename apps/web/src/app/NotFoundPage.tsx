@@ -1,3 +1,4 @@
+import { here } from './href'
 import { useNavigate } from 'react-router-dom'
 
 import { useShellPage } from '../shell/shellStore'
@@ -11,7 +12,7 @@ export function NotFoundPage() {
     <div className="aw-page" role="alert">
       <EmptyState
         action={
-          <Button onClick={() => navigate('/home')} variant="primary">
+          <Button onClick={() => navigate(here('/home'))} variant="primary">
             Go to Home
           </Button>
         }

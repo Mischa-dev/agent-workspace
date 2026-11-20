@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { Banner, Button, ListSkeleton, countLabel, describeLoadError, formatDateTime, formatFullDate, formatShortDate } from '../../ui'
 import { getHistory, usageKeys, type AccountHistory, type WindowHistory } from './usageApi'
 import '../../styles/conversation.css'
+import { spaceHref } from '../../app/href'
 
 /**
  * The usage page's history (U5): each window over the last two weeks, how
@@ -154,7 +155,7 @@ function ProjectTable({ history }: { history: AccountHistory }) {
         <tbody>
           {history.projects.map((project) => (
             <tr key={project.projectId ?? 'hidden'}>
-              <td>{project.projectId ? <Link to={`/projects/${project.projectId}`}>{project.projectName}</Link> : project.projectName}</td>
+              <td>{project.projectId ? <Link to={spaceHref(project.projectId)}>{project.projectName}</Link> : project.projectName}</td>
               <td>{project.runs}</td>
               <td>
                 {project.cost != null

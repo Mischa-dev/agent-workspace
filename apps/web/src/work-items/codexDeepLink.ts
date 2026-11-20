@@ -1,3 +1,5 @@
+import { spaceHref } from '../app/href'
+
 import type { WorkItem } from './types'
 
 const canonicalGitHubOrigin = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/
@@ -18,8 +20,8 @@ export function buildOpenInCodexLink(item: WorkItem, applicationOrigin: string) 
   }
 
   const origin = applicationOrigin.replace(/\/$/, '')
-  const projectUrl = `${origin}/projects/${encodeURIComponent(item.projectId)}`
-  const workItemUrl = `${projectUrl}/work-items/${encodeURIComponent(item.id)}`
+  const projectUrl = `${origin}${spaceHref(item.projectId)}`
+  const workItemUrl = `${origin}${spaceHref(item.projectId, `/work-items/${encodeURIComponent(item.id)}`)}`
   const prompt = [
     'Use the Agent Workspace MCP server.',
     `Project ID: ${item.projectId}`,

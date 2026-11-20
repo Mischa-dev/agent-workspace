@@ -1323,12 +1323,28 @@ pub(crate) async fn starter_contents(
                 problem_found.message,
             ))
         })?;
+        // A collection whose records act like tasks is switched on too, as
+        // collection_write would (T1.25).
+        let switched = wanted.acts_like_task && !collection.acts_like_task;
+        if switched {
+            if let Some(refused) =
+                collections::task_like::refusal(transaction, &collection, true, false).await?
+            {
+                return Err(ApplyError::Problem(problem(
+                    format!("{at}.actsLikeTask"),
+                    refused,
+                )));
+            }
+            collections::task_like::switch(transaction, collection.id, actor_id, true).await?;
+        }
         if created {
             changes.push(format!("Made the {name} collection in {project_key}."));
-        } else if !applied.is_empty() {
+        } else if !applied.is_empty() || switched {
             changes.push(format!("Updated the {name} collection in {project_key}."));
         }
-        if created || !applied.is_empty() {
+        // Other tabs refresh the collection, including when only the switch
+        // to acting like tasks changed it.
+        if created || !applied.is_empty() || switched {
             crate::outbox::enqueue_collection_updated(transaction, project_id, collection.id, &[])
                 .await?;
         }
@@ -1470,8 +1486,8 @@ async fn project_snapshot(
             continue;
         };
         // The Tasks collection comes with every project; its tasks travel
-        // as tasks.
-        if collection.is_tasks() {
+        // as tasks. The Pages collection's records are its pages.
+        if collection.is_tasks() || collection.is_pages() {
             continue;
         }
         let fields =

@@ -7,6 +7,7 @@ export default {
     { path: '/new-task', space: 'workspace', page: () => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })) },
     { path: '/share', space: 'workspace', page: () => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })) },
     { path: '/my-work', space: 'home', page: () => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })) },
+    { path: '/initiatives', space: 'home', page: () => import('./InitiativesPage').then((module) => ({ default: module.InitiativesPage })) },
     {
       path: '/projects/:projectId/work-items',
       space: 'project',
@@ -40,6 +41,7 @@ export default {
   sidebar: [
     { id: 'tasks', space: 'project', rank: 10, part: 'area.tasks', icon: 'work', label: { noun: 'task' }, path: '/work-items', section: 'work' },
     { id: 'my-work', space: 'home', rank: 20, part: 'workspace.my_work', icon: 'checklist', label: 'My work', path: '/my-work' },
+    { id: 'initiatives', space: 'home', rank: 25, part: 'workspace.initiatives', icon: 'branch', label: 'Initiatives', path: '/initiatives' },
   ],
   palette: [
     { id: 'p:tasks', space: 'project', rank: 10, label: 'Tasks', icon: 'checklist', shortcut: 'G T', keywords: ['list'], path: '/work-items' },
@@ -100,6 +102,15 @@ export default {
       keywords: ['assigned', 'tasks', 'review', 'claimed'],
       path: '/my-work',
     },
+    {
+      id: 'g:initiatives',
+      space: 'workspace',
+      rank: 25,
+      label: 'Initiatives',
+      icon: 'branch',
+      keywords: ['goals', 'roadmap', 'across projects', 'milestones'],
+      path: '/initiatives',
+    },
   ],
   shortcuts: [
     { action: 'go-my-work', key: 'w', label: 'My work', path: '/my-work', rank: 30 },
@@ -108,5 +119,5 @@ export default {
   ],
   things: [{ kind: 'task', label: 'Task', icon: 'checklist' }],
   capture: [{ id: 'task', label: 'New task', icon: 'checklist', path: '/new-task' }],
-  phone: true,
+  phone: { id: 'my-work', space: 'home', rank: 30, part: 'workspace.my_work', icon: 'checklist', label: 'My work', path: '/my-work' },
 } satisfies WebModule

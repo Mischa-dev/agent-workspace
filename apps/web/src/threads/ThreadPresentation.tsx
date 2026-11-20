@@ -1,13 +1,14 @@
-import { useState, type ReactNode } from 'react'
+import { RequestCard } from '../pieces/RequestCard'
+import { here } from '../app/href'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { ConversationWorkItemChip } from '../conversations/types'
 import { runSettingsFrom } from '../execution/api'
-import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatFullDate, formatRelative, type ChipTone, type IconName } from '../ui'
+import { Avatar, Button, Icon, IconButton, StatusChip, formatFullDate, formatRelative, type ChipTone, type IconName } from '../ui'
 import { RUN_STATUS } from '../runs/runModel'
 import { runAgent } from './runAgent'
-import { answerKey } from './threadTimeline'
-import type { RequestAnswer, Run, ThreadRequest } from './threadTypes'
+import type { Run, ThreadRequest } from './threadTypes'
 import '../styles/conversation.css'
 
 function ordinal(position: number) {
@@ -129,7 +130,7 @@ export function RunCard({ actions, developerDetail = true, notes, run }: { actio
       ) : null}
       <div className="aw-run__row">
         <Icon name="activity" size={14} />
-        <Link to={`/runs/${encodeURIComponent(run.id)}`}>See every step, the diff and the cost</Link>
+        <Link to={here(`/runs/${encodeURIComponent(run.id)}`)}>See every step, the diff and the cost</Link>
       </div>
       {notes}
       {actions ? <footer className="aw-card__actions">{actions}</footer> : null}
@@ -140,95 +141,31 @@ export function RunCard({ actions, developerDetail = true, notes, run }: { actio
 /** A request the run raised: allow or deny, or answer a question. */
 export function ApprovalCard({
   approval,
-  busyAction,
   canRespond,
-  onRespond,
+  onAnswered,
   run,
 }: {
   approval: ThreadRequest
   /** The run asking, for its name. */
   run: Run | null
-  busyAction: string | null
   canRespond: boolean
-  onRespond: (requestId: string, answer: RequestAnswer) => void
+  onAnswered: () => void
 }) {
-  const [answer, setAnswer] = useState('')
   const question = approval.kind !== 'approval'
   const agent = runAgent(run)
-  const send = (reply: RequestAnswer) => onRespond(approval.id, reply)
   return (
-    <section aria-labelledby={`approval-${approval.id}`} className="aw-card aw-approval is-open">
-      <header className="aw-card__head">
-        <Avatar kind="agent" name={agent.name} seed={agent.seed} size={24} />
-        <div className="aw-card__titles">
-          <h2 className="aw-card__title" id={`approval-${approval.id}`}>
-            {question ? `${agent.name} has a question` : `${agent.name} needs your approval`}
-          </h2>
-        </div>
-        <StatusChip icon={question ? 'circle-help' : 'shield-check'} tone="warning">
-          Needs you
-        </StatusChip>
-      </header>
-      <p className="aw-approval__summary">{approval.title}</p>
-      {canRespond ? (
-        <form
-          className="aw-approval__answer-form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const value = answer.trim()
-            if (value) send({ text: value })
-          }}
-        >
-          {approval.options.length > 0 ? (
-            <div
-              aria-label={question ? 'Suggested answers' : 'Answers'}
-              className="aw-card__actions"
-              role="group"
-            >
-              {/* An offered answer is an answer: it sends straight away. */}
-              {approval.options.map((option) => (
-                <Button
-                  busy={busyAction === answerKey(approval.id, { optionId: option.id })}
-                  disabled={Boolean(busyAction)}
-                  key={option.id}
-                  onClick={() => send({ optionId: option.id })}
-                  size={question ? 'sm' : undefined}
-                  type="button"
-                  variant={(option.style ?? option.id) === 'approve' ? 'primary' : undefined}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          ) : null}
-          {approval.allowText ? (
-            <>
-              <TextArea
-                disabled={Boolean(busyAction)}
-                id={`approval-answer-${approval.id}`}
-                label={approval.options.length > 0 ? 'Or write your own' : 'Your answer'}
-                maxLength={4000}
-                onChange={(event) => setAnswer(event.target.value)}
-                required
-                rows={3}
-                value={answer}
-              />
-              <div className="aw-card__actions">
-                <Button
-                  busy={busyAction === answerKey(approval.id, {})}
-                  disabled={Boolean(busyAction) || !answer.trim()}
-                  type="submit"
-                  variant="primary"
-                >
-                  Send answer
-                </Button>
-              </div>
-            </>
-          ) : null}
-        </form>
-      ) : null}
-      {!canRespond ? <p className="aw-approval__note">This waits on whoever it asks; they answer it here or from their inbox.</p> : null}
-    </section>
+    <RequestCard
+      canAnswer={canRespond}
+      heading={
+        <span className="aw-request__asker">
+          <Avatar kind="agent" name={agent.name} seed={agent.seed} size={24} />
+          <span className="aw-card__title">{question ? `${agent.name} has a question` : `${agent.name} needs your approval`}</span>
+        </span>
+      }
+      key={approval.id}
+      onAnswered={onAnswered}
+      request={approval}
+    />
   )
 }
 
@@ -252,7 +189,7 @@ export function ThreadDetails({
     ['Project', projectName],
     ['Runs on', run ? `${runAgent(run).name}, in an isolated workspace` : 'An isolated workspace'],
     ['Branch', run?.branch ? <code>{run.branch}</code> : 'Assigned when a run starts'],
-    ['Latest run', run ? <Link to={`/runs/${encodeURIComponent(run.id)}`}>View run</Link> : 'No run yet'],
+    ['Latest run', run ? <Link to={here(`/runs/${encodeURIComponent(run.id)}`)}>View run</Link> : 'No run yet'],
   ]
   return (
     <aside aria-label="Thread details" className="context-drawer aw-details">

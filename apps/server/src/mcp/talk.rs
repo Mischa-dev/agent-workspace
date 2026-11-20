@@ -916,6 +916,7 @@ fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
         ToolResult::TemporarilyUnavailable { message } => {
             ToolResult::TemporarilyUnavailable { message }
         }
+        ToolResult::LimitReached { message, limit } => ToolResult::LimitReached { message, limit },
     }
 }
 
@@ -2098,6 +2099,9 @@ pub(super) async fn people_search(
                   ON theirs.organization_id = mine.organization_id AND theirs.enabled
                 CROSS JOIN LATERAL account_profile(theirs.actor_id, mine.organization_id) profile
                 WHERE direct_scope_id() = ANY($1) AND mine.actor_id = $4 AND mine.enabled
+                  -- Only the workspaces a credential's limit names (a token
+                  -- for one workspace finds that one's people).
+                  AND ($5::uuid[] IS NULL OR mine.organization_id = ANY($5))
                   -- The workspace's directory: not for a guest (K1.27).
                   AND role_allows(mine.role, mine.role_id, 'directory.view')
             )
@@ -2120,6 +2124,10 @@ pub(super) async fn people_search(
         .bind(query.trim().trim_start_matches('@'))
         .bind(limit)
         .bind(principal.actor_id)
+        .bind(crate::policy::agent_limit_direct_workspaces(
+            principal.actor_id,
+            crate::policy::Permission::ProjectsView,
+        ))
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(PeopleValue {

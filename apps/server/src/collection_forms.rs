@@ -10,11 +10,19 @@
 //! answer becomes a record through `record_write`, as the person who made
 //! the link, so it gets the same checks; only the asked fields are taken.
 //!
-//! People and links to tasks or pages are never asked on a form: their
-//! pickers would show who and what is in the project.
+//! People and links to tasks or pages are never asked on a public form:
+//! their pickers would show who and what is in the project.
+//!
+//! T1.28: a form is its own definition (the `forms` table), public with a
+//! link or internal, filled in by members in the app (`forms::ops`). An
+//! internal form may ask for people and relations too. Either may split its
+//! questions into sections, show a question only when an earlier answer is
+//! one of some values (`showIf`; a hidden question is never required and
+//! its answer is dropped), and set fields on every record it makes (`sets`).
 
 use std::collections::HashSet;
 
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -47,7 +55,7 @@ pub const RENDER_TOKEN_KEY: &str = "_aw_rendered";
 pub const HONEYPOT_KEY: &str = "_aw_homepage";
 
 /// A form's settings, as `bug_report_links.form` stores them.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FormConfig {
     /// Shown above the fields: what the form is for.
@@ -63,6 +71,73 @@ pub struct FormConfig {
     /// maker; [`DEFAULT_DAILY_LIMIT`] when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_limit: Option<u32>,
+    /// Headings that split the questions into sections, each shown before
+    /// the question it names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<FormSection>,
+    /// Values every record the form makes gets, for fields it doesn't ask.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<FormSet>,
+}
+
+/// A heading before one of the form's questions.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormSection {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The question (its field) the section starts with.
+    #[schemars(with = "String")]
+    pub before: Uuid,
+}
+
+/// A value the form gives a field on every record.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormSet {
+    #[schemars(with = "String")]
+    pub field: Uuid,
+    pub value: Value,
+}
+
+/// When a question shows: an earlier question's answer is one of these
+/// values (an option's name, "Yes" or "No" for a checkbox), or, with none
+/// listed, is given at all.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShowIf {
+    #[schemars(with = "String")]
+    pub field: Uuid,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub is_one_of: Vec<String>,
+}
+
+/// Who fills a form in.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Audience {
+    /// Anyone with its link, signed in or not.
+    Public,
+    /// The space's members, in the app.
+    Internal,
+}
+
+impl Audience {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Internal => "internal",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "public" => Some(Self::Public),
+            "internal" => Some(Self::Internal),
+            _ => None,
+        }
+    }
 }
 
 impl FormConfig {
@@ -71,19 +146,40 @@ impl FormConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FormField {
+    #[schemars(with = "String")]
     pub field: Uuid,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_if: Option<ShowIf>,
 }
 
 /// Whether a public form may ask for this type of field: not people or
 /// links (the person filling it in can't see who or what there is), and
 /// not the record's own columns, which nobody fills in.
 pub fn askable(field_type: FieldType) -> bool {
-    !matches!(field_type, FieldType::Person | FieldType::Link) && !field_type.is_read_only()
+    askable_on(field_type, Audience::Public)
+}
+
+/// Whether a form for `audience` may ask for this type of field. Members
+/// see the space's people and records, so an internal form asks for them
+/// too.
+pub fn askable_on(field_type: FieldType, audience: Audience) -> bool {
+    // Files are off on every form: nothing uploads before the record is
+    // made, and a public form's sender has no account to upload with.
+    if field_type.is_read_only() || field_type == FieldType::File {
+        return false;
+    }
+    match audience {
+        Audience::Public => !matches!(
+            field_type,
+            FieldType::Person | FieldType::People | FieldType::Link | FieldType::Relation
+        ),
+        Audience::Internal => !matches!(field_type, FieldType::Link),
+    }
 }
 
 fn clean(value: &str, limit: usize, what: &str) -> Result<String, String> {
@@ -104,6 +200,18 @@ fn clean(value: &str, limit: usize, what: &str) -> Result<String, String> {
 /// fields: each asked field is an active one of a type a form can ask,
 /// once. The message says what to change.
 pub fn check(form: &FormConfig, definitions: &[FieldDefinition]) -> Result<FormConfig, String> {
+    check_for(form, definitions, Audience::Public)
+}
+
+/// [`check`] for a form `audience` fills in, with its sections, conditions
+/// and set values: a section starts at one of its questions, a condition
+/// reads an earlier question, and a set value is for a field it doesn't ask
+/// that someone can fill in.
+pub fn check_for(
+    form: &FormConfig,
+    definitions: &[FieldDefinition],
+    audience: Audience,
+) -> Result<FormConfig, String> {
     if form.fields.len() > MAX_FORM_FIELDS {
         return Err(format!("A form asks for at most {MAX_FORM_FIELDS} fields."));
     }
@@ -115,14 +223,74 @@ pub fn check(form: &FormConfig, definitions: &[FieldDefinition]) -> Result<FormC
         else {
             return Err("A form field names a field this collection doesn't have.".to_owned());
         };
-        if !askable(field.field_type) {
+        if !askable_on(field.field_type, audience) {
+            return Err(match audience {
+                _ if field.field_type == FieldType::File => format!(
+                    "\"{}\" holds files, which forms don't take yet.",
+                    field.name
+                ),
+                Audience::Public => format!(
+                    "\"{}\" can't be on a public form: people and links would show who and what is in the project.",
+                    field.name
+                ),
+                Audience::Internal => format!("\"{}\" can't be on a form.", field.name),
+            });
+        }
+        if let Some(condition) = &asked.show_if
+            && !seen.contains(&condition.field)
+        {
             return Err(format!(
-                "\"{}\" can't be on a form: people and links would show who and what is in the project.",
+                "\"{}\" shows after an answer to a question before it on the form.",
                 field.name
             ));
         }
         if !seen.insert(field.id) {
             return Err(format!("\"{}\" is on the form twice.", field.name));
+        }
+    }
+    let mut sections = Vec::with_capacity(form.sections.len());
+    for section in &form.sections {
+        if !seen.contains(&section.before) {
+            return Err("A section starts at a question that isn't on the form.".to_owned());
+        }
+        let title = clean(&section.title, 120, "section title")?;
+        if title.is_empty() {
+            return Err("Give each section a title.".to_owned());
+        }
+        sections.push(FormSection {
+            title,
+            description: clean(&section.description, MAX_INTRO_CHARACTERS, "section text")?,
+            before: section.before,
+        });
+    }
+    let mut set_fields = HashSet::new();
+    for set in &form.sets {
+        let Some(field) = definitions
+            .iter()
+            .find(|field| field.id == set.field && !field.archived)
+        else {
+            return Err("A set value names a field this collection doesn't have.".to_owned());
+        };
+        if field.field_type.is_read_only() {
+            return Err(format!(
+                "Nobody sets \"{}\": it fills itself in.",
+                field.name
+            ));
+        }
+        if field.field_type == FieldType::File {
+            return Err(format!(
+                "\"{}\" holds files, which forms don't take yet.",
+                field.name
+            ));
+        }
+        if seen.contains(&field.id) {
+            return Err(format!(
+                "\"{}\" is asked on the form, so the form can't also set it.",
+                field.name
+            ));
+        }
+        if !set_fields.insert(field.id) {
+            return Err(format!("\"{}\" is set twice.", field.name));
         }
     }
     if let Some(limit) = form.daily_limit
@@ -137,6 +305,8 @@ pub fn check(form: &FormConfig, definitions: &[FieldDefinition]) -> Result<FormC
         fields: form.fields.clone(),
         thanks: clean(&form.thanks, MAX_THANKS_CHARACTERS, "thank-you note")?,
         daily_limit: form.daily_limit,
+        sections,
+        sets: form.sets.clone(),
     })
 }
 
@@ -205,26 +375,48 @@ pub fn caught_by_honeypot(answer: &Map<String, Value>) -> bool {
 // ---------------------------------------------------------------------------
 // The form as the public page reads it
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicOption {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
     pub color: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicField {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     #[serde(rename = "type")]
+    #[schemars(with = "String")]
     pub field_type: &'static str,
     pub required: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<PublicOption>,
+    /// Shown only when an earlier answer is one of these values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_if: Option<ShowIf>,
+    /// A heading the question starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<PublicSection>,
+    /// A relation question (internal forms only): the collection whose
+    /// records it picks from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub collection: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSection {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 /// What `/forms/{token}` shows: nothing but the form.
@@ -261,34 +453,56 @@ pub fn public(
         title_name: collection.title_name.clone(),
         intro: form.intro.clone(),
         thanks: form.thanks.clone(),
-        fields: form
-            .fields
-            .iter()
-            .filter_map(|asked| {
-                let field = definitions
-                    .iter()
-                    .find(|field| field.id == asked.field && !field.archived)?;
-                askable(field.field_type).then(|| PublicField {
-                    id: field.id,
-                    name: field.name.clone(),
-                    description: field.description.clone(),
-                    field_type: field.field_type.as_str(),
-                    required: asked.required,
-                    options: field
-                        .config
-                        .options
-                        .iter()
-                        .filter(|option| !option.archived)
-                        .map(|option| PublicOption {
-                            id: option.id,
-                            name: option.name.clone(),
-                            color: option.color.clone(),
-                        })
-                        .collect(),
-                })
-            })
-            .collect(),
+        fields: questions(form, definitions, Audience::Public),
     }
+}
+
+/// The questions a form asks after the title, as `audience` sees them:
+/// the fields still active and askable, in the form's order, with their
+/// options, conditions and section headings.
+pub fn questions(
+    form: &FormConfig,
+    definitions: &[FieldDefinition],
+    audience: Audience,
+) -> Vec<PublicField> {
+    form.fields
+        .iter()
+        .filter_map(|asked| {
+            let field = definitions
+                .iter()
+                .find(|field| field.id == asked.field && !field.archived)?;
+            askable_on(field.field_type, audience).then(|| PublicField {
+                id: field.id,
+                name: field.name.clone(),
+                description: field.description.clone(),
+                field_type: field.field_type.as_str(),
+                required: asked.required,
+                options: field
+                    .config
+                    .options
+                    .iter()
+                    .filter(|option| !option.archived)
+                    .map(|option| PublicOption {
+                        id: option.id,
+                        name: option.name.clone(),
+                        color: option.color.clone(),
+                    })
+                    .collect(),
+                show_if: asked.show_if.clone(),
+                section: form
+                    .sections
+                    .iter()
+                    .find(|section| section.before == field.id)
+                    .map(|section| PublicSection {
+                        title: section.title.clone(),
+                        description: section.description.clone(),
+                    }),
+                collection: (field.field_type == FieldType::Relation)
+                    .then_some(field.config.collection)
+                    .flatten(),
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -401,9 +615,24 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
                     .ok_or_else(|| wrong("a list of its options"))?,
             )
         }
-        FieldType::Person
-        | FieldType::Link
-        | FieldType::People
+        // On an internal form: a member's ID or handle, or several, or
+        // records by ID or title; `record_write` checks each.
+        FieldType::Person => Value::String(text_of(value).ok_or_else(|| wrong("a person"))?),
+        FieldType::People | FieldType::Relation => {
+            let values = match value {
+                Value::Array(values) => values.clone(),
+                other => vec![other.clone()],
+            };
+            Value::Array(
+                values
+                    .iter()
+                    .filter(|value| !is_blank(value))
+                    .map(|value| text_of(value).map(Value::String))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| wrong("a list"))?,
+            )
+        }
+        FieldType::Link
         | FieldType::Labels
         | FieldType::CreatedTime
         | FieldType::EditedTime
@@ -411,7 +640,11 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
         | FieldType::EditedBy
         | FieldType::AutoId
         | FieldType::Formula
+        | FieldType::Rollup
         | FieldType::Button => return Err(wrong("nothing on a form")),
+        // Forms take no files (T1.20): one is never asked, and an answer
+        // naming one is refused.
+        FieldType::File => return Err(wrong("files, which forms don't take")),
     })
 }
 
@@ -424,6 +657,61 @@ pub fn record_from_answer(
     form: &FormConfig,
     definitions: &[FieldDefinition],
     answer: &Map<String, Value>,
+) -> Result<(String, Map<String, Value>), String> {
+    record_from_answer_for(collection, form, definitions, answer, Audience::Public)
+}
+
+/// An answer with its options named: a choice may be answered by an
+/// option's id, and a condition names the option.
+fn option_names(field: &FieldDefinition, value: &Value) -> Value {
+    let name = |value: &Value| match value {
+        Value::String(text) => field
+            .config
+            .options
+            .iter()
+            .find(|option| option.id.to_string() == text.trim())
+            .map_or_else(
+                || value.clone(),
+                |option| Value::String(option.name.clone()),
+            ),
+        other => other.clone(),
+    };
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(name).collect()),
+        other => name(other),
+    }
+}
+
+/// Whether an answer meets a question's condition.
+fn meets(condition: &ShowIf, given: Option<&Value>) -> bool {
+    let Some(given) = given.filter(|value| !is_blank(value)) else {
+        return false;
+    };
+    if condition.is_one_of.is_empty() {
+        return true;
+    }
+    let words: Vec<String> = match given {
+        Value::Array(values) => values.iter().filter_map(text_of).collect(),
+        Value::Bool(true) => vec!["yes".to_owned(), "true".to_owned()],
+        Value::Bool(false) => vec!["no".to_owned(), "false".to_owned()],
+        other => text_of(other).into_iter().collect(),
+    };
+    condition.is_one_of.iter().any(|wanted| {
+        words
+            .iter()
+            .any(|word| word.trim().eq_ignore_ascii_case(wanted.trim()))
+    })
+}
+
+/// [`record_from_answer`] for a form `audience` fills in: a question whose
+/// condition isn't met (or follows one that's hidden) is skipped, required
+/// or not, and the form's set values fill the fields it doesn't ask.
+pub fn record_from_answer_for(
+    collection: &collections::Collection,
+    form: &FormConfig,
+    definitions: &[FieldDefinition],
+    answer: &Map<String, Value>,
+    audience: Audience,
 ) -> Result<(String, Map<String, Value>), String> {
     let lookup = |keys: &[&str]| {
         answer.iter().find_map(|(key, value)| {
@@ -438,7 +726,26 @@ pub fn record_from_answer(
     if title.is_empty() {
         return Err(format!("Fill in {}.", collection.title_name));
     }
+    // Files are off on forms: an answer that names a file field is refused,
+    // never quietly dropped.
+    if let Some(field) = definitions.iter().find(|field| {
+        field.field_type == FieldType::File
+            && !field.archived
+            && answer.iter().any(|(key, value)| {
+                !is_blank(value)
+                    && (key.trim() == field.id.to_string()
+                        || key.trim().eq_ignore_ascii_case(field.name.trim()))
+            })
+    }) {
+        return Err(format!(
+            "\"{}\" holds files, which this form doesn't take.",
+            field.name
+        ));
+    }
     let mut values = Map::new();
+    // The answers so far by field, as given: conditions read them. A hidden
+    // question's answer isn't kept, so what follows it hides too.
+    let mut answered: std::collections::HashMap<Uuid, Value> = std::collections::HashMap::new();
     for asked in &form.fields {
         let Some(field) = definitions
             .iter()
@@ -446,7 +753,12 @@ pub fn record_from_answer(
         else {
             continue;
         };
-        if !askable(field.field_type) {
+        if !askable_on(field.field_type, audience) {
+            continue;
+        }
+        if let Some(condition) = &asked.show_if
+            && !meets(condition, answered.get(&condition.field))
+        {
             continue;
         }
         let id = field.id.to_string();
@@ -465,12 +777,23 @@ pub fn record_from_answer(
         .filter(|value| !is_blank(value));
         match given {
             Some(value) => {
+                answered.insert(field.id, option_names(field, value));
                 values.insert(id, value_for(field, value)?);
             }
             None if asked.required && field.field_type != FieldType::Checkbox => {
                 return Err(format!("Fill in {}.", field.name));
             }
             None => {}
+        }
+    }
+    for set in &form.sets {
+        if definitions
+            .iter()
+            .any(|field| field.id == set.field && !field.archived)
+        {
+            values
+                .entry(set.field.to_string())
+                .or_insert_with(|| set.value.clone());
         }
     }
     Ok((title, values))
@@ -528,6 +851,8 @@ mod tests {
             version: 1,
             builtin: None,
             acts_like_task: false,
+            task_statuses: None,
+            start_status_id: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -545,6 +870,7 @@ mod tests {
                 .map(|id| FormField {
                     field: *id,
                     required: false,
+                    show_if: None,
                 })
                 .collect(),
             ..FormConfig::default()
@@ -583,6 +909,7 @@ mod tests {
                 .map(|field| FormField {
                     field: field.id,
                     required: field.id == severity.id,
+                    show_if: None,
                 })
                 .collect(),
             ..FormConfig::default()
@@ -626,6 +953,45 @@ mod tests {
     }
 
     #[test]
+    fn a_form_never_takes_a_file() {
+        let notes = field("Notes", FieldType::Text);
+        let files = field("Screenshots", FieldType::File);
+        let fields = vec![notes.clone(), files.clone()];
+        let ask = |ids: &[Uuid]| FormConfig {
+            fields: ids
+                .iter()
+                .map(|id| FormField {
+                    field: *id,
+                    required: false,
+                    show_if: None,
+                })
+                .collect(),
+            ..FormConfig::default()
+        };
+        // Not asked, on a public form or an internal one.
+        assert_eq!(
+            check(&ask(&[files.id]), &fields),
+            Err("\"Screenshots\" holds files, which forms don't take yet.".to_owned())
+        );
+        assert!(super::check_for(&ask(&[files.id]), &fields, super::Audience::Internal).is_err());
+        // An answer naming it, by name or ID, is refused, not dropped.
+        let form = ask(&[notes.id]);
+        for key in ["Screenshots".to_owned(), files.id.to_string()] {
+            let mut answer = Map::new();
+            answer.insert("title".to_owned(), json!("Crash"));
+            answer.insert(key, json!([Uuid::now_v7().to_string()]));
+            assert_eq!(
+                record_from_answer(&collection(), &form, &fields, &answer),
+                Err("\"Screenshots\" holds files, which this form doesn't take.".to_owned())
+            );
+        }
+        let mut plain = Map::new();
+        plain.insert("title".to_owned(), json!("Crash"));
+        plain.insert("Notes".to_owned(), json!("On start"));
+        assert!(record_from_answer(&collection(), &form, &fields, &plain).is_ok());
+    }
+
+    #[test]
     fn a_field_named_title_never_takes_the_records_title() {
         let named_title = field("Title", FieldType::Number);
         let fields = vec![named_title.clone()];
@@ -633,6 +999,7 @@ mod tests {
             fields: vec![FormField {
                 field: named_title.id,
                 required: false,
+                show_if: None,
             }],
             ..FormConfig::default()
         };
@@ -645,6 +1012,7 @@ mod tests {
             fields: vec![FormField {
                 field: named_title.id,
                 required: true,
+                show_if: None,
             }],
             ..FormConfig::default()
         };

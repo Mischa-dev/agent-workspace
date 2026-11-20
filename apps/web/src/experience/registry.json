@@ -173,6 +173,13 @@
       "default": true
     },
     {
+      "id": "task.delegate",
+      "group": "task",
+      "label": "Delegate",
+      "description": "Who a task is handed to to do, often an agent, beside who owns it.",
+      "default": true
+    },
+    {
       "id": "task.estimate",
       "group": "task",
       "label": "Estimate",
@@ -303,6 +310,13 @@
       "group": "talk",
       "label": "Replies",
       "description": "Replying to one message, quoted above the reply.",
+      "default": true
+    },
+    {
+      "id": "talk.typing",
+      "group": "talk",
+      "label": "Who is typing",
+      "description": "A line under the messages saying who is writing one now.",
       "default": true
     },
     {
@@ -439,6 +453,20 @@
       "default": true
     },
     {
+      "id": "workspace.initiatives",
+      "group": "workspace",
+      "label": "Initiatives",
+      "description": "Work that spans projects, followed through each project's milestones.",
+      "default": true
+    },
+    {
+      "id": "workspace.project_updates",
+      "group": "workspace",
+      "label": "Project status and updates",
+      "description": "Each project's health, target date and lead, and its latest update, on its home, in My work and in initiatives.",
+      "default": true
+    },
+    {
       "id": "workspace.threads",
       "group": "workspace",
       "label": "Threads",
@@ -478,6 +506,13 @@
       "group": "workspace",
       "label": "Hosts",
       "description": "Machines and services that run agents, linked to the workspace or to you, in settings.",
+      "default": true
+    },
+    {
+      "id": "workspace.budgets",
+      "group": "workspace",
+      "label": "Budgets",
+      "description": "Limits on what an agent may use, on its card in settings.",
       "default": true
     }
   ],
@@ -529,6 +564,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -577,6 +613,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -631,6 +668,7 @@
         "area.board",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -641,6 +679,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "workspace.my_work"
@@ -674,6 +713,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -726,6 +766,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -774,6 +815,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -814,6 +856,7 @@
         "area.sheets",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.milestone",
@@ -827,6 +870,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -873,6 +917,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -914,6 +959,7 @@
         "area.files",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -926,6 +972,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -972,6 +1019,7 @@
         "area.decisions",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.estimate",
         "task.labels",
         "task.custom_fields",
@@ -986,6 +1034,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",
@@ -1015,6 +1064,7 @@
         "area.pages",
         "area.decisions",
         "task.priority",
+        "task.delegate",
         "task.milestone",
         "task.dates",
         "talk.threads",
@@ -1023,6 +1073,7 @@
         "channel.tabs",
         "channel.details",
         "talk.replies",
+        "talk.typing",
         "talk.channel_memory",
         "thing.comments",
         "page.live_editing",

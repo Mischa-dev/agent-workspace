@@ -4,7 +4,6 @@ import { Navigate, type RouteObject } from 'react-router-dom'
 import { SessionBoundary } from '../auth/SessionBoundary'
 import {
   AuthenticatedRouteBoundary,
-  LegacyProjectSettingsRedirect,
   PublicRouteBoundary,
   RootLayout,
   RouteErrorPage,
@@ -16,6 +15,7 @@ import { ShellLayout } from '../shell/ShellLayout'
 import { WorkspaceBoundary, WorkspaceProvider, WorkspaceRedirect } from './WorkspaceBoundary'
 import {
   DesignSystemPage,
+  ThingRedirect,
   ForgotPasswordPage,
   HomePage,
   JoinPage,
@@ -96,17 +96,19 @@ const publicRoutes: AppRoute[] = [
 
 /**
  * Signed in: every page needs the session. A workspace's own pages are listed
- * here by their old root paths and served under `/w/:ws` (W1.14a), the old
- * path redirecting there; `public/sw.js` lists the first segments it serves
+ * here by their old root paths and served under `/w/:ws` (W1.14a), a
+ * space's under `/w/:ws/s/:projectId` (W1.14b, `/projects/:projectId/work-items`
+ * becoming `/s/:projectId/tasks`; app/href.ts has the words), the old path
+ * redirecting there; `public/sw.js` lists the first segments it serves
  * offline. The workspace's own pages are here; each module's come from its
  * registration. The router ranks routes by how specific they are, so their
  * order doesn't matter.
  */
 const sessionRoutes: AppRoute[] = [
+  // Account settings, and old workspace settings links (they redirect).
   page('/settings/*', SettingsArea, 'settings'),
   page('/home', HomePage, 'home'),
   page('/welcome', OnboardingPage, 'workspace'),
-  { path: '/projects/:projectId/settings', element: <LegacyProjectSettingsRedirect />, handle: { space: 'project', layout: 'redirect' } },
   page('/search', SearchPage, 'workspace'),
   page('/design-system', DesignSystemPage, 'workspace'),
   page('/design-system/pieces', PieceGallery, 'workspace'),
@@ -118,9 +120,23 @@ const inWorkspace = (route: AppRoute) => Boolean(route.path && isWorkspacePath(r
 /** In the persistent shell: shell pages and canvases (a canvas draws the rail but no sidebar). */
 const framed = (route: AppRoute) => route.handle?.layout === 'shell' || route.handle?.layout === 'canvas'
 
-/** The old root address of each workspace page, and `/`: the same page in the current workspace. */
+const redirect = (path: string, space: RouteHandle['space'] = 'workspace'): AppRoute => ({
+  path,
+  element: <WorkspaceRedirect />,
+  handle: { space, layout: 'redirect' },
+})
+
+/**
+ * The old root address of each workspace page, and `/`: the same page in
+ * the current workspace (a space's in its own workspace). Any old space
+ * address, and old workspace and space settings links, too. W1.14d deletes
+ * them once the server's links have moved.
+ */
 const workspaceRedirects: AppRoute[] = [
-  { path: '/', element: <WorkspaceRedirect />, handle: { space: 'workspace', layout: 'redirect' } },
+  redirect('/'),
+  redirect('/projects/:projectId/*', 'project'),
+  redirect('/settings/workspace/*', 'settings'),
+  redirect('/settings/projects/*', 'settings'),
   ...sessionRoutes.filter(inWorkspace).map((route) => ({
     path: route.path,
     element: <WorkspaceRedirect />,
@@ -133,7 +149,11 @@ function workspaceRoutes(shell: boolean): AppRoute {
   const children: AppRoute[] = sessionRoutes
     .filter((route) => inWorkspace(route) && framed(route) === shell)
     .map((route) => ({ ...route, path: workspaceRoutePath(route.path ?? '').slice(1) }))
-  if (shell) children.unshift({ index: true, element: <Navigate replace to="home" />, handle: { space: 'home', layout: 'redirect' } })
+  if (shell) {
+    children.unshift({ index: true, element: <Navigate replace to="home" />, handle: { space: 'home', layout: 'redirect' } })
+    // The workspace's settings and its spaces' (`settings/spaces/:id/...`), and any thing by its permanent address.
+    children.push(page('settings/*', SettingsArea, 'settings'), { ...page('t/:kind/:id', ThingRedirect, 'workspace') })
+  }
   return { path: '/w/:ws', element: <WorkspaceBoundary />, children }
 }
 

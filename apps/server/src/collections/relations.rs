@@ -1,0 +1,374 @@
+//! Two-way relations (T1.18): a relation field whose settings name its pair
+//! (`FieldConfig::inverse`) on the other collection. When a record's
+//! relation gains or loses a record, that record's pair gains or loses this
+//! one, in the same transaction, so the two sides always agree.
+//!
+//! A write that sets a two-way relation first takes the pair's lock
+//! (`lock_pairs`), before it locks any record, so two people connecting the
+//! same records from opposite sides queue instead of deadlocking; the
+//! pair's records are then locked in ID order before they change. Their
+//! worked-out values are refreshed with them, the records whose rollups
+//! read them are queued (`computed::mark_dependents`), and one
+//! `collection.updated` event names them with the cause "paired".
+
+use std::collections::HashSet;
+
+use serde_json::Value;
+use sqlx::PgConnection;
+use uuid::Uuid;
+
+use crate::{
+    error::AppError,
+    fields::{self, FieldDefinition, FieldType, MAX_RELATED},
+};
+
+/// What one record's write did to its relations' pairs.
+pub struct PairChange {
+    pub collection_id: Uuid,
+    pub records: Vec<Uuid>,
+}
+
+/// The locks a write that sets `references` (field names or IDs) takes,
+/// one for each two-way relation they name, in one order. Take them with
+/// `lock_pairs` before locking any record: a write on either side of a
+/// pair takes the same lock, so the rows the two lock can't form a cycle.
+pub fn pair_locks<'a>(
+    project_id: Uuid,
+    definitions: &[FieldDefinition],
+    references: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut keys = references
+        .filter_map(|reference| fields::find(definitions, reference))
+        .filter(|field| field.field_type == FieldType::Relation)
+        .filter_map(|field| {
+            let pair = field.config.inverse?;
+            field.config.collection?;
+            Some(format!(
+                "record-pair:{project_id}:{}:{}",
+                field.id.min(pair),
+                field.id.max(pair)
+            ))
+        })
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Takes `pair_locks`' locks, held until the transaction ends.
+pub async fn lock_pairs(connection: &mut PgConnection, keys: Vec<String>) -> Result<(), AppError> {
+    for key in keys {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Keeps the pairs of `record`'s two-way relations in step with its values
+/// going from `before` to `after` (its stored values; `before` None for a
+/// new record). Refuses, with the message, when a record would name more
+/// than `MAX_RELATED` records, or when the pair is a field only builders
+/// change and the writer can't build (`may_build`).
+#[allow(clippy::too_many_arguments)]
+pub async fn write_pairs(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    actor_id: Uuid,
+    may_build: bool,
+    record: Uuid,
+    definitions: &[FieldDefinition],
+    before: Option<&Value>,
+    after: &Value,
+) -> Result<Result<Vec<PairChange>, String>, AppError> {
+    let mut changes = Vec::new();
+    for field in definitions
+        .iter()
+        .filter(|field| field.field_type == FieldType::Relation)
+    {
+        let (Some(pair), Some(collection)) = (field.config.inverse, field.config.collection) else {
+            continue;
+        };
+        let key = field.id.to_string();
+        let old = before
+            .and_then(|values| values.get(&key))
+            .map(|value| fields::referenced_ids(field, value))
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let new = after
+            .get(&key)
+            .map(|value| fields::referenced_ids(field, value))
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let mut added = new.difference(&old).copied().collect::<Vec<_>>();
+        let mut removed = old.difference(&new).copied().collect::<Vec<_>>();
+        if added.is_empty() && removed.is_empty() {
+            continue;
+        }
+        added.sort_unstable();
+        removed.sort_unstable();
+        let mut all = added.iter().chain(&removed).copied().collect::<Vec<_>>();
+        all.sort_unstable();
+        // Changing this side changes the pair: a pair only builders change
+        // can't be changed from here by anyone else either.
+        if !may_build {
+            let guarded = sqlx::query_as::<_, (String, String)>(
+                "SELECT pair.name, other.name FROM field_definitions pair \
+                 JOIN collections other \
+                   ON other.project_id = pair.project_id AND other.id = pair.collection_id \
+                 WHERE pair.project_id = $1 AND pair.id = $2 \
+                   AND COALESCE((pair.config -> 'rules' ->> 'buildersOnly')::boolean, false)",
+            )
+            .bind(project_id)
+            .bind(pair)
+            .fetch_optional(&mut *connection)
+            .await?;
+            if let Some((name, other)) = guarded {
+                return Ok(Err(format!(
+                    "\"{}\" also changes \"{name}\" in {other}, which only people who can change {other}'s fields set.",
+                    field.name
+                )));
+            }
+        }
+        let pair_key = pair.to_string();
+        // In ID order, so two writes pairing the same records can't
+        // deadlock; with the pair's values as they were, for their history.
+        let was = sqlx::query_as::<_, (Uuid, Option<Value>)>(
+            "SELECT id, field_values -> $4 FROM collection_records \
+             WHERE project_id = $1 AND collection_id = $2 AND id = ANY($3) \
+             ORDER BY id FOR UPDATE",
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&all)
+        .bind(&pair_key)
+        .fetch_all(&mut *connection)
+        .await?;
+        let own = record.to_string();
+        sqlx::query(
+            r#"
+            UPDATE collection_records
+            SET field_values = jsonb_set(
+                    field_values, ARRAY[$4],
+                    COALESCE(field_values -> $4, '[]'::jsonb) || to_jsonb($5::text)),
+                version = version + 1, updated_at = now(), updated_by_actor_id = $6
+            WHERE project_id = $1 AND collection_id = $2 AND id = ANY($3)
+              AND NOT COALESCE(field_values -> $4, '[]'::jsonb) @> to_jsonb(ARRAY[$5::text])
+            "#,
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&added)
+        .bind(&pair_key)
+        .bind(&own)
+        .bind(actor_id)
+        .execute(&mut *connection)
+        .await?;
+        let over = sqlx::query_as::<_, (i64, String)>(
+            "SELECT number, title FROM collection_records \
+             WHERE project_id = $1 AND collection_id = $2 AND id = ANY($3) \
+               AND jsonb_array_length(COALESCE(field_values -> $4, '[]'::jsonb)) > $5 \
+             ORDER BY number LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&added)
+        .bind(&pair_key)
+        .bind(MAX_RELATED as i32)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some((number, title)) = over {
+            return Ok(Err(format!(
+                "#{number} {title} already names {MAX_RELATED} records through \"{}\"'s other side, the most it can.",
+                field.name
+            )));
+        }
+        sqlx::query(
+            r#"
+            UPDATE collection_records
+            SET field_values = CASE
+                    WHEN (field_values -> $4) - $5 = '[]'::jsonb THEN field_values - $4
+                    ELSE jsonb_set(field_values, ARRAY[$4], (field_values -> $4) - $5) END,
+                version = version + 1, updated_at = now(), updated_by_actor_id = $6
+            WHERE project_id = $1 AND collection_id = $2 AND id = ANY($3)
+              AND jsonb_typeof(field_values -> $4) = 'array'
+              AND (field_values -> $4) ? $5
+            "#,
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&removed)
+        .bind(&pair_key)
+        .bind(&own)
+        .bind(actor_id)
+        .execute(&mut *connection)
+        .await?;
+        // A removal may not leave a paired record without the relation
+        // its rules require, as editing that record itself couldn't.
+        let emptied = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT record.number, record.title, pair.name \
+             FROM collection_records record \
+             JOIN field_definitions pair ON pair.project_id = record.project_id AND pair.id = $4 \
+             WHERE record.project_id = $1 AND record.collection_id = $2 AND record.id = ANY($3) \
+               AND pair.archived_at IS NULL AND (pair.config -> 'rules' ->> 'required')::boolean \
+               AND NOT (record.field_values ? $5) \
+             ORDER BY record.number LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(collection)
+        .bind(&removed)
+        .bind(pair)
+        .bind(&pair_key)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some((number, title, name)) = emptied {
+            return Ok(Err(format!(
+                "#{number} {title} needs a value in \"{name}\", so it can't lose its last record through \"{}\".",
+                field.name
+            )));
+        }
+        record_history(connection, project_id, actor_id, collection, pair, was).await?;
+        match changes
+            .iter_mut()
+            .find(|change: &&mut PairChange| change.collection_id == collection)
+        {
+            Some(change) => change.records.extend(all),
+            None => changes.push(PairChange {
+                collection_id: collection,
+                records: all,
+            }),
+        }
+    }
+    Ok(Ok(changes))
+}
+
+/// A history entry on each paired record whose `pair` field changed from
+/// what `was` holds, so its earlier versions can be shown and put back
+/// like any other change.
+async fn record_history(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    actor_id: Uuid,
+    collection: Uuid,
+    pair: Uuid,
+    was: Vec<(Uuid, Option<Value>)>,
+) -> Result<(), AppError> {
+    let ids = was.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let now = sqlx::query_as::<_, (Uuid, i64, Option<Value>)>(
+        "SELECT id, version, field_values -> $3 FROM collection_records \
+         WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&ids)
+    .bind(pair.to_string())
+    .fetch_all(&mut *connection)
+    .await?;
+    let changed = now
+        .into_iter()
+        .filter_map(|(id, version, is)| {
+            let before = was.iter().find(|(other, _)| *other == id)?.1.clone();
+            (before != is).then_some((id, version, before, is))
+        })
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM field_definitions WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(pair)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default();
+    let named = |value: &Option<Value>| {
+        value
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| id.as_str()?.parse::<Uuid>().ok())
+            .collect::<Vec<_>>()
+    };
+    let mut mentioned = changed
+        .iter()
+        .flat_map(|(_, _, before, is)| named(before).into_iter().chain(named(is)))
+        .collect::<Vec<_>>();
+    mentioned.sort_unstable();
+    mentioned.dedup();
+    let titles = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, title FROM collection_records WHERE project_id = $1 AND id = ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&mentioned)
+    .fetch_all(&mut *connection)
+    .await?;
+    let read = |value: &Option<Value>| {
+        Value::Array(
+            named(value)
+                .into_iter()
+                .map(|id| {
+                    let title = titles
+                        .iter()
+                        .find(|(other, _)| *other == id)
+                        .map_or_else(String::new, |(_, title)| title.clone());
+                    Value::String(title)
+                })
+                .collect(),
+        )
+    };
+    let field = pair.to_string();
+    for (id, version, before, is) in changed {
+        let entry = super::records::change_entry(
+            &field,
+            &name,
+            read(&before),
+            read(&is),
+            (before.as_ref(), is.as_ref()),
+        );
+        super::records::insert_history(
+            connection,
+            project_id,
+            collection,
+            id,
+            actor_id,
+            "updated",
+            vec![entry],
+            version,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// After `changes`: the paired records' worked-out values, the records
+/// whose rollups read them, and the event that names them.
+pub async fn after_pairs(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    changes: Vec<PairChange>,
+) -> Result<(), AppError> {
+    for PairChange {
+        collection_id,
+        mut records,
+    } in changes
+    {
+        records.sort_unstable();
+        records.dedup();
+        super::computed::refresh_records(connection, project_id, collection_id, &records).await?;
+        super::computed::mark_dependents(connection, project_id, collection_id, &records, 1)
+            .await?;
+        crate::outbox::enqueue_records_changed(
+            connection,
+            project_id,
+            collection_id,
+            &records,
+            "paired",
+        )
+        .await?;
+    }
+    Ok(())
+}

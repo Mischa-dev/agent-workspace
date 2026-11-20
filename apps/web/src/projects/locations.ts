@@ -1,7 +1,9 @@
+import { legacyPathOf, spaceHref } from '../app/href'
 import type { PlainProjectPlace, ProjectLocation } from './types'
 
 /**
- * Where each plain place lives under /projects/:id. Settings aren't a place
+ * Where each plain place lives in a space, in today's words (`spaceHref`
+ * gives them the address's). Settings aren't a place
  * in the project to come back to: a project that last remembered them (older
  * clients saved it) opens on its overview, so its own tile always leads out of
  * settings.
@@ -39,22 +41,15 @@ export function projectLocationHref(
   projectId: string,
   location: ProjectLocation,
 ): string {
-  const project = encodeURIComponent(projectId)
-  if (location.kind === 'channel') {
-    return `/projects/${project}/channels/${encodeURIComponent(location.conversationId)}`
-  }
-  if (location.kind === 'thread') {
-    return `/projects/${project}/threads/${encodeURIComponent(location.conversationId)}`
-  }
-  if (location.kind === 'page') {
-    return `/projects/${project}/pages/${encodeURIComponent(location.pageId)}`
-  }
-  return `/projects/${project}${PLACE_PATHS[location.kind]}`
+  if (location.kind === 'channel') return spaceHref(projectId, `/chat/${encodeURIComponent(location.conversationId)}`)
+  if (location.kind === 'thread') return spaceHref(projectId, `/threads/${encodeURIComponent(location.conversationId)}`)
+  if (location.kind === 'page') return spaceHref(projectId, `/pages/${encodeURIComponent(location.pageId)}`)
+  return spaceHref(projectId, PLACE_PATHS[location.kind])
 }
 
 /**
  * A project area's address, or one thing in it: `projectAreaHref(p, 'dashboards', d)`
- * is `/projects/<p>/dashboards/<d>`. `search` adds query parameters, such as
+ * is `/w/<slug>/s/<p>/dashboards/<d>`. `search` adds query parameters, such as
  * the view a collection opens on.
  */
 export function projectAreaHref(
@@ -63,7 +58,7 @@ export function projectAreaHref(
   id?: string,
   search?: Record<string, string>,
 ): string {
-  const path = `/projects/${encodeURIComponent(projectId)}/${area}${id ? `/${encodeURIComponent(id)}` : ''}`
+  const path = spaceHref(projectId, `/${area}${id ? `/${encodeURIComponent(id)}` : ''}`)
   const query = search ? new URLSearchParams(search).toString() : ''
   return query ? `${path}?${query}` : path
 }
@@ -91,8 +86,10 @@ function idAfter(pathname: string, prefix: string) {
 
 export function projectLocationFromPath(
   projectId: string,
-  pathname: string,
+  address: string,
 ): ProjectLocation | null {
+  // Read in today's words, whichever shape the address is in.
+  const pathname = legacyPathOf(address)
   const projectRoot = `/projects/${encodeURIComponent(projectId)}`
   if (pathname === projectRoot) return { kind: 'project_overview' }
   if (pathname === `${projectRoot}/settings`) return { kind: 'settings' }
@@ -140,4 +137,9 @@ export function locationsEqual(
   }
   if (left.kind === 'page' && right.kind === 'page') return left.pageId === right.pageId
   return true
+}
+
+/** A collection of the project, such as its built-in Pages collection (T1.36). */
+export function collectionHref(projectId: string, collectionId: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collectionId)}`
 }

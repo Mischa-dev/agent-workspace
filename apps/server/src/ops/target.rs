@@ -128,6 +128,12 @@ const KINDS: &[(&str, &str)] = &[
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
     (
+        "milestone",
+        "SELECT project.organization_id, project.id FROM project_milestones milestone \
+         JOIN projects project ON project.id = milestone.project_id \
+         WHERE milestone.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "collection",
         "SELECT project.organization_id, project.id FROM collections collection \
          JOIN projects project ON project.id = collection.project_id \
@@ -147,6 +153,18 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT dashboard.workspace_id, dashboard.space_id FROM dashboards dashboard \
          WHERE dashboard.id = $1 \
            AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+    ),
+    // Outside data (T1.34): a connection, and a saved query. Who sees which
+    // is the operation's to say (data.connect, or a shared query).
+    (
+        "data_connection",
+        "SELECT connection.workspace_id, connection.space_id FROM data_connections connection \
+         WHERE connection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "data_query",
+        "SELECT query.workspace_id, query.space_id FROM data_queries query \
+         WHERE query.id = $1 AND $2::uuid IS NOT NULL",
     ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
@@ -239,6 +257,21 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT view.workspace_id, view.space_id FROM sheet_views view \
          WHERE view.id = $1 AND subject_visible_to('sheet', view.sheet_id, $2) \
            AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
+    ),
+    (
+        "record_template",
+        "SELECT template.workspace_id, template.space_id FROM record_templates template \
+         WHERE template.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "recurring_record",
+        "SELECT recurring.workspace_id, recurring.space_id FROM recurring_records recurring \
+         WHERE recurring.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
+        "form",
+        "SELECT form.workspace_id, form.space_id FROM forms form \
+         WHERE form.id = $1 AND $2::uuid IS NOT NULL",
     ),
     (
         "record",
@@ -483,12 +516,16 @@ fn what_of(kind: &str) -> &'static str {
         "scheduled_message" => "That scheduled message",
         "decision" => "That decision",
         "task" => "That task",
+        "milestone" => "That milestone",
         "run" => "That run",
         "page" => "That page",
         "proposal" => "That proposal",
         "change_set" => "That change",
         "sheet" => "That sheet",
         "record" => "That record",
+        "form" => "That form",
+        "record_template" => "That template",
+        "recurring_record" => "That recurring record",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",

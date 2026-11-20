@@ -1,0 +1,1226 @@
+[
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "account_owner_take",
+    "title": "Take ownership of an agent"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "account_workspace_add",
+    "title": "Add an agent you have to this workspace"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_action_run",
+    "title": "Run a host's action"
+  },
+  {
+    "kind": "create",
+    "module": "agents",
+    "name": "agent_create",
+    "title": "Make an agent in this workspace"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_managers_set",
+    "title": "Set agent managers"
+  },
+  {
+    "kind": "create",
+    "module": "agents",
+    "name": "agent_offer_start",
+    "title": "Start a host's offer"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_pause",
+    "title": "Pause agent"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_ref_decide",
+    "title": "Decide on an agent's proposed rebind"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_ref_remove",
+    "title": "Detach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_ref_set",
+    "title": "Attach an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_ref_update",
+    "title": "Rebind an agent's outside reference"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_register_decide",
+    "title": "Approve an agent a host made"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "agent_resume",
+    "title": "Resume agent"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "app_consent_set",
+    "title": "Let an app hear a conversation"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "budget_set",
+    "title": "Set a budget"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "bug_report_link_create",
+    "title": "Create bug report link"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "bug_report_link_update",
+    "title": "Update bug report link"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "change_undo",
+    "title": "Undo a change"
+  },
+  {
+    "kind": "create",
+    "module": "channels",
+    "name": "channel_create",
+    "title": "Create channel"
+  },
+  {
+    "kind": "change",
+    "module": "channels",
+    "name": "channel_update",
+    "title": "Change channel"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "comment_create",
+    "title": "Comment"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "comment_thread_update",
+    "title": "Resolve comment thread"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "connection_redeliver",
+    "title": "Redeliver webhook event"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "connection_remove",
+    "title": "Remove connection"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "connection_test",
+    "title": "Test webhook"
+  },
+  {
+    "kind": "change",
+    "module": "channels",
+    "name": "conversation_agent_settings_set",
+    "title": "Set ambient mode"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "conversation_continue",
+    "title": "Let agents continue"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "conversation_members_update",
+    "title": "Change members"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "conversation_tab_set",
+    "title": "Set a channel's page tab"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "conversation_update",
+    "title": "Update conversation"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "conversations_mark_read",
+    "title": "Mark all read"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "credential_revoke",
+    "title": "Revoke a secret"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "custom_emoji_create",
+    "title": "Add custom emoji"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "custom_emoji_update",
+    "title": "Retire custom emoji"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "cycle_set",
+    "title": "Set up cycles"
+  },
+  {
+    "kind": "create",
+    "module": "dashboards",
+    "name": "dashboard_create",
+    "title": "Make a dashboard"
+  },
+  {
+    "kind": "change",
+    "module": "dashboards",
+    "name": "dashboard_delete",
+    "title": "Remove a dashboard"
+  },
+  {
+    "kind": "change",
+    "module": "dashboards",
+    "name": "dashboard_update",
+    "title": "Change a dashboard"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_connection_delete",
+    "title": "Remove an outside data connection"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "data_query_create",
+    "title": "Save an outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_delete",
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_review",
+    "title": "Review a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_run",
+    "title": "Run a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_share",
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_update",
+    "title": "Change a saved outside data query"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
+    "name": "decision_record",
+    "title": "Record decision"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "environment_archive",
+    "title": "Archive environment"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "environment_check",
+    "title": "Check environment"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "environment_create",
+    "title": "Add environment"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "environment_update",
+    "title": "Update environment"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "field_create",
+    "title": "Create field"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "field_update",
+    "title": "Update field"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "file_upload_finish",
+    "title": "Finish a direct upload"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "file_upload_start",
+    "title": "Start a direct upload"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "follow_set",
+    "title": "Follow"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "form_answer_send",
+    "title": "Answer a form"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "form_create",
+    "title": "Create a form"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "form_update",
+    "title": "Change a form"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "github_automation_update",
+    "title": "Update pull request automation"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "github_installation_link",
+    "title": "Link GitHub installation"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "group_archive",
+    "title": "Archive a group"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "group_create",
+    "title": "Make a group"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "group_members_set",
+    "title": "Change who is in a group"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "group_restore",
+    "title": "Bring back a group"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "group_update",
+    "title": "Change a group"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "guard_set",
+    "title": "Set a guard"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "host_agent_bind",
+    "title": "Bind an agent to a host"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "host_agent_unbind",
+    "title": "Unbind an agent from a host"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "host_unlink",
+    "title": "Unlink a host"
+  },
+  {
+    "kind": "change",
+    "module": "automations",
+    "name": "incoming_hook_delete",
+    "title": "Delete an incoming hook"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "initiative_create",
+    "title": "Create an initiative"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "invite_link_revoke",
+    "title": "Revoke an invitation link"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "label_create",
+    "title": "Create label"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "label_update",
+    "title": "Update label"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "memory_page_set",
+    "title": "Write memory"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "message_delete",
+    "title": "Remove message"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "message_draft_set",
+    "title": "Save draft"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "message_forward",
+    "title": "Forward message"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "message_preview_hide",
+    "title": "Hide link previews"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "message_react",
+    "title": "React to message"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "message_schedule",
+    "title": "Schedule message"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "message_send",
+    "title": "Send message"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "message_update",
+    "title": "Edit message"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "milestone_create",
+    "title": "Create milestone"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "milestone_reorder",
+    "title": "Reorder milestones"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "milestone_update",
+    "title": "Update milestone"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_archive",
+    "title": "Archive a module"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "module_create",
+    "title": "Build a module"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_part_link",
+    "title": "Add a part to a module"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_part_unlink",
+    "title": "Take a part out of a module"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_restore",
+    "title": "Restore a module"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_set",
+    "title": "Switch a module on or off"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "module_update",
+    "title": "Change a module"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "notification_keyword_set",
+    "title": "Set keyword alerts"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "package_install",
+    "title": "Install a package"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "package_remove",
+    "title": "Remove a package"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
+    "name": "page_file_upload",
+    "title": "Keep a file on a page"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
+    "name": "page_make",
+    "title": "Make a page from messages or blocks"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "pin_set",
+    "title": "Pin or unpin"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "plan_import",
+    "title": "Import a plan"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "profile_update",
+    "title": "Update profile"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "project_status_set",
+    "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "project_update_create",
+    "title": "Post a project update"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "proposal_decide",
+    "title": "Decide a proposal"
+  },
+  {
+    "kind": "create",
+    "module": "code",
+    "name": "pull_request_create",
+    "title": "Open pull request"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "pull_request_merge",
+    "title": "Merge pull request"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "pull_request_refresh",
+    "title": "Refresh pull request"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "record_create",
+    "title": "Create a record"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "record_template_create",
+    "title": "Create a record template"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "record_template_update",
+    "title": "Change a record template"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "record_update",
+    "title": "Update a record"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "recurring_create",
+    "title": "Schedule a template"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "recurring_record_create",
+    "title": "Make records on a schedule"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "recurring_record_delete",
+    "title": "Stop a recurring record"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "recurring_record_update",
+    "title": "Change a recurring record"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "recurring_update",
+    "title": "Update schedule"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "reply_claim",
+    "title": "Claim reply request"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "reply_pass",
+    "title": "Pass"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "reply_progress_report",
+    "title": "Report progress"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "reply_release",
+    "title": "Release reply request"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "reply_retry",
+    "title": "Ask again"
+  },
+  {
+    "kind": "create",
+    "module": "messages",
+    "name": "reply_send",
+    "title": "Send reply"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "reply_stop",
+    "title": "Stop reply request"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "repository_archive",
+    "title": "Archive repository"
+  },
+  {
+    "kind": "create",
+    "module": "code",
+    "name": "repository_create",
+    "title": "Add repository"
+  },
+  {
+    "kind": "change",
+    "module": "code",
+    "name": "repository_prepare",
+    "title": "Prepare repository"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "request_cancel",
+    "title": "Withdraw a request"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "request_create",
+    "title": "Ask someone something"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "request_respond",
+    "title": "Answer a request"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "run_activity_report",
+    "title": "Report run activity"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_cancel",
+    "title": "Stop a run"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "run_create",
+    "title": "Open a run"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_mark_not_started",
+    "title": "Mark a run not started"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "run_result_report",
+    "title": "Report run results"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_update",
+    "title": "Update a run"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "run_usage_report",
+    "title": "Report usage"
+  },
+  {
+    "kind": "create",
+    "module": "agents",
+    "name": "schedule_create",
+    "title": "Set a follow-up"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
+    "name": "schedule_update",
+    "title": "Change a follow-up"
+  },
+  {
+    "kind": "change",
+    "module": "messages",
+    "name": "scheduled_message_update",
+    "title": "Change scheduled message"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_chart_set",
+    "title": "Chart a sheet range"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_range_set",
+    "title": "Name a sheet range"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_row_add",
+    "title": "Add a sheet row"
+  },
+  {
+    "kind": "create",
+    "module": "sheets",
+    "name": "sheet_view_create",
+    "title": "Save a sheet view"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_view_delete",
+    "title": "Remove a sheet view"
+  },
+  {
+    "kind": "change",
+    "module": "sheets",
+    "name": "sheet_view_update",
+    "title": "Change a sheet view"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_archive",
+    "title": "Archive a space"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "space_create",
+    "title": "Make a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_group_add",
+    "title": "Give a group a role in a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_group_remove",
+    "title": "Take a group out of a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_join",
+    "title": "Join a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_leave",
+    "title": "Leave a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_member_add",
+    "title": "Add someone to a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_member_remove",
+    "title": "Remove someone from a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_member_update",
+    "title": "Change someone's role in a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_restore",
+    "title": "Restore a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "space_update",
+    "title": "Change a space"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "status_delete",
+    "title": "Clear status"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "status_set",
+    "title": "Set status"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_claim",
+    "title": "Claim task"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "task_comment_create",
+    "title": "Comment on task"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_comment_delete",
+    "title": "Delete task comment"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_comment_update",
+    "title": "Edit task comment"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "task_create",
+    "title": "Create task"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "task_create_many",
+    "title": "Create many tasks"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "task_import",
+    "title": "Import tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_link",
+    "title": "Link task"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_link_many",
+    "title": "Link many tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_move",
+    "title": "Move task"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_release",
+    "title": "Release task"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_reorder",
+    "title": "Reorder tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_update_many",
+    "title": "Update many tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_watch_set",
+    "title": "Watch task"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "template_create",
+    "title": "Create task template"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "template_update",
+    "title": "Update task template"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "theme_create",
+    "title": "Make theme"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "theme_delete",
+    "title": "Delete theme"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "thing_link",
+    "title": "Link two things"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "thing_share_add",
+    "title": "Share one thing"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "thing_share_remove",
+    "title": "Stop sharing one thing"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "thing_unlink",
+    "title": "Take a link away"
+  },
+  {
+    "kind": "create",
+    "module": "channels",
+    "name": "thread_start",
+    "title": "Start thread"
+  },
+  {
+    "kind": "change",
+    "module": "channels",
+    "name": "thread_update",
+    "title": "Update thread"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_decide",
+    "title": "Triage tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_enable",
+    "title": "Turn on triage"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_rule_set",
+    "title": "Write a triage rule"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "view_create",
+    "title": "Make a view"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "view_default_set",
+    "title": "Choose a default view"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "view_delete",
+    "title": "Remove a view"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "view_pin",
+    "title": "Pin a view"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "view_update",
+    "title": "Change a view"
+  },
+  {
+    "kind": "create",
+    "module": "whiteboards",
+    "name": "whiteboard_ask",
+    "title": "Ask about part of a board"
+  },
+  {
+    "kind": "create",
+    "module": "whiteboards",
+    "name": "whiteboard_create",
+    "title": "Create whiteboard"
+  },
+  {
+    "kind": "create",
+    "module": "whiteboards",
+    "name": "whiteboard_duplicate",
+    "title": "Copy whiteboard"
+  },
+  {
+    "kind": "change",
+    "module": "whiteboards",
+    "name": "whiteboard_link",
+    "title": "Link whiteboard"
+  },
+  {
+    "kind": "create",
+    "module": "whiteboards",
+    "name": "whiteboard_propose",
+    "title": "Propose a whiteboard change"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "whiteboard_to_tasks",
+    "title": "Make tasks from a board's notes"
+  },
+  {
+    "kind": "change",
+    "module": "whiteboards",
+    "name": "whiteboard_update",
+    "title": "Update whiteboard"
+  },
+  {
+    "kind": "change",
+    "module": "whiteboards",
+    "name": "whiteboard_update_elements",
+    "title": "Draw on whiteboard"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_delete",
+    "title": "Delete workspace"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_delete_cancel",
+    "title": "Keep workspace"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "workspace_export_start",
+    "title": "Export the workspace"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_member_update",
+    "title": "Change someone's workspace membership"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_store_revoke",
+    "title": "Stop using the workspace's own file bucket"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_theme_set",
+    "title": "Offer theme to the workspace"
+  }
+]

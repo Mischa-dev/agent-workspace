@@ -1,4 +1,10 @@
+import { isSpaceAddress } from '../app/href'
+import { workItemHref } from './links'
 import { requestJson } from '../api/client'
+import { ApiError, isApiError } from '../api/errors'
+import { callOp, type OpInput } from '../api/ops'
+import { queueOp } from '../data/outbound'
+import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
 import { parseMessageContent } from '../conversations/messageContentModel'
@@ -55,6 +61,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
   const itemType = record(item.itemType)
   const status = record(item.status)
   const assignee = item.assignee === null ? null : record(item.assignee)
+  const delegate = item.delegate ? record(item.delegate) : null
   const capabilities = record(item.capabilities)
   return {
     id: string(item.id),
@@ -79,6 +86,16 @@ export function normalizeWorkItem(value: unknown): WorkItem {
             handle: string(assignee.handle),
             kind: string(assignee.kind),
             active: boolean(assignee.active),
+          },
+    delegate:
+      delegate === null
+        ? null
+        : {
+            actorId: string(delegate.actorId),
+            displayName: string(delegate.displayName),
+            handle: string(delegate.handle),
+            kind: string(delegate.kind),
+            active: true,
           },
     version: number(item.version),
     archivedAt: nullableString(item.archivedAt),
@@ -256,13 +273,15 @@ export function normalizeCard(value: unknown): WorkItemCard {
   }
 }
 
-function workItemLinkPath(
-  projectId: string,
-  workItemId: string,
-  collection: 'threads' | 'repositories' | 'pull-requests',
-  targetId: string,
+/** Links or unlinks a record on a task with `task_link`, then reads the task as it is now. */
+async function linkOnTask(
+  input: { projectId: string; workItemId: string; idempotencyKey: string; expectedVersion?: number },
+  link: Omit<OpInput<'task_link'>, 'taskId' | 'expectedVersion'>,
 ) {
-  return `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/${collection}/${encodeURIComponent(targetId)}`
+  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
+    (error: unknown) => refuseAsMovedOn(error, input),
+  )
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 export async function setWorkItemThreadLink(input: {
@@ -272,10 +291,7 @@ export async function setWorkItemThreadLink(input: {
   linked: boolean
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(await requestJson<unknown>(
-    workItemLinkPath(input.projectId, input.workItemId, 'threads', input.threadId),
-    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: {} },
-  ))
+  return linkOnTask(input, { conversationId: input.threadId, ...(input.linked ? {} : { remove: true }) })
 }
 
 export async function setWorkItemRepositoryLink(input: {
@@ -286,12 +302,7 @@ export async function setWorkItemRepositoryLink(input: {
   role?: 'primary' | 'related'
   idempotencyKey: string
 }) {
-  const path = workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)
-  return normalizeWorkItem(await requestJson<unknown>(path, {
-    method: input.role ? 'POST' : 'DELETE',
-    idempotencyKey: input.idempotencyKey,
-    json: input.role ? { expectedVersion: input.expectedVersion, role: input.role } : { expectedVersion: input.expectedVersion },
-  }))
+  return linkOnTask(input, { repositoryId: input.repositoryId, ...(input.role ? { role: input.role } : { remove: true }) })
 }
 
 /** Links a pull request to a task (confirming a suggested one), or unlinks it (dismissing a suggestion). */
@@ -303,10 +314,7 @@ export async function setWorkItemPullRequestLink(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(await requestJson<unknown>(
-    workItemLinkPath(input.projectId, input.workItemId, 'pull-requests', input.pullRequestId),
-    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion } },
-  ))
+  return linkOnTask(input, { pullRequestId: input.pullRequestId, ...(input.linked ? {} : { remove: true }) })
 }
 
 /** Merges a task's pull request on GitHub if its head is still the one shown. */
@@ -316,10 +324,7 @@ export async function mergeWorkItemPullRequest(input: {
   pullRequestId: string
   expectedHeadSha: string
 }) {
-  return record(await requestJson<unknown>(
-    projectPath(input.projectId, `pull-requests/${encodeURIComponent(input.pullRequestId)}/merge`),
-    { method: 'POST', idempotencyKey: crypto.randomUUID(), json: { expectedHeadSha: input.expectedHeadSha } },
-  ))
+  return callOp('pull_request_merge', { pullRequestId: input.pullRequestId, expectedHeadSha: input.expectedHeadSha })
 }
 
 export async function setWorkItemPrimaryRepository(input: {
@@ -329,10 +334,7 @@ export async function setWorkItemPrimaryRepository(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  const path = `${workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)}/primary`
-  return normalizeWorkItem(await requestJson<unknown>(path, {
-    method: 'POST', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion },
-  }))
+  return linkOnTask(input, { repositoryId: input.repositoryId, role: 'primary' })
 }
 
 export async function workWithWorker(input: {
@@ -463,7 +465,7 @@ export async function searchWorkItemReferences(
     const key = string(item.key)
     const title = string(item.title)
     const href = string(item.href)
-    if (!id || !key || !title || !href.startsWith('/projects/')) return []
+    if (!id || !key || !title || !isSpaceAddress(href)) return []
     return [{
       id,
       key,
@@ -572,6 +574,32 @@ export async function createWorkItem(input: {
   idempotencyKey: string
 }) {
   const { projectId, idempotencyKey, ...json } = input
+  // W1.9a: through `task_create`, except custom field values, which it takes by name only.
+  if (!input.fieldValues || !Object.keys(input.fieldValues).length) {
+    const created = await callOp(
+      'task_create',
+      {
+        projectId,
+        title: input.title,
+        description: input.description,
+        type: input.typeId,
+        status: input.statusId,
+        priority: input.priority,
+        assignee: input.assigneeActorId,
+        parentId: input.parentWorkItemId,
+        milestone: input.milestoneId,
+        labels: input.labelIds?.length ? input.labelIds : undefined,
+        startDate: input.startDate,
+        dueDate: input.dueDate,
+        estimate: input.estimate,
+        acceptanceCriteria: input.acceptanceCriteria?.length ? input.acceptanceCriteria : undefined,
+        fromMessageId: input.sourceMessageId,
+        saySo: input.saySo,
+      },
+      { requestId: idempotencyKey },
+    )
+    return getWorkItem(projectId, created.workItemId)
+  }
   return normalizeWorkItem(
     await requestJson<unknown>(
       `/api/v1/projects/${encodeURIComponent(projectId)}/work-items`,
@@ -580,12 +608,76 @@ export async function createWorkItem(input: {
   )
 }
 
+/**
+ * The patch as `task_update` takes it, or null where it can't yet: custom
+ * field values go by name there and by id here, a status change there also
+ * moves the task to the bottom of its column, and a blocked reason isn't
+ * cleared the same way. Those stay on the old route until K2's task
+ * operations carry them (W1.9a).
+ */
+export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskUpdateInput | null {
+  if (patch.fieldValues !== undefined || patch.statusId !== undefined || patch.blockedReason !== undefined) return null
+  const input: TaskUpdateInput = { taskId: workItemId, expectedVersion: patch.expectedVersion }
+  if (patch.title !== undefined) input.title = patch.title
+  if (patch.description !== undefined) input.description = patch.description
+  if (patch.typeId !== undefined) input.type = patch.typeId
+  if (patch.priority !== undefined) input.priority = patch.priority
+  if (patch.assigneeActorId !== undefined) {
+    if (patch.assigneeActorId === null) input.clearAssignee = true
+    else input.assignee = patch.assigneeActorId
+  }
+  if (patch.delegateActorId !== undefined) input.delegate = patch.delegateActorId ?? 'none'
+  if (patch.parentWorkItemId !== undefined) {
+    if (patch.parentWorkItemId === null) input.clearParent = true
+    else input.parentId = patch.parentWorkItemId
+  }
+  if (patch.milestoneId !== undefined) input.milestone = patch.milestoneId ?? 'none'
+  if (patch.startDate !== undefined) input.startDate = patch.startDate ?? ''
+  if (patch.dueDate !== undefined) input.dueDate = patch.dueDate ?? ''
+  if (patch.estimate !== undefined) {
+    if (patch.estimate === null) input.clearEstimate = true
+    else input.estimate = patch.estimate
+  }
+  if (patch.addLabelIds?.length) input.addLabels = patch.addLabelIds
+  if (patch.removeLabelIds?.length) input.removeLabels = patch.removeLabelIds
+  return input
+}
+
+/**
+ * A task edit that may wait for the connection (W1.30): offline, it's kept on
+ * this device and sent when the connection is back, and this returns null.
+ * Edits the operation can't carry yet go the old way, and never wait.
+ */
+export async function queueWorkItemUpdate(input: {
+  projectId: string
+  workItemId: string
+  patch: WorkItemPatch
+  idempotencyKey: string
+  /** What it was, in words, for the note if it's refused later. */
+  label: string
+}): Promise<WorkItem | null> {
+  const operation = taskUpdateInput(input.workItemId, input.patch)
+  if (!operation) return updateWorkItem(input)
+  const meta = { thing: `task:${input.workItemId}`, href: workItemHref(input.projectId, input.workItemId), label: input.label }
+  const sent = await queueOp('task_update', operation, meta, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+    refuseAsMovedOn(error, { ...input, expectedVersion: input.patch.expectedVersion }),
+  )
+  return sent === null ? null : getWorkItem(input.projectId, input.workItemId)
+}
+
 export async function updateWorkItem(input: {
   projectId: string
   workItemId: string
   patch: WorkItemPatch
   idempotencyKey: string
 }) {
+  const operation = taskUpdateInput(input.workItemId, input.patch)
+  if (operation) {
+    await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+      refuseAsMovedOn(error, { ...input, expectedVersion: input.patch.expectedVersion }),
+    )
+    return getWorkItem(input.projectId, input.workItemId)
+  }
   return normalizeWorkItem(
     await requestJson<unknown>(
       `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}`,
@@ -594,6 +686,9 @@ export async function updateWorkItem(input: {
   )
 }
 
+// W1.9a: these writes go through the op client; its answers are short, so
+// each reads the task back to hand callers the whole task, as before.
+
 export async function setWorkItemArchived(input: {
   projectId: string
   workItemId: string
@@ -601,17 +696,11 @@ export async function setWorkItemArchived(input: {
   archived: boolean
   idempotencyKey: string
 }) {
-  const command = input.archived ? 'archive' : 'restore'
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/${command}`,
-      {
-        method: 'POST',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion },
-      },
-    ),
+  const task = { taskId: input.workItemId, expectedVersion: input.expectedVersion }
+  await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+    refuseAsMovedOn(error, input),
   )
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 /** How many assignable people and agents one search returns. */
@@ -646,6 +735,38 @@ async function assignableActors(projectId: string, parameters: URLSearchParams):
   })
 }
 
+/** One change to a task's acceptance criteria, through `task_criteria_update`. */
+async function changeCriteria(
+  input: { projectId: string; workItemId: string; expectedVersion: number; idempotencyKey: string },
+  ...operations: CriterionOperationArgument[]
+) {
+  await callOp(
+    'task_criteria_update',
+    { taskId: input.workItemId, expectedVersion: input.expectedVersion, operations },
+    { requestId: input.idempotencyKey },
+  ).catch((error: unknown) => refuseAsMovedOn(error, input))
+  return getWorkItem(input.projectId, input.workItemId)
+}
+
+/**
+ * A task write's conflict, with the whole task as it is now: criteria and
+ * links refuse without it, and `task_update` and archiving send only a few of
+ * its fields. Reads the task, and if it moved on past the version the change
+ * was made against, refuses with it, so the editor loads the newer one.
+ */
+async function refuseAsMovedOn(error: unknown, input: { projectId: string; workItemId: string; expectedVersion?: number }): Promise<never> {
+  if (!isApiError(error) || error.code !== 'conflict' || input.expectedVersion === undefined) throw error
+  const current = await getWorkItem(input.projectId, input.workItemId).catch(() => null)
+  if (!current || current.version === input.expectedVersion) throw error
+  throw new ApiError({
+    status: error.status,
+    code: 'conflict',
+    message: error.message,
+    details: { reason: 'version', currentVersion: current.version, current: { task: current, whole: true } },
+    requestId: error.requestId,
+  })
+}
+
 export async function createAcceptanceCriterion(input: {
   projectId: string
   workItemId: string
@@ -653,18 +774,10 @@ export async function createAcceptanceCriterion(input: {
   text: string
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria`,
-      {
-        method: 'POST',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion, text: input.text },
-      },
-    ),
-  )
+  return changeCriteria(input, { op: 'add', text: input.text })
 }
 
+/** Edits, checks and moves one criterion, all in one change the task's version covers. */
 export async function updateAcceptanceCriterion(input: {
   projectId: string
   workItemId: string
@@ -675,13 +788,12 @@ export async function updateAcceptanceCriterion(input: {
   completed?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, workItemId, criterionId, idempotencyKey, ...json } = input
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/acceptance-criteria/${encodeURIComponent(criterionId)}`,
-      { method: 'PATCH', idempotencyKey, json },
-    ),
-  )
+  const criterion = input.criterionId
+  const operations: CriterionOperationArgument[] = []
+  if (input.text !== undefined) operations.push({ op: 'edit', criterion, text: input.text })
+  if (input.completed !== undefined) operations.push({ op: input.completed ? 'check' : 'uncheck', criterion })
+  if (input.position !== undefined) operations.push({ op: 'move', criterion, position: input.position })
+  return changeCriteria(input, ...operations)
 }
 
 export async function removeAcceptanceCriterion(input: {
@@ -691,19 +803,9 @@ export async function removeAcceptanceCriterion(input: {
   expectedVersion: number
   idempotencyKey: string
 }) {
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria/${encodeURIComponent(input.criterionId)}`,
-      {
-        method: 'DELETE',
-        idempotencyKey: input.idempotencyKey,
-        json: { expectedVersion: input.expectedVersion },
-      },
-    ),
-  )
+  return changeCriteria(input, { op: 'remove', criterion: input.criterionId })
 }
 
-/** A comment needs words; one that is only files says what it attaches. */
 export function commentContent({ attachments, content, text }: { attachments?: { name: string }[]; content: MessageContentV1; text?: string }): MessageContentV1 {
   return text || !attachments?.length
     ? content
@@ -776,7 +878,7 @@ export async function editWorkItemComment(input: {
 
 /** Deletes a comment and every earlier version of its text: your own, or anyone's as a project owner or admin. */
 export async function deleteWorkItemComment(input: { projectId: string; workItemId: string; commentId: string }) {
-  return requestJson<unknown>(commentPath(input.projectId, input.workItemId, input.commentId), { method: 'DELETE' })
+  return callOp('task_comment_delete', { taskId: input.workItemId, commentId: input.commentId })
 }
 
 export async function getWorkItemCommentRevisions(projectId: string, workItemId: string, commentId: string): Promise<CommentRevisions> {
@@ -860,7 +962,7 @@ export async function getWorkItemTimeline(
               referencedWorkItems: (Array.isArray(comment.referencedWorkItems) ? comment.referencedWorkItems : []).flatMap((value) => {
                 const item = record(value)
                 const href = string(item.href)
-                if (!string(item.id) || !href.startsWith('/projects/')) return []
+                if (!string(item.id) || !isSpaceAddress(href)) return []
                 return [{ id: string(item.id), key: string(item.key), title: string(item.title), statusCategory: string(item.statusCategory), archivedAt: nullableString(item.archivedAt), href }]
               }),
               createdAt: string(comment.createdAt),

@@ -99,7 +99,8 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .fetch_all(pool)
     .await
     .expect("views");
-    // Its first view, and the views every Tasks collection starts with.
+    // Its first view, and the views every Tasks collection starts with
+    // (Triage since T1.23).
     assert_eq!(
         views,
         [
@@ -107,7 +108,8 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
             "Blocked",
             "My tasks",
             "Ready for agents",
-            "Recently changed"
+            "Recently changed",
+            "Triage"
         ]
     );
 

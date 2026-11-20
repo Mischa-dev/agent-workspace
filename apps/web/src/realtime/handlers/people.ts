@@ -69,6 +69,18 @@ const dmRulesChanged: Handler = () => [
 /** Someone's profile or avatar changed: profiles and avatars read again. */
 const profileChanged: Handler = () => [opAnswers('profile_get'), opAnswers('profile_avatar_list')]
 
+/** A theme you made, or one the workspace offers, changed: the theme lists and that theme. */
+const themesChanged: Handler = (event) => {
+  const themeId = payloadId(event, 'themeId', 'theme_id')
+  const named = (query: { queryKey: readonly unknown[] }) => (query.queryKey[3] as { id?: unknown } | undefined)?.id === themeId
+  return [
+    { id: 'op:theme_list', filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'theme_list' } },
+    ...(themeId
+      ? [{ id: `theme:${themeId}`, filters: { predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey[0] === 'op' && query.queryKey[2] === 'theme_get' && named(query) } }]
+      : []),
+  ]
+}
+
 /** Someone's status changed: the names that show it read it again. */
 const statusChanged: Handler = () => [{ id: 'statuses', filters: { queryKey: queryKeys.statuses } }]
 
@@ -78,6 +90,8 @@ export const peopleHandlers: Record<string, Handler> = {
   'account.managers.changed': managersChanged,
   'workspace.lifecycle.changed': lifecycleChanged,
   'custom_emoji.changed': customEmojiChanged,
+  'theme.changed': themesChanged,
+  'workspace_themes.changed': themesChanged,
   'message_draft.changed': ownList('message_draft_list'),
   'notification_keywords.changed': ownList('notification_keyword_list'),
   'sidebar.changed': ownList('sidebar_list'),
@@ -86,6 +100,8 @@ export const peopleHandlers: Record<string, Handler> = {
   'follows.changed': ownList('follow_list'),
   // A team's guards changed (A2.27): the lists of them read again.
   'guards.changed': ownList('guard_list'),
+  // A workspace's budgets changed (A2.14): the lists of them read again.
+  'budgets.changed': ownList('budget_list'),
   'dm_rules.changed': dmRulesChanged,
   'account.profile_changed': profileChanged,
   'account.status.changed': statusChanged,

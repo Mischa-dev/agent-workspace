@@ -1,3 +1,4 @@
+import { here } from '../../app/href'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -18,7 +19,7 @@ export function WorkspaceEnvironments({ projects }: { projects: Project[] }) {
     return (
       <EmptyState
         action={
-          <Link className="aw-btn aw-btn--secondary aw-btn--md" to="/projects/new">
+          <Link className="aw-btn aw-btn--secondary aw-btn--md" to={here('/projects/new')}>
             <span className="aw-btn__label">Create a project</span>
           </Link>
         }

@@ -1,3 +1,4 @@
+import { here } from '../../app/href'
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -7,6 +8,7 @@ import { queryKeys } from '../../api/queryKeys'
 import { isApiError } from '../../api/errors'
 import { describeError, toastError } from '../../app/mutations'
 import { getOnboarding, onboardingKeys, progressText, updateOnboarding } from '../../onboarding/api'
+import { useWorkspaceExperience } from '../../experience/layout'
 import { roleLabel } from '../../projects/format'
 import {
   Banner,
@@ -28,6 +30,7 @@ import {
   formatShortDate,
   showToast,
 } from '../../ui'
+import { ScopedSettings } from '../ScopedSettings'
 import type { SettingsPageProps } from '../types'
 import { defaultWorkspace, useSwitchWorkspace } from '../workspaceChoice'
 import {
@@ -54,6 +57,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
     queryFn: () => getWorkspace(organizationId),
     enabled: Boolean(organizationId),
   })
+  const experience = useWorkspaceExperience(organizationId)
   if (!summary) return null
 
   return (
@@ -74,11 +78,13 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
                 { label: 'Your role', value: roleLabel(workspace.data.role) },
                 ...(workspace.data.peopleCount === undefined || workspace.data.agentCount === undefined
                   ? [{ label: 'Members', value: String(workspace.data.memberCount) }]
-                  : [
-                      { label: 'People', value: String(workspace.data.peopleCount) },
-                      { label: 'Agents', value: String(workspace.data.agentCount) },
-                    ]),
-                { label: 'Projects', value: String(workspace.data.projectCount) },
+                  : experience.moduleOn('agents')
+                    ? [
+                        { label: 'People', value: String(workspace.data.peopleCount) },
+                        { label: 'Agents', value: String(workspace.data.agentCount) },
+                      ]
+                    : [{ label: 'People', value: String(workspace.data.peopleCount) }]),
+                ...(experience.moduleOn('projects') ? [{ label: 'Projects', value: String(workspace.data.projectCount) }] : []),
                 {
                   label: 'Created',
                   value: <span title={formatFullDate(workspace.data.createdAt)}>{formatShortDate(workspace.data.createdAt)}</span>,
@@ -88,11 +94,18 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
             />
           </Section>
           {workspace.data.capabilities.rename && <RenameSection workspace={workspace.data} />}
+          <Section
+            description="When it’s allowed, each person still turns it on for themselves, in their account’s Security settings."
+            id="workspace-offline-heading"
+            title="Reading offline"
+          >
+            <ScopedSettings prefixes={['offline.']} target={{ scope: 'workspace', organizationId: summary.id }} />
+          </Section>
           {can(summary, 'settings.manage') ? <SetupSection organizationId={summary.id} /> : null}
           {session.organizations.length > 1 && <DefaultSection current={summary.id} session={session} />}
           {workspace.data.capabilities.transferOwnership && <TransferSection workspace={workspace.data} />}
           <LeaveSection workspace={workspace.data} />
-          {workspace.data.capabilities.delete && <DeleteSection workspace={workspace.data} />}
+          {workspace.data.capabilities.delete && <DeleteSection contents={deletedContents(experience.moduleOn)} workspace={workspace.data} />}
         </>
       )}
     </>
@@ -129,7 +142,7 @@ function SetupSection({ organizationId }: { organizationId: string }) {
             Show setup
           </Button>
         ) : (
-          <ButtonLink to="/welcome">Continue setup</ButtonLink>
+          <ButtonLink to={here('/welcome')}>Continue setup</ButtonLink>
         )}
       </div>
     </Section>
@@ -230,7 +243,7 @@ function TransferSection({ workspace }: { workspace: Workspace }) {
     queryFn: () => listWorkspaceMembers(workspace.id),
     enabled: open,
   })
-  const candidates = (members.data?.members ?? []).filter((member) => member.enabled && !member.isYou)
+  const candidates = (members.data?.members ?? []).filter((member) => member.enabled && !member.isYou && member.mayOwn)
   const chosen = candidates.find((member) => member.actorId === actorId) ?? null
   // Handing over a workspace can't be taken back by you, so the name is typed to confirm.
   const confirmed = typed.trim() === workspace.name
@@ -320,7 +333,7 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
       setOpen(false)
       await queryClient.invalidateQueries({ queryKey: queryKeys.session })
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-      navigate('/home', { replace: true, state: { notice: `You left ${workspace.name}.` } })
+      navigate(here('/home'), { replace: true, state: { notice: `You left ${workspace.name}.` } })
     },
   })
   const leaveError = leave.isError
@@ -330,7 +343,7 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
     : null
   return (
     <Section
-      description="You lose access to every project in it. Someone has to invite you again for you to come back."
+      description="You lose access to everything in it. Someone has to invite you again for you to come back."
       id="leave-workspace-heading"
       title="Leave this workspace"
     >
@@ -385,7 +398,22 @@ function LifecycleNotice({ workspace }: { workspace: Workspace }) {
 }
 
 /** Delete the whole workspace after 14 days, or keep it while it's waiting. */
-function DeleteSection({ workspace }: { workspace: Workspace }) {
+/** What deleting the workspace takes with it, in the words of the modules that are on. */
+function deletedContents(moduleOn: (module: string) => boolean) {
+  const things = [
+    moduleOn('projects') ? 'projects' : null,
+    'conversations',
+    moduleOn('tasks') ? 'tasks' : null,
+    'pages',
+    'files',
+    moduleOn('runs') ? 'runs' : null,
+  ].filter((thing): thing is string => thing !== null)
+  const listed = `${things.slice(0, -1).join(', ')} and ${things[things.length - 1]}`
+  const retired = moduleOn('agents') ? 'agents and apps the workspace owns are retired' : 'apps the workspace owns are retired'
+  return `Delete the workspace and everything in it: ${listed}. People keep their accounts; ${retired}.`
+}
+
+function DeleteSection({ workspace, contents }: { workspace: Workspace; contents: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
@@ -430,7 +458,7 @@ function DeleteSection({ workspace }: { workspace: Workspace }) {
   const confirmed = typed.trim().toLowerCase() === workspace.slug
   return (
     <Section
-      description="Delete the workspace and everything in it: projects, conversations, tasks, pages, files and runs. People keep their accounts; agents and apps the workspace owns are retired."
+      description={contents}
       id="delete-workspace-heading"
       title="Delete this workspace"
     >

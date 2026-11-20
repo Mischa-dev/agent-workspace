@@ -626,6 +626,10 @@ fn at_index<T, U>(index: usize, refusal: ToolResult<T>) -> ToolResult<U> {
         ToolResult::TemporarilyUnavailable { message } => ToolResult::TemporarilyUnavailable {
             message: prefix(message),
         },
+        ToolResult::LimitReached { message, limit } => ToolResult::LimitReached {
+            message: prefix(message),
+            limit,
+        },
     }
 }
 
@@ -939,6 +943,23 @@ pub(crate) struct MilestoneValue {
     /// Pass as expectedVersion to milestone_write.
     pub version: i64,
     pub url: String,
+    /// The initiative it is part of (initiative_list), by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiative: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiative_id: Option<String>,
+    /// Its place in the space's order, 1 being first (milestone_reorder).
+    #[serde(default)]
+    pub position: i32,
+    /// Its tasks' estimates added up (canceled ones left out), and the
+    /// completed ones'.
+    #[serde(default)]
+    pub estimate_total: f64,
+    #[serde(default)]
+    pub estimate_done: f64,
+    /// The latest due date among its tasks, YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_due_date: Option<String>,
     /// Tasks not yet finished.
     #[serde(default)]
     pub open: i64,
@@ -981,6 +1002,12 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
         version: view.version,
         open: view.open,
         progress: view.progress,
+        initiative: view.initiative,
+        initiative_id: view.initiative_id.map(|id| id.to_string()),
+        position: view.position,
+        estimate_total: view.estimate_total,
+        estimate_done: view.estimate_done,
+        latest_due_date: view.latest_due_date.map(|date| date.to_string()),
         idempotent_replay: false,
     }
 }
@@ -1036,6 +1063,9 @@ pub(crate) struct MilestoneWriteArguments {
     pub target_date: Option<String>,
     /// True to archive, false to restore. Its tasks keep the milestone.
     pub archived: Option<bool>,
+    /// The initiative it is part of: its name, #number or ID
+    /// (initiative_list). "" takes it out of one.
+    pub initiative: Option<String>,
     /// Tasks to put in this milestone (keys or IDs). A task belongs to one
     /// milestone at a time, so this moves them from any other. Each move is
     /// in the task's history.
@@ -1162,6 +1192,29 @@ pub(crate) async fn milestone_write(
             return Ok(ToolResult::conflict(archived_task_message(key)));
         }
         let actor = command_actor(principal, project_id);
+        let initiative = match arguments.initiative.as_deref().map(str::trim) {
+            None => None,
+            Some("") => Some(None),
+            Some(reference) => {
+                let workspace = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT organization_id FROM projects WHERE id = $1",
+                )
+                .bind(project_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                match crate::work_items::initiatives::resolve(&mut transaction, workspace, reference)
+                    .await?
+                {
+                    Some(id) => Some(Some(id)),
+                    None => {
+                        return Ok(ToolResult::invalid(
+                            "initiative",
+                            format!("There is no initiative \"{reference}\" (initiative_list lists them)."),
+                        ));
+                    }
+                }
+            }
+        };
         let milestone_id = match arguments.milestone_id.as_deref() {
             Some(reference) => {
                 let Some(id) = parse_id(reference) else {
@@ -1172,6 +1225,7 @@ pub(crate) async fn milestone_write(
                     description: description.clone(),
                     target_date,
                     archived: arguments.archived,
+                    initiative,
                 };
                 match work_item_planning::update_milestone(
                     &mut transaction,
@@ -1196,6 +1250,12 @@ pub(crate) async fn milestone_write(
                             "Another active milestone already has that name.",
                         ));
                     }
+                    Err(MilestoneRefusal::InitiativeNotFound) => {
+                        return Ok(ToolResult::invalid(
+                            "initiative",
+                            "That isn't an initiative of this workspace.",
+                        ));
+                    }
                 }
             }
             None => {
@@ -1212,6 +1272,25 @@ pub(crate) async fn milestone_write(
                 .await?
                 .0;
                 complete_create(&mut transaction, reservation.as_ref(), created).await?;
+                if initiative.is_some()
+                    && work_item_planning::update_milestone(
+                        &mut transaction,
+                        &actor,
+                        created,
+                        None,
+                        &MilestoneChange {
+                            initiative,
+                            ..MilestoneChange::default()
+                        },
+                    )
+                    .await?
+                    .is_err()
+                {
+                    return Ok(ToolResult::invalid(
+                        "initiative",
+                        "That isn't an initiative of this workspace.",
+                    ));
+                }
                 created
             }
         };

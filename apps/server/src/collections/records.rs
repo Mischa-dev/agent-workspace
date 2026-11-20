@@ -119,11 +119,8 @@ impl Record {
     /// back: system values aren't stored.
     pub fn shown_values(&self, definitions: &[FieldDefinition]) -> Value {
         let mut values = self.field_values.as_object().cloned().unwrap_or_default();
-        // Formula results, an error as `{"error": ...}`.
-        for field in definitions
-            .iter()
-            .filter(|field| field.field_type == FieldType::Formula)
-        {
+        // Formula and rollup results, an error as `{"error": ...}`.
+        for field in definitions.iter().filter(|field| field.is_computed()) {
             let key = field.id.to_string();
             match self.computed_values.get(&key) {
                 Some(value) => values.insert(key, value.clone()),
@@ -456,6 +453,9 @@ pub struct HistoryEntry {
     /// The app they made it through, when it shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Who accepted it, when it was someone's proposal (T1.41).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_by: Option<String>,
     /// [{"field", "name", "before", "after"}], each value as it read then.
     pub changes: Value,
     /// The record's version after the change.
@@ -473,11 +473,18 @@ pub async fn history(
         r#"
         SELECT history.id, history.action, history.actor_id,
                COALESCE(member.display_name, '') AS actor,
-               via_client.client_name AS via,
-               history.changes, history.version, history.created_at::text AS at
+               via_client.client_name AS via, accepter.display_name AS accepted_by,
+               -- How values read; the stored ones are for putting back.
+               COALESCE((SELECT jsonb_agg(change - 'was' - 'is')
+                         FROM jsonb_array_elements(history.changes) change), '[]'::jsonb)
+                   AS changes,
+               history.version, history.created_at::text AS at
         FROM collection_record_history history
         LEFT JOIN project_memberships member
           ON member.project_id = history.project_id AND member.actor_id = history.actor_id
+        LEFT JOIN project_memberships accepter
+          ON accepter.project_id = history.project_id
+         AND accepter.actor_id = history.accepted_by_actor_id
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = history.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -522,15 +529,38 @@ fn kept(value: Value) -> Value {
     }
 }
 
-fn change_entry(field: &str, name: &str, before: Value, after: Value) -> Value {
-    json!({ "field": field, "name": name, "before": kept(before), "after": kept(after) })
+/// The most a stored value kept beside a change takes, as JSON; a larger
+/// one is left out, and that version can't be put back.
+const MAX_KEPT_STORED_BYTES: usize = 16 * 1024;
+
+/// One change in a record's history: how the value read before and after
+/// (`before`, `after`, for people) and, when small enough, the stored
+/// values themselves (`was`, `is`, for showing and putting back a version;
+/// T1.41). A stored value of null is a cleared field.
+pub(super) fn change_entry(
+    field: &str,
+    name: &str,
+    before: Value,
+    after: Value,
+    stored: (Option<&Value>, Option<&Value>),
+) -> Value {
+    let mut entry =
+        json!({ "field": field, "name": name, "before": kept(before), "after": kept(after) });
+    let fits = |value: Option<&Value>| {
+        value.is_none_or(|value| value.to_string().len() <= MAX_KEPT_STORED_BYTES)
+    };
+    if fits(stored.0) && fits(stored.1) {
+        entry["was"] = stored.0.cloned().unwrap_or(Value::Null);
+        entry["is"] = stored.1.cloned().unwrap_or(Value::Null);
+    }
+    entry
 }
 
 /// The record's history entry and its fact in the event log (K3.7): the
 /// record created or changed, with the names of the fields that changed,
 /// for webhooks, automations and activity.
 #[allow(clippy::too_many_arguments)]
-async fn insert_history(
+pub(super) async fn insert_history(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
@@ -620,8 +650,10 @@ pub async fn resolve_values(
     definitions: &[FieldDefinition],
     argument: &str,
     written: &[(String, Value)],
-    current: Option<&Value>,
+    current: Option<(Uuid, &Value)>,
 ) -> Result<Result<FieldValueChanges, work_item_fields::ValueProblem>, AppError> {
+    let record_id = current.map(|(id, _)| id);
+    let current = current.map(|(_, values)| values);
     if written.len() > work_item_fields::MAX_VALUES_PER_CHANGE {
         return Ok(Err(problem(
             argument,
@@ -697,6 +729,90 @@ pub async fn resolve_values(
                             ),
                         )));
                     }
+                }
+            }
+            Normalized::Relation(written) => {
+                let held = kept
+                    .map(|kept| fields::referenced_ids(field, kept))
+                    .unwrap_or_default();
+                let mut ids = Vec::with_capacity(written.len());
+                let mut shown = Vec::with_capacity(written.len());
+                for one in &written {
+                    let (id, label) = match work_item_fields::find_link(
+                        connection, project_id, writer, field, one,
+                    )
+                    .await?
+                    {
+                        Some(found) => found,
+                        // A record it names already stays, even archived.
+                        None => match work_item_fields::uuid_in(one).filter(|id| held.contains(id))
+                        {
+                            Some(id) => (id, "An archived record".to_owned()),
+                            None => {
+                                return Ok(Err(problem(
+                                    &at,
+                                    format!(
+                                        "\"{}\" names records of its collection by title, #number, ID or link. {} isn't one.",
+                                        field.name,
+                                        echo(one)
+                                    ),
+                                )));
+                            }
+                        },
+                    };
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                        shown.push(Value::String(label));
+                    }
+                }
+                FieldValueChange {
+                    field: field.clone(),
+                    value: (!ids.is_empty()).then(|| {
+                        Value::Array(ids.iter().map(|id| Value::String(id.to_string())).collect())
+                    }),
+                    shown: Value::Array(shown),
+                }
+            }
+            Normalized::Files(ids) => {
+                let Some(record_id) = record_id else {
+                    return Ok(Err(problem(
+                        &at,
+                        format!(
+                            "\"{}\" holds files uploaded to the record, so set it once the record is made: upload each file to the record (thing kind \"record\"), then name it here.",
+                            field.name
+                        ),
+                    )));
+                };
+                let found = sqlx::query_as::<_, (Uuid, String)>(
+                    "SELECT id, name FROM files WHERE id = ANY($1) AND project_id = $2 \
+                       AND thing_kind = 'record' AND thing_id = $3 AND removed_at IS NULL",
+                )
+                .bind(&ids)
+                .bind(project_id)
+                .bind(record_id)
+                .fetch_all(&mut *connection)
+                .await?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+                if let Some(missing) = ids.iter().find(|id| !found.contains_key(id)) {
+                    return Ok(Err(problem(
+                        &at,
+                        format!(
+                            "\"{}\" holds this record's own files. {missing} isn't one: upload it to the record first (thing kind \"record\").",
+                            field.name
+                        ),
+                    )));
+                }
+                FieldValueChange {
+                    field: field.clone(),
+                    shown: Value::Array(
+                        ids.iter()
+                            .map(|id| Value::String(found[id].clone()))
+                            .collect(),
+                    ),
+                    value: Some(Value::Array(
+                        ids.iter().map(|id| Value::String(id.to_string())).collect(),
+                    )),
                 }
             }
             Normalized::Link(written) => {
@@ -806,13 +922,15 @@ pub struct WriteProblem {
 /// (`super::lock`) after the project lock. `values_argument` is what the
 /// caller calls the values ("fields" for agents, "values" for the web app),
 /// for refusals. The caller has checked the actor may edit records and
-/// that the collection isn't archived.
+/// that the collection isn't archived; `may_build` is whether they may
+/// also build it, which fields only builders change need (T1.19).
 #[allow(clippy::too_many_arguments)]
 pub async fn write(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection: &Collection,
     writer: Writer<'_>,
+    may_build: bool,
     definitions: &[FieldDefinition],
     values_argument: &str,
     inputs: &[RecordInput],
@@ -827,9 +945,19 @@ pub async fn write(
             current_version: None,
         }));
     }
+    // Before any record is locked: a two-way relation's pairs change too.
+    let locks = super::relations::pair_locks(
+        project_id,
+        definitions,
+        inputs
+            .iter()
+            .flat_map(|input| input.values.iter().map(|(reference, _)| reference.as_str())),
+    );
+    super::relations::lock_pairs(connection, locks).await?;
     let mut next_number = collection.next_number;
     let mut written = Vec::with_capacity(inputs.len());
     let mut touched = HashSet::new();
+    let mut pairs = Vec::new();
     for (index, input) in inputs.iter().enumerate() {
         let stop = |kind: ProblemKind, field: &str, message: String| {
             Ok(Err(WriteProblem {
@@ -840,6 +968,22 @@ pub async fn write(
                 current_version: None,
             }))
         };
+        // The Pages collection's records are its pages (T1.36): only their
+        // fields change here.
+        if collection.is_pages()
+            && (input.record.is_none() || input.title.is_some() || input.archived.is_some())
+        {
+            let field = match (input.record, input.title.is_some()) {
+                (None, _) => "record",
+                (Some(_), true) => "title",
+                (Some(_), false) => "archived",
+            };
+            return stop(
+                ProblemKind::Invalid,
+                field,
+                super::pages::RECORDS_MESSAGE.to_owned(),
+            );
+        }
         let title = match input.title.as_deref() {
             Some(value) => match normalize_title(value) {
                 Some(title) => Some(title),
@@ -867,7 +1011,7 @@ pub async fn write(
                     ),
                 );
             }
-            let changes = match resolve_values(
+            let mut changes = match resolve_values(
                 connection,
                 project_id,
                 collection,
@@ -884,7 +1028,67 @@ pub async fn write(
                     return stop(ProblemKind::Invalid, &problem.field, problem.message);
                 }
             };
+            if let Some(field) = builders_only(&changes, None, may_build) {
+                return stop(
+                    ProblemKind::Invalid,
+                    &format!("{values_argument}.{}", field.name),
+                    builders_only_message(field, collection),
+                );
+            }
+            // Fields left out start with their defaults; one that no longer
+            // fits (an archived option, someone gone) is left empty.
+            let given = changes
+                .entries
+                .iter()
+                .map(|entry| entry.field.id)
+                .collect::<HashSet<_>>();
+            for field in definitions
+                .iter()
+                .filter(|field| !field.archived && !given.contains(&field.id))
+            {
+                let Some(default) = fields::rules::default_written(field) else {
+                    continue;
+                };
+                if let Ok(more) = resolve_values(
+                    connection,
+                    project_id,
+                    collection,
+                    writer,
+                    definitions,
+                    values_argument,
+                    &[(field.id.to_string(), default)],
+                    None,
+                )
+                .await?
+                {
+                    changes.entries.extend(more.entries);
+                }
+            }
             let values = changes.initial();
+            let fresh = changes
+                .entries
+                .iter()
+                .filter(|entry| entry.value.is_some())
+                .map(|entry| entry.field.id)
+                .collect::<HashSet<_>>();
+            if let Some((field, message)) = broken_rule(
+                connection,
+                project_id,
+                collection,
+                None,
+                definitions,
+                &values,
+                &fresh,
+                true,
+            )
+            .await?
+            {
+                return stop(
+                    ProblemKind::Invalid,
+                    &format!("{values_argument}.{field}"),
+                    message,
+                );
+            }
             if !work_item_fields::values_fit(&values) {
                 return stop(
                     ProblemKind::Invalid,
@@ -903,6 +1107,21 @@ pub async fn write(
                 &values,
             )
             .await?;
+            match super::relations::write_pairs(
+                connection,
+                project_id,
+                writer.actor_id,
+                may_build,
+                record.id,
+                definitions,
+                None,
+                &values,
+            )
+            .await?
+            {
+                Ok(changes) => pairs.extend(changes),
+                Err(message) => return stop(ProblemKind::Invalid, values_argument, message),
+            }
             if let Some(computed) =
                 super::computed::refresh(connection, project_id, record.id, definitions).await?
             {
@@ -916,6 +1135,7 @@ pub async fn write(
                     &collection.title_name,
                     Value::Null,
                     Value::String(title.clone()),
+                    (None, Some(&Value::String(title.clone()))),
                 ));
             }
             for entry in changes.entries.iter().filter(|entry| entry.value.is_some()) {
@@ -924,6 +1144,7 @@ pub async fn write(
                     &entry.field.name,
                     Value::Null,
                     entry.shown.clone(),
+                    (None, entry.value.as_ref()),
                 ));
             }
             insert_history(
@@ -979,13 +1200,20 @@ pub async fn write(
             definitions,
             values_argument,
             &input.values,
-            Some(&current.field_values),
+            Some((current.id, &current.field_values)),
         )
         .await?
         {
             Ok(changes) => changes,
             Err(problem) => return stop(ProblemKind::Invalid, &problem.field, problem.message),
         };
+        if let Some(field) = builders_only(&changes, Some(&current.field_values), may_build) {
+            return stop(
+                ProblemKind::Invalid,
+                &format!("{values_argument}.{}", field.name),
+                builders_only_message(field, collection),
+            );
+        }
         let mut changed = Vec::new();
         let mut history = Vec::new();
         let title = title.unwrap_or_else(|| current.title.clone());
@@ -996,6 +1224,10 @@ pub async fn write(
                 &collection.title_name,
                 Value::String(current.title.clone()),
                 Value::String(title.clone()),
+                (
+                    Some(&Value::String(current.title.clone())),
+                    Some(&Value::String(title.clone())),
+                ),
             ));
         }
         for entry in &changes.entries {
@@ -1011,6 +1243,7 @@ pub async fn write(
                 work_item_fields::shown_before(connection, project_id, &entry.field, before)
                     .await?,
                 entry.shown.clone(),
+                (before, entry.value.as_ref()),
             ));
         }
         if restoring || archiving {
@@ -1042,6 +1275,36 @@ pub async fn write(
                 work_item_fields::TOO_LARGE.to_owned(),
             );
         }
+        // The values that change meet their rules; a restored record's
+        // unique values are checked again, since another may have taken them.
+        let fresh = definitions
+            .iter()
+            .filter(|field| {
+                let key = field.id.to_string();
+                values.get(&key) != current.field_values.get(&key)
+                    || (restoring && values.get(&key).is_some())
+            })
+            .map(|field| field.id)
+            .collect::<HashSet<_>>();
+        if !archiving
+            && let Some((field, message)) = broken_rule(
+                connection,
+                project_id,
+                collection,
+                Some(current.id),
+                definitions,
+                &values,
+                &fresh,
+                false,
+            )
+            .await?
+        {
+            return stop(
+                ProblemKind::Invalid,
+                &format!("{values_argument}.{field}"),
+                message,
+            );
+        }
         let archived = if restoring {
             false
         } else {
@@ -1065,6 +1328,21 @@ pub async fn write(
         .bind(writer.actor_id)
         .execute(&mut *connection)
         .await?;
+        match super::relations::write_pairs(
+            connection,
+            project_id,
+            writer.actor_id,
+            may_build,
+            current.id,
+            definitions,
+            Some(&current.field_values),
+            &values,
+        )
+        .await?
+        {
+            Ok(changes) => pairs.extend(changes),
+            Err(message) => return stop(ProblemKind::Invalid, values_argument, message),
+        }
         super::computed::refresh(connection, project_id, current.id, definitions).await?;
         let action = if archiving {
             "archived"
@@ -1095,6 +1373,15 @@ pub async fn write(
         .ok_or(AppError::Internal("changed record is missing"))?;
         written.push(Written::Changed { record, changed });
     }
+    // Records whose rollups read these, and the other side of two-way
+    // relations.
+    let changed = written
+        .iter()
+        .filter(|written| !matches!(written, Written::Unchanged(_)))
+        .map(|written| written.record().id)
+        .collect::<Vec<_>>();
+    super::computed::mark_dependents(connection, project_id, collection.id, &changed, 1).await?;
+    super::relations::after_pairs(connection, project_id, pairs).await?;
     if next_number != collection.next_number {
         sqlx::query("UPDATE collections SET next_number = $3 WHERE project_id = $1 AND id = $2")
             .bind(project_id)
@@ -1104,6 +1391,108 @@ pub async fn write(
             .await?;
     }
     Ok(Ok(written))
+}
+
+/// The first field `changes` sets (to something new, against `current`)
+/// that only builders change, when the writer can't build.
+fn builders_only<'a>(
+    changes: &'a FieldValueChanges,
+    current: Option<&Value>,
+    may_build: bool,
+) -> Option<&'a FieldDefinition> {
+    if may_build {
+        return None;
+    }
+    changes
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .field
+                .config
+                .rules
+                .as_ref()
+                .is_some_and(|rules| rules.builders_only)
+        })
+        .find(|entry| {
+            let before = current.and_then(|values| values.get(entry.field.id.to_string()));
+            before != entry.value.as_ref()
+        })
+        .map(|entry| &entry.field)
+}
+
+fn builders_only_message(field: &FieldDefinition, collection: &Collection) -> String {
+    format!(
+        "Only people who can change {}'s fields set \"{}\".",
+        collection.name, field.name
+    )
+}
+
+/// The first rule a record's `values` break (T1.19), as the field's name
+/// and what to fix. `fresh` names the fields whose values are new: those
+/// meet their range, pattern and uniqueness, and a required one isn't
+/// cleared. A new record (`creating`) has a value for every required field.
+#[allow(clippy::too_many_arguments)]
+async fn broken_rule(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection: &Collection,
+    record: Option<Uuid>,
+    definitions: &[FieldDefinition],
+    values: &Value,
+    fresh: &HashSet<Uuid>,
+    creating: bool,
+) -> Result<Option<(String, String)>, AppError> {
+    for field in definitions.iter().filter(|field| !field.archived) {
+        let Some(rules) = field.config.rules.as_ref() else {
+            continue;
+        };
+        let key = field.id.to_string();
+        let value = values.get(&key).filter(|value| !value.is_null());
+        let is_fresh = fresh.contains(&field.id);
+        if rules.required && value.is_none() && (creating || is_fresh) {
+            return Ok(Some((
+                field.name.clone(),
+                format!("\"{}\" needs a value in {}.", field.name, collection.name),
+            )));
+        }
+        let (Some(value), true) = (value, is_fresh) else {
+            continue;
+        };
+        if let Err(message) = fields::rules::check(field, rules, value) {
+            return Ok(Some((field.name.clone(), message)));
+        }
+        if rules.unique {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            let taken = sqlx::query_scalar::<_, i64>(
+                "SELECT number FROM collection_records \
+                 WHERE project_id = $1 AND collection_id = $2 AND archived_at IS NULL \
+                   AND ($3::uuid IS NULL OR id <> $3) \
+                   AND lower(field_values ->> $4) = lower($5) \
+                 ORDER BY number LIMIT 1",
+            )
+            .bind(project_id)
+            .bind(collection.id)
+            .bind(record)
+            .bind(&key)
+            .bind(&text)
+            .fetch_optional(&mut *connection)
+            .await?;
+            if let Some(number) = taken {
+                return Ok(Some((
+                    field.name.clone(),
+                    format!(
+                        "#{number} already has that \"{}\", and no two records of {} may share one.",
+                        field.name, collection.name
+                    ),
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 async fn create(

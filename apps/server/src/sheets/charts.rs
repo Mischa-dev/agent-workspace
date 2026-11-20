@@ -302,6 +302,12 @@ mod tests {
                 })
                 .collect(),
             records: Vec::new(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+            ran_at: None,
+            running: false,
+            truncated: false,
+            error: None,
         }
     }
 

@@ -95,6 +95,10 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "events/consumer.rs",
         ],
     ),
+    // Whether an agent is also in another workspace (A2.15's scope screen
+    // says yes or no, never which, R19): one count across workspaces the
+    // viewer may not be in.
+    ("agents.scope", &["external_agents/scope.rs"]),
     // An operator suspending or resuming a workspace from the command line
     // (H1.24), before any account is known.
     ("workspace.operator", &["workspace/lifecycle.rs"]),

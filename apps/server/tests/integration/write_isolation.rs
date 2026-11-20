@@ -36,11 +36,20 @@
 //! `every_write_route_and_write_tool_has_an_isolation_case` reads the server
 //! sources and fails until that's done.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
+};
+use agent_workspace_server::{
+    AppState,
+    limits::{Bucket, LimitKey, LimitSource},
+    rate_limit::RateLimiters,
+    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -65,6 +74,15 @@ use super::{
         upload,
     },
 };
+
+/// Every budget far beyond what the sweep spends.
+struct Unmetered;
+
+impl LimitSource for Unmetered {
+    fn limit_for(&self, _bucket: &Bucket, _key: &LimitKey<'_>) -> Option<u32> {
+        Some(1_000_000)
+    }
+}
 
 /// Every mutating route this suite calls, as `"METHOD /path"` with the path
 /// as written in the server's `.route(...)` calls.
@@ -521,6 +539,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_ref_decide",
     "agent_ref_remove",
     "agent_ref_update",
+    "app_consent_set",
     "group_archive",
     "group_create",
     "group_members_set",
@@ -557,6 +576,15 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "dashboard_create",
     "dashboard_delete",
     "dashboard_update",
+    "data_connection_create",
+    "data_connection_delete",
+    "data_connection_update",
+    "data_query_create",
+    "data_query_delete",
+    "data_query_review",
+    "data_query_run",
+    "data_query_share",
+    "data_query_update",
     "decision_record",
     "page_make",
     "page_file_upload",
@@ -606,6 +634,15 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "proposal_decide",
     "record_write",
     "record_create",
+    "record_update",
+    "form_create",
+    "form_update",
+    "form_answer_send",
+    "record_template_create",
+    "record_template_update",
+    "recurring_record_create",
+    "recurring_record_update",
+    "recurring_record_delete",
     "conversation_tab_set",
     "button_press",
     "sheet_write",
@@ -620,6 +657,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "schedule_update",
     "follow_set",
     "guard_set",
+    "budget_set",
     "memory_page_set",
     "request_create",
     "request_respond",
@@ -628,6 +666,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversations_mark_read",
     "custom_emoji_create",
     "custom_emoji_update",
+    "theme_create",
+    "theme_update",
+    "theme_delete",
+    "workspace_theme_set",
     "comment_create",
     "comment_thread_update",
     "message_delete",
@@ -638,6 +680,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_schedule",
     "message_send",
     "message_update",
+    "milestone_reorder",
+    "project_status_set",
+    "project_update_create",
     "module_archive",
     "module_create",
     "module_part_link",
@@ -734,6 +779,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "task_release",
     "task_reorder",
     "task_restore",
+    "triage_decide",
     "task_update",
     "task_update_many",
     "thread_start",
@@ -755,6 +801,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_update",
     "whiteboard_trash_empty",
     "workflow_update",
+    "triage_enable",
+    "triage_rule_set",
+    "cycle_set",
+    "initiative_create",
     "workspace_template_apply",
     "workspace_template_save",
     "project_template_write",
@@ -1474,6 +1524,8 @@ struct Targets {
     schedule: Uuid,
     /// The workspace's own emoji (C2.19).
     custom_emoji: Uuid,
+    /// The owner's own theme.
+    theme: Uuid,
     /// A thread in the sheet's comments (C1.3).
     comment_thread: Uuid,
     /// A shared filter view of the sheet (C1.16).
@@ -1918,8 +1970,10 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     let mut hosts = [Uuid::nil(); 4];
     for (index, host) in hosts.iter_mut().enumerate() {
         let account = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+            "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
         )
+        .bind(organization)
         .fetch_one(pool)
         .await
         .expect("host account");
@@ -2013,6 +2067,19 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("custom emoji");
+    // A theme of the owner's, to change, offer and delete.
+    let theme = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO themes (id, workspace_id, owner_account_id, name, document) \
+         VALUES ($1, $2, $3, 'Net theme', $4)",
+    )
+    .bind(theme)
+    .bind(organization)
+    .bind(owner)
+    .bind(json!({"format": 1, "light": {"base": "quiet", "tokens": {}}, "dark": {"base": "quiet-dark", "tokens": {}}}))
+    .execute(pool)
+    .await
+    .expect("theme");
     // C1.3: the sheet's comments and a thread in them, to resolve.
     let (comments, comment_thread) = (Uuid::now_v7(), Uuid::now_v7());
     for (id, kind, parent, visibility, subject) in [
@@ -2064,6 +2131,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         sheet_view,
         schedule,
         custom_emoji,
+        theme,
         comment_thread,
         hosts,
         proposal,
@@ -2296,6 +2364,9 @@ struct Spares {
     collection_view: Uuid,
     /// A second dashboard in A's project, removed by dashboard_delete.
     dashboard: Uuid,
+    /// A connection nothing runs on, and a query, removed (T1.34).
+    data_connection: Uuid,
+    data_query: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2920,6 +2991,27 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("spare dashboard");
+    let data_connection = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/data_connection_create", a.organization),
+        json!({"spaceId": a.project, "name": "Net spare connection",
+               "address": "postgresql://reader:spare@db.example.com/spare"}),
+    )
+    .await;
+    let data_connection =
+        Uuid::parse_str(&string_at(&data_connection, "/value/id")).expect("spare connection");
+    let data_query = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/data_query_create", a.organization),
+        json!({"spaceId": a.project, "connection": a.data_connection,
+               "name": "Net spare query", "statement": "SELECT 1"}),
+    )
+    .await;
+    let data_query = Uuid::parse_str(&string_at(&data_query, "/value/id")).expect("spare query");
 
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
@@ -2969,6 +3061,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         provider_account,
         collection_view,
         dashboard,
+        data_connection,
+        data_query,
     }
 }
 
@@ -3099,15 +3193,20 @@ pub(super) async fn digest_ignoring(
 }
 
 /// Every table in the schema (partitions and their parents included),
-/// except the shared limit counters: every call into a workspace spends its
-/// budget (H1.1), so a counter row changes on reads too. They hold numbers,
-/// never records; `hosting_limits` checks whose budget a call spends.
-async fn base_tables(pool: &PgPool) -> Vec<String> {
+/// except the shared limit counters and the usage ledger: every call into a
+/// workspace spends its budget (H1.1) and is counted (A2.14), so their rows
+/// change on reads too. They hold numbers, never records; `hosting_limits`
+/// checks whose budget a call spends, `budgets` what is counted.
+pub(super) async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
-        SELECT table_name::text FROM information_schema.tables
-        WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
-          AND table_name <> 'rate_limit_counters'
+        -- pg_catalog, not information_schema, whose view reads every test
+        -- schema's tables.
+        SELECT listed.relname::text FROM pg_class listed
+        JOIN pg_namespace schema
+          ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
+        WHERE listed.relkind IN ('r', 'p')
+          AND listed.relname NOT IN ('rate_limit_counters', 'usage_counters', 'usage_events')
         ORDER BY 1
         "#,
     )
@@ -3167,8 +3266,10 @@ pub(super) async fn digest_tables(
 /// [`digest_tables`] again: the full digest matches every row of every table
 /// against hundreds of IDs and is far too slow to repeat after each of
 /// hundreds of calls.
-pub(super) async fn table_fingerprints(pool: &PgPool) -> BTreeMap<String, String> {
-    let tables = base_tables(pool).await;
+pub(super) async fn table_fingerprints(
+    pool: &PgPool,
+    tables: &[String],
+) -> BTreeMap<String, String> {
     let query = tables
         .iter()
         .map(|table| {
@@ -3193,10 +3294,11 @@ pub(super) async fn refresh_digest(
     pool: &PgPool,
     ids: &[String],
     ignored: &[&str],
+    tables: &[String],
     fingerprints: &BTreeMap<String, String>,
     rows: &mut BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeMap<String, String> {
-    let now = table_fingerprints(pool).await;
+    let now = table_fingerprints(pool, tables).await;
     let moved = now
         .iter()
         .filter(|(table, print)| fingerprints.get(*table) != Some(*print))
@@ -3265,8 +3367,14 @@ async fn one_workspace_never_writes_to_another() {
         return;
     };
     let TwoWorkspaces {
-        app, pool, a, b, ..
+        pool, a, b, state, ..
     } = &fixture;
+    // Thousands of calls as A's and B's apps and agents, to prove isolation,
+    // not budgets (`hosting_limits` proves those): none runs out mid-sweep.
+    let app = &router(AppState {
+        rate_limits: RateLimiters::with_source(Arc::new(Unmetered)),
+        ..state.clone()
+    });
     let ax = more_targets(app, pool, a).await;
     let bx = more_targets(app, pool, b).await;
     let sp = spares(app, pool, a, &ax).await;
@@ -6243,6 +6351,7 @@ async fn check_own_mcp(
 
 #[allow(clippy::too_many_lines)]
 fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> Vec<McpCase> {
+    let theme_document = json!({"format": 1, "light": {"base": "quiet", "tokens": {}}, "dark": {"base": "quiet-dark", "tokens": {}}});
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     let task_version = |task: Uuid| version("work_items", task);
@@ -6558,11 +6667,40 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"conversation": a.channel, "account": b.agent, "ambient": true}),
         ]),
+        // A2.15: consent is given in A's own DM; B's DM and channel aren't
+        // found from A.
+        mcp_case(
+            "app_consent_set",
+            json!({"conversation": a.dm, "app": a.agent}),
+            vec![
+                json!({"conversation": b.dm, "app": a.agent}),
+                json!({"conversation": b.channel, "app": a.agent}),
+            ],
+        )
+        .without_own(
+            "consent is for an account that acts as itself as an app, which this world \
+             doesn't make; reply_requests covers granting it",
+        ),
         // A2.27: a guard in A, or in A's space; B's space isn't found.
         mcp_case(
             "guard_set",
             json!({"name": "Net guard", "action": "deny", "terms": ["zq-net-guard"]}),
             vec![json!({"space": b.project, "name": "Net guard", "action": "deny"})],
+        ),
+        // A2.14: a budget on A's agent; B's agent, space and channel aren't
+        // found from A.
+        mcp_case(
+            "budget_set",
+            json!({"scope": "account", "scopeId": a.agent, "meter": "operations",
+                   "period": "month", "hardLimit": 1000000}),
+            vec![
+                json!({"scope": "account", "scopeId": b.agent, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "space", "scopeId": b.project, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "conversation", "scopeId": b.channel, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+            ],
         ),
         // A2.16: memory of A's channel or space; B's aren't found from A.
         mcp_case(
@@ -6597,8 +6735,45 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"id": ax.custom_emoji, "retired": true}),
             vec![json!({"id": bx.custom_emoji, "retired": true})],
         ),
+        // Themes: one is made in the workspace called; B's can't be read,
+        // changed, offered or deleted from A.
+        mcp_case(
+            "theme_create",
+            json!({"name": "Net new", "document": theme_document, "clientRequestId": "net-theme"}),
+            vec![json!({"workspace": b.organization, "name": "Net new", "document": theme_document, "clientRequestId": "net-theme-b"})],
+        ),
+        mcp_case(
+            "theme_update",
+            json!({"id": ax.theme, "expectedVersion": 1, "name": "Net renamed"}),
+            vec![
+                json!({"id": bx.theme, "expectedVersion": 1, "name": "Net renamed"}),
+                json!({"workspace": b.organization, "id": bx.theme, "expectedVersion": 1, "name": "Net renamed"}),
+            ],
+        ),
+        mcp_case(
+            "workspace_theme_set",
+            json!({"themeId": ax.theme, "offered": true}),
+            vec![
+                json!({"themeId": bx.theme, "offered": true}),
+                json!({"workspace": b.organization, "themeId": bx.theme, "offered": true}),
+            ],
+        ),
+        mcp_case(
+            "theme_delete",
+            json!({"id": ax.theme}),
+            vec![
+                json!({"id": bx.theme}),
+                json!({"workspace": b.organization, "id": bx.theme}),
+            ],
+        ),
         // C2.13: keywords are the caller's own, in the workspace called; a
         // workspace the caller isn't in takes none.
+        // T1.26: an initiative goes in the workspace called.
+        mcp_case(
+            "initiative_create",
+            json!({"title": "Net initiative", "clientRequestId": "net-initiative"}),
+            vec![json!({"workspace": b.organization, "title": "Net initiative", "clientRequestId": "net-initiative-b"})],
+        ),
         mcp_case(
             "notification_keyword_set",
             json!({"keywords": ["net launch"]}),
@@ -6848,6 +7023,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"conversationId": b.channel, "name": "net.txt", "text": "Net"}),
                 json!({"taskId": b.task, "name": "net.txt", "text": "Net"}),
+                json!({"thing": {"kind": "record", "id": b.record}, "name": "net.txt", "text": "Net"}),
             ],
         ),
         mcp_case(
@@ -7415,6 +7591,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+            // T1.36: a space's Pages records are its own pages only.
+            json!({"projectId": a.project, "collection": "Pages", "records": [{"record": b.page, "fields": {}}]}),
         ]),
         // C1.26: a page tab, only a page and channel of the caller's own.
         mcp_case(
@@ -7432,6 +7610,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
             json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
+            // T1.30: nor from another workspace's template.
+            json!({"collection": a.collection, "template": b.record_template,
+                   "clientRequestId": "net-from-template-cross"}),
         ]),
         // C2.22: a sheet row from a message, only into a sheet here and
         // only from a message here.
@@ -7443,6 +7624,64 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"sheetId": a.sheet, "fromMessageId": b.message}),
         ]),
+        // T1.41: a record changed (or a change proposed) only here.
+        mcp_case(
+            "record_update",
+            json!({"record": a.record, "title": "Net record renamed"}),
+            vec![json!({"record": b.record, "title": "Net record renamed"})],
+        )
+        .rejecting(vec![json!({"record": a.record, "fields": {"Tester": b.rook}})]),
+        // T1.28: forms only on, and answered in, the caller's own space.
+        mcp_case(
+            "form_create",
+            json!({"collection": a.collection, "name": "Net form made",
+                   "clientRequestId": "net-form"}),
+            vec![json!({"collection": b.collection, "name": "Net form made",
+                        "clientRequestId": "net-form-b"})],
+        ),
+        mcp_case(
+            "form_update",
+            json!({"form": a.form, "name": "Net form renamed"}),
+            vec![json!({"form": b.form, "name": "Net form renamed"})],
+        ),
+        mcp_case(
+            "form_answer_send",
+            json!({"form": a.form, "answers": {"title": "Net answer"},
+                   "clientRequestId": "net-answer"}),
+            vec![json!({"form": b.form, "answers": {"title": "Net answer"},
+                        "clientRequestId": "net-answer-b"})],
+        ),
+        // T1.30: templates and their schedules only in the caller's own
+        // space.
+        mcp_case(
+            "record_template_create",
+            json!({"collection": a.collection, "name": "Net template", "title": "Net {date}",
+                   "clientRequestId": "net-template"}),
+            vec![json!({"collection": b.collection, "name": "Net template", "title": "Net",
+                        "clientRequestId": "net-template-b"})],
+        ),
+        mcp_case(
+            "record_template_update",
+            json!({"template": a.record_template, "name": "Net template renamed"}),
+            vec![json!({"template": b.record_template, "name": "Net template renamed"})],
+        ),
+        mcp_case(
+            "recurring_record_create",
+            json!({"template": a.record_template, "frequency": "daily",
+                   "clientRequestId": "net-recurring"}),
+            vec![json!({"template": b.record_template, "frequency": "daily",
+                        "clientRequestId": "net-recurring-b"})],
+        ),
+        mcp_case(
+            "recurring_record_update",
+            json!({"recurring": a.recurring_record, "enabled": false}),
+            vec![json!({"recurring": b.recurring_record, "enabled": false})],
+        ),
+        mcp_case(
+            "recurring_record_delete",
+            json!({"recurring": a.recurring_record}),
+            vec![json!({"recurring": b.recurring_record})],
+        ),
         mcp_case(
             "button_press",
             json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),
@@ -7567,6 +7806,61 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "dashboard_delete",
             json!({"dashboard": sp.dashboard}),
             vec![json!({"dashboard": b.dashboard})],
+        ),
+        // Outside data (T1.34, T1.35): connections and queries are made in
+        // the project named, over A's own connections; B's can't be
+        // changed, reviewed, shared, run or removed from A.
+        mcp_case(
+            "data_connection_create",
+            json!({"spaceId": a.project, "name": "Net mcp connection",
+                   "address": "postgresql://reader:net@db.example.com/net"}),
+            vec![json!({"spaceId": b.project, "name": "Net mcp connection",
+                        "address": "postgresql://reader:net@db.example.com/net"})],
+        ),
+        mcp_case(
+            "data_connection_update",
+            json!({"connection": a.data_connection, "name": "Net renamed connection"}),
+            vec![json!({"connection": b.data_connection, "name": "Net"})],
+        ),
+        mcp_case(
+            "data_connection_delete",
+            json!({"connection": sp.data_connection}),
+            vec![json!({"connection": b.data_connection})],
+        ),
+        mcp_case(
+            "data_query_create",
+            json!({"spaceId": a.project, "connection": a.data_connection,
+                   "name": "Net mcp query", "statement": "SELECT 1"}),
+            vec![json!({"spaceId": b.project, "connection": b.data_connection,
+                        "name": "Net mcp query", "statement": "SELECT 1"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "connection": b.data_connection,
+                               "name": "Net over B", "statement": "SELECT 1"})]),
+        mcp_case(
+            "data_query_update",
+            json!({"query": a.data_query, "name": "Net renamed query"}),
+            vec![json!({"query": b.data_query, "name": "Net"})],
+        )
+        .rejecting(vec![json!({"query": a.data_query, "connection": b.data_connection})]),
+        mcp_case(
+            "data_query_review",
+            json!({"query": a.data_query, "state": "reviewed"}),
+            vec![json!({"query": b.data_query, "state": "reviewed"})],
+        ),
+        mcp_case(
+            "data_query_share",
+            json!({"query": a.data_query, "shared": false}),
+            vec![json!({"query": b.data_query, "shared": false})],
+        ),
+        mcp_case(
+            "data_query_run",
+            json!({"query": a.data_query}),
+            vec![json!({"query": b.data_query})],
+        ),
+        mcp_case(
+            "data_query_delete",
+            json!({"query": sp.data_query}),
+            vec![json!({"query": b.data_query})],
         ),
         mcp_case(
             "label_create",
@@ -8110,10 +8404,24 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
             }),
-            // K3.26: B's incoming hook can't start A's rule.
+            // T1.38: a record rule watches only its own space's collections.
             json!({
                 "projectId": a.project,
                 "name": "Net mcp rule c",
+                "trigger": {"kind": "record_matches", "collectionId": b.collection,
+                            "filters": [{"field": "Title", "op": "notEmpty"}]},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            }),
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp rule d",
+                "trigger": {"kind": "field_changed", "collectionId": b.collection, "field": "Title"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            }),
+            // K3.26: B's incoming hook can't start A's rule.
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp rule e",
                 "trigger": {"kind": "incoming_hook", "hookId": b.incoming_hook},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
             }),
@@ -8155,6 +8463,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "milestoneId": bx.milestone, "name": "Net", "expectedVersion": version("project_milestones", bx.milestone)}),
             json!({"projectId": a.project, "milestoneId": ax.milestone, "addTasks": [b.task], "expectedVersion": version("project_milestones", ax.milestone)}),
         ]),
+        // T1.42: a milestone moves only within its own space's order.
+        mcp_case(
+            "milestone_reorder",
+            json!({"milestoneId": ax.milestone, "position": 1}),
+            vec![json!({"milestoneId": bx.milestone, "position": 1})],
+        ),
+        // T1.43: a space's status and updates stay in its workspace, and an
+        // update never goes in another workspace's channel.
+        mcp_case(
+            "project_status_set",
+            json!({"projectId": a.project, "health": "at_risk"}),
+            vec![json!({"projectId": b.project, "health": "at_risk"})],
+        ),
+        mcp_case(
+            "project_update_create",
+            json!({"projectId": a.project, "health": "on_track", "text": "Net update",
+                   "channelId": a.channel, "clientRequestId": "net-update"}),
+            vec![json!({"projectId": b.project, "health": "on_track", "text": "Net update",
+                        "clientRequestId": "net-update-b"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "health": "on_track",
+                               "text": "Net update", "channelId": b.channel,
+                               "clientRequestId": "net-update-cross"})]),
         // AI
         mcp_case(
             "ai_suggestion_decide",
@@ -8227,6 +8558,41 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "allTransitions": true,
             }),
         ]),
+        // Triage (T1.23): a space's queue, its rules and the tasks in it.
+        // Last, so A's workflow and task versions read above still hold.
+        mcp_case(
+            "triage_enable",
+            json!({"spaceId": a.project}),
+            vec![json!({"spaceId": b.project})],
+        )
+        .last(),
+        mcp_case(
+            "triage_rule_set",
+            json!({"spaceId": a.project, "name": "Net rule", "action": {"kind": "keep"}}),
+            vec![json!({"spaceId": b.project, "name": "Net rule", "action": {"kind": "keep"}})],
+        )
+        .rejecting(vec![
+            json!({"spaceId": a.project, "name": "Net", "action": {"kind": "assign", "to": b.rook}}),
+            json!({"spaceId": a.project, "name": "Net", "action": {"kind": "keep"}, "filter": [{"field": b.collection_field, "op": "notEmpty"}]}),
+        ])
+        .last(),
+        // Cycles (T1.24): a space's settings and its cycles' names.
+        mcp_case(
+            "cycle_set",
+            json!({"spaceId": a.project, "enabled": true}),
+            vec![json!({"spaceId": b.project, "enabled": true})],
+        )
+        .last(),
+        mcp_case(
+            "triage_decide",
+            json!({"taskIds": [a.subtask], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()}),
+            vec![json!({"taskIds": [b.task], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()})],
+        )
+        .rejecting(vec![
+            json!({"taskIds": [a.subtask, b.task], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()}),
+            json!({"taskIds": [a.subtask], "action": "duplicate", "duplicateOf": b.task}),
+        ])
+        .last(),
         // Runs
         mcp_case(
             "run_start",

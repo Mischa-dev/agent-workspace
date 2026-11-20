@@ -307,6 +307,10 @@ pub struct CollectionUpdatedPayload {
     pub collection_id: Uuid,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub record_ids: Vec<Uuid>,
+    /// "computed" when only worked-out values changed (rollups after a
+    /// related record changed); absent for a write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
 
 /// The most records one `collection.updated` names; a larger change names
@@ -392,6 +396,16 @@ pub struct GuardsChangedPayload {
     pub project_id: Uuid,
 }
 
+/// A workspace's budgets changed (A2.14): one set, changed or removed.
+/// Sent to the workspace's own space; budget lists read them again. Ids
+/// only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BudgetsChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+}
+
 /// Someone's draft changed (C2.28): saved or cleared on one of their
 /// devices. Their id only, delivered to them alone; their open draft lists
 /// read again over HTTP.
@@ -407,6 +421,27 @@ pub struct MessageDraftChangedPayload {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
+}
+
+/// Someone's theme changed (made, changed, offered or deleted). Their id
+/// and the theme's only, delivered to them alone; their other devices read
+/// the theme again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeChangedPayload {
+    pub actor_id: Uuid,
+    pub theme_id: Uuid,
+}
+
+/// A theme a workspace offers changed, or one started or stopped being
+/// offered. Ids only, delivered in the workspace's own space; open theme
+/// lists read again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceThemesChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub theme_id: Uuid,
 }
 
 /// Someone's sidebar sections changed (C2.9). Their id only, delivered to
@@ -492,8 +527,11 @@ pub enum OutboxEventPayload {
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
     GuardsChanged(GuardsChangedPayload),
+    BudgetsChanged(BudgetsChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    ThemeChanged(ThemeChangedPayload),
+    WorkspaceThemesChanged(WorkspaceThemesChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
     FollowsChanged(FollowsChangedPayload),
@@ -532,8 +570,11 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::GuardsChanged(_) => "guards.changed",
+            Self::BudgetsChanged(_) => "budgets.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::ThemeChanged(_) => "theme.changed",
+            Self::WorkspaceThemesChanged(_) => "workspace_themes.changed",
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
             Self::FollowsChanged(_) => "follows.changed",
@@ -575,8 +616,11 @@ impl OutboxEventPayload {
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::GuardsChanged(_)
+            | Self::BudgetsChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_)
+            | Self::WorkspaceThemesChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
             | Self::FollowsChanged(_)
@@ -597,6 +641,7 @@ impl OutboxEventPayload {
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
+            Self::ThemeChanged(payload) => Some(payload.actor_id),
             Self::SidebarChanged(payload) => Some(payload.actor_id),
             Self::SavedSearchesChanged(payload) => Some(payload.actor_id),
             Self::FollowsChanged(payload) => Some(payload.actor_id),
@@ -624,6 +669,7 @@ impl OutboxEventPayload {
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
             Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_)
             | Self::SidebarChanged(_) => OutboxResourceKind::Account,
             Self::SavedSearchesChanged(_)
             | Self::InboxViewsChanged(_)
@@ -640,7 +686,9 @@ impl OutboxEventPayload {
             Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
             Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
-            | Self::GuardsChanged(_) => OutboxResourceKind::Project,
+            | Self::WorkspaceThemesChanged(_)
+            | Self::GuardsChanged(_)
+            | Self::BudgetsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
@@ -677,9 +725,12 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
             Self::GuardsChanged(payload) => payload.project_id,
+            Self::BudgetsChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::ThemeChanged(payload) => payload.actor_id,
+            Self::WorkspaceThemesChanged(payload) => payload.project_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
             Self::FollowsChanged(payload) => payload.actor_id,
@@ -825,8 +876,11 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::GuardsChanged(payload) => serde_json::to_value(payload),
+            Self::BudgetsChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::ThemeChanged(payload) => serde_json::to_value(payload),
+            Self::WorkspaceThemesChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
             Self::FollowsChanged(payload) => serde_json::to_value(payload),
@@ -923,10 +977,19 @@ impl OutboxEventPayload {
             "guards.changed" => Self::GuardsChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "budgets.changed" => Self::BudgetsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
             "message_draft.changed" => Self::MessageDraftChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notification_keywords.changed" => Self::NotificationKeywordsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "theme.changed" => Self::ThemeChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "workspace_themes.changed" => Self::WorkspaceThemesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sidebar.changed" => Self::SidebarChanged(
@@ -1159,9 +1222,37 @@ pub async fn enqueue_collection_updated(
         OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
             collection_id,
             record_ids,
+            cause: None,
         }),
     )
     .await
+}
+
+/// [`enqueue_collection_updated`] on a connection inside the caller's
+/// transaction, saying why (`cause`, such as "computed" or "paired").
+pub async fn enqueue_records_changed(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    record_ids: &[Uuid],
+    cause: &str,
+) -> Result<Uuid, AppError> {
+    let mut record_ids = record_ids.to_vec();
+    record_ids.sort_unstable();
+    record_ids.dedup();
+    if record_ids.len() > MAX_COLLECTION_EVENT_RECORDS {
+        record_ids.clear();
+    }
+    let event = NewOutboxEvent::new(
+        project_id,
+        OutboxEventPayload::CollectionUpdated(CollectionUpdatedPayload {
+            collection_id,
+            record_ids,
+            cause: Some(cause.to_owned()),
+        }),
+    )
+    .map_err(|_| AppError::Internal("construct typed outbox event"))?;
+    enqueue_on(connection, &event).await
 }
 
 /// Enqueue `project.modules.updated`: a space's own module switches

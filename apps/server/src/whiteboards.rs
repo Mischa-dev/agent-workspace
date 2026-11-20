@@ -280,6 +280,12 @@ pub async fn access(
     let (organization_id, project_id, deleted, visible, reachable) = row;
     if !visible
         || !reachable
+        // A credential's limit (a token for another workspace) doesn't reach it.
+        || crate::access::limit_hides(
+            caller.actor_id,
+            project_id,
+            crate::policy::Permission::ProjectsView,
+        )
         || caller
             .confined_project
             .is_some_and(|confined| project_id != confined)

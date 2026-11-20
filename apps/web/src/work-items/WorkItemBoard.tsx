@@ -27,9 +27,9 @@ import type { BoardColumn, WorkItem, WorkItemBoardResponse, WorkItemCard, WorkIt
 import { useBoardDrag, type DropTarget } from '../ui/useBoardDrag'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import './board.css'
+import { PICKER_KEYS } from '../views/viewKeys'
 import '../styles/work.css'
 
-const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 const PAGE = 50
 
 type Entry = { card: WorkItemCard; dragId: string } | { slot: true }
@@ -546,7 +546,7 @@ export function WorkItemBoard({
     if (!picker) return
     const targets = picker.targets
     applyPick.mutate(
-      { projectId, result, targets: targets.map((card) => ({ id: card.id, projectId: card.projectId, version: card.version, key: card.key })) },
+      { projectId, result, targets },
       {
         onSuccess: () => {
           if (targets.length > 1) notify({ tone: 'success', title: `Changed ${countLabel(targets.length, 'task')}` })

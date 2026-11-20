@@ -218,6 +218,7 @@ impl<T> BatchResult<T> {
                     retry_category,
                 },
                 ToolResult::Conflict { message } => Self::Conflict { message },
+                ToolResult::LimitReached { message, .. } => Self::denied(message),
             },
         }
     }
@@ -2165,6 +2166,10 @@ async fn apply_update(
         UpdateWorkItemOutcome::InvalidAssignee => problem(
             "assignee",
             "That person can't be assigned tasks here: only active people and agents in the project can.".to_owned(),
+        ),
+        UpdateWorkItemOutcome::InvalidDelegate => problem(
+            "delegate",
+            "That person can't be handed tasks here: only active people and agents in the project can.".to_owned(),
         ),
         UpdateWorkItemOutcome::TooManyLabels { limit, would_have } => problem(
             "addLabels",

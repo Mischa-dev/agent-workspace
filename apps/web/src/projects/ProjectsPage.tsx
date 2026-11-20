@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useDeferredValue, useState, type MouseEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -80,7 +81,7 @@ export function ProjectsPage() {
         <PageHeader
           actions={
             canCreate ? (
-              <ButtonLink icon="plus" to="/projects/new" variant="primary">
+              <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
                 New project
               </ButtonLink>
             ) : null
@@ -124,7 +125,7 @@ export function ProjectsPage() {
             <EmptyState
               action={
                 canCreate ? (
-                  <ButtonLink icon="plus" to="/projects/new" variant="primary">
+                  <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
                     New project
                   </ButtonLink>
                 ) : null

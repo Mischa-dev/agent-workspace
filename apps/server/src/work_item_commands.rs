@@ -87,15 +87,18 @@ pub struct ProjectMembership {
     pub role: String,
     /// The custom role's permissions, when they hold one.
     pub role_permissions: Option<Vec<String>>,
+    /// What their groups are given in the project (K1.27).
+    pub group_permissions: Option<Vec<String>>,
     pub enabled: bool,
 }
 
 impl ProjectMembership {
     pub fn grant(&self) -> Result<RoleGrant, AppError> {
-        Ok(RoleGrant::stored(
-            &self.role,
-            self.role_permissions.as_deref(),
-        )?)
+        Ok(
+            RoleGrant::stored(&self.role, self.role_permissions.as_deref())?.with_groups(
+                crate::access::group_permissions(self.group_permissions.as_deref()),
+            ),
+        )
     }
 }
 
@@ -110,11 +113,15 @@ pub struct LockedWorkItem {
     pub status_id: Uuid,
     pub priority: String,
     pub assignee_actor_id: Option<Uuid>,
+    /// Who the work is handed to (T1.22), beside the assignee who owns it.
+    pub delegate_actor_id: Option<Uuid>,
     pub parent_work_item_id: Option<Uuid>,
     pub board_rank: i64,
     pub archived: bool,
     pub blocked_reason: Option<String>,
     pub milestone_id: Option<Uuid>,
+    /// The cycle it is planned in (T1.24).
+    pub cycle_id: Option<Uuid>,
     pub start_date: Option<NaiveDate>,
     pub due_date: Option<NaiveDate>,
     pub estimate: Option<f64>,
@@ -124,8 +131,8 @@ pub struct LockedWorkItem {
 
 /// The columns `LockedWorkItem` reads, for every query that locks a task.
 pub const LOCKED_WORK_ITEM_COLUMNS: &str = "id, number, version, title, description, type_id, status_id, priority, \
-    assignee_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
-    blocked_reason, milestone_id, start_date, due_date, estimate, field_values";
+    assignee_actor_id, delegate_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
+    blocked_reason, milestone_id, cycle_id, start_date, due_date, estimate, field_values";
 
 /// Planning fields a new task can start with.
 #[derive(Clone, Copy, Debug, Default)]
@@ -145,6 +152,10 @@ pub struct TaskFieldChanges {
     pub estimate: Option<Option<f64>>,
     /// Marks the task blocked with this reason, or clears it.
     pub blocked_reason: Option<Option<String>>,
+    /// Hands the task to someone (T1.22), or takes it back.
+    pub delegate_actor_id: Option<Option<Uuid>>,
+    /// Plans it in a cycle that hasn't ended (T1.24), or takes it out.
+    pub cycle_id: Option<Option<Uuid>>,
 }
 
 impl TaskFieldChanges {
@@ -154,6 +165,8 @@ impl TaskFieldChanges {
             && self.due_date.is_none()
             && self.estimate.is_none()
             && self.blocked_reason.is_none()
+            && self.delegate_actor_id.is_none()
+            && self.cycle_id.is_none()
     }
 }
 
@@ -280,6 +293,8 @@ pub enum UpdateWorkItemOutcome {
     Conflict(LockedWorkItem),
     NotFound,
     InvalidAssignee,
+    /// The delegate isn't someone who could be given the task.
+    InvalidDelegate,
     InvalidTransition {
         current_status_id: Uuid,
         requested_status_id: Uuid,
@@ -363,6 +378,7 @@ macro_rules! membership_select {
                project.archived_at::text AS project_archived_at,
                membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions(membership.actor_id, project.id) AS group_permissions,
                membership.enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
@@ -588,13 +604,41 @@ pub async fn create_work_item_with_id(
         command.type_id,
     )
     .await?;
-    let status_id = select_definition(
+    let status_id = match crate::collections::task_like::workflow_of(
         transaction,
         actor.project_id,
-        DefinitionKind::Status,
-        command.status_id,
+        command.collection_id,
     )
-    .await?;
+    .await?
+    {
+        None => {
+            select_definition(
+                transaction,
+                actor.project_id,
+                DefinitionKind::Status,
+                command.status_id,
+            )
+            .await?
+        }
+        // A collection with its own workflow starts its tasks in its start
+        // status, else the space's default if it uses it, else its first.
+        Some((statuses, start)) => {
+            let status_id = select_status_in(
+                transaction,
+                actor.project_id,
+                statuses.as_deref(),
+                command.status_id.or(start),
+            )
+            .await?;
+            if command
+                .status_id
+                .is_some_and(|requested| requested != status_id)
+            {
+                return Err(STATUS_NOT_USED);
+            }
+            status_id
+        }
+    };
     let board_rank = match command.board_placement {
         None => {
             sqlx::query_scalar::<_, i64>(
@@ -767,6 +811,12 @@ pub async fn create_work_item_with_id(
         },
     )
     .await?;
+    // A task made in a triage status meets the space's triage rules (T1.23).
+    if crate::work_items::triage::triage_status(transaction, actor.project_id).await?
+        == Some(status_id)
+    {
+        crate::work_items::triage::run_rules(transaction, actor, work_item_id).await?;
+    }
     Ok(CreateWorkItemOutcome::Created {
         work_item_id,
         number,
@@ -825,6 +875,18 @@ pub async fn update_locked_work_item(
         }
         None => current.status_id,
     };
+    if status_id != current.status_id {
+        let collection_id = task_collection(transaction, current.id).await?;
+        if let Some((Some(statuses), _)) =
+            crate::collections::task_like::workflow_of(transaction, actor.project_id, collection_id)
+                .await?
+            && !statuses.contains(&status_id)
+            && crate::work_items::triage::triage_status(transaction, actor.project_id).await?
+                != Some(status_id)
+        {
+            return Err(STATUS_NOT_USED);
+        }
+    }
     if status_id != current.status_id
         && !transition_allowed(transaction, actor.project_id, current.status_id, status_id).await?
     {
@@ -839,7 +901,23 @@ pub async fn update_locked_work_item(
         return Ok(UpdateWorkItemOutcome::InvalidAssignee);
     }
     let fields = &command.fields;
+    // A delegate is someone who could be the assignee.
+    if let Some(delegate) = fields.delegate_actor_id
+        && !validate_assignee(transaction, actor.project_id, delegate).await?
+    {
+        return Ok(UpdateWorkItemOutcome::InvalidDelegate);
+    }
+    let delegate_actor_id = fields
+        .delegate_actor_id
+        .unwrap_or(current.delegate_actor_id);
     let milestone_id = fields.milestone_id.unwrap_or(current.milestone_id);
+    let cycle_id = fields.cycle_id.unwrap_or(current.cycle_id);
+    if cycle_id != current.cycle_id
+        && let Some(cycle_id) = cycle_id
+        && !crate::work_items::cycles::is_open(transaction, actor.project_id, cycle_id).await?
+    {
+        return Err(AppError::Validation("cycle"));
+    }
     if milestone_id != current.milestone_id
         && let Some(milestone_id) = milestone_id
         && !milestone_is_active(transaction, actor.project_id, milestone_id).await?
@@ -959,6 +1037,9 @@ pub async fn update_locked_work_item(
     if assignee_actor_id != current.assignee_actor_id {
         changed_fields.push("assignee".to_owned());
     }
+    if delegate_actor_id != current.delegate_actor_id {
+        changed_fields.push("delegate".to_owned());
+    }
     if parent_work_item_id != current.parent_work_item_id {
         changed_fields.push("parent".to_owned());
     }
@@ -971,6 +1052,9 @@ pub async fn update_locked_work_item(
     }
     if milestone_id != current.milestone_id {
         changed_fields.push("milestone".to_owned());
+    }
+    if cycle_id != current.cycle_id {
+        changed_fields.push("cycle".to_owned());
     }
     if start_date != current.start_date {
         changed_fields.push("startDate".to_owned());
@@ -1027,6 +1111,12 @@ pub async fn update_locked_work_item(
     {
         emit_assigned(transaction, actor, current.id, assignee).await?;
     }
+    if delegate_actor_id != current.delegate_actor_id
+        && let Some(delegate) = delegate_actor_id
+    {
+        add_watcher(transaction, actor.project_id, current.id, delegate).await?;
+        emit_delegated(transaction, actor, current.id, delegate).await?;
+    }
     // The title and field values are the record's (crate::task_records);
     // the rest is the task's own.
     crate::task_records::write_shared(
@@ -1047,7 +1137,7 @@ pub async fn update_locked_work_item(
         SET description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
             board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
-            estimate = $15,
+            estimate = $15, delegate_actor_id = $17, cycle_id = $18,
             blocked_reason = $16,
             blocked_at = CASE WHEN $16::text IS NULL THEN NULL
                               WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
@@ -1075,6 +1165,8 @@ pub async fn update_locked_work_item(
     .bind(due_date)
     .bind(estimate)
     .bind(blocked_reason.as_deref())
+    .bind(delegate_actor_id)
+    .bind(cycle_id)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -1091,7 +1183,9 @@ pub async fn update_locked_work_item(
         serde_json::json!(priority),
     );
     changes.id("assignee", current.assignee_actor_id, assignee_actor_id);
+    changes.id("delegate", current.delegate_actor_id, delegate_actor_id);
     changes.id("milestone", current.milestone_id, milestone_id);
+    changes.id("cycle", current.cycle_id, cycle_id);
     changes.value(
         "startDate",
         serde_json::json!(current.start_date),
@@ -1335,23 +1429,13 @@ pub async fn set_archived(
             "locked Work Item archive lost its record",
         ));
     }
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_items
-        SET version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $3
-        "#,
+    advance_version(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        command.expected_version,
     )
-    .bind(actor.project_id)
-    .bind(work_item_id)
-    .bind(command.expected_version)
-    .execute(&mut **transaction)
     .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal(
-            "locked Work Item archive lost its version",
-        ));
-    }
     let open_subtasks = if command.archived {
         sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1")
             .bind(work_item_id)
@@ -2685,6 +2769,52 @@ enum DefinitionKind {
     Status,
 }
 
+const STATUS_NOT_USED: AppError = AppError::Refused {
+    field: "status",
+    message: "This task's collection doesn't use that status.",
+};
+
+/// The collection a task belongs to; None for the built-in Tasks.
+async fn task_collection(
+    transaction: &mut Transaction<'_, Postgres>,
+    work_item_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT collection_id FROM work_items WHERE id = $1")
+            .bind(work_item_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .flatten(),
+    )
+}
+
+/// An enabled status among `allowed` (all when None): `preferred` if it is
+/// one (or the space's triage status, which comes before any collection's
+/// workflow), else the default if it is one, else the first by position.
+async fn select_status_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    allowed: Option<&[Uuid]>,
+    preferred: Option<Uuid>,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar(
+        r#"
+        SELECT id FROM work_item_statuses
+        WHERE project_id = $1 AND enabled
+          AND ($2::uuid[] IS NULL OR id = ANY($2)
+               OR (id = $3 AND semantic_category = 'triage'))
+        ORDER BY id = $3 IS TRUE DESC, is_default DESC, position
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(allowed)
+    .bind(preferred)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::Validation("Work Item definition"))
+}
+
 async fn select_definition(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -2779,6 +2909,174 @@ async fn emit_assigned(
         .audience(crate::events::Audience::Account(assignee))
         .actor(actor.actor_id)
         .payload(serde_json::json!({ "taskId": work_item_id, "assigneeId": assignee })),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Records that `actor` triaged a task (T1.23): when and by whom, and the
+/// snooze that now hides it from the triage queue, if any. A snooze is a
+/// change of its own (a new version and an update event); any other
+/// decision came with a move that was one already, and clears a snooze.
+/// The caller holds the task's lock.
+pub async fn mark_triaged(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), AppError> {
+    let rows = write_snoozes(
+        transaction,
+        Some((actor.project_id, work_item_id, actor.actor_id)),
+        snoozed_until,
+        1,
+    )
+    .await?;
+    let Some((_, _, _, version)) = rows.first() else {
+        return Err(AppError::NotFound("task"));
+    };
+    if snoozed_until.is_some() {
+        enqueue_update(transaction, actor.project_id, work_item_id, *version).await?;
+    }
+    Ok(())
+}
+
+/// A task whose snooze ended.
+pub struct WokenTask {
+    pub task_id: Uuid,
+    pub project_id: Uuid,
+    /// Who snoozed it.
+    pub snoozed_by: Option<Uuid>,
+}
+
+/// Ends up to `limit` snoozes that are due, oldest first, skipping tasks
+/// another writer holds; each task gets a new version and an update event,
+/// so open triage queues show it again.
+pub async fn end_due_snoozes(
+    transaction: &mut Transaction<'_, Postgres>,
+    limit: i64,
+) -> Result<Vec<WokenTask>, AppError> {
+    let rows = write_snoozes(transaction, None, None, limit).await?;
+    let mut woken = Vec::with_capacity(rows.len());
+    for (task_id, project_id, snoozed_by, version) in rows {
+        enqueue_update(transaction, project_id, task_id, version).await?;
+        woken.push(WokenTask {
+            task_id,
+            project_id,
+            snoozed_by,
+        });
+    }
+    Ok(woken)
+}
+
+/// The one write of a task's triage columns: one task triaged by someone
+/// (`triaged` is its space, id and who), or else the snoozes that are due
+/// ended. A snooze set or ended is a new version; a decision with no
+/// snooze rode on a move that was one already.
+async fn write_snoozes(
+    transaction: &mut Transaction<'_, Postgres>,
+    triaged: Option<(Uuid, Uuid, Uuid)>,
+    snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+    limit: i64,
+) -> Result<Vec<(Uuid, Uuid, Option<Uuid>, i64)>, AppError> {
+    let (project_id, task_id, by) = match triaged {
+        Some((project_id, task_id, by)) => (Some(project_id), Some(task_id), Some(by)),
+        None => (None, None, None),
+    };
+    Ok(sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, i64)>(
+        "UPDATE work_items task SET snoozed_until = $4, \
+           triaged_at = CASE WHEN $5::uuid IS NULL THEN task.triaged_at ELSE now() END, \
+           triaged_by_actor_id = COALESCE($5, task.triaged_by_actor_id), \
+           version = task.version + \
+             CASE WHEN $5::uuid IS NULL OR $4::timestamptz IS NOT NULL THEN 1 ELSE 0 END, \
+           updated_at = CASE WHEN $5::uuid IS NULL OR $4::timestamptz IS NOT NULL \
+             THEN now() ELSE task.updated_at END \
+         FROM (SELECT id FROM work_items \
+               WHERE CASE WHEN $2::uuid IS NULL THEN snoozed_until <= now() \
+                          ELSE project_id = $1 AND id = $2 END \
+               ORDER BY snoozed_until, id LIMIT $3 FOR UPDATE SKIP LOCKED) chosen \
+         WHERE task.id = chosen.id \
+         RETURNING task.id, task.project_id, task.triaged_by_actor_id, task.version",
+    )
+    .bind(project_id)
+    .bind(task_id)
+    .bind(limit)
+    .bind(snoozed_until)
+    .bind(by)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+/// Hands a task to `delegate` when it has no delegate yet, as a launch does
+/// for the agent it starts (T1.22, A1.13), in the caller's transaction.
+/// Someone who can't hold the task (not a member of its project) is left
+/// out quietly: the launch goes ahead either way.
+pub async fn delegate_unless_set(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    delegate: Uuid,
+) -> Result<(), AppError> {
+    let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
+        return Ok(());
+    };
+    if current.delegate_actor_id.is_some() || current.archived {
+        return Ok(());
+    }
+    let version = current.version;
+    let outcome = update_locked_work_item(
+        transaction,
+        actor,
+        current,
+        UpdateWorkItemCommand {
+            expected_version: version,
+            title: None,
+            description: None,
+            type_id: None,
+            status_id: None,
+            priority: None,
+            assignee_actor_id: None,
+            parent_work_item_id: None,
+            board_placement: None,
+            labels: None,
+            fields: TaskFieldChanges {
+                delegate_actor_id: Some(Some(delegate)),
+                ..TaskFieldChanges::default()
+            },
+            field_values: None,
+            summary: "Handed to the agent it was launched with",
+            audit_action: "work_item.delegated_by_launch",
+            audit_version_metadata: AuditVersionMetadata::Include,
+        },
+    )
+    .await?;
+    match outcome {
+        UpdateWorkItemOutcome::Applied { .. }
+        | UpdateWorkItemOutcome::Noop(_)
+        | UpdateWorkItemOutcome::InvalidDelegate => Ok(()),
+        _ => Err(AppError::Internal("handing a launched task to its agent")),
+    }
+}
+
+/// Tells the new delegate, and only them, that the task was handed to
+/// them (`task.delegated`, T1.22).
+async fn emit_delegated(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    delegate: Uuid,
+) -> Result<(), AppError> {
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::TASK_DELEGATED,
+            actor.project_id,
+            "task",
+            work_item_id,
+        )
+        .audience(crate::events::Audience::Account(delegate))
+        .actor(actor.actor_id)
+        .payload(serde_json::json!({ "taskId": work_item_id, "delegateId": delegate })),
     )
     .await?;
     Ok(())

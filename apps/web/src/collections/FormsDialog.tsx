@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { callOp, opPrefix, opQuery, useOp } from '../api/ops'
+import type { FormSummary } from '../api/generated/operations'
 import { describeError } from '../app/mutations'
+import { useWorkspaceId } from '../app/workspace'
 import type { FieldDefinition } from '../fields/fieldModel'
 import {
   bugReportKeys,
@@ -26,6 +29,8 @@ import {
   Menu,
   Row,
   RowList,
+  SegmentedControl,
+  SelectField,
   StatusChip,
   Switch,
   TextArea,
@@ -35,18 +40,41 @@ import {
   showToast,
 } from '../ui'
 import type { CollectionBody } from './api'
-import { askableFields, dailyLimitProblem, formDraft, formFromDraft, MAX_DAILY_LIMIT, type FormDraft } from './formSettings'
+import {
+  askableFields,
+  canBeCondition,
+  conditionValues,
+  dailyLimitProblem,
+  formDraft,
+  formFromDraft,
+  MAX_DAILY_LIMIT,
+  type FormAudience,
+  type FormDraft,
+} from './formSettings'
+import { FormFill } from './FormFill'
 import '../styles/pages.css'
 
-type Step = { kind: 'list' } | { kind: 'edit'; link: BugReportLink | null } | { kind: 'shared'; name: string; url: string; replaced: boolean }
+type Step =
+  | { kind: 'list' }
+  | { kind: 'edit'; link: BugReportLink | null }
+  | { kind: 'edit-form'; formId: string }
+  | { kind: 'fill'; formId: string }
+  | { kind: 'shared'; name: string; url: string; replaced: boolean }
 
 /**
  * A collection's forms (AWD-110): public pages anyone with the link fills in,
  * each answer a new record. They're bug report links underneath, so the
- * secret URL is shown once and replacing it cuts the old one off.
+ * secret URL is shown once and replacing it cuts the old one off. Internal
+ * forms (T1.28) are filled in here by the space's members.
  */
 export function FormsDialog({ body, onClose, projectId }: { body: CollectionBody; onClose: () => void; projectId: string }) {
   const [step, setStep] = useState<Step>({ kind: 'list' })
+  if (step.kind === 'fill') {
+    return <FormFill formId={step.formId} onBack={() => setStep({ kind: 'list' })} onClose={onClose} projectId={projectId} />
+  }
+  if (step.kind === 'edit-form') {
+    return <InternalFormEditor body={body} formId={step.formId} onBack={() => setStep({ kind: 'list' })} onClose={onClose} projectId={projectId} />
+  }
   if (step.kind === 'edit') {
     return (
       <FormEditor
@@ -67,6 +95,8 @@ export function FormsDialog({ body, onClose, projectId }: { body: CollectionBody
       body={body}
       onClose={onClose}
       onEdit={(link) => setStep({ kind: 'edit', link })}
+      onEditForm={(formId) => setStep({ kind: 'edit-form', formId })}
+      onFill={(formId) => setStep({ kind: 'fill', formId })}
       onReplaced={(name, url) => setStep({ kind: 'shared', name, url, replaced: true })}
       projectId={projectId}
     />
@@ -77,17 +107,29 @@ function FormList({
   body,
   onClose,
   onEdit,
+  onEditForm,
+  onFill,
   onReplaced,
   projectId,
 }: {
   body: CollectionBody
   onClose: () => void
   onEdit: (link: BugReportLink | null) => void
+  onEditForm: (formId: string) => void
+  onFill: (formId: string) => void
   onReplaced: (name: string, url: string) => void
   projectId: string
 }) {
   const client = useQueryClient()
+  const workspaceId = useWorkspaceId() ?? undefined
   const list = useQuery({ queryKey: bugReportKeys.links(projectId), queryFn: () => listBugReportLinks(projectId) })
+  const internal = useQuery(opQuery('form_list', { spaceId: projectId, collection: body.collection.id }, { workspaceId }))
+  const archive = useOp('form_update', {
+    workspaceId,
+    invalidates: ['form_list'],
+    onSuccess: (form) => showToast({ title: `${form.name} archived` }),
+  })
+  const internalForms: FormSummary[] = (internal.data?.forms ?? []).filter((form) => form.audience === 'internal')
   const refresh = () => client.invalidateQueries({ queryKey: bugReportKeys.links(projectId) })
   const [problem, setProblem] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<BugReportLink | null>(null)
@@ -117,7 +159,7 @@ function FormList({
 
   return (
     <Dialog
-      description={`Anyone with a form’s link can add a record to ${body.collection.name}, without signing in. Records are added as the person who shared the form.`}
+      description={`A public form’s link lets anyone add a record to ${body.collection.name} without signing in, as the person who shared it. An internal form is filled in here by people in this project, as themselves.`}
       footer={
         <>
           <Button onClick={onClose}>Close</Button>
@@ -137,8 +179,47 @@ function FormList({
         <ListSkeleton label="Loading forms" rows={2} />
       ) : list.isError ? (
         <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Forms didn’t load" />
-      ) : forms.length ? (
+      ) : forms.length || internalForms.length ? (
         <RowList label="Forms">
+          {internalForms.map((form) => (
+            <Row
+              actions={
+                <>
+                  <Button onClick={() => onFill(form.id)} size="sm" variant="secondary">
+                    Fill in
+                  </Button>
+                  {body.canBuild ? (
+                    <Menu
+                      items={[
+                        { label: 'Edit form…', icon: 'pencil', onSelect: () => onEditForm(form.id) },
+                        { separator: true },
+                        {
+                          label: 'Archive',
+                          icon: 'archive',
+                          onSelect: () => archive.mutate({ form: form.id, archived: true, expectedVersion: form.version }),
+                        },
+                      ]}
+                      label={`${form.name} actions`}
+                      trigger={<IconButton icon="more" label={`${form.name} actions`} size="sm" />}
+                    />
+                  ) : null}
+                </>
+              }
+              key={form.id}
+              meta={
+                <span className="aw-row__metaline aw-wrap">
+                  <span>{countLabel(form.questions, 'question')}</span>
+                  <span>Filled in by people in this project</span>
+                </span>
+              }
+              title={
+                <span className="aw-row__titleline">
+                  {form.name}
+                  <StatusChip tone="muted">Internal</StatusChip>
+                </span>
+              }
+            />
+          ))}
           {forms.map((link) => (
             <Row
               actions={
@@ -181,10 +262,13 @@ function FormList({
         </RowList>
       ) : (
         <EmptyState icon="list" title="No forms yet">
-          {canMake ? 'Make one to collect requests, sign-ups or reports from people outside this project.' : 'People who can add records here can share a form.'}
+          {canMake
+            ? 'Make one to collect requests, sign-ups or reports, from people outside this project or inside it.'
+            : 'People who can add records here can share a form.'}
         </EmptyState>
       )}
       {problem ? <Banner tone="danger">{problem}</Banner> : null}
+      {archive.error ? <Banner tone="danger">{`The form wasn’t archived. ${describeError(archive.error).message}`}</Banner> : null}
       {deleting ? (
         <div className="aw-cforms__confirm" role="group" aria-label={`Delete ${deleting.name}?`}>
           <p>Delete {deleting.name}? Its link stops working right away. Records it added stay.</p>
@@ -200,8 +284,45 @@ function FormList({
   )
 }
 
+/** An internal form's editor, once its settings have loaded. */
+function InternalFormEditor({
+  body,
+  formId,
+  onBack,
+  onClose,
+  projectId,
+}: {
+  body: CollectionBody
+  formId: string
+  onBack: () => void
+  onClose: () => void
+  projectId: string
+}) {
+  const workspaceId = useWorkspaceId() ?? undefined
+  const form = useQuery(opQuery('form_get', { form: formId }, { workspaceId }))
+  if (!form.data) {
+    return (
+      <Dialog footer={<Button onClick={onBack}>Back</Button>} onClose={onClose} open title="Edit form" width={560}>
+        {form.isError ? <ErrorState error={form.error} onRetry={() => void form.refetch()} title="The form didn’t load" /> : <ListSkeleton label="Loading the form" rows={3} />}
+      </Dialog>
+    )
+  }
+  return (
+    <FormEditor
+      body={body}
+      internal={{ id: form.data.id, version: form.data.version, name: form.data.name, form: form.data.definition as FormSettings }}
+      link={null}
+      onBack={onBack}
+      onClose={onClose}
+      onShared={() => onBack()}
+      projectId={projectId}
+    />
+  )
+}
+
 function FormEditor({
   body,
+  internal,
   link,
   onBack,
   onClose,
@@ -209,6 +330,8 @@ function FormEditor({
   projectId,
 }: {
   body: CollectionBody
+  /** An internal form being edited (T1.28). */
+  internal?: { id: string; version: number; name: string; form: FormSettings }
   link: BugReportLink | null
   onBack: () => void
   onClose: () => void
@@ -216,21 +339,37 @@ function FormEditor({
   projectId: string
 }) {
   const client = useQueryClient()
-  const fields = askableFields(body.fields)
-  const [draft, setDraft] = useState<FormDraft>(() => formDraft(link, body.collection.name, fields))
+  const workspaceId = useWorkspaceId() ?? undefined
+  const editing = Boolean(link || internal)
+  const [draft, setDraft] = useState<FormDraft>(() =>
+    formDraft(link ?? internal ?? null, body.collection.name, askableFields(body.fields, internal ? 'internal' : 'public'), internal ? 'internal' : 'public'),
+  )
+  const audience: FormAudience = draft.audience ?? 'public'
+  const fields = askableFields(body.fields, audience)
   const [initial] = useState(draft)
   const [error, setError] = useState<string | null>(null)
   const save = useMutation({
     mutationFn: async () => {
       const form: FormSettings = formFromDraft(draft, fields)
-      if (link) {
-        await updateBugReportLink(link.id, { name: draft.name.trim(), form })
+      const name = draft.name.trim()
+      if (internal) {
+        await callOp('form_update', { form: internal.id, name, definition: form }, { workspaceId, expectedVersion: internal.version })
         return null
       }
-      return createCollectionForm(projectId, body.collection.id, draft.name.trim(), form)
+      if (audience === 'internal') {
+        await callOp('form_create', { collection: body.collection.id, name, definition: form }, { workspaceId })
+        return null
+      }
+      if (link) {
+        await updateBugReportLink(link.id, { name, form })
+        return null
+      }
+      return createCollectionForm(projectId, body.collection.id, name, form)
     },
     onSuccess: (created) => {
       void client.invalidateQueries({ queryKey: bugReportKeys.links(projectId) })
+      void client.invalidateQueries({ queryKey: opPrefix('form_list', workspaceId) })
+      void client.invalidateQueries({ queryKey: opPrefix('form_get', workspaceId) })
       if (created) onShared(created.link.name, created.formUrl ?? created.url)
       else {
         showToast({ title: `${draft.name.trim()} saved` })
@@ -241,7 +380,7 @@ function FormEditor({
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const problem = dailyLimitProblem(draft)
+    const problem = audience === 'public' ? dailyLimitProblem(draft) : null
     if (problem) {
       setError(problem)
       return
@@ -257,18 +396,36 @@ function FormEditor({
         <>
           <Button onClick={onBack}>Back</Button>
           <Button busy={save.isPending} disabled={!draft.name.trim()} type="submit" variant="primary">
-            {link ? 'Save form' : 'Make form'}
+            {editing ? 'Save form' : 'Make form'}
           </Button>
         </>
       }
       onClose={onClose}
       onSubmit={submit}
       open
-      title={link ? `Edit ${link.name}` : 'New form'}
+      title={link ? `Edit ${link.name}` : internal ? `Edit ${internal.name}` : 'New form'}
       width={560}
     >
       <div className="aw-form">
         <TextField label="Form name" maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required value={draft.name} />
+        {editing ? null : (
+          <SegmentedControl<FormAudience>
+            label="Who fills it in"
+            onChange={(next) =>
+              setDraft((current) => {
+                // People questions stay inside the project: a public form drops them.
+                const allowed = new Set(askableFields(body.fields, next).map((field) => field.id))
+                const asked = Object.fromEntries(Object.entries(current.asked).filter(([id]) => allowed.has(id)))
+                return { ...current, audience: next, asked }
+              })
+            }
+            options={[
+              { value: 'public', label: 'Anyone with the link' },
+              { value: 'internal', label: 'People in this project' },
+            ]}
+            value={audience}
+          />
+        )}
         <TextArea
           hint="Shown above the questions."
           label="Intro"
@@ -298,6 +455,7 @@ function FormEditor({
                         onChange={(required) => setDraft((current) => ({ ...current, asked: { ...current.asked, [field.id]: required ? 'required' : 'optional' } }))}
                       />
                     ) : null}
+                    {asked !== undefined ? <QuestionLogic draft={draft} field={field} fields={fields} setDraft={setDraft} /> : null}
                   </li>
                 )
               })}
@@ -314,19 +472,89 @@ function FormEditor({
           rows={2}
           value={draft.thanks}
         />
-        <TextField
-          hint="When it takes this many answers in a day, the form pauses and tells you. Turn it on again to take more."
-          inputMode="numeric"
-          label="Answers a day"
-          max={MAX_DAILY_LIMIT}
-          min={1}
-          onChange={(event) => setDraft({ ...draft, dailyLimit: event.target.value })}
-          type="number"
-          value={draft.dailyLimit}
-        />
+        {audience === 'public' ? (
+          <TextField
+            hint="When it takes this many answers in a day, the form pauses and tells you. Turn it on again to take more."
+            inputMode="numeric"
+            label="Answers a day"
+            max={MAX_DAILY_LIMIT}
+            min={1}
+            onChange={(event) => setDraft({ ...draft, dailyLimit: event.target.value })}
+            type="number"
+            value={draft.dailyLimit}
+          />
+        ) : null}
         {error ? <Banner tone="danger">{error}</Banner> : null}
       </div>
     </Dialog>
+  )
+}
+
+/**
+ * When a question shows (T1.28): always, or only after an earlier choice or
+ * checkbox is answered with one of some values; and a heading it starts.
+ */
+function QuestionLogic({
+  draft,
+  field,
+  fields,
+  setDraft,
+}: {
+  draft: FormDraft
+  field: FieldDefinition
+  fields: FieldDefinition[]
+  setDraft: (change: (current: FormDraft) => FormDraft) => void
+}) {
+  const index = fields.findIndex((candidate) => candidate.id === field.id)
+  const earlier = fields.slice(0, index).filter((candidate) => draft.asked[candidate.id] !== undefined && canBeCondition(candidate))
+  const condition = draft.conditions?.[field.id]
+  const on = earlier.find((candidate) => candidate.id === condition?.on)
+  const setCondition = (next: { on: string; values: string[] } | undefined) =>
+    setDraft((current) => ({ ...current, conditions: { ...current.conditions, [field.id]: next } }))
+  return (
+    <div className="aw-cforms__logic">
+      {earlier.length ? (
+        <SelectField
+          label={
+            <>
+              Show<span className="aw-sr-only"> {field.name}</span>
+            </>
+          }
+          onChange={(event) => setCondition(event.target.value ? { on: event.target.value, values: [] } : undefined)}
+          value={on?.id ?? ''}
+        >
+          <option value="">Always</option>
+          {earlier.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              When {candidate.name} is…
+            </option>
+          ))}
+        </SelectField>
+      ) : null}
+      {on && condition ? (
+        <div className="aw-cforms__values" role="group" aria-label={`${on.name} values that show ${field.name}`}>
+          {conditionValues(on).map((value) => (
+            <Checkbox
+              checked={condition.values.includes(value)}
+              key={value}
+              label={value}
+              onChange={(checked) => setCondition({ on: on.id, values: checked ? [...condition.values, value] : condition.values.filter((entry) => entry !== value) })}
+            />
+          ))}
+        </div>
+      ) : null}
+      <TextField
+        label={
+          <>
+            Section heading<span className="aw-sr-only"> before {field.name}</span>
+          </>
+        }
+        maxLength={120}
+        onChange={(event) => setDraft((current) => ({ ...current, sections: { ...current.sections, [field.id]: event.target.value } }))}
+        placeholder="None"
+        value={draft.sections?.[field.id] ?? ''}
+      />
+    </div>
   )
 }
 

@@ -147,12 +147,27 @@ fn signature_ok(secret: &str, headers: &HeaderMap, body: &str) -> bool {
         == expected
 }
 
-// The walk is one long async body: held on the heap, its state doesn't sit
-// on the test thread's stack under the jobs it pumps (it overflowed the
-// two megabytes there on a loaded runner).
-#[tokio::test]
-async fn api_webhooks_and_automations_act_for_their_maker_only() {
-    Box::pin(webhooks_and_automations_walk()).await;
+// The walk is one long async body, and an unoptimized build polls it in a
+// frame of over half a megabyte, under the operations it calls through the
+// app (each a deep frame of its own): it overflowed the test thread's two
+// megabytes. It runs on a thread of its own with room to spare, on the same
+// single-threaded runtime `#[tokio::test]` gives.
+#[test]
+fn api_webhooks_and_automations_act_for_their_maker_only() {
+    let walk = std::thread::Builder::new()
+        .name("w14-walk".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(Box::pin(webhooks_and_automations_walk()));
+        })
+        .expect("walk thread");
+    if let Err(panic) = walk.join() {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 async fn webhooks_and_automations_walk() {
@@ -1417,11 +1432,15 @@ async fn seed_failing_pull_request(
     linked_by: Uuid,
 ) -> Uuid {
     let integration = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(integration)
-        .execute(pool)
-        .await
-        .expect("integration actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+         SELECT $1, 'integration', 'active', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(integration)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("integration actor");
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration')",
     )

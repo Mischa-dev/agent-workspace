@@ -82,6 +82,15 @@ fn not_supported(kind: &str, what: &str, reason: &str) -> OpError {
     }
 }
 
+/// A version whose values weren't kept, or can't be put back now.
+fn not_kept(why: impl Into<String>) -> OpError {
+    OpError::Conflict {
+        reason: ConflictReason::State { code: "not_kept" },
+        message: why.into().into(),
+        current: None,
+    }
+}
+
 fn adapter_for(kind: &str) -> Result<&'static super::Adapter, OpError> {
     super::adapter(kind)
         .ok_or_else(|| not_supported(kind, "be read", "this kind keeps no history yet"))
@@ -218,15 +227,29 @@ impl Operation for HistoryShow {
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
-        let content = super::show(
-            &crate::files::FileStore::from_config(&call.state.config),
-            &mut connection,
-            &kind,
-            id,
-            input.version,
-        )
-        .await?
-        .ok_or_else(|| OpError::not_found("That version"))?;
+        let content = if kind == "record" {
+            match crate::collections::record_versions::at_version(
+                &mut connection,
+                id,
+                input.version,
+            )
+            .await?
+            {
+                None => return Err(OpError::not_found("That version")),
+                Some(Err(why)) => return Err(not_kept(why)),
+                Some(Ok(earlier)) => earlier.to_json(input.version),
+            }
+        } else {
+            super::show(
+                &crate::files::FileStore::from_config(&call.state.config),
+                &mut connection,
+                &kind,
+                id,
+                input.version,
+            )
+            .await?
+            .ok_or_else(|| OpError::not_found("That version"))?
+        };
         Ok(HistoryShowOutput {
             kind,
             version: input.version,
@@ -280,13 +303,16 @@ impl Operation for HistoryRestore {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Restore a version";
-    const DESCRIPTION: &'static str = "Put an earlier version of a page, whiteboard or sheet back, as a \
-        new version (nothing is lost: the current one stays in history). Pass expectedVersion \
-        from the thing as you read it. Other kinds say why they can't yet.";
+    const DESCRIPTION: &'static str = "Put an earlier version of a page, whiteboard, sheet or \
+        record back, as a new version (nothing is lost: the current one stays in history). For \
+        a record, the fields changed since that version get the values they had then. Pass \
+        expectedVersion from the thing as you read it. Other kinds say why they can't yet.";
     const EMITS: &'static [&'static str] = &[
         "page.version_restored",
         "whiteboard.version_restored",
         "sheet.version_restored",
+        "record.version_restored",
+        "record.updated",
     ];
 
     type Input = HistoryRestoreInput;
@@ -304,6 +330,7 @@ impl Operation for HistoryRestore {
         let permission = match kind.as_str() {
             "page" => Perm::PagesEdit,
             "sheet" => Perm::SheetsEdit,
+            "record" => Perm::CollectionsEdit,
             _ => Perm::WhiteboardsEdit,
         };
         {
@@ -325,6 +352,9 @@ impl Operation for HistoryRestore {
                 Self::TITLE,
             )
             .await?;
+        }
+        if kind == "record" {
+            return restore_record(call, id, input.version, input.expected_version).await;
         }
         let restorer = Restorer {
             page: crate::memory::Writer::from(call.ctx),
@@ -359,4 +389,78 @@ impl Operation for HistoryRestore {
             version,
         })
     }
+}
+
+/// A record's version put back (T1.41): the fields changed since get the
+/// values they had then, as one change by the caller.
+async fn restore_record(
+    call: &mut OpCall<'_>,
+    id: Uuid,
+    version: i64,
+    expected_version: i64,
+) -> Result<HistoryRestoreOutput, OpError> {
+    use crate::collections::record_versions::{self, Restored};
+    let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+    let workspace_id = call.ctx.workspace_id;
+    let actor = call.account_id();
+    let caller = call.ctx.caller.clone();
+    let tx = call.tx().await?;
+    let may_build = crate::access::check(
+        tx,
+        &caller,
+        crate::access::Need::permission(Perm::CollectionsBuild),
+        crate::access::Target::Space(space_id),
+    )
+    .await?
+    .is_ok();
+    let project_key =
+        sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+            .bind(space_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+    let restored = record_versions::restore(
+        tx,
+        crate::work_item_fields::Writer {
+            actor_id: actor,
+            project_key: &project_key,
+        },
+        may_build,
+        id,
+        version,
+        expected_version,
+    )
+    .await?;
+    let now = match restored {
+        Restored::Done(now) => now,
+        Restored::NotFound => return Err(OpError::not_found("That version")),
+        Restored::Moved(now) => {
+            return Err(crate::error::AppError::VersionConflict {
+                resource: "record",
+                current_version: now,
+            }
+            .into());
+        }
+        Restored::Refused(why) => return Err(not_kept(why)),
+    };
+    crate::events::emit(
+        tx,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::RECORD_VERSION_RESTORED,
+            space_id,
+            "record",
+            id,
+        )
+        .version(now)
+        .actor(actor)
+        .workspace(workspace_id)
+        .payload(json!({ "restoredVersion": version })),
+    )
+    .await?;
+    call.audit_target("record", id, json!({ "restoredVersion": version }));
+    Ok(HistoryRestoreOutput {
+        kind: "record".to_owned(),
+        restored: version,
+        version: now,
+    })
 }

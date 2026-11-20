@@ -12,6 +12,7 @@ import type { WorkItemFilters } from '../../work-items/types'
 import type { WorkItemCard } from '../../work-items/types'
 import { moduleEmbedTarget } from './moduleEmbed'
 import './moduleEmbed.css'
+import { spaceHref } from '../../app/href'
 
 /** The most tasks a task list embed shows. */
 const TASKS = 10
@@ -93,7 +94,7 @@ function taskThing(card: WorkItemCard): Thing {
     status: card.status.name,
     ...(card.assignee ? { owner: { id: card.assignee.actorId, name: card.assignee.displayName } } : {}),
     projectId: card.projectId,
-    href: `/projects/${encodeURIComponent(card.projectId)}/work-items/${encodeURIComponent(card.id)}`,
+    href: spaceHref(card.projectId, `/work-items/${encodeURIComponent(card.id)}`),
     fields: { key: card.key, priority: card.priority, dueDate: card.dueDate, estimate: card.estimate },
   }
 }

@@ -1,13 +1,12 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useMemo, useState } from 'react'
 
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { isSafeMessageText } from '../conversations/messageContentModel'
 import type { ConversationTimelineEntry } from '../conversations/types'
-import { answerKey } from './threadTimeline'
-import type { RequestAnswer, Timeline } from './threadTypes'
+import type { Timeline } from './threadTypes'
 
 // What a run action failed to do, for its error toast.
 const ACTION_ERRORS: Record<string, string> = {
@@ -27,7 +26,6 @@ const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
 const threadApi = {
   startRun: (threadId: string, prompt: string, key: string) =>
     post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
-  respond: (requestId: string, answer: RequestAnswer) => callOp('request_respond', { requestId, ...answer }),
   interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
   publish: (projectId: string, runId: string, key: string) =>
@@ -113,11 +111,9 @@ export function useThreadRunActions({
     })
   }
 
-  const respond = (requestId: string, answer: RequestAnswer) => {
-    const request = verifiedTimeline?.requests.find((candidate) => candidate.id === requestId)
-    if (!request || request.status !== 'open' || !request.mayAnswer) return
-    void perform(answerKey(requestId, answer), () => threadApi.respond(requestId, answer))
-  }
+  // A request card answers for itself (pieces/RequestCard); the thread reads its timeline again.
+  const queryClient = useQueryClient()
+  const answered = () => void queryClient.invalidateQueries({ queryKey: queryKeys.timeline(projectId, threadId, includeArchived) })
 
   const interrupt = () => {
     const runId = activeRun?.id
@@ -223,7 +219,7 @@ export function useThreadRunActions({
     prompt,
     publishLastRun,
     refreshPullRequest,
-    respond,
+    answered,
     retryLastRun,
     startRun,
   }

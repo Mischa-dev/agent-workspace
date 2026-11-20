@@ -336,6 +336,157 @@ async fn person_op(
     body
 }
 
+/// A2.27: the tools that aren't operations yet are guarded too. A deny
+/// guard on everything stops a page written by hand-written tool; a review
+/// guard holds it, and once allowed the same call goes through once.
+#[tokio::test]
+async fn guards_hold_hand_written_tools_too() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_tools")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let write = |title: &str| json!({"projectId": space, "title": title, "body": "Notes."});
+    let pool = world.pool().clone();
+    let pages = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Plan'")
+                .fetch_one(&pool)
+                .await
+                .expect("pages")
+        }
+    };
+
+    let denied = op(
+        &world,
+        "guard_set",
+        json!({"name": "Hands off", "action": "deny"}),
+    )
+    .await;
+    let refused = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(refused.to_string().contains("Hands off"), "{refused}");
+    assert_eq!(pages().await, 0);
+    op(
+        &world,
+        "guard_set",
+        json!({"guardId": denied["guard"]["id"], "remove": true}),
+    )
+    .await;
+
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let held = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(held["pendingReview"], true, "{held}");
+    assert_eq!(pages().await, 0);
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["requestId"], "optionId": "allow"}),
+    )
+    .await;
+    let made = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(pages().await, 1);
+    let next = tool(&world, rook, "page_write", write("Plan")).await;
+    assert_eq!(next["pendingReview"], true, "{next}");
+}
+
+/// A conversation's memory page is that conversation's: a change to it held
+/// for review goes only to reviewers who can read the conversation, and
+/// with none who can, it is refused rather than shown to the others.
+#[tokio::test]
+async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_memory")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let channel = tool(
+        &world,
+        rook,
+        "channel_create",
+        json!({"projectId": space, "name": "rook-notes", "private": true}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel = channel["value"]["id"]
+        .as_str()
+        .or_else(|| channel["value"]["conversation"]["id"].as_str())
+        .or_else(|| channel["value"]["conversationId"].as_str())
+        .expect("channel")
+        .to_owned();
+    let memory = tool(
+        &world,
+        rook,
+        "memory_page_set",
+        json!({"conversation": channel, "body": "First.", "clientRequestId": Uuid::now_v7()}),
+    )
+    .await;
+    assert_eq!(memory["outcome"], "ok", "{memory}");
+    let page = memory["value"]["pageId"].as_str().expect("page").to_owned();
+    // The only reviewer isn't in the private channel.
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write", "file_upload"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let written = tool(
+        &world,
+        rook,
+        "page_write",
+        // A link to the page, as the tool takes it, is the page too.
+        json!({"pageId": format!("https://example.test/pages/{page}"), "body": "Second.", "expectedVersion": 1}),
+    )
+    .await;
+    assert_ne!(written["pendingReview"], true, "{written}");
+    assert!(
+        written
+            .to_string()
+            .contains("none of its reviewers can read"),
+        "{written}"
+    );
+    // Nor a file kept on the page, which names it inside `thing`.
+    let uploaded = tool(
+        &world,
+        rook,
+        "file_upload",
+        json!({"thing": {"kind": "page", "id": page}, "name": "plan.txt",
+               "text": "Second plan."}),
+    )
+    .await;
+    assert_ne!(uploaded["pendingReview"], true, "{uploaded}");
+    assert!(
+        uploaded
+            .to_string()
+            .contains("none of its reviewers can read"),
+        "{uploaded}"
+    );
+    let held = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds")
+        .fetch_one(world.pool())
+        .await
+        .expect("holds");
+    assert_eq!(held, 0);
+}
+
 /// A2.27: a team's own guards. A deny guard stops the changes it matches
 /// and nothing else; a review guard holds a change until a reviewer allows
 /// it, then the same call goes through once; declined, it is refused. A

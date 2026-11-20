@@ -108,8 +108,8 @@ pub struct TileInput {
     /// new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<IdRef>,
-    /// "view" (the default when view is given), "sheet" (when sheet is) or
-    /// "text".
+    /// "view" (the default when view is given), "sheet" (when sheet is),
+    /// "query" (when query is) or "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<TileKind>,
     /// Shown above the tile; left out, the view's name.
@@ -131,7 +131,12 @@ pub struct TileInput {
     /// or such as "A1:B9" or "Summary!A1:B9".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
-    /// A sheet tile's chart: bar (the default), line, donut or number.
+    /// A query tile's saved query over outside data, by id
+    /// (data_query_list). A shared dashboard shows shared queries only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<IdRef>,
+    /// A sheet tile's chart: bar (the default), line, donut or number. A
+    /// query tile's chart of its first two columns; a table when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<crate::views::definition::ChartStyle>,
     /// Columns of twelve it spans: 3 to 12 (6 when left out).
@@ -158,6 +163,8 @@ async fn tiles_of(
             format!("A dashboard holds at most {MAX_TILES} tiles."),
         ));
     }
+    let connects =
+        tiles.iter().any(|tile| tile.query.is_some()) && holds(call, Perm::DataConnect).await?;
     let project_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
     let writer = call.ctx.caller.account_id;
     let tx = call.tx().await?;
@@ -167,6 +174,8 @@ async fn tiles_of(
             TileKind::View
         } else if input.sheet.is_some() {
             TileKind::Sheet
+        } else if input.query.is_some() {
+            TileKind::Query
         } else {
             TileKind::Text
         });
@@ -194,6 +203,7 @@ async fn tiles_of(
             text: String::new(),
             sheet: None,
             range: String::new(),
+            query: None,
             style: None,
             width,
             height,
@@ -248,6 +258,33 @@ async fn tiles_of(
                     ));
                 }
                 tile.text = text;
+            }
+            TileKind::Query => {
+                let Some(query) = input.query.map(IdRef::id) else {
+                    return Err(invalid("tiles", "A query tile names its saved query."));
+                };
+                tile.query = Some(query);
+                tile.style = input.style;
+                let kept = before
+                    .iter()
+                    .any(|old| old.id == tile.id && old.query == Some(query));
+                // A query that has since gone stays on a tile it was on (it
+                // shows as gone); one that is there must be one the
+                // dashboard's readers may see.
+                let found = crate::outside_data::query(tx, project_id, query, false)
+                    .await?
+                    .filter(|found| connects || found.shared);
+                match found {
+                    None if !kept => return Err(OpError::not_found("That query")),
+                    Some(found) if shared && !found.shared => {
+                        return Err(invalid(
+                            "tiles",
+                            "A shared dashboard shows shared queries only: share the query \
+                             first, or keep the dashboard your own.",
+                        ));
+                    }
+                    _ => {}
+                }
             }
             TileKind::Sheet => {
                 let Some(sheet) = input.sheet.map(IdRef::id) else {
@@ -340,6 +377,9 @@ pub struct TileEntry {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub range: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub query: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<crate::views::definition::ChartStyle>,
     pub width: u8,
     pub height: u8,
@@ -369,6 +409,7 @@ fn entry(dashboard: &Dashboard) -> DashboardEntry {
                 text: tile.text.clone(),
                 sheet: tile.sheet,
                 range: tile.range.clone(),
+                query: tile.query,
                 style: tile.style,
                 width: tile.width,
                 height: tile.height,
@@ -527,6 +568,11 @@ impl Operation for DashboardGet {
             return Ok(shown);
         }
         let can_view_tasks = holds(call, Perm::TasksView).await?;
+        let connects = dashboard
+            .tiles
+            .iter()
+            .any(|tile| tile.kind == TileKind::Query)
+            && holds(call, Perm::DataConnect).await?;
         let project_id = dashboard.project_id;
         let reader = call.ctx.caller.account_id;
         let tx = call.tx().await?;
@@ -537,9 +583,14 @@ impl Operation for DashboardGet {
                     super::figures(tx, project_id, tile, reader, can_view_tasks).await?
                 }
                 TileKind::Sheet => super::sheet_figures(tx, project_id, tile, reader).await?,
+                TileKind::Query => super::query_figures(tx, project_id, tile, connects).await?,
             };
             match figures {
                 Ok(figures) => shown.figures = Some(figures),
+                Err(Unseen::Gone) if tile.kind == TileKind::Query => {
+                    shown.unseen =
+                        Some("This tile's query is gone, or isn't shared with you.".into());
+                }
                 Err(Unseen::Gone) => {
                     shown.unseen =
                         Some("This tile's view is gone, or isn't one you can see.".into());
@@ -547,6 +598,9 @@ impl Operation for DashboardGet {
                 Err(Unseen::Tasks) => {
                     shown.unseen =
                         Some("You can't see this data: your role doesn't see tasks.".into());
+                }
+                Err(Unseen::NotRun) => {
+                    shown.unseen = Some("This query hasn't run yet.".into());
                 }
                 Err(Unseen::Range) => {
                     shown.unseen = Some(
@@ -738,6 +792,7 @@ impl Operation for DashboardUpdate {
                         text: (!tile.text.is_empty()).then(|| tile.text.clone()),
                         sheet: tile.sheet.map(IdRef),
                         range: (!tile.range.is_empty()).then(|| tile.range.clone()),
+                        query: tile.query.map(IdRef),
                         style: tile.style,
                         width: Some(tile.width),
                         height: Some(tile.height),

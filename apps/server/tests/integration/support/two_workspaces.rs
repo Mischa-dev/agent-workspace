@@ -103,6 +103,14 @@ pub(crate) struct World {
     pub(crate) collection_view: Uuid,
     /// A shared dashboard (T1.32) with a tile over `collection_view`.
     pub(crate) dashboard: Uuid,
+    /// An outside data connection (T1.34) and a saved query on it.
+    pub(crate) data_connection: Uuid,
+    pub(crate) data_query: Uuid,
+    /// An internal form (T1.28) on `collection`.
+    pub(crate) form: Uuid,
+    /// A record template (T1.30) on `collection`, made daily.
+    pub(crate) record_template: Uuid,
+    pub(crate) recurring_record: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -120,6 +128,8 @@ pub(crate) struct World {
     pub(crate) foreign_file_link: String,
     /// The workspace's own emoji (C2.19), added by `rook`.
     pub(crate) custom_emoji: Uuid,
+    /// A theme of `rook`'s that the workspace offers to everyone.
+    pub(crate) theme: Uuid,
     /// A built module (M1.6) in the project, holding nothing.
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
@@ -866,6 +876,63 @@ async fn build_workspace(
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
+    let data_connection = call(
+        "data_connection_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Warehouse{m}"),
+            "address": format!("postgresql://reader:secret{m}@db.example.com/warehouse"),
+            "clientRequestId": "data-connection-1",
+        }),
+    )
+    .await;
+    let data_connection =
+        Uuid::parse_str(&string_at(&data_connection, "/value/id")).expect("data connection id");
+    let data_query = call(
+        "data_query_create",
+        json!({
+            "spaceId": project,
+            "connection": data_connection.to_string(),
+            "name": format!("Orders{m}"),
+            "statement": format!("SELECT 'Orders{m}' AS team"),
+            "clientRequestId": "data-query-1",
+        }),
+    )
+    .await;
+    let data_query = Uuid::parse_str(&string_at(&data_query, "/value/id")).expect("data query id");
+    let form = call(
+        "form_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Intake{m}"),
+            "clientRequestId": "form-1",
+        }),
+    )
+    .await;
+    let form = Uuid::parse_str(&string_at(&form, "/value/id")).expect("form id");
+    let record_template = call(
+        "record_template_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Weekly{m}"),
+            "title": format!("Check-in{m} {{date}}"),
+            "clientRequestId": "record-template-1",
+        }),
+    )
+    .await;
+    let record_template =
+        Uuid::parse_str(&string_at(&record_template, "/value/id")).expect("record template id");
+    let recurring_record = call(
+        "recurring_record_create",
+        json!({
+            "template": record_template.to_string(),
+            "frequency": "daily",
+            "clientRequestId": "recurring-record-1",
+        }),
+    )
+    .await;
+    let recurring_record =
+        Uuid::parse_str(&string_at(&recurring_record, "/value/id")).expect("recurring id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -1186,8 +1253,10 @@ async fn build_workspace(
         .await
         .expect("owner");
         let account = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+            "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
         )
+        .bind(organization)
         .fetch_one(pool)
         .await
         .expect("host account");
@@ -1833,6 +1902,23 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("custom emoji");
+    let theme = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO themes (id, workspace_id, owner_account_id, name, document, offered) \
+         VALUES ($1, $2, $3, 'World theme', $4, true)",
+    )
+    .bind(theme)
+    .bind(organization)
+    .bind(rook)
+    .bind(serde_json::json!({
+        "format": 1,
+        "light": {"base": "quiet", "tokens": {"accent": "#224466"}},
+        "dark": {"base": "quiet-dark", "tokens": {}},
+        "css": ".aw-card { border-color: var(--accent); }"
+    }))
+    .execute(pool)
+    .await
+    .expect("theme");
     // C2.17: rook's avatar, served only to people who share a workspace.
     sqlx::query(
         "INSERT INTO account_profiles (account_id, avatar, avatar_type) VALUES ($1, $2, 'image/png')",
@@ -1964,6 +2050,11 @@ async fn build_workspace(
         collection_button,
         collection_view,
         dashboard,
+        data_connection,
+        data_query,
+        form,
+        record_template,
+        recurring_record,
         record,
         sheet,
         sheet_chart,
@@ -1974,6 +2065,7 @@ async fn build_workspace(
         file_link: String::new(),
         foreign_file_link: String::new(),
         custom_emoji,
+        theme,
         module,
         package_install,
         export: Uuid::nil(),
@@ -2034,20 +2126,20 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
     // Tables with a UUID `id` and one of these parent columns.
     let tables = sqlx::query_as::<_, (String, String)>(
         r#"
-        SELECT parent.table_name::text, parent.column_name::text
-        FROM information_schema.columns parent
-        JOIN information_schema.columns own
-          ON own.table_schema = parent.table_schema
-         AND own.table_name = parent.table_name
-         AND own.column_name = 'id'
-         AND own.data_type = 'uuid'
-        JOIN information_schema.tables listed
-          ON listed.table_schema = parent.table_schema
-         AND listed.table_name = parent.table_name
-         AND listed.table_type = 'BASE TABLE'
-        WHERE parent.table_schema = current_schema()
-          AND parent.data_type = 'uuid'
-          AND parent.column_name IN (
+        -- From pg_catalog: the same join over information_schema's views
+        -- took twenty seconds a sweep, three sweeps a test.
+        SELECT listed.relname::text, parent.attname::text
+        FROM pg_class listed
+        JOIN pg_namespace schema
+          ON schema.oid = listed.relnamespace AND schema.nspname = current_schema()
+        JOIN pg_attribute own
+          ON own.attrelid = listed.oid AND own.attname = 'id'
+         AND own.atttypid = 'uuid'::regtype AND NOT own.attisdropped
+        JOIN pg_attribute parent
+          ON parent.attrelid = listed.oid AND parent.attnum > 0
+         AND parent.atttypid = 'uuid'::regtype AND NOT parent.attisdropped
+        WHERE listed.relkind IN ('r', 'p')
+          AND parent.attname IN (
               'organization_id', 'project_id', 'conversation_id', 'work_item_id',
               'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id',
               -- K4.3 (G6): the names new tables use (ruling R1).

@@ -19,8 +19,12 @@ const linkedThreadId = '019fb600-0000-7000-8000-000000000006'
 const createdThreadId = '019fb600-0000-7000-8000-000000000007'
 
 class WebSocketStub extends EventTarget {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
   static instances: WebSocketStub[] = []
+  readyState = WebSocketStub.CONNECTING
   close = vi.fn()
+  send = vi.fn()
 
   constructor() {
     super()
@@ -310,7 +314,7 @@ describe('M2 Channel workspace', () => {
       }),
     ).toHaveAttribute(
       'href',
-      `/projects/${projectId}/threads/${linkedThreadId}`,
+      `/w/mischa/s/${projectId}/threads/${linkedThreadId}`,
     )
     await waitFor(() =>
       expect(
@@ -368,7 +372,7 @@ describe('M2 Channel workspace', () => {
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get('thread')).toBe(createdThreadId),
     )
-    expect(window.location.pathname).toBe(`/projects/${projectId}/channels/${channelId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectId}/chat/${channelId}`)
     expect(await screen.findByRole('complementary', { name: 'Thread' })).toBeVisible()
   })
 
@@ -489,7 +493,7 @@ describe('M2 Channel workspace', () => {
     })
 
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/projects/${projectId}`),
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectId}`),
     )
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Agent Workspace' }),

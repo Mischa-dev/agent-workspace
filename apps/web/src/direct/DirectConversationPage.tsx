@@ -1,3 +1,4 @@
+import { here } from '../app/href'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -22,7 +23,7 @@ import { ThreadChip } from '../conversations/ThreadChip'
 import { threadChipFacts } from '../conversations/threadChipModel'
 import { useRefreshThreads, useThreads } from '../conversations/threadModel'
 import { ThreadDialog } from '../conversations/ThreadDialog'
-import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries } from '../conversations/Timeline'
+import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries, TypingNow } from '../conversations/Timeline'
 import type { ConversationActor, ConversationTimelineEntry, ThreadSummary } from '../conversations/types'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useFirstUnread } from '../conversations/useFirstUnread'
@@ -273,7 +274,7 @@ export function DirectConversationPage() {
       },
   })
   if (isApiError(timeline.error) && timeline.error.status === 404) {
-    return <Navigate replace to="/messages" />
+    return <Navigate replace to={here('/messages')} />
   }
 
   const otherKind = other ? actorKind(other.kind) : 'person'
@@ -432,6 +433,8 @@ export function DirectConversationPage() {
           viewerId={viewerId}
         />
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {/* Direct messages always say who is typing; layouts are for spaces. */}
+        <TypingNow conversationId={conversationId} entries={entries} viewerId={viewerId} />
       </ConversationTimeline>
       {waitingForContinue ? (
         <Banner
@@ -458,7 +461,7 @@ export function DirectConversationPage() {
             kind: 'message',
             conversationId,
             conversationKind: isGroup ? 'group' : 'dm',
-            href: `/messages/${encodeURIComponent(conversationId)}`,
+            href: here(`/messages/${encodeURIComponent(conversationId)}`),
           }}
           onEditLast={() => messageActions.editLast(entries)}
           onReplyChange={reply.set}
@@ -486,7 +489,7 @@ export function DirectConversationPage() {
       <LeaveGroupDialog
         conversationId={conversationId}
         onClose={() => setLeaving(null)}
-        onLeft={() => navigate('/messages')}
+        onLeft={() => navigate(here('/messages'))}
         open={leaving === conversationId}
         title={title}
         viewerId={viewerId}

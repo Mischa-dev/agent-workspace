@@ -180,6 +180,21 @@ button.aw-convhead__title[aria-expanded="true"] {
   color: var(--content-fg);
 }
 
+/* Who is typing (W1.6): a quiet line under the messages, empty most of the time. */
+.aw-typing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: 0;
+  padding: 0 var(--space-4) 0 calc(var(--space-4) + var(--size-avatar) + var(--space-3));
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+.aw-typing:not(:empty) {
+  padding-block: var(--space-1) var(--space-2);
+}
+
 .aw-day {
   display: flex;
   align-items: center;

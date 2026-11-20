@@ -72,7 +72,7 @@ export const LANE_FIELDS: Array<{ value: LaneBy; label: string }> = [
 /** List columns a view can hide; select and title always show. */
 export const VIEW_FIELDS = ['priority', 'key', 'status', 'details', 'due', 'assignee']
 
-export const SEMANTIC_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled']
+export const SEMANTIC_CATEGORIES = ['triage', 'backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled']
 
 const ID = /^[A-Za-z0-9_.:-]{1,100}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/

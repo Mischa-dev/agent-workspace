@@ -424,6 +424,8 @@ pub(crate) enum ThingKind {
     /// A board's images (C1.29), each under the id the board's elements
     /// name it by.
     Whiteboard,
+    /// A collection record: its file fields hold its files (T1.20).
+    Record,
 }
 
 impl ThingKind {
@@ -432,6 +434,7 @@ impl ThingKind {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "page" => Some(Self::Page),
+            "record" => Some(Self::Record),
             _ => None,
         }
     }
@@ -440,6 +443,16 @@ impl ThingKind {
         match self {
             Self::Page => "page",
             Self::Whiteboard => "whiteboard",
+            Self::Record => "record",
+        }
+    }
+
+    /// What uploading to one takes: editing it.
+    pub(crate) fn edit_action(self) -> crate::policy::Action {
+        match self {
+            Self::Page => crate::policy::Action::PageEdit,
+            Self::Whiteboard => crate::policy::Action::WhiteboardEdit,
+            Self::Record => crate::policy::Action::CollectionRecordEdit,
         }
     }
 }
@@ -498,6 +511,43 @@ pub(crate) async fn thing_destination(
                 thing,
                 thing_id,
                 purpose: Purpose::Inline,
+            })
+        }
+        ThingKind::Record => {
+            let (project_id, archived) = sqlx::query_as::<_, (Uuid, bool)>(
+                "SELECT project_id, archived_at IS NOT NULL FROM collection_records WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(crate::db::scoped(pool))
+            .await?
+            .ok_or(AppError::NotFound("record"))?;
+            crate::memory::project_access(
+                pool,
+                editor,
+                project_id,
+                crate::policy::Action::CollectionRecordEdit,
+            )
+            .await
+            .map_err(|_| AppError::NotFound("record"))?;
+            // A record of a collection that acts like tasks also wants
+            // seeing tasks there.
+            let visible =
+                sqlx::query_scalar::<_, bool>("SELECT subject_visible_to('record', $1, $2)")
+                    .bind(thing_id)
+                    .bind(editor)
+                    .fetch_one(crate::db::scoped(pool))
+                    .await?;
+            if !visible {
+                return Err(AppError::NotFound("record"));
+            }
+            if archived {
+                return Err(AppError::Conflict("record", "archived"));
+            }
+            Ok(Destination::Thing {
+                project_id,
+                thing,
+                thing_id,
+                purpose: Purpose::Attachment,
             })
         }
     }

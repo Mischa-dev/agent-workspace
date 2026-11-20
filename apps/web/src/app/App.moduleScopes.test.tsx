@@ -142,7 +142,7 @@ describe('entry points follow the modules where they lead', () => {
     withScopes({ home: ['tasks'], extra: references })
     window.history.replaceState({}, '', '/AW-7')
     const first = render(<App />)
-    await waitFor(() => expect(window.location.pathname).toBe(`/projects/${projectAId}/work-items/item-7`))
+    await waitFor(() => expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/tasks/item-7`))
     await settle()
     expect(turnedOff('Tasks')).toBeNull()
     first.unmount()
@@ -152,7 +152,7 @@ describe('entry points follow the modules where they lead', () => {
     window.history.replaceState({}, '', '/AW-7')
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Tasks is turned off' })).toBeVisible()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}/work-items/item-7`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/tasks/item-7`)
   })
 
   it('the command menu follows each entry’s own project, Home for the rest', async () => {
@@ -218,7 +218,7 @@ describe('entry points follow the modules where they lead', () => {
     await settle()
     await waitFor(() => {
       press('g', 't')
-      expect(window.location.pathname).toBe(`/projects/${projectAId}/work-items`)
+      expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}/tasks`)
     })
     press('g', 'w')
     await settle()
@@ -243,7 +243,7 @@ describe('entry points follow the modules where they lead', () => {
     await settle()
     press('g', 't')
     await settle()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/s/${projectAId}`)
     press('?')
     const again = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     expect(again.querySelector('dd[aria-label="G then W"]')).toBeTruthy()

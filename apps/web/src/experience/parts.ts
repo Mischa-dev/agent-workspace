@@ -24,6 +24,7 @@ export const PART_IDS = [
   'area.files',
   'task.type',
   'task.priority',
+  'task.delegate',
   'task.estimate',
   'task.custom_fields',
   'task.labels',
@@ -43,6 +44,7 @@ export const PART_IDS = [
   'channel.details',
   'talk.sidebar_sections',
   'talk.replies',
+  'talk.typing',
   'talk.channel_memory',
   'thing.comments',
   'page.live_editing',
@@ -62,12 +64,15 @@ export const PART_IDS = [
   'home.working_now',
   'home.capacity',
   'workspace.my_work',
+  'workspace.initiatives',
+  'workspace.project_updates',
   'workspace.threads',
   'workspace.later',
   'workspace.inbox_triage',
   'workspace.inbox_views',
   'workspace.runs',
   'workspace.hosts',
+  'workspace.budgets',
 ] as const
 
 export type PartId = (typeof PART_IDS)[number]

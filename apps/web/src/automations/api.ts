@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp, type OpInput, type OpOutput } from '../api/ops'
 
 /**
  * Automation rules and the public API's document (W14). A person's
@@ -12,16 +13,14 @@ export const automationKeys = {
   channels: (projectId: string) => ['project', projectId, 'automations', 'channels'] as const,
   runs: (projectId: string, ruleId: string) => ['project', projectId, 'automations', ruleId, 'runs'] as const,
   openapi: ['public-api', 'openapi'] as const,
+  operations: ['api', 'v2', 'openapi'] as const,
+  preview: (projectId: string, ruleId: string, taskId: string | null) => ['project', projectId, 'automations', ruleId, 'preview', taskId] as const,
 }
 
-const json = <T>(path: string, method: string, body: unknown = {}) =>
-  requestJson<T>(path, {
-    method,
-    json: body,
-    idempotencyKey: crypto.randomUUID(),
-  })
-
 // Automation rules
+
+/** A field filter on a record rule, as record_query takes one. */
+export type RecordFilter = { field: string; op: string; values?: string[] }
 
 export type Trigger =
   | { kind: 'task_created' }
@@ -36,6 +35,10 @@ export type Trigger =
   /** A collection's records (AWD-110): one collection, or any. */
   | { kind: 'record_created'; collectionId?: string | null }
   | { kind: 'record_changed'; collectionId?: string | null }
+  /** A record starts matching a view of its collection and field filters (T1.38); stored by IDs. */
+  | { kind: 'record_matches'; collectionId: string; viewId?: string | null; filters?: RecordFilter[] }
+  /** A field of a record changes, to one of `to` when given (option IDs or values as stored). */
+  | { kind: 'field_changed'; collectionId: string; field: string; to?: string[]; viewId?: string | null; filters?: RecordFilter[] }
   /** A page, sheet or board kept as a new version: one of them, or any in the project. */
   | { kind: 'page_changed'; pageId?: string | null }
   | { kind: 'sheet_changed'; sheetId?: string | null }
@@ -128,28 +131,40 @@ export type AutomationRun = {
   finishedAt: string | null
 }
 
-const rulesPath = (projectId: string, suffix = '') => `/api/v1/projects/${encodeURIComponent(projectId)}/automations${suffix}`
+// Every rule call is an operation; their answers are the rule views the
+// server has always sent, typed here.
+type OpTrigger = OpInput<'automation_create'>['trigger']
+type OpActions = OpInput<'automation_create'>['actions']
+const asInput = (draft: Partial<RuleDraft>) => ({
+  ...draft,
+  ...(draft.trigger ? { trigger: draft.trigger as unknown as OpTrigger } : {}),
+  ...(draft.actions ? { actions: draft.actions as unknown as OpActions } : {}),
+})
 
-export const listRules = (projectId: string) => requestJson<{ rules: AutomationRule[]; canCreate: boolean }>(rulesPath(projectId))
+export const listRules = async (projectId: string) =>
+  (await callOp('automation_list', { projectId })) as { rules: AutomationRule[]; canCreate: boolean }
 
-export const createRule = (projectId: string, draft: RuleDraft) => json<AutomationRule>(rulesPath(projectId), 'POST', draft)
+export const createRule = async (projectId: string, draft: RuleDraft) =>
+  (await callOp('automation_create', { projectId, ...asInput(draft) } as OpInput<'automation_create'>)) as AutomationRule
 
-export const updateRule = (projectId: string, rule: Pick<AutomationRule, 'id' | 'version'>, change: Partial<RuleDraft>) =>
-  json<AutomationRule>(rulesPath(projectId, `/${encodeURIComponent(rule.id)}`), 'PATCH', {
-    expectedVersion: rule.version,
-    ...change,
-  })
+export const updateRule = async (projectId: string, rule: Pick<AutomationRule, 'id' | 'version'>, change: Partial<RuleDraft>) =>
+  (await callOp('automation_update', { projectId, ruleId: rule.id, expectedVersion: rule.version, ...asInput(change) } as OpInput<'automation_update'>)) as AutomationRule
 
-export const deleteRule = (projectId: string, ruleId: string) =>
-  requestJson<void>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}`), {
-    method: 'DELETE',
-  })
+export const deleteRule = async (projectId: string, ruleId: string) => {
+  await callOp('automation_delete', { projectId, ruleId })
+}
 
-export const runRule = (projectId: string, ruleId: string, workItemId?: string) =>
-  json<AutomationRun>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}/run`), 'POST', workItemId ? { workItemId } : {})
+export const runRule = async (projectId: string, ruleId: string, workItemId?: string) =>
+  (await callOp('automation_run_start', { projectId, ruleId, ...(workItemId ? { taskId: workItemId } : {}) })) as AutomationRun
 
-export const listRuns = (projectId: string, ruleId: string) =>
-  requestJson<{ runs: AutomationRun[] }>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}/runs`))
+/** What a rule would do if it fired now, worked out without doing any of it. */
+export type RulePreview = OpOutput<'automation_preview'>
+
+export const previewRule = (projectId: string, ruleId: string, workItemId?: string) =>
+  callOp('automation_preview', { projectId, ruleId, ...(workItemId ? { taskId: workItemId } : {}) })
+
+export const listRuns = async (projectId: string, ruleId: string) =>
+  (await callOp('automation_history', { projectId, ruleId })) as { runs: AutomationRun[] }
 
 // The public API's OpenAPI document
 
@@ -187,3 +202,6 @@ export type OpenApiDocument = {
 }
 
 export const getOpenApi = () => requestJson<OpenApiDocument>('/api/public/v1/openapi.json')
+
+/** Every operation's input schema, as the v2 document has them: the automation builder's forms. */
+export const getOperationDocument = () => requestJson<OpenApiDocument>('/api/v2/openapi.json')

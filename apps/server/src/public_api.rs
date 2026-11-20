@@ -48,13 +48,58 @@ pub fn router() -> Router<AppState> {
         .route("/api/public/v1/{tool}", post(call_operation))
 }
 
-async fn openapi_document() -> Response {
-    let mut response = Json(document()).into_response();
-    response.headers_mut().insert(
+/// The document, gzipped for a client that takes it: it is close to a
+/// megabyte as JSON and a tenth of that compressed.
+async fn openapi_document(headers: HeaderMap) -> Response {
+    let gzip = headers
+        .get_all(http::header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|coding| {
+            let mut parts = coding.split(';');
+            let name = parts.next().unwrap_or("").trim();
+            let refused = parts.any(|parameter| {
+                parameter
+                    .trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.trim().parse::<f32>().ok())
+                    == Some(0.0)
+            });
+            name.eq_ignore_ascii_case("gzip") && !refused
+        });
+    let mut response = if gzip {
+        match gzipped(&document()) {
+            Ok(body) => (
+                [
+                    (http::header::CONTENT_TYPE, "application/json"),
+                    (http::header::CONTENT_ENCODING, "gzip"),
+                ],
+                body,
+            )
+                .into_response(),
+            Err(_) => Json(document()).into_response(),
+        }
+    } else {
+        Json(document()).into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(
         http::header::CACHE_CONTROL,
         http::HeaderValue::from_static("public, max-age=300"),
     );
+    headers.insert(
+        http::header::VARY,
+        http::HeaderValue::from_static("accept-encoding"),
+    );
     response
+}
+
+fn gzipped(document: &Value) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&serde_json::to_vec(document).map_err(std::io::Error::other)?)?;
+    encoder.finish()
 }
 
 async fn call_operation(
@@ -227,10 +272,11 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// An output schema's descriptions cut to their first sentence: the
-/// result's shape is the reference, and the operation's own description and
-/// its arguments say the rest. Kept whole, results take most of the
-/// document.
+/// A schema's descriptions cut to their first sentence: the result's shape
+/// is the reference, and the operation's own description says the rest.
+/// Kept whole, results take most of the document. An argument's first
+/// sentence says what it is; its full text is in the agent tool's schema
+/// (`tools/list`), which is where the longer guidance is read.
 fn brief(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -419,9 +465,13 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     }
     // The shared branches together (paused, started, each refusal) are the
     // same list for most operations: one `oneOf` of them, named once.
-    let (kept, shared): (Vec<Value>, Vec<Value>) = branches
+    let (kept, mut shared): (Vec<Value>, Vec<Value>) = branches
         .drain(..)
         .partition(|branch| !is_shared_branch(branch));
+    // What the edge answers before any operation runs (401, 413, 429) is
+    // one more branch of the same list, rather than a response named again
+    // under every path.
+    shared.push(json!({ "$ref": "#/components/schemas/Error" }));
     if shared.len() < 2 {
         branches.extend(kept);
         branches.extend(shared);
@@ -685,9 +735,17 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
+        // The note on clientRequestId that ends a write's tool description:
+        // the introduction says it once for every operation (said per
+        // operation, it passed the size budget).
+        let description = tool.description.as_deref().unwrap_or_default();
+        let description = description
+            .strip_suffix(crate::ops::mcp::RETRY_NOTE)
+            .unwrap_or(description);
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
         drop_optional_nulls(&mut input);
+        brief(&mut input);
         let (result, output) = tool
             .output_schema
             .as_ref()
@@ -735,7 +793,7 @@ pub(crate) fn document() -> Value {
         let mut post = json!({
             "operationId": name,
             "summary": title,
-            "description": tool.description.as_deref().unwrap_or_default(),
+            "description": description,
             "tags": [tag],
             "requestBody": {
                 "required": true,
@@ -1046,14 +1104,19 @@ mod tests {
         let schemas = document["components"]["schemas"]
             .as_object()
             .expect("schemas");
-        // The reference page fetches it whole, so keep it under a megabyte.
-        // Raised from 768 KiB with AWD-62's question tools; past this, serve
-        // it compressed or slim the result schemas rather than raise it again.
+        // The reference page fetches it whole, gzipped (a tenth of its size
+        // as JSON), so keep that small; the JSON itself has room to grow as
+        // operations are added. Past these, slim the result schemas.
         let size = serde_json::to_vec(&document).expect("serialize").len();
         if std::env::var_os("SHOW_PUBLIC_API_SIZE").is_some() {
             eprintln!("the public API document is {size} bytes");
         }
-        assert!(size < 896 * 1024, "the document is {size} bytes");
+        assert!(size < 1536 * 1024, "the document is {size} bytes");
+        let compressed = super::gzipped(&document).expect("gzip").len();
+        assert!(
+            compressed < 192 * 1024,
+            "the document is {compressed} bytes gzipped"
+        );
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());

@@ -1,4 +1,6 @@
+import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { asRecord, capability, integer, normalizeConversationActor, nullableString, REMOVED_MESSAGE_CONTENT, string } from './sidebarApi'
 import type { FileAttachment } from '../files/model'
 import {
@@ -42,7 +44,7 @@ function normalizeWorkItemReference(
     typeof item.id !== 'string' ||
     typeof item.key !== 'string' ||
     typeof item.href !== 'string' ||
-    !item.href.startsWith('/projects/')
+    !isSpaceAddress(item.href)
   ) {
     return null
   }
@@ -347,25 +349,16 @@ function normalizeReplyRequest(value: unknown): ReplyRequest | null {
 }
 
 export async function continueConversation(conversationId: string) {
-  await requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(conversationId)}/continue`,
-    { method: 'POST' },
-  )
+  await callOp('conversation_continue', { conversationId })
 }
 
 export async function retryReplyRequest(requestId: string) {
-  await requestJson<unknown>(
-    `/api/v1/reply-requests/${encodeURIComponent(requestId)}/retry`,
-    { method: 'POST' },
-  )
+  await callOp('reply_retry', { requestId })
 }
 
 /** Stop an agent's work on a request (and its follow-ups queued behind it). */
 export async function stopReplyRequest(requestId: string) {
-  await requestJson<unknown>(
-    `/api/v1/reply-requests/${encodeURIComponent(requestId)}/stop`,
-    { method: 'POST' },
-  )
+  await callOp('reply_stop', { requestId })
 }
 
 export async function getConversationTimeline(
@@ -584,13 +577,7 @@ export async function archiveConversation(input: {
   kind: 'channel' | 'thread'
   expectedVersion: number
 }) {
-  return requestJson<unknown>(
-    `/api/v1/${input.kind === 'channel' ? 'channels' : 'threads'}/${encodeURIComponent(input.conversationId)}/archive`,
-    {
-      method: 'POST',
-      json: { expectedVersion: input.expectedVersion },
-    },
-  )
+  return callOp('conversation_update', { conversationId: input.conversationId, archived: true }, { expectedVersion: input.expectedVersion })
 }
 
 /** Undo an archive. `expectedVersion` is the version the archive returned. */
@@ -599,30 +586,22 @@ export async function restoreConversation(input: {
   kind: 'channel' | 'thread'
   expectedVersion: number
 }) {
-  return requestJson<unknown>(
-    `/api/v1/${input.kind === 'channel' ? 'channels' : 'threads'}/${encodeURIComponent(input.conversationId)}/restore`,
-    {
-      method: 'POST',
-      json: { expectedVersion: input.expectedVersion },
-    },
-  )
+  return callOp('conversation_update', { conversationId: input.conversationId, archived: false }, { expectedVersion: input.expectedVersion })
 }
 
 /** The version a conversation has after an archive or restore, from its response. */
 export function conversationVersionFrom(response: unknown, fallback: number) {
-  const conversation = response && typeof response === 'object' ? (response as { conversation?: { version?: unknown } }).conversation : undefined
-  return typeof conversation?.version === 'number' ? conversation.version : fallback
+  const version = response && typeof response === 'object' ? (response as { version?: unknown }).version : undefined
+  return typeof version === 'number' ? version : fallback
 }
 
 /** Make `messageId` and everything after it unread for you again (never marks anything read). */
 export async function markConversationUnread(input: { conversationId: string; messageId: string | null }) {
-  return requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/mark-unread`,
-    {
-      method: 'POST',
-      json: { messageId: input.messageId },
-    },
-  )
+  return callOp('conversation_mark_read', {
+    conversationId: input.conversationId,
+    unread: true,
+    ...(input.messageId ? { fromMessageId: input.messageId } : {}),
+  })
 }
 
 export async function searchMentionableActors(
@@ -649,5 +628,5 @@ export async function updateThread(
   threadId: string,
   patch: { name?: string; status?: string; outcome?: string; clearOutcome?: boolean },
 ) {
-  return requestJson<unknown>(`/api/v1/threads/${encodeURIComponent(threadId)}`, { method: 'PATCH', json: patch })
+  return callOp('thread_update', { threadId, ...patch })
 }

@@ -1,4 +1,5 @@
 pub mod ops;
+pub mod scope;
 
 use axum::{
     Json, Router,
@@ -70,6 +71,8 @@ struct AccessRow {
     organization_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the manager's groups are given in the project (K1.27).
+    project_group_permissions: Option<Vec<String>>,
     project_enabled: bool,
 }
 
@@ -1390,6 +1393,9 @@ fn management_allowed(
     ) else {
         return false;
     };
+    let project_grant = project_grant.with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
     manager_active
         && crate::access::workspace_membership_allows(
             manager,
@@ -1517,6 +1523,7 @@ fn access_sql(lock: bool) -> &'static str {
                workspace_role_permissions(om.role_id) AS organization_role_permissions,
                pm.role AS project_role,
                workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               space_group_permissions(pm.actor_id, p.id) AS project_group_permissions,
                pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om
@@ -1533,6 +1540,7 @@ fn access_sql(lock: bool) -> &'static str {
                workspace_role_permissions(om.role_id) AS organization_role_permissions,
                pm.role AS project_role,
                workspace_role_permissions(pm.role_id) AS project_role_permissions,
+               space_group_permissions(pm.actor_id, p.id) AS project_group_permissions,
                pm.enabled AS project_enabled
         FROM projects p
         JOIN organization_memberships om

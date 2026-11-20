@@ -83,6 +83,21 @@ const rules: Rule[] = [
     skip: (file) => file.startsWith("shell/"),
   },
   {
+    // W1.14c (AGENTS.md rule 13): a page's address comes from a builder in
+    // app/href.ts or app/thingHref.ts (projects/locations.ts until W1.14d),
+    // never pasted together from `/projects/${id}` or `/w/${slug}`. API
+    // paths (`/api/v1/projects/${id}`) aren't addresses and don't count.
+    id: "web_pasted_addresses",
+    what: "an address pasted together; build it with spaceHref, workspaceHref, here or thingHref",
+    ceiling: 0,
+    count: (source) =>
+      (source.match(/(?:^|[^\w/])\/(?:projects|w)\/\$\{|['"`]\/(?:projects|w)\/['"`]\s*\+/gm) ?? []).length,
+    // The builders themselves, and the one reader that matches addresses
+    // to find the thing a pasted link names.
+    skip: (file) =>
+      ["app/href.ts", "app/thingHref.ts", "projects/locations.ts", "modules/references/thingLinks.ts"].includes(file),
+  },
+  {
     id: "web_vendor_names",
     what: "a provider or harness name in the app; use the name its manifest gives",
     ceiling: 20,

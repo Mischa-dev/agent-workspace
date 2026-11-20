@@ -3,17 +3,19 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useProjectExperience } from '../experience/layout'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { useShellPage } from '../shell/shellStore'
 import { useProjects } from '../projects/hooks'
 import { ButtonLink, EmptyState, ErrorState, ListSkeleton, PageHeader, Section, StatusChip, actorKind, countLabel } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import { LIST_PIECE_TITLE, ListPiece, ListPieceTitle } from '../pieces/ListPiece'
 import { workItemHref, workItemsHref } from '../work-items/links'
 import { useOpenAsYouGo } from '../work-items/shortcutKeys'
 import { TaskPanel } from '../work-items/TaskPanel'
+import { UpdateLine } from '../work-items/UpdateLine'
 import { PriorityIcon, StatusIcon } from '../work-items/WorkItemIcons'
 import type { WorkItemPriority } from '../work-items/types'
-import { getMyWork, viewKeys, type MyWorkSection, type MyWorkTask } from './api'
+import { getMyWork, viewKeys, type MyWorkSection, type MyWorkTask, type MyWorkUpdate } from './api'
 import { dayLabel } from './dates'
 import './views.css'
 
@@ -61,7 +63,7 @@ export function MyWorkPage() {
   const following = useOpenAsYouGo((task: TaskPlace) => {
     if (task.id !== openTaskId) showTask(task)
   })
-  useListKeys(pageRef, '.aw-mywork__title', {
+  useListKeys(pageRef, LIST_PIECE_TITLE, {
     onMove: (element) => {
       const { projectId, taskId } = element.dataset
       if (taskId && projectId) following.follow({ id: taskId, projectId })
@@ -106,6 +108,7 @@ export function MyWorkPage() {
             Tasks assigned to you, claimed by your agents or waiting for your review show up here.
           </EmptyState>
         ) : null}
+        {work.data?.updates?.length ? <UpdatesSection updates={work.data.updates} /> : null}
         {work.data && !empty ? (
           <>
             <TaskSection
@@ -149,6 +152,26 @@ export function MyWorkPage() {
   )
 }
 
+/** The latest update of each of your projects from the last two weeks. */
+function UpdatesSection({ updates }: { updates: MyWorkUpdate[] }) {
+  const experience = useHomeExperience()
+  if (!experience.shows('workspace.project_updates')) return null
+  return (
+    <Section description="How your projects are going, from their latest updates." id="my-work-updates" title="Project updates">
+      <ul aria-label="Project updates" className="aw-mywork__updates">
+        {updates.map((update) =>
+          update.latestUpdate ? (
+            <li key={update.spaceId}>
+              <span className="aw-mywork__update-space">{update.spaceName}</span>
+              <UpdateLine spaceId={update.spaceId} update={update.latestUpdate} />
+            </li>
+          ) : null,
+        )}
+      </ul>
+    </Section>
+  )
+}
+
 function TaskSection({
   actorId,
   description,
@@ -178,15 +201,18 @@ function TaskSection({
   const moreHref = (projectId: string) => `${workItemsHref(projectId)}?${new URLSearchParams(moreFilter(actorId)).toString()}`
   return (
     <Section description={description} id={id} title={section.total ? `${title} · ${section.total}` : title}>
-      {section.items.length ? (
-        <ul aria-labelledby={id} className="aw-mywork__list">
-          {section.items.map((task) => (
-            <TaskRow key={task.id} onOpen={onOpen} open={task.id === openTaskId} showClaim={showClaim} task={task} />
-          ))}
-        </ul>
-      ) : (
-        <p className="aw-mywork__none">{empty}</p>
-      )}
+      <ListPiece
+        aside={(task) => <TaskAside showClaim={showClaim} task={task} />}
+        density="compact"
+        empty={<p className="aw-mywork__none">{empty}</p>}
+        isOpen={(task) => task.id === openTaskId}
+        itemKey={(task) => task.id}
+        items={section.items}
+        labelledBy={id}
+        leading={(task) => <TaskMarks task={task} />}
+        title={(task) => <TaskTitle onOpen={onOpen} open={task.id === openTaskId} task={task} />}
+        wholeRow
+      />
       {more > 0 ? (
         <p className="aw-mywork__none">
           And {countLabel(more, 'more task', 'more tasks')}. See them all in{' '}
@@ -203,42 +229,54 @@ function TaskSection({
   )
 }
 
-function TaskRow({ onOpen, open, showClaim, task }: { onOpen: OpenTask; open: boolean; showClaim: boolean; task: MyWorkTask }) {
+function TaskMarks({ task }: { task: MyWorkTask }) {
   // Each task follows its own project's layout.
   const experience = useProjectExperience(task.projectId)
   return (
-    <li className={open ? 'aw-mywork__row is-open' : 'aw-mywork__row'}>
+    <>
       {experience.shows('task.priority') ? (
         <PriorityIcon decorative priority={task.priority as WorkItemPriority} />
       ) : (
         <span aria-hidden="true" className="aw-mywork__icon" />
       )}
       <StatusIcon category={task.statusCategory} label={task.statusName} />
-      <Link
-        aria-current={open || undefined}
-        className="aw-mywork__title"
-        data-project-id={task.projectId}
-        data-task-id={task.id}
-        onClick={(event) => onOpen(task, event)}
-        to={workItemHref(task.projectId, task.id)}
-      >
-        {experience.shows('tech.task_keys') ? <span className="aw-mywork__key">{task.key}</span> : null} {task.title}
-      </Link>
-      <span className="aw-mywork__meta">
-        {task.blocked ? <StatusChip tone="warning">Blocked</StatusChip> : null}
-        {showClaim && task.claimedByName ? (
-          <StatusChip icon={actorKind(task.claimedByKind ?? 'human') === 'person' ? undefined : 'bot'} tone={actorKind(task.claimedByKind ?? 'human') === 'person' ? 'muted' : 'agent'}>
-            {task.claimedByName}
-          </StatusChip>
-        ) : null}
-        <span className="aw-mywork__project">{task.projectName}</span>
-        {task.dueDate && experience.shows('task.dates') ? (
-          <span className={task.overdue ? 'aw-mywork__due is-overdue' : 'aw-mywork__due'}>
-            {task.overdue ? 'Overdue · ' : ''}
-            {dayLabel(task.dueDate)}
-          </span>
-        ) : null}
-      </span>
-    </li>
+    </>
+  )
+}
+
+function TaskTitle({ onOpen, open, task }: { onOpen: OpenTask; open: boolean; task: MyWorkTask }) {
+  const experience = useProjectExperience(task.projectId)
+  return (
+    <ListPieceTitle
+      current={open}
+      data-project-id={task.projectId}
+      data-task-id={task.id}
+      onClick={(event) => onOpen(task, event)}
+      to={workItemHref(task.projectId, task.id)}
+    >
+      {experience.shows('tech.task_keys') ? <span className="aw-mywork__key">{task.key}</span> : null} {task.title}
+    </ListPieceTitle>
+  )
+}
+
+function TaskAside({ showClaim, task }: { showClaim: boolean; task: MyWorkTask }) {
+  const experience = useProjectExperience(task.projectId)
+  const claimer = actorKind(task.claimedByKind ?? 'human') === 'person'
+  return (
+    <>
+      {task.blocked ? <StatusChip tone="warning">Blocked</StatusChip> : null}
+      {showClaim && task.claimedByName ? (
+        <StatusChip icon={claimer ? undefined : 'bot'} tone={claimer ? 'muted' : 'agent'}>
+          {task.claimedByName}
+        </StatusChip>
+      ) : null}
+      <span className="aw-mywork__project">{task.projectName}</span>
+      {task.dueDate && experience.shows('task.dates') ? (
+        <span className={task.overdue ? 'aw-mywork__due is-overdue' : 'aw-mywork__due'}>
+          {task.overdue ? 'Overdue · ' : ''}
+          {dayLabel(task.dueDate)}
+        </span>
+      ) : null}
+    </>
   )
 }

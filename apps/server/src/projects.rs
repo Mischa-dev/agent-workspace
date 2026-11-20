@@ -53,6 +53,9 @@ struct ProjectRow {
     kind: String,
     role: String,
     role_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given here (K1.27).
+    #[sqlx(default)]
+    group_permissions: Option<Vec<String>>,
     version: i64,
     archived_at: Option<String>,
     location_kind: Option<String>,
@@ -220,6 +223,7 @@ struct ProjectMembershipRow {
     id: Uuid,
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     archived_at: Option<String>,
 }
 
@@ -275,6 +279,7 @@ async fn list_projects(
             p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -854,6 +859,7 @@ async fn update_navigation(
             (SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2) AS role,
             (SELECT workspace_role_permissions(role_id) FROM project_memberships
               WHERE project_id = $1 AND actor_id = $2) AS role_permissions,
+            space_group_permissions($2, $1) AS group_permissions,
             (SELECT version FROM projects WHERE id = $1) AS version,
             (SELECT archived_at::text FROM projects WHERE id = $1) AS archived_at,
             (SELECT icon FROM projects WHERE id = $1) AS icon,
@@ -983,6 +989,7 @@ async fn set_rail_order(
             p.id,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
             p.version,
             p.archived_at::text AS archived_at
         FROM projects p
@@ -1098,6 +1105,7 @@ async fn fetch_project_row(
             p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -1177,6 +1185,7 @@ async fn fetch_project_row_in_transaction(
             p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
             p.version,
             p.archived_at::text AS archived_at,
             CASE
@@ -1241,6 +1250,7 @@ async fn lock_project_membership(
             p.id,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
+            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
             p.archived_at::text AS archived_at
         FROM projects p
         JOIN project_memberships pm
@@ -1262,7 +1272,9 @@ async fn lock_project_membership(
 
 fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
     // What the role itself lets its holder do here, before any app's limit.
-    let role = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
+    let role = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(row.group_permissions.as_deref()),
+    );
     let holds = |action: Action| {
         crate::access::membership_allows(Uuid::nil(), row.id, role, true, action.permission())
     };
@@ -1462,7 +1474,9 @@ fn authorize_project_action(
     project: &impl ProjectMembership,
     action: Action,
 ) -> Result<(), AppError> {
-    let role = RoleGrant::stored(project.role(), project.role_permissions())?;
+    let role = RoleGrant::stored(project.role(), project.role_permissions())?.with_groups(
+        crate::access::group_permissions(project.group_permissions()),
+    );
     if crate::access::membership_allows(
         principal.actor_id,
         project.project_id(),
@@ -1480,6 +1494,7 @@ trait ProjectMembership {
     fn project_id(&self) -> Uuid;
     fn role(&self) -> &str;
     fn role_permissions(&self) -> Option<&[String]>;
+    fn group_permissions(&self) -> Option<&[String]>;
 }
 
 impl ProjectMembership for ProjectRow {
@@ -1494,6 +1509,10 @@ impl ProjectMembership for ProjectRow {
     fn role_permissions(&self) -> Option<&[String]> {
         self.role_permissions.as_deref()
     }
+
+    fn group_permissions(&self) -> Option<&[String]> {
+        self.group_permissions.as_deref()
+    }
 }
 
 impl ProjectMembership for ProjectMembershipRow {
@@ -1507,6 +1526,10 @@ impl ProjectMembership for ProjectMembershipRow {
 
     fn role_permissions(&self) -> Option<&[String]> {
         self.role_permissions.as_deref()
+    }
+
+    fn group_permissions(&self) -> Option<&[String]> {
+        self.group_permissions.as_deref()
     }
 }
 
