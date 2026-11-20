@@ -40,6 +40,20 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
         body,
     };
 
+    let (_, teams) = laptop
+        .call(
+            app,
+            tool(
+                "collection_write",
+                json!({"projectId": "WORK", "name": "Teams"}),
+            ),
+        )
+        .await;
+    assert_eq!(teams["outcome"], "ok", "{teams}");
+    let teams = teams["value"]["collection"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{teams}"))
+        .to_owned();
     let (_, made) = laptop
         .call(
             app,
@@ -53,6 +67,7 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
                         {"name": "Steps", "type": "text"},
                         {"name": "Owner", "type": "person"},
                         {"name": "Area", "type": "text"},
+                        {"name": "Team", "type": "relation", "target": "record:Teams"},
                     ],
                 }),
             ),
@@ -94,6 +109,7 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
                             {"field": "Steps", "required": true,
                              "showIf": {"field": "Kind", "isOneOf": ["Bug"]}},
                             {"field": "Owner"},
+                            {"field": "Team"},
                         ],
                         "sections": [{"title": "Who", "before": "Owner"}],
                         "sets": [{"field": "Area", "value": "Intake"}],
@@ -107,8 +123,11 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
     let form_id = form["value"]["id"].as_str().expect("id").to_owned();
     assert_eq!(form["value"]["audience"], "internal", "{form}");
     let questions = form["value"]["questions"].as_array().expect("questions");
-    assert_eq!(questions.len(), 3, "{form}");
+    assert_eq!(questions.len(), 4, "{form}");
     assert_eq!(questions[2]["section"]["title"], "Who", "{form}");
+    // A relation question says which collection it picks from.
+    assert_eq!(questions[3]["type"], "relation", "{form}");
+    assert_eq!(questions[3]["collection"], teams.as_str(), "{form}");
     assert!(questions[1]["showIf"].is_object(), "{form}");
 
     // An idea: the hidden Steps doesn't block, and its answer isn't kept.

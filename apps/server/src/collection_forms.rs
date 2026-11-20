@@ -404,6 +404,11 @@ pub struct PublicField {
     /// A heading the question starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<PublicSection>,
+    /// A relation question (internal forms only): the collection whose
+    /// records it picks from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub collection: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -492,6 +497,9 @@ pub fn questions(
                         title: section.title.clone(),
                         description: section.description.clone(),
                     }),
+                collection: (field.field_type == FieldType::Relation)
+                    .then_some(field.config.collection)
+                    .flatten(),
             })
         })
         .collect()

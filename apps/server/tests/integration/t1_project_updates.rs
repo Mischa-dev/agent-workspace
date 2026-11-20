@@ -91,6 +91,31 @@ async fn an_update_sets_health_and_reaches_members() {
         .await;
     assert_eq!(channel["outcome"], "ok", "{channel}");
 
+    // An update too long to post changes nothing: no thread, no health.
+    let (_, refused) = rook
+        .call(
+            app,
+            tool(
+                "project_update_create",
+                json!({"spaceId": "WORK", "health": "off_track",
+                       "text": "a".repeat(20_001), "clientRequestId": "too-long"}),
+            ),
+        )
+        .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let updates = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM conversations WHERE thread_outcome IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("threads");
+    assert_eq!(updates, 0, "{refused}");
+    let health = sqlx::query_scalar::<_, Option<String>>("SELECT health FROM space_statuses")
+        .fetch_one(pool)
+        .await
+        .expect("health");
+    assert_eq!(health.as_deref(), Some("on_track"), "{refused}");
+
     // An agent posts the weekly update, at risk: it becomes the health.
     let post = json!({"spaceId": "WORK", "health": "at_risk",
                       "text": "Beta slipped a week: the importer needs another pass.",

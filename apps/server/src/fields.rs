@@ -3272,6 +3272,24 @@ async fn recompute_after(
     if formula::has_computed(&definitions) {
         crate::collections::computed::enqueue(connection, project_id, collection_id).await?;
     }
+    // Other collections' rollups that read these fields (an option
+    // renamed, a type's display changed) are worked out again too.
+    let reading = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT rollup.collection_id FROM field_definitions rollup \
+         JOIN field_definitions read \
+           ON read.project_id = rollup.project_id \
+          AND read.id::text = rollup.config -> 'rollup' ->> 'target' \
+         WHERE rollup.project_id = $1 AND rollup.field_type = 'rollup' \
+           AND rollup.archived_at IS NULL AND read.collection_id = $2 \
+           AND rollup.collection_id IS DISTINCT FROM $2",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    for collection in reading {
+        crate::collections::computed::enqueue(connection, project_id, collection).await?;
+    }
     Ok(())
 }
 

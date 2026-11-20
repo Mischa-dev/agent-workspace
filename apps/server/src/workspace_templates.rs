@@ -1325,7 +1325,8 @@ pub(crate) async fn starter_contents(
         })?;
         // A collection whose records act like tasks is switched on too, as
         // collection_write would (T1.25).
-        if wanted.acts_like_task && !collection.acts_like_task {
+        let switched = wanted.acts_like_task && !collection.acts_like_task;
+        if switched {
             if let Some(refused) =
                 collections::task_like::refusal(transaction, &collection, true, false).await?
             {
@@ -1338,10 +1339,12 @@ pub(crate) async fn starter_contents(
         }
         if created {
             changes.push(format!("Made the {name} collection in {project_key}."));
-        } else if !applied.is_empty() {
+        } else if !applied.is_empty() || switched {
             changes.push(format!("Updated the {name} collection in {project_key}."));
         }
-        if created || !applied.is_empty() {
+        // Other tabs refresh the collection, including when only the switch
+        // to acting like tasks changed it.
+        if created || !applied.is_empty() || switched {
             crate::outbox::enqueue_collection_updated(transaction, project_id, collection.id, &[])
                 .await?;
         }

@@ -7584,6 +7584,13 @@
       },
       "PublicField": {
         "properties": {
+          "collection": {
+            "description": "A relation question (internal forms only): the collection whose\nrecords it picks from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": "string"
           },
