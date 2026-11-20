@@ -6,6 +6,7 @@ import {
 } from 'react'
 import {
   useQuery,
+  useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
 
@@ -201,12 +202,32 @@ export async function logout() {
 }
 
 export function useSession() {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: queryKeys.session,
-    queryFn: getSession,
+    queryFn: () => confirmSession(queryClient),
     staleTime: 30_000,
     retry: false,
   })
+}
+
+/**
+ * Asks the server who is signed in. A session shown before the answer (one
+ * kept for reading offline, or a tab left open) may be someone else's: when
+ * the answer names another account, what the earlier one read is cleared,
+ * the copy kept on this device included, before the new one renders.
+ */
+export async function confirmSession(queryClient: QueryClient) {
+  const shown = queryClient.getQueryData<SessionResponse>(queryKeys.session)
+  const session = await getSession()
+  const before = isAuthenticatedSession(shown) ? shown.user.actorId : null
+  const now = isAuthenticatedSession(session) ? session.user.actorId : null
+  if (before && now && before !== now) {
+    if (offlineOwner()) forgetOffline()
+    resetQueryScope()
+    clearActorScopedQueries(queryClient)
+  }
+  return session
 }
 
 export function clearAuthenticatedQueryCache(queryClient: QueryClient) {
