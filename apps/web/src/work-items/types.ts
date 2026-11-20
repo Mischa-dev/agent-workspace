@@ -3,6 +3,8 @@ import type { FieldReference, FieldValue, FieldValues } from '../fields/fieldMod
 export type WorkItemCapabilities = {
   view: boolean
   edit: boolean
+  /** Can't edit, but may suggest changes: the panel's edits become proposals someone who edits accepts. */
+  suggest?: boolean
   archive: boolean
   /** Manages the project's code, so pull request cards offer Merge. */
   mergePullRequests?: boolean

@@ -3,9 +3,13 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
+import { callOp } from '../api/ops'
+import { showToast } from '../ui'
+import { getWorkItem } from './api'
 import { useUpdateWorkItem } from './hooks'
 import { inOrder, remember } from '../views/saveQueue'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
+import { suggestedUpdate } from './taskSuggest'
 import { undoableTaskChange } from './taskUndo'
 import type { WorkItem, WorkItemPatch } from './types'
 
@@ -182,7 +186,7 @@ const MAX_ATTEMPTS = 4
  * "Keep yours" or "Use theirs". A version conflict caused by a change to
  * another field is retried against the newer task on its own.
  */
-export function useTaskSave(item: WorkItem) {
+export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boolean } = {}) {
   const update = useUpdateWorkItem()
   const queryClient = useQueryClient()
   const [problem, setProblem] = useState<SaveProblem | null>(null)
@@ -240,6 +244,10 @@ export function useTaskSave(item: WorkItem) {
       }
       change(id, { state: 'saving' })
       try {
+        if (suggest) {
+          await propose(id, entry, task)
+          return
+        }
         const saved = await update.mutateAsync({
           projectId: task.projectId,
           workItemId: task.id,
@@ -260,7 +268,10 @@ export function useTaskSave(item: WorkItem) {
         if (undo) remember(undo)
         return
       } catch (error) {
-        const theirs = conflictCurrent(error)
+        // A proposal's conflict carries no task; read it again.
+        const theirs =
+          conflictCurrent(error) ??
+          (suggest && isApiError(error) && error.code === 'conflict' ? await getWorkItem(task.projectId, task.id).catch(() => null) : null)
         if (!theirs) {
           change(id, { state: 'failed', message: problemFor(error, fieldName(entry.field)).message })
           return
@@ -270,6 +281,29 @@ export function useTaskSave(item: WorkItem) {
       }
     }
     change(id, { state: 'failed', message: 'The task kept changing while this saved. Try again.' })
+  }
+
+  /**
+   * Someone who only suggests (T1.41): the change goes to `task_update`,
+   * which keeps it as a proposal for someone who edits the task. The task
+   * stays as it was, so the field shows its value again and a toast says
+   * where the change went; it is no one's to undo.
+   */
+  const propose = async (id: number, entry: Entry, task: WorkItem) => {
+    const name = fieldName(entry.field)
+    const input = suggestedUpdate(task.id, task.version, entry.patch)
+    if (!input) {
+      change(id, { state: 'failed', message: `Only someone who edits this task can change its ${name}.` })
+      return
+    }
+    const written = await callOp('task_update', input)
+    change(id, null)
+    if (written.proposalId) {
+      showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
+    } else {
+      // Their own task, which they may change: it landed.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workItem(task.projectId, task.id) })
+    }
   }
 
   // One task's saves go one at a time, with the list's and board's (T1.27).
