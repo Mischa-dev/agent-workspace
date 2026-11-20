@@ -71,6 +71,10 @@ pub static WORKSPACE_CALLS: Bucket =
 pub static MCP_AUTH: Bucket = exact("mcp.auth", 600, MINUTE);
 /// Run reports (A1.3) from one account: 20 a second on average, in bursts
 /// of up to 100.
+/// Panel requests and actions from one viewer to connected modules
+/// (M1.14): each one calls out to an app, so a stuck refresh or a loop
+/// can't flood one.
+pub static MODULE_PANELS: Bucket = chunked("modules.panels", 120, MINUTE, 10);
 pub static RUN_REPORTS: Bucket = chunked("runs.reports", 100, Duration::from_secs(5), 5);
 /// Tokens that didn't resolve, across every caller. Valid tokens never
 /// spend it; while it's spent, only tokens that authenticated lately are
@@ -754,6 +758,7 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&MCP_REQUESTS, LimitScope::Credential),
     (&WORKSPACE_CALLS, LimitScope::Workspace),
     (&MCP_AUTH, LimitScope::Credential),
+    (&MODULE_PANELS, LimitScope::Account),
     (&RUN_REPORTS, LimitScope::Account),
     (&MCP_AUTH_FAILURES, LimitScope::ServerFailuresOnly),
     (&OAUTH_CEREMONIES, LimitScope::Client),

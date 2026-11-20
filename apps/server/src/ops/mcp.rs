@@ -262,6 +262,13 @@ async fn request(
                 .map_err(|error| OpError::logged("workspace", &error.into()))?;
             Some(target::workspace_named(&mut connection, &text).await?)
         }
+        Some(Value::Bool(_)) => {
+            return Err(OpError::invalid(
+                "workspace",
+                "workspace is a workspace's id or slug; for the whole workspace, say \
+                 wholeWorkspace: true.",
+            ));
+        }
         Some(_) => {
             return Err(OpError::invalid(
                 "workspace",

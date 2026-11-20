@@ -97,7 +97,7 @@ pub fn check_anchor(
     quote: Option<&str>,
 ) -> Result<(), &'static str> {
     if !ydoc::valid_block_id(block_id) {
-        return Err("Pass a block's id from page_blocks.");
+        return Err("Pass a block's id from page_blocks_get.");
     }
     if !blocks
         .iter()

@@ -250,7 +250,7 @@ impl Operation for PageTemplateList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List page templates";
     const DESCRIPTION: &'static str = "List what a new page in a space can start from: the \
-        built-in templates and pages marked as templates. Pass a template's id to page_write \
+        built-in templates and pages marked as templates. Pass a template's id to page_create \
         as fromTemplateId.";
 
     type Input = PageTemplateListInput;

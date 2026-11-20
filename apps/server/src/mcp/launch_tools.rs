@@ -23,9 +23,9 @@ use crate::{
 
 const CHOOSE_PROJECT: &str = "Name the project (projectId: an ID, link or key such as \"AWD\").";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskLaunchArguments {
+pub(crate) struct TaskLaunchArguments {
     /// The tasks to launch: IDs, links or keys such as "AWD-12", all in one
     /// project. One task starts at once; several go through the launch
     /// queue, which starts them as account slots free up, blocked ones last.
@@ -67,7 +67,7 @@ pub(super) struct TaskLaunchArguments {
     pub client_request_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProjectArguments {
     // Read by the MCP middleware, which scopes the call to this project.
@@ -76,16 +76,16 @@ pub(crate) struct ProjectArguments {
     pub project_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LaunchCancelArguments {
+pub(crate) struct LaunchCancelArguments {
     /// The queued launch, from launch_list. It names its project.
     pub launch_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaunchValue {
+pub(crate) struct LaunchValue {
     pub id: String,
     /// The task's key, such as AWD-12.
     pub task: Option<String>,
@@ -108,13 +108,13 @@ pub(super) struct LaunchValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskLaunchValue {
+pub(crate) struct TaskLaunchValue {
     pub launches: Vec<LaunchValue>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaunchListValue {
+pub(crate) struct LaunchListValue {
     /// Waiting to start, in queue order.
     pub queued: Vec<LaunchValue>,
     /// The latest that started, failed or were cancelled.
@@ -250,7 +250,7 @@ fn start_when(value: Option<&str>) -> Option<StartWhen> {
     })
 }
 
-pub(super) async fn task_launch(
+pub(crate) async fn task_launch(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskLaunchArguments,
@@ -361,7 +361,7 @@ pub(super) async fn task_launch(
     })
 }
 
-pub(super) async fn launch_list(
+pub(crate) async fn launch_list(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: ProjectArguments,
@@ -393,7 +393,7 @@ pub(super) async fn launch_list(
 
 /// Take a launch out of the queue before it starts, as the queue's Cancel
 /// button does: your own, or anyone's if you manage the project.
-pub(super) async fn launch_cancel(
+pub(crate) async fn launch_cancel(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LaunchCancelArguments,

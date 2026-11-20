@@ -2,7 +2,8 @@
 //! anything private before it is returned (M1.8). `package_preview`,
 //! `package_install`, `package_list`, `package_remove` and
 //! `agent_template_list` (M1.9): what installing would do, doing it, what
-//! was installed, and removing it.
+//! was installed, and removing it. `package_upgrade_preview` and
+//! `package_upgrade` (M1.10): a newer version, planned three ways.
 
 use std::borrow::Cow;
 
@@ -18,6 +19,7 @@ use super::{
     install::{self, AgentTemplateView, InstallView, NewSpace, Place, Plan},
     secrets_check,
     source::{self, Origin},
+    upgrade,
 };
 use crate::ops::{
     Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
@@ -29,6 +31,8 @@ pub fn register_ops(registry: &mut Registry) {
     registry.add::<PackageExport>();
     registry.add::<PackagePreview>();
     registry.add::<PackageInstall>();
+    registry.add::<PackageUpgradePreview>();
+    registry.add::<PackageUpgrade>();
     registry.add::<PackageList>();
     registry.add::<PackageRemove>();
 }
@@ -57,7 +61,8 @@ pub struct PackageExportInput {
     /// A built module, by key (built modules arrive later; refused today).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
-    /// The workspace's setup: switches, layout and roles. (`workspace`
+    /// The workspace's setup: switches, layout, roles and the themes it
+    /// offers. (`workspace`
     /// itself names which workspace, as on every operation.)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_workspace: bool,
@@ -308,7 +313,10 @@ impl Operation for PackageInstall {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::ModulesManage);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    /// The package is read (an uploaded file may come over the network)
+    /// before the request id is kept, so nothing waits holding a
+    /// connection (rule 14).
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const MAX_BODY_BYTES: usize = install::MAX_DOCUMENT_BYTES;
     const TITLE: &'static str = "Install a package";
     const DESCRIPTION: &'static str = "Install a package as package_preview planned it: its \
@@ -332,7 +340,13 @@ impl Operation for PackageInstall {
         )
         .await?;
         let place = input.target.place(call, &origin.package)?;
-        install_planned(call, origin, place, Some(&input.plan_hash)).await
+        let reservation = match keep_request(call, Self::NAME, &input).await? {
+            Kept::Replay(installed) => return Ok(installed),
+            Kept::Reserved(reservation) => reservation,
+        };
+        let installed = install_planned(call, origin, place, Some(&input.plan_hash)).await?;
+        kept(call, reservation, &installed).await?;
+        Ok(installed)
     }
 }
 
@@ -377,68 +391,13 @@ pub(super) async fn install_planned(
             current: None,
         });
     }
-    let live = |line: &&install::PlanItem| line.action != "skip";
-    // Roles, module switches, the default layout and the other admin lines
-    // change the whole workspace, so they are asked of the workspace even
-    // when the package lands in a space.
-    let located = crate::ops::Located {
-        workspace_id: workspace,
-        space_id: None,
-        direct: None,
-    };
-    let workspace_target = Target::Workspace(Some(workspace));
-    // A connection held to one space installs only into that space, and only
-    // what stays there: its workspace role came with the account.
-    if ctx.caller.confined_space.is_some()
-        && (ctx.space_id.is_none()
-            || plan
-                .items
-                .iter()
-                .filter(live)
-                .any(|line| line.kind == "role" || line.needs_admin))
-    {
-        return Err(OpError::Denied {
-            reason: DenyReason::Delegation,
-            message: "This connection is held to one space, so it can only install what stays \
-                      in that space. Reconnect it for your whole account to change the \
-                      workspace."
-                .into(),
-        });
-    }
-    if plan
+    let lines = plan
         .items
         .iter()
-        .filter(live)
-        .any(|line| line.kind == "role")
-    {
-        access_shim::check(
-            tx,
-            &ctx.caller,
-            &workspace_target,
-            &located,
-            Some(Perm::RolesManage),
-            true,
-            "Installing a package that adds or changes a role",
-        )
-        .await?;
-    }
-    if plan
-        .items
-        .iter()
-        .filter(live)
-        .any(|line| line.needs_admin && line.kind != "role")
-    {
-        access_shim::check(
-            tx,
-            &ctx.caller,
-            &workspace_target,
-            &located,
-            Some(Perm::SettingsManage),
-            true,
-            "Installing a package that changes the workspace's settings",
-        )
-        .await?;
-    }
+        .filter(|line| line.action != "skip")
+        .map(|line| (line.kind.as_str(), line.needs_admin))
+        .collect::<Vec<_>>();
+    check_rights(tx, ctx, &lines).await?;
     let standing = crate::roles::standing(tx, workspace, actor).await?;
     let auditor = crate::roles::Auditor::App(&principal);
     let who = Installer {
@@ -472,6 +431,335 @@ pub(super) async fn install_planned(
         }),
     );
     Ok(installed)
+}
+
+/// The rights the live lines of a plan need, as (kind, needsAdmin): a
+/// connection held to one space installs only what stays there; a role
+/// needs roles.manage; anything else marked for admins needs
+/// settings.manage. Asked of the workspace, since these change all of it.
+pub(super) async fn check_rights(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    ctx: &crate::ops::OpContext,
+    lines: &[(&str, bool)],
+) -> Result<(), OpError> {
+    let located = crate::ops::Located {
+        workspace_id: ctx.workspace_id,
+        space_id: None,
+        direct: None,
+    };
+    let workspace_target = Target::Workspace(Some(ctx.workspace_id));
+    // A connection held to one space installs only into that space, and only
+    // what stays there: its workspace role came with the account.
+    if ctx.caller.confined_space.is_some()
+        && (ctx.space_id.is_none()
+            || lines
+                .iter()
+                .any(|(kind, needs_admin)| *kind == "role" || *needs_admin))
+    {
+        return Err(OpError::Denied {
+            reason: DenyReason::Delegation,
+            message: "This connection is held to one space, so it can only install what stays \
+                      in that space. Reconnect it for your whole account to change the \
+                      workspace."
+                .into(),
+        });
+    }
+    if lines.iter().any(|(kind, _)| *kind == "role") {
+        access_shim::check(
+            tx,
+            &ctx.caller,
+            &workspace_target,
+            &located,
+            Some(Perm::RolesManage),
+            true,
+            "Installing a package that adds or changes a role",
+        )
+        .await?;
+    }
+    if lines
+        .iter()
+        .any(|(kind, needs_admin)| *needs_admin && *kind != "role")
+    {
+        access_shim::check(
+            tx,
+            &ctx.caller,
+            &workspace_target,
+            &located,
+            Some(Perm::SettingsManage),
+            true,
+            "Installing a package that changes the workspace's settings",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// ------------------------------- package_upgrade_preview and _upgrade (M1.10)
+
+/// Preview upgrading an install to a newer version.
+pub struct PackageUpgradePreview;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageUpgradePreviewInput {
+    /// The install (package_list's id).
+    pub install_id: IdRef,
+    /// The new version, given as package_preview takes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub package: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+}
+
+fn install_target(install: IdRef) -> Target {
+    Target::Thing {
+        kind: "package_install",
+        id: install.id(),
+        expected_version: None,
+    }
+}
+
+impl Targeted for PackageUpgradePreviewInput {
+    fn target(&self) -> Target {
+        install_target(self.install_id)
+    }
+}
+
+impl Operation for PackageUpgradePreview {
+    const NAME: &'static str = "package_upgrade_preview";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "workspace";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const MAX_BODY_BYTES: usize = install::MAX_DOCUMENT_BYTES;
+    const TITLE: &'static str = "Preview a package upgrade";
+    const DESCRIPTION: &'static str = "Plan upgrading an install to a newer version, part by \
+        part (see a line's action). Nothing is deleted. Pass planHash to package_upgrade.";
+
+    type Input = PackageUpgradePreviewInput;
+    type Output = upgrade::UpgradePlan;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: PackageUpgradePreviewInput,
+    ) -> Result<upgrade::UpgradePlan, OpError> {
+        let origin = source::resolve(
+            call,
+            input.package.as_ref(),
+            input.entry.as_deref(),
+            input.file_id.as_deref(),
+        )
+        .await?;
+        let workspace = call.ctx.workspace_id;
+        let reader = crate::modules::built::Reader::of(&call.ctx.caller);
+        let tx = call.tx().await?;
+        let old = upgrade::old_install(tx, workspace, input.install_id.id(), reader).await?;
+        Ok(upgrade::plan(tx, workspace, reader, old, &origin.package)
+            .await?
+            .plan)
+    }
+}
+
+/// Upgrade an install to a newer version.
+pub struct PackageUpgrade;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageUpgradeInput {
+    /// The install (package_list's id).
+    pub install_id: IdRef,
+    /// The new version, given as package_preview takes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub package: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    pub plan_hash: String,
+    /// By conflict ("kind:key"): keep_mine (default) or take_theirs.
+    #[serde(default)]
+    pub choices: std::collections::BTreeMap<String, upgrade::Choice>,
+}
+
+impl Targeted for PackageUpgradeInput {
+    fn target(&self) -> Target {
+        install_target(self.install_id)
+    }
+}
+
+impl Operation for PackageUpgrade {
+    const NAME: &'static str = "package_upgrade";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "workspace";
+    const PERMISSION: Option<Perm> = Some(Perm::ModulesManage);
+    /// As package_install: the package is read before the request id is kept.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const MAX_BODY_BYTES: usize = install::MAX_DOCUMENT_BYTES;
+    const TITLE: &'static str = "Upgrade a package";
+    const DESCRIPTION: &'static str = "Upgrade an install as package_upgrade_preview planned it \
+        (planHash), in one go. Conflicts keep yours unless choices says take_theirs. Nothing \
+        is deleted.";
+    const EMITS: &'static [&'static str] = &["package.installed"];
+
+    type Input = PackageUpgradeInput;
+    type Output = upgrade::Upgraded;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: PackageUpgradeInput,
+    ) -> Result<upgrade::Upgraded, OpError> {
+        let origin = source::resolve(
+            call,
+            input.package.as_ref(),
+            input.entry.as_deref(),
+            input.file_id.as_deref(),
+        )
+        .await?;
+        let reservation = match keep_request(call, Self::NAME, &input).await? {
+            Kept::Replay(upgraded) => return Ok(upgraded),
+            Kept::Reserved(reservation) => reservation,
+        };
+        let ctx = call.ctx;
+        let workspace = ctx.workspace_id;
+        let actor = call.account_id();
+        let principal = crate::mcp::messaging::principal_of(ctx);
+        let reader = crate::modules::built::Reader::of(&ctx.caller);
+        let tx = call.tx().await?;
+        // One install at a time per workspace, as package_install takes it.
+        sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(workspace)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        sqlx::query("SELECT id FROM package_installs WHERE id = $1 FOR UPDATE")
+            .bind(input.install_id.id())
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        let old = upgrade::old_install(tx, workspace, input.install_id.id(), reader).await?;
+        let planned = upgrade::plan(tx, workspace, reader, old, &origin.package).await?;
+        if planned.plan.plan_hash != input.plan_hash.trim() {
+            return Err(OpError::Conflict {
+                reason: ConflictReason::State {
+                    code: "plan_changed",
+                },
+                message: "The workspace changed since the preview, so upgrading would do \
+                          something else. Preview again and upgrade with that plan."
+                    .into(),
+                current: None,
+            });
+        }
+        let taken = |item: &&upgrade::UpgradeItem| match item.action.as_str() {
+            "create" | "reuse" | "update" => true,
+            "conflict" => {
+                input.choices.get(&format!("{}:{}", item.kind, item.key))
+                    == Some(&upgrade::Choice::TakeTheirs)
+            }
+            _ => false,
+        };
+        let lines = planned
+            .plan
+            .items
+            .iter()
+            .filter(taken)
+            .map(|item| (item.kind.as_str(), item.needs_admin))
+            .collect::<Vec<_>>();
+        check_rights(tx, ctx, &lines).await?;
+        let standing = crate::roles::standing(tx, workspace, actor).await?;
+        let auditor = crate::roles::Auditor::App(&principal);
+        let who = Installer {
+            workspace,
+            actor,
+            standing,
+            auditor: &auditor,
+            maker: crate::events::Caller::from(ctx),
+            writer: crate::memory::Writer::from(ctx),
+            template: origin.template.clone(),
+            source: origin.source,
+            source_ref: origin.source_ref.clone(),
+            confined: ctx.caller.confined_space,
+        };
+        let upgraded = upgrade::upgrade(
+            tx,
+            &who,
+            planned,
+            &origin.package,
+            &origin.document,
+            &input.choices,
+        )
+        .await
+        .map_err(apply::InstallError::into_op)?;
+        call.audit_target(
+            "package_install",
+            upgraded.install_id,
+            json!({
+                "package": origin.package.id,
+                "version": upgraded.version,
+                "upgradedFrom": upgraded.upgraded_from,
+                "updated": upgraded.updated.len(),
+                "detached": upgraded.detached.len(),
+            }),
+        );
+        kept(call, reservation, &upgraded).await?;
+        Ok(upgraded)
+    }
+}
+
+/// A request id kept by a package write once its package is in hand.
+enum Kept<T> {
+    /// The same request ran before: its answer.
+    Replay(T),
+    /// Kept for this run (none when the call gave no request id).
+    Reserved(Option<crate::idempotency::IdempotencyReservation>),
+}
+
+/// Keeps the call's request id for `name`, in the call's transaction. Called
+/// after the package is read, so no transaction is open across that read.
+async fn keep_request<I: Serialize, T: serde::de::DeserializeOwned>(
+    call: &mut OpCall<'_>,
+    name: &str,
+    input: &I,
+) -> Result<Kept<T>, OpError> {
+    let Some(key) = call
+        .ctx
+        .request_id
+        .as_deref()
+        .and_then(|key| crate::idempotency::IdempotencyKey::parse(key).ok())
+    else {
+        return Ok(Kept::Reserved(None));
+    };
+    call.key_honoured();
+    let actor = call.account_id();
+    let scope = format!("op.{name}.{}", call.ctx.workspace_id.simple());
+    let hash =
+        crate::idempotency::RequestHash::for_value(input).map_err(|_| OpError::Unavailable)?;
+    let tx = call.tx().await?;
+    match crate::idempotency::reserve(tx, actor, &scope, &key, hash).await? {
+        crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+            call.mark_replayed(true);
+            Ok(Kept::Replay(replay.decode::<T>()?))
+        }
+        crate::idempotency::IdempotencyOutcome::Reserved(reserved) => {
+            Ok(Kept::Reserved(Some(reserved)))
+        }
+    }
+}
+
+/// Stores `output` as the kept request's answer.
+async fn kept<T: Serialize>(
+    call: &mut OpCall<'_>,
+    reservation: Option<crate::idempotency::IdempotencyReservation>,
+    output: &T,
+) -> Result<(), OpError> {
+    if let Some(reservation) = reservation {
+        let tx = call.tx().await?;
+        crate::idempotency::complete(tx, &reservation, axum::http::StatusCode::OK, output).await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------- package_list (M1.9)
@@ -608,6 +896,17 @@ impl Operation for PackageRemove {
                     code: "already_removed",
                 },
                 message: "That install was removed already.".into(),
+                current: None,
+            });
+        }
+        // An upgraded install's parts belong to the install that replaced it
+        // (or were left as they are): only the current one is removed.
+        if state == "superseded" {
+            return Err(OpError::Conflict {
+                reason: ConflictReason::State { code: "superseded" },
+                message: "That install was upgraded: remove the install that replaced it \
+                          (package_list shows it)."
+                    .into(),
                 current: None,
             });
         }

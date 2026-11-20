@@ -191,6 +191,7 @@ pub fn builtin_definitions() -> impl Iterator<
 /// A template, built in or saved, as people and agents read it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "WorkspaceTemplateView")]
 pub struct TemplateView {
     /// A built-in template's id (such as "software_team"), or a saved one's
     /// ID. Pass it to workspace_template_apply.

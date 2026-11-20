@@ -34,6 +34,7 @@ pub mod memory_pages;
 pub mod ops;
 pub mod page_files;
 pub mod page_move;
+pub mod page_ops;
 pub mod templates;
 
 pub const MAX_PAGE_TITLE: usize = 200;

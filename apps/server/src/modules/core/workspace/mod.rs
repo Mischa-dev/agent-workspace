@@ -23,8 +23,16 @@ impl CoreModule for Module {
         module.operations(crate::custom_emoji::ops::register_ops);
         module.routes(crate::custom_emoji::router);
         module.operations(crate::themes::ops::register_ops);
+        module.operations(crate::roles::ops::register_ops);
+        module.operations(crate::settings::ops::register_ops);
+        module.operations(crate::workspace::admin_ops::register_ops);
+        module.operations(crate::notifications::ops::register_ops);
         module.routes(crate::profiles::router);
         module.operations(crate::modules::built::ops::register_ops);
+        module.operations(crate::modules::connected::ops::register_ops);
+        module.operations(crate::modules::connected::panels::register_ops);
+        module.operations(crate::modules::connected::files::register_ops);
+        module.routes(crate::modules::connected::http::router);
         module.operations(crate::history::ops::register_ops);
         module.operations(crate::events::activity::register_ops);
         module.operations(crate::links::ops::register_ops);

@@ -53,9 +53,9 @@ use crate::{
 
 const MESSAGES_SPACE_MESSAGE: &str =
     "The Messages space has no collections. Pick a project with projects_list.";
-const BUILD_MESSAGE: &str = "Your role here can't build collections (collections.build): it can't create them or change their fields and views. my_permissions says what it can do.";
+const BUILD_MESSAGE: &str = "Your role here can't build collections (collections.build): it can't create them or change their fields and views. permissions_get says what it can do.";
 const EDIT_MESSAGE: &str =
-    "Your role here can't edit records (collections.edit). my_permissions says what it can do.";
+    "Your role here can't edit records (collections.edit). permissions_get says what it can do.";
 
 fn collection_url(state: &AppState, project_id: Uuid, collection_id: Uuid) -> String {
     link_url(

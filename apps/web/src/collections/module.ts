@@ -18,4 +18,20 @@ export default {
     },
   ],
   things: [{ kind: 'record', label: 'Record', icon: 'table' }],
+  embeds: [
+    {
+      // A collection's view: /projects/{projectId}/collections/{collectionId}, with ?view= for a saved view.
+      id: 'collection-view',
+      match: (path, search) => {
+        const found = /^\/projects\/([^/]+)\/collections\/([^/]+)\/?$/.exec(path)
+        return found
+          ? { projectId: decodeURIComponent(found[1]), collectionId: decodeURIComponent(found[2]), viewId: search.get('view') || null }
+          : null
+      },
+      view: () => import('./CollectionEmbedView'),
+      loading: 'the collection',
+      picker: { label: 'Collection view…', part: 'area.collections', view: () => import('./CollectionEmbedPicker') },
+    },
+  ],
+  live: [{ events: ['collection.updated'], handler: () => import('./live') }],
 } satisfies WebModule

@@ -25,6 +25,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
+  createElement,
   lazy,
   Suspense,
   useEffect,
@@ -41,6 +42,9 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import * as Y from 'yjs'
 
+import { useProjectExperience } from '../../experience/layout'
+import type { EmbedRegistration } from '../../modules/define'
+import { embedPicker, embedPickers } from '../../modules/embeds'
 import { lastHeardVersion, onPageChange } from '../../realtime/liveDocuments'
 import { useOptionalRealtime, useWatchDocument } from '../../realtime/realtimeContext'
 import { Banner, Button, Menu, TextField, Tooltip, describeError, showToast, type MenuEntry } from '../../ui'
@@ -63,9 +67,7 @@ import '../../styles/conversation.css'
 import '../../styles/markdown.css'
 import '../../styles/pages.css'
 
-const CollectionEmbedPicker = lazy(() => import('../../collections/CollectionEmbedPicker'))
 const EmbedPicker = lazy(() => import('../embeds/EmbedPicker'))
-const SheetEmbedPicker = lazy(() => import('../../sheets/SheetEmbedPicker'))
 
 // A page you write in place, live with everyone who has it open (AWD-53): a
 // Tiptap editor on the page's Yjs document, kept in step with the server by
@@ -79,10 +81,6 @@ export type LivePageProps = {
   pageId: string
   /** The page's project, whose collections its views can come from. */
   projectId: string
-  /** Whether the toolbar offers a collection's view to put in the page. */
-  collections: boolean
-  /** Whether the toolbar offers a sheet's range to put in the page. */
-  sheets: boolean
   /** Names the editor for screen readers. */
   title: string
   /** The page as last saved: shown while the live copy loads, and if it can't. */
@@ -115,7 +113,9 @@ function openDocument(snapshot: PageDocument) {
   return doc
 }
 
-export default function LivePage({ collections, discussion = null, edited, fallback, pageId, projectId, sheets, title }: LivePageProps) {
+export default function LivePage({ discussion = null, edited, fallback, pageId, projectId, title }: LivePageProps) {
+  // What the toolbar offers to put in the page, besides an address (M1.5).
+  const pickers = embedPickers(useProjectExperience(projectId))
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
@@ -179,8 +179,7 @@ export default function LivePage({ collections, discussion = null, edited, fallb
   }
   return (
     <LiveEditor
-      collections={collections ? projectId : null}
-      sheets={sheets ? projectId : null}
+      pickers={pickers}
       discussion={discussion}
       edited={edited}
       doc={current.doc}
@@ -234,28 +233,25 @@ function commentOnSelection(editor: Editor, discussion: LiveDiscussion) {
 }
 
 function LiveEditor({
-  collections,
   discussion,
   doc,
   edited,
   onReload,
   onUnshowable,
+  pickers,
   projectId,
-  sheets,
   snapshot,
   title,
 }: {
-  /** The project whose collections the toolbar offers, if it does. */
-  collections: string | null
   discussion: LiveDiscussion | null
   doc: Y.Doc
   edited?: EditedBlock[]
   onReload: () => void
   onUnshowable: () => void
+  /** What the toolbar offers to put in the page, besides an address. */
+  pickers: (EmbedRegistration & { module: string })[]
   /** The space the page is in. */
   projectId: string
-  /** The project whose sheets the toolbar offers, if it does. */
-  sheets: string | null
   snapshot: PageDocument
   title: string
 }) {
@@ -272,8 +268,11 @@ function LiveEditor({
   const [linking, setLinking] = useState(false)
   // The blocks a new page is being made from.
   const [making, setMaking] = useState<Extract<PageSource, { kind: 'blocks' }> | null>(null)
-  // Embedding by address, a collection view, or a sheet's range.
-  const [embedding, setEmbedding] = useState<'address' | 'collection' | 'sheet' | null>(null)
+  // Embedding by address, or with a module's picker (by "module:id").
+  const [embedding, setEmbedding] = useState<string | null>(null)
+  const picking = pickers.find((entry) => `${entry.module}:${entry.id}` === embedding) ?? null
+  // One lazy picker per registration, made once and kept (embedPicker).
+  const picker = picking ? embedPicker(picking.module, picking) : null
   // Each embed's live view, drawn into the element the editor keeps for it.
   const [slots] = useState(() => new EmbedSlots())
   const embeds = useSyncExternalStore(slots.subscribe, slots.getSnapshot)
@@ -479,8 +478,11 @@ function LiveEditor({
                 setEmbedding(null)
                 editor.commands.focus()
               }}
-              onCollection={collections ? () => setEmbedding('collection') : null}
-              onSheet={sheets ? () => setEmbedding('sheet') : null}
+              others={pickers.map((entry) => ({
+                id: `${entry.module}:${entry.id}`,
+                label: entry.picker?.label ?? entry.id,
+                onOpen: () => setEmbedding(`${entry.module}:${entry.id}`),
+              }))}
               onPick={(embed) => {
                 insertEmbed(editor, embed)
                 setEmbedding(null)
@@ -488,34 +490,19 @@ function LiveEditor({
             />
           </Suspense>
         ) : null}
-        {embedding === 'collection' && editor && collections ? (
+        {picker && editor ? (
           <Suspense fallback={null}>
-            <CollectionEmbedPicker
-              onClose={() => {
+            {createElement(picker, {
+              onClose: () => {
                 setEmbedding(null)
                 editor.commands.focus()
-              }}
-              onPick={(embed) => {
+              },
+              onPick: (embed: { href: string; label: string }) => {
                 insertEmbed(editor, embed)
                 setEmbedding(null)
-              }}
-              projectId={collections}
-            />
-          </Suspense>
-        ) : null}
-        {embedding === 'sheet' && editor && sheets ? (
-          <Suspense fallback={null}>
-            <SheetEmbedPicker
-              onClose={() => {
-                setEmbedding(null)
-                editor.commands.focus()
-              }}
-              onPick={(embed) => {
-                insertEmbed(editor, embed)
-                setEmbedding(null)
-              }}
-              projectId={sheets}
-            />
+              },
+              projectId,
+            })}
           </Suspense>
         ) : null}
       </div>

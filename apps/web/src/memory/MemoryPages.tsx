@@ -596,13 +596,11 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
           {showsRecent ? <RecentEditsBar canUndo={canEdit} change={recent.newest} kind="page" onUndone={() => void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })} /> : null}
           <LivePage
-            collections={experience.shows('area.collections')}
             discussion={liveDiscussion}
             edited={editedBlocks}
             fallback={read}
             pageId={pageId}
             projectId={projectId}
-            sheets={experience.shows('area.sheets')}
             title={current.title}
           />
         </Suspense>

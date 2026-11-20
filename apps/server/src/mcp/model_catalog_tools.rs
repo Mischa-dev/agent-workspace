@@ -16,9 +16,9 @@ use crate::{AppState, error::AppError, execution, provider::manifest::ModelOverr
 const MANAGERS_ONLY: &str =
     "Changing the model lists takes a role that manages the workspace's settings.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ModelCatalogWriteArguments {
+pub(crate) struct ModelCatalogWriteArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
     /// The harness whose model list to change, by kind (such as the
@@ -47,7 +47,7 @@ pub(super) struct ModelCatalogWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ModelCatalogWriteValue {
+pub(crate) struct ModelCatalogWriteValue {
     /// "saved", "removed" or "refreshed".
     pub done: String,
     /// The harness with its manifest and the workspace's model list now.
@@ -119,7 +119,7 @@ fn change_of(
     Ok(Change::Save(model, Box::new(overrides)))
 }
 
-pub(super) async fn model_catalog_write(
+pub(crate) async fn model_catalog_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ModelCatalogWriteArguments,

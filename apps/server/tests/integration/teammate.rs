@@ -336,11 +336,13 @@ async fn person_op(
     body
 }
 
-/// A2.27: the tools that aren't operations yet are guarded too. A deny
-/// guard on everything stops a page written by hand-written tool; a review
-/// guard holds it, and once allowed the same call goes through once.
+/// A2.27: a tool called by its old name is guarded like the operation it
+/// runs, and a guard may name the old tool (`page_write` stands for
+/// `page_create` and `page_update`). A deny guard on everything stops the
+/// page; a review guard holds it, and once allowed the same call goes
+/// through once.
 #[tokio::test]
-async fn guards_hold_hand_written_tools_too() {
+async fn guards_hold_tools_called_by_their_old_names() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
         .agent("rook", "member")
@@ -388,19 +390,19 @@ async fn guards_hold_hand_written_tools_too() {
     )
     .await;
     let held = tool(&world, rook, "page_write", write("Plan")).await;
-    assert_eq!(held["pendingReview"], true, "{held}");
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
     assert_eq!(pages().await, 0);
     op(
         &world,
         "request_respond",
-        json!({"requestId": held["requestId"], "optionId": "allow"}),
+        json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
     )
     .await;
     let made = tool(&world, rook, "page_write", write("Plan")).await;
     assert_eq!(made["outcome"], "ok", "{made}");
     assert_eq!(pages().await, 1);
     let next = tool(&world, rook, "page_write", write("Plan")).await;
-    assert_eq!(next["pendingReview"], true, "{next}");
+    assert_eq!(next["value"]["status"], "pending_review", "{next}");
 }
 
 /// A conversation's memory page is that conversation's: a change to it held

@@ -531,7 +531,13 @@ async fn a_part_from_another_workspace_never_joins() {
     );
     assert!(!opened.to_string().contains("Hidden"), "{opened}");
     assert_eq!(opened["value"]["nav"], json!([]), "{opened}");
-    let listed = tool(&world, "builder", "module_list", json!({})).await;
+    let listed = tool(
+        &world,
+        "builder",
+        "module_list",
+        json!({"workspace": world.organization}),
+    )
+    .await;
     let wide_listed = listed["value"]["built"]
         .as_array()
         .and_then(|built| built.iter().find(|row| row["id"] == wide["value"]["id"]))

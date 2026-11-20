@@ -23,9 +23,9 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct UsageBatchArguments {
+pub(crate) struct UsageBatchArguments {
     /// The provider account (usage_windows lists yours).
     pub account_id: String,
     /// The window to size the batch for; defaults to the soonest to reset
@@ -36,7 +36,7 @@ pub(super) struct UsageBatchArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BatchTaskLine {
+pub(crate) struct BatchTaskLine {
     pub task_id: String,
     /// Such as AWD-12.
     pub key: String,
@@ -53,14 +53,14 @@ pub(super) struct BatchTaskLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SkippedLine {
+pub(crate) struct SkippedLine {
     pub project: String,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UsageBatchValue {
+pub(crate) struct UsageBatchValue {
     pub account: String,
     pub harness: String,
     /// How many tasks fit, and why.
@@ -74,9 +74,9 @@ pub(super) struct UsageBatchValue {
     pub skipped: Vec<SkippedLine>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct UsageBatchLaunchArguments {
+pub(crate) struct UsageBatchLaunchArguments {
     pub account_id: String,
     /// Task IDs to launch (from usage_batch). Left out, the suggested batch
     /// as it stands now.
@@ -91,7 +91,7 @@ pub(super) struct UsageBatchLaunchArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaunchedLine {
+pub(crate) struct LaunchedLine {
     pub project: String,
     pub environment: String,
     /// Task keys queued; follow them with launch_list.
@@ -100,7 +100,7 @@ pub(super) struct LaunchedLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FailedLine {
+pub(crate) struct FailedLine {
     pub project: String,
     pub tasks: usize,
     pub reason: String,
@@ -108,7 +108,7 @@ pub(super) struct FailedLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UsageBatchLaunchValue {
+pub(crate) struct UsageBatchLaunchValue {
     pub launched: usize,
     pub projects: Vec<LaunchedLine>,
     pub failed: Vec<FailedLine>,
@@ -146,7 +146,7 @@ async fn account(
     }
 }
 
-pub(super) async fn usage_batch(
+pub(crate) async fn usage_batch(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: UsageBatchArguments,
@@ -191,7 +191,7 @@ pub(super) async fn usage_batch(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "usage_batch"))
 }
 
-pub(super) async fn usage_batch_launch(
+pub(crate) async fn usage_batch_launch(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: UsageBatchLaunchArguments,
@@ -224,7 +224,7 @@ pub(super) async fn usage_batch_launch(
                     let Some(work_item_id) = parse_id(id) else {
                         return Ok(ToolResult::invalid(
                             "taskIds",
-                            "Use task IDs from usage_batch.",
+                            "Use task IDs from usage_batch_preview.",
                         ));
                     };
                     let Some(project_id) = sqlx::query_scalar::<_, Uuid>(

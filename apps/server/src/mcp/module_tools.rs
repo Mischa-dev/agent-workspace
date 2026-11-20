@@ -16,11 +16,11 @@ use crate::{
     modules::{
         self,
         contract::{EmbedDecl, Thing, ThingDecl, ThingLink},
-        manifest, state,
+        state,
     },
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ModuleListArguments {
     /// A project's ID, link or key (such as "AWD"): its workspace's modules.
@@ -68,122 +68,17 @@ pub(crate) struct BuiltModuleSummary {
     pub id: Uuid,
     pub key: String,
     pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Switched on here (module_set).
+    pub on: bool,
     #[schemars(with = "Option<String>")]
     pub space_id: Option<Uuid>,
     pub parts: i64,
 }
 
-/// The workspace of the project a call names, or of the connection's own
-/// project, if the caller can open it.
-async fn workspace_of(
-    state: &AppState,
-    principal: &McpPrincipal,
-    project: Option<&str>,
-) -> Result<Option<(Uuid, Uuid)>, AppError> {
-    let project_id = match project {
-        Some(project) => match parse_id(project) {
-            Some(id) => id,
-            None => return Ok(None),
-        },
-        None => principal.project_id,
-    };
-    if !accessible_project_ids(state, principal)
-        .await?
-        .contains(&project_id)
-    {
-        return Ok(None);
-    }
-    Ok(
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-            .map(|organization_id| (organization_id, project_id)),
-    )
-}
-
-pub(crate) async fn module_list(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: ModuleListArguments,
-) -> ToolResult<ModuleListValue> {
-    if !principal.can_read() {
-        return ToolResult::denied("This connection can't read.");
-    }
-    let detail_of = match arguments.module.as_deref() {
-        Some(id) => match manifest::get(id) {
-            Some(module) => Some(module),
-            None => {
-                let known = manifest::core()
-                    .iter()
-                    .map(|module| module.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return ToolResult::invalid(
-                    "module",
-                    format!("There's no module {id}. Use one of {known}."),
-                );
-            }
-        },
-        None => None,
-    };
-    let result = async {
-        let Some((organization_id, project_id)) =
-            workspace_of(state, principal, arguments.project_id.as_deref()).await?
-        else {
-            return Ok(ToolResult::not_found("That project"));
-        };
-        let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        let switches = state::switches(&mut connection, organization_id).await?;
-        // In a project the caller names, their role there narrows the
-        // workspace's switches, as tool calls there are checked; otherwise
-        // their workspace role does.
-        let set = if arguments.project_id.is_some() {
-            state::for_project(&mut connection, project_id, principal.actor_id)
-                .await?
-                .unwrap_or_default()
-        } else {
-            state::for_member(&mut connection, organization_id, principal.actor_id).await?
-        };
-        let space = arguments.project_id.is_some().then_some(project_id);
-        let rows = modules::built::list(&mut connection, organization_id, space, false).await?;
-        let counts = modules::built::part_counts(
-            &mut connection,
-            &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-            modules::built::Reader::of(&crate::access::Caller::of_principal(principal, None)),
-        )
-        .await?;
-        let built = rows
-            .into_iter()
-            .map(|row| BuiltModuleSummary {
-                parts: counts.get(&row.id).copied().unwrap_or(0),
-                id: row.id,
-                key: row.module_key,
-                name: row.name,
-                space_id: row.space_id,
-            })
-            .collect();
-        Ok::<_, AppError>(ToolResult::ok(ModuleListValue {
-            built,
-            workspace_id: organization_id,
-            modules: manifest::core()
-                .iter()
-                .map(|module| modules::http::ModuleView::of(module, set, &switches))
-                .collect(),
-            preset: modules::http::matching_preset(&switches),
-            detail: detail_of.map(|module| ModuleDetail {
-                things: module.things.clone(),
-                embeds: module.embeds.clone(),
-                permissions: module.permissions.clone(),
-                listens: module.events.listens.clone(),
-            }),
-        }))
-    }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "module_list"))
-}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ThingOpenArguments {
     /// What kind of thing: task, page, decision, whiteboard, sheet, thread,
@@ -294,7 +189,7 @@ pub(crate) async fn thing_open(
 // ---------------------------------------------------------------------------
 // workspace_update (AWD-111)
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct WorkspaceUpdateArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").

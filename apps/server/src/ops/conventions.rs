@@ -30,12 +30,19 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "forward",
             "report",
             "install",
+            // Made, or changed when it exists: a connected module's thing,
+            // which the module names by its own id (M1.13).
+            "upsert",
             // A page made from other things (messages, a thread, blocks).
             "make",
             // Tasks made from a thing's parts (a board's notes, C1.32).
             "to_tasks",
             // A change kept for someone who edits the thing to decide (C1.11).
             "propose",
+            // A template made from what's there, such as a workspace (K2.17).
+            "save",
+            // Work handed to agents: runs started from tasks (K2.19).
+            "launch",
             // A question about part of a thing, put to someone (C1.31).
             "ask",
         ],
@@ -71,6 +78,10 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            // A run's work goes out to its code host (K2.19).
+            "publish",
+            // An install takes a newer version of its package (M1.10).
+            "upgrade",
             // A group's agents take more turns (K2.8).
             "continue",
             // An agent passes on, or a person stops, a reply request (K2.9).
@@ -85,6 +96,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "test",
             "press",
             "remove",
+            // A template's modules, layout and roles put in place (K2.17).
+            "apply",
             // You go into or out of something, such as a channel (C2.7).
             "join",
             "leave",
@@ -103,8 +116,12 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // An account stops acting and hearing until resumed (A2.10).
             "pause",
             "resume",
-            // A host's published action runs (A2.19).
+            // A host's published action runs (A2.19); so does a connected
+            // module's declared operation (M1.13).
             "run",
+            // Someone with the right grants what was asked: a connected
+            // module's scopes (M1.12).
+            "approve",
             // Something a space can use is turned on, such as triage (T1.23).
             "enable",
             // Someone makes their own what another owned, such as an agent

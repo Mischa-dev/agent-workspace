@@ -1,3 +1,4 @@
+import type { QueryClient } from '@tanstack/react-query'
 import type { ComponentType } from 'react'
 
 import type { NounId, PartId } from '../experience/parts'
@@ -123,6 +124,96 @@ export type CaptureRegistration = {
   inProject?: boolean
 }
 
+/** What an embed's path says: named values read from it, such as a sheet's id. */
+export type EmbedParams = Readonly<Record<string, string | null>>
+
+/** What an embed's view is given: what its path says, and the label the page keeps. */
+export type EmbedViewProps = { params: EmbedParams; label: string }
+
+/** What a picker that makes an embed is given (the page editor's toolbar). */
+export type EmbedPickerProps = {
+  /** The page's space, whose things it offers. */
+  projectId: string
+  onPick: (embed: { href: string; label: string }) => void
+  onClose: () => void
+}
+
+/**
+ * Something of a module's drawn live inside a page (M1.5): an embed block
+ * whose path it reads. The page draws the first registration whose `match`
+ * reads the path; a path none reads is drawn as the thing its module's
+ * manifest declares, or a link. The view, and the picker the page editor's
+ * toolbar offers to make one, load when first used.
+ */
+export type EmbedRegistration = {
+  id: string
+  /** The path's named values when it's one of this module's, else null. Pure: no imports. */
+  match: (path: string, search: URLSearchParams) => EmbedParams | null
+  view: () => Promise<{ default: ComponentType<EmbedViewProps> }>
+  /** What it is while it loads, such as "the collection". */
+  loading: string
+  /** The toolbar's way to make one, where the layout shows `part`. */
+  picker?: {
+    label: string
+    part?: PartId
+    view: () => Promise<{ default: ComponentType<EmbedPickerProps> }>
+  }
+}
+
+/**
+ * Keeps open pages current when something of the module's changes (M1.5):
+ * the live-update events it answers, by type, and its handler, loaded the
+ * first time one arrives. The handler refreshes exactly what the event names.
+ */
+export type LiveRegistration = {
+  events: readonly string[]
+  handler: () => Promise<{ default: LiveHandler }>
+}
+
+/** Refreshes what one event names; `queryClient` is TanStack Query's. */
+export type LiveHandler = (queryClient: QueryClient, event: { type: string; projectId: string; payload: Record<string, unknown> }) => void
+
+/**
+ * A tab on a thing's detail view (M1.5): shown on things of `thing`'s kind
+ * where the layout shows `part`, loaded when opened.
+ */
+export type ThingTabRegistration = {
+  id: string
+  thing: string
+  label: string
+  icon: IconName
+  part?: PartId
+  rank: number
+  view: () => Promise<{ default: ComponentType<{ thingId: string; projectId?: string }> }>
+}
+
+/**
+ * Something the message composer offers beside sending (M1.5): an extra in
+ * its menu, where the layout shows `part`, loaded when picked.
+ */
+export type ComposerExtraRegistration = {
+  id: string
+  label: string
+  icon: IconName
+  part?: PartId
+  rank: number
+  view: () => Promise<{ default: ComponentType<{ conversationId: string; onDone: (insert?: string) => void }> }>
+}
+
+/**
+ * Something "New" makes (M1.5): an entry in the space's make menu that opens
+ * where the new thing is started.
+ */
+export type MakerRegistration = {
+  id: string
+  label: string
+  icon: IconName
+  /** After the space's address. */
+  path: string
+  part?: PartId
+  rank: number
+}
+
 export type WebModule = {
   /** A manifest id (`modules/<id>.json`). */
   id: string
@@ -141,4 +232,14 @@ export type WebModule = {
   things?: ThingRegistration[]
   /** What it lets a person capture quickly (W1.13). */
   capture?: CaptureRegistration[]
+  /** What it draws inside pages (M1.5). */
+  embeds?: EmbedRegistration[]
+  /** The live-update events it answers (M1.5). */
+  live?: LiveRegistration[]
+  /** Tabs it adds to things' detail views (M1.5). */
+  tabs?: ThingTabRegistration[]
+  /** What it adds to the message composer (M1.5). */
+  composer?: ComposerExtraRegistration[]
+  /** What it adds to a space's make menu (M1.5). */
+  makers?: MakerRegistration[]
 }

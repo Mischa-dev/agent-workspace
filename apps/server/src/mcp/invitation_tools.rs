@@ -27,7 +27,7 @@ const DEFAULT_EXPIRY_HOURS: i32 = 72;
 /// An invitation, without its link: the link is shown once, when it's made.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct InvitationLine {
+pub(crate) struct InvitationLine {
     pub id: String,
     /// The role it gives: admin, member or viewer, or a custom role (see
     /// roleId).
@@ -89,23 +89,24 @@ impl From<crate::workspace::InvitationView> for InvitationLine {
 // ---------------------------------------------------------------------------
 // invitation_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct InvitationListArguments {
+pub(crate) struct InvitationListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// List the invitations to the project's workspace instead.
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct InvitationListValue {
+pub(crate) struct InvitationListValue {
     /// Newest first, at most 200.
     pub invitations: Vec<InvitationLine>,
 }
 
-pub(super) async fn invitation_list(
+pub(crate) async fn invitation_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: InvitationListArguments,
@@ -146,14 +147,15 @@ pub(super) async fn invitation_list(
 // ---------------------------------------------------------------------------
 // invitation_write
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct InvitationWriteArguments {
+pub(crate) struct InvitationWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Invite to (or revoke an invitation to) the project's workspace
     /// instead: role admin or member, or a custom role. Workspace
     /// invitations can't be replaced; revoke and send a new one.
+    #[serde(default, rename = "wholeWorkspace")]
     pub workspace: Option<bool>,
     /// A note for a new workspace invitation, up to 200 characters.
     pub note: Option<String>,
@@ -178,7 +180,7 @@ pub(super) struct InvitationWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct InvitationWriteValue {
+pub(crate) struct InvitationWriteValue {
     /// "sent", "revoked" or "replaced".
     pub done: String,
     pub invitation: InvitationLine,
@@ -188,7 +190,7 @@ pub(super) struct InvitationWriteValue {
     pub join_url: Option<String>,
 }
 
-pub(super) async fn invitation_write(
+pub(crate) async fn invitation_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: InvitationWriteArguments,

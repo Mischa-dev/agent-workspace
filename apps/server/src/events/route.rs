@@ -66,6 +66,10 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
         "A whiteboard was saved as a new version",
     ),
     (
+        "module.event",
+        "A connected module sent an event it declares",
+    ),
+    (
         "incoming_hook.received",
         "An incoming hook received a delivery",
     ),
@@ -295,6 +299,24 @@ async fn heard(
                 logged.actor_account_id,
                 subject,
             )]
+        }
+        // A connected module's event (M1.13): rules match its declared
+        // type, carried as the subject's state, about its own thing.
+        "module.event" => {
+            let mut heard = event(
+                event_type,
+                format!("module.event:{}", logged.id),
+                logged.actor_account_id,
+                Subject {
+                    state: text_in("type"),
+                    ..Subject::default()
+                },
+            );
+            heard.thing = logged
+                .thing_kind
+                .clone()
+                .map(|kind| ThingRef { kind, id: thing });
+            vec![heard]
         }
         // One per accepted delivery: the delivery's id is the key.
         "incoming_hook.received" => {

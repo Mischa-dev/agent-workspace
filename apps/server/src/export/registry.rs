@@ -197,6 +197,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("package_id", "packages"),
                     ("installed_by_actor_id", "actors"),
                     ("via_app_actor_id", "actors"),
+                    ("upgraded_from", "package_installs"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -294,6 +295,26 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             ),
             (
                 "invite_tokens",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
+                "module_apps",
+                "a connected module's app account and secrets; connect it again after import",
+            ),
+            (
+                "module_kinds",
+                "read from a connected module's manifest; made again when it is connected again",
+            ),
+            (
+                "module_things",
+                "which connected module owns a thing; set again when it is connected again",
+            ),
+            (
+                "module_event_receipts",
+                "runtime state of this server (signed events already taken, so replays are refused)",
+            ),
+            (
+                "module_frame_launches",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (

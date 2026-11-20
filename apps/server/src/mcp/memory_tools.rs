@@ -283,7 +283,7 @@ pub(crate) async fn search_tool(
 // ---------------------------------------------------------------------------
 // Pages
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageListArguments {
     /// The project, or "workspace" for the workspace's own pages.
@@ -298,7 +298,7 @@ pub(crate) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
-    /// A template: page_write fromTemplateId starts a page from it.
+    /// A template: page_create fromTemplateId starts a page from it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_template: bool,
     /// Set when the page is a skill: when to use it. skill_get loads it.
@@ -366,7 +366,7 @@ pub(crate) async fn page_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageGetArguments {
     pub page_id: String,
@@ -394,13 +394,13 @@ pub(crate) struct PageValue {
     pub updated_at: String,
     pub stale: bool,
     pub archived: bool,
-    /// Recent versions, newest first. Restore one with page_write.
+    /// Recent versions, newest first. Restore one with page_update.
     pub history: Vec<RevisionLine>,
     pub url: String,
-    /// Open comment threads on the page (page_comments reads them).
+    /// Open comment threads on the page (page_comment_list reads them).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub open_comments: i64,
-    /// Suggested edits waiting on someone (page_suggestions reads them).
+    /// Suggested edits waiting on someone (page_suggestion_list reads them).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub pending_suggestions: i64,
     /// Set when your change to the text was kept as a suggestion instead
@@ -412,21 +412,21 @@ pub(crate) struct PageValue {
     pub idempotent_replay: bool,
     /// The pages it sits inside, outermost first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inside: Vec<PageLine>,
+    pub inside: Vec<PageCrumbLine>,
     /// The pages inside it, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pages_inside: Vec<PageLine>,
+    pub pages_inside: Vec<PageCrumbLine>,
 }
 
 /// A page named by id and title.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PageLine {
+pub(crate) struct PageCrumbLine {
     pub id: String,
     pub title: String,
 }
 
-impl From<memory::PageCrumb> for PageLine {
+impl From<memory::PageCrumb> for PageCrumbLine {
     fn from(crumb: memory::PageCrumb) -> Self {
         Self {
             id: crumb.id.to_string(),
@@ -533,8 +533,12 @@ pub(crate) async fn page_get(
             updated_at: page.updated_at,
             stale: page.stale,
             archived: page.archived,
-            inside: page.ancestors.into_iter().map(PageLine::from).collect(),
-            pages_inside: page.children.into_iter().map(PageLine::from).collect(),
+            inside: page
+                .ancestors
+                .into_iter()
+                .map(PageCrumbLine::from)
+                .collect(),
+            pages_inside: page.children.into_iter().map(PageCrumbLine::from).collect(),
             history: page
                 .revisions
                 .into_iter()
@@ -923,7 +927,7 @@ async fn suggest_text(
         Ok(suggestions::Suggested::Archived) => {
             return Ok(Err(ToolResult::invalid(
                 "pageId",
-                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+                "That page is archived. Bring it back with page_update (archived: false) to edit it.",
             )));
         }
         Ok(suggestions::Suggested::TooBig) => {
@@ -970,7 +974,7 @@ async fn suggest_text(
 /// How much of a block page_blocks shows without includeMarkdown.
 const BLOCK_PREVIEW_CHARACTERS: usize = 120;
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageBlocksArguments {
     pub page_id: String,
@@ -1391,7 +1395,7 @@ fn missing_block<T>(message: String, reference: &str) -> ToolResult<T> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageEditArguments {
     pub page_id: String,
@@ -1414,7 +1418,7 @@ pub(crate) struct PageEditArguments {
     pub thread_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PageEditInput {
     /// replace, insertBefore, insertAfter, delete, or append (to the end of
@@ -1526,7 +1530,7 @@ pub(crate) async fn page_edit(
         if page.archived {
             return Ok(ToolResult::invalid(
                 "pageId",
-                "That page is archived. Bring it back with page_write (archived: false) to edit it.",
+                "That page is archived. Bring it back with page_update (archived: false) to edit it.",
             ));
         }
         if let Some(expected) = arguments.expected_version
@@ -1672,7 +1676,7 @@ pub(crate) async fn page_edit(
 // folders. skill_get also returns the skill as a SKILL.md, so an agent can
 // keep a copy where its own harness looks for skills.
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SkillListArguments {
     pub project_id: String,
@@ -1744,7 +1748,7 @@ pub(crate) async fn skill_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "skill_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SkillGetArguments {
     // Read by the MCP middleware, which scopes the call to this project.

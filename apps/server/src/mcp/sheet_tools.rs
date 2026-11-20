@@ -47,7 +47,7 @@ use crate::{
 const MESSAGES_SPACE_MESSAGE: &str =
     "The Messages space has no sheets. Pick a project with projects_list.";
 const EDIT_MESSAGE: &str =
-    "Your role here can't edit sheets (sheets.edit). my_permissions says what it can do.";
+    "Your role here can't edit sheets (sheets.edit). permissions_get says what it can do.";
 /// Cells one read returns at most.
 const MAX_READ_CELLS: i64 = 2_000;
 /// Rows one read returns at most, as objects.

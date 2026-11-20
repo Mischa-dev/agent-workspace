@@ -181,12 +181,15 @@ describe('modules that are off', () => {
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
-      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
-        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      if (path.endsWith(`/w/${organization.id}/ops/role_list`)) {
+        return jsonResponse({
+          outcome: 'ok',
+          value: { roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] },
+        })
       }
-      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+      if (path.endsWith(`/w/${organization.id}/ops/role_update`)) {
         off = true
-        return jsonResponse(role())
+        return jsonResponse({ outcome: 'ok', value: role() })
       }
       // You hold Member in Agent Workspace: with Projects off for it, so is
       // that project for you.
@@ -233,12 +236,15 @@ describe('modules that are off', () => {
       // You hold Member in Agent Workspace, so its layout carries the role's modules.
       if (path.endsWith(`/projects/${projectAId}/layout`)) return jsonResponse({ effective: effectiveWith(off ? ['pages'] : []) })
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
-      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
-        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      if (path.endsWith(`/w/${organization.id}/ops/role_list`)) {
+        return jsonResponse({
+          outcome: 'ok',
+          value: { roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] },
+        })
       }
-      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+      if (path.endsWith(`/w/${organization.id}/ops/role_update`)) {
         off = true
-        return jsonResponse(role())
+        return jsonResponse({ outcome: 'ok', value: role() })
       }
       return standard(input, init)
     })

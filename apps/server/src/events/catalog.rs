@@ -745,6 +745,25 @@ pub static SPACE_MODULES_CHANGED: EventType = fact(
 )
 .legacy(&["project.modules.updated"]);
 
+pub static SETTING_CHANGED: EventType = fact(
+    "setting.changed",
+    "workspace",
+    None,
+    "A setting was changed or reset for the workspace, a space or someone",
+);
+pub static ROLE_CHANGED: EventType = fact(
+    "role.changed",
+    "workspace",
+    Some("role"),
+    "A workspace role was made, changed or removed",
+);
+pub static WORKSPACE_MEMBER_CHANGED: EventType = fact(
+    "workspace.member_changed",
+    "workspace",
+    Some("account"),
+    "Someone's workspace role or the cap on their apps changed",
+);
+
 pub static WORKSPACE_LIFECYCLE_CHANGED: EventType = fact(
     "workspace.lifecycle_changed",
     "workspace",
@@ -809,6 +828,40 @@ pub static THEME_CHANGED: EventType = signal(
     None,
     "Someone's theme was made, changed, offered or deleted",
 );
+// A connected module's things and the events it sends in (M1.13). Their
+// kinds and types are the module's own, so the thing names them; the
+// declared type rides in the payload.
+pub static CONNECTED_THING_CHANGED: EventType = fact(
+    "connected_thing.changed",
+    "workspace",
+    None,
+    "A connected module added or changed one of its things",
+);
+pub static MODULE_OPERATION_RAN: EventType = fact(
+    "module.operation_ran",
+    "workspace",
+    None,
+    "Someone ran an operation a connected module declares",
+);
+pub static MODULE_PANEL_PRESSED: EventType = fact(
+    "module.panel_pressed",
+    "workspace",
+    None,
+    "Someone pressed a button or sent a form in a connected module's panel",
+);
+pub static MODULE_CONNECTED: EventType = signal(
+    "module.connected",
+    "workspace",
+    None,
+    "A connected module was installed, re-read, approved or revoked",
+);
+pub static MODULE_EVENT: EventType = fact(
+    "module.event",
+    "workspace",
+    None,
+    "A connected module sent an event it declares",
+)
+.automatable();
 pub static WORKSPACE_THEMES_CHANGED: EventType = signal(
     "workspace_themes.changed",
     "workspace",
@@ -1017,7 +1070,15 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SPACE_RESTORED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
+        &SETTING_CHANGED,
+        &ROLE_CHANGED,
+        &WORKSPACE_MEMBER_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,
+        &CONNECTED_THING_CHANGED,
+        &MODULE_OPERATION_RAN,
+        &MODULE_PANEL_PRESSED,
+        &MODULE_CONNECTED,
+        &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,

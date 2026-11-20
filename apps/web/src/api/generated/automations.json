@@ -44,6 +44,12 @@
   {
     "kind": "change",
     "module": "agents",
+    "name": "agent_profile_set",
+    "title": "Change an agent"
+  },
+  {
+    "kind": "change",
+    "module": "agents",
     "name": "agent_ref_decide",
     "title": "Decide on an agent's proposed rebind"
   },
@@ -82,6 +88,12 @@
     "module": "agents",
     "name": "app_consent_set",
     "title": "Let an app hear a conversation"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "app_limit_set",
+    "title": "Set app limit"
   },
   {
     "kind": "change",
@@ -130,6 +142,30 @@
     "module": "messages",
     "name": "comment_thread_update",
     "title": "Resolve comment thread"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "connected_module_approve",
+    "title": "Approve a connected module's scopes"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "connected_module_install",
+    "title": "Install a connected module"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "connected_module_refresh",
+    "title": "Re-read a connected module's manifest"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "connected_module_revoke",
+    "title": "Revoke a connected module"
   },
   {
     "kind": "change",
@@ -444,6 +480,42 @@
     "title": "Update label"
   },
   {
+    "kind": "create",
+    "module": "inbox",
+    "name": "later_save",
+    "title": "Save for later"
+  },
+  {
+    "kind": "change",
+    "module": "inbox",
+    "name": "later_update",
+    "title": "Update Later item"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "launch_cancel",
+    "title": "Cancel launch"
+  },
+  {
+    "kind": "create",
+    "module": "projects",
+    "name": "layout_preset_create",
+    "title": "Save layout preset"
+  },
+  {
+    "kind": "change",
+    "module": "projects",
+    "name": "layout_preset_update",
+    "title": "Update layout preset"
+  },
+  {
+    "kind": "change",
+    "module": "projects",
+    "name": "layout_update",
+    "title": "Set layout"
+  },
+  {
     "kind": "change",
     "module": "pages",
     "name": "memory_page_set",
@@ -517,6 +589,12 @@
   },
   {
     "kind": "change",
+    "module": "runs",
+    "name": "model_catalog_set",
+    "title": "Change model list"
+  },
+  {
+    "kind": "change",
     "module": "workspace",
     "name": "module_archive",
     "title": "Archive a module"
@@ -564,6 +642,12 @@
     "title": "Set keyword alerts"
   },
   {
+    "kind": "change",
+    "module": "workspace",
+    "name": "notification_update",
+    "title": "Update notifications"
+  },
+  {
     "kind": "create",
     "module": "workspace",
     "name": "package_install",
@@ -576,6 +660,30 @@
     "title": "Remove a package"
   },
   {
+    "kind": "change",
+    "module": "workspace",
+    "name": "package_upgrade",
+    "title": "Upgrade a package"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
+    "name": "page_comment_create",
+    "title": "Comment on page"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "page_comment_update",
+    "title": "Update page comment"
+  },
+  {
+    "kind": "create",
+    "module": "pages",
+    "name": "page_create",
+    "title": "Create page"
+  },
+  {
     "kind": "create",
     "module": "pages",
     "name": "page_file_upload",
@@ -586,6 +694,24 @@
     "module": "pages",
     "name": "page_make",
     "title": "Make a page from messages or blocks"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "page_suggestion_decide",
+    "title": "Decide suggested edit"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "page_update",
+    "title": "Update page"
+  },
+  {
+    "kind": "change",
+    "module": "pages",
+    "name": "page_update_blocks",
+    "title": "Edit page blocks"
   },
   {
     "kind": "change",
@@ -610,6 +736,18 @@
     "module": "tasks",
     "name": "project_status_set",
     "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "module": "projects",
+    "name": "project_template_create",
+    "title": "Save space template"
+  },
+  {
+    "kind": "change",
+    "module": "projects",
+    "name": "project_template_update",
+    "title": "Update space template"
   },
   {
     "kind": "create",
@@ -774,6 +912,24 @@
     "title": "Answer a request"
   },
   {
+    "kind": "change",
+    "module": "workspace",
+    "name": "role_assign",
+    "title": "Assign role"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "role_create",
+    "title": "Create role"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "role_delete",
+    "title": "Delete role"
+  },
+  {
     "kind": "create",
     "module": "runs",
     "name": "run_activity_report",
@@ -794,14 +950,44 @@
   {
     "kind": "change",
     "module": "runs",
+    "name": "run_failure_hide",
+    "title": "Dismiss run failure"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
     "name": "run_mark_not_started",
     "title": "Mark a run not started"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_publish",
+    "title": "Publish run branch"
   },
   {
     "kind": "create",
     "module": "runs",
     "name": "run_result_report",
     "title": "Report run results"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_retry",
+    "title": "Retry run"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
+    "name": "run_start",
+    "title": "Start a run"
+  },
+  {
+    "kind": "change",
+    "module": "runs",
+    "name": "run_stop",
+    "title": "Stop run"
   },
   {
     "kind": "change",
@@ -832,6 +1018,12 @@
     "module": "messages",
     "name": "scheduled_message_update",
     "title": "Change scheduled message"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "setting_update",
+    "title": "Update setting"
   },
   {
     "kind": "change",
@@ -990,6 +1182,12 @@
     "title": "Import tasks"
   },
   {
+    "kind": "create",
+    "module": "runs",
+    "name": "task_launch",
+    "title": "Launch tasks"
+  },
+  {
     "kind": "change",
     "module": "tasks",
     "name": "task_link",
@@ -1111,6 +1309,12 @@
   },
   {
     "kind": "create",
+    "module": "runs",
+    "name": "usage_batch_launch",
+    "title": "Launch batch"
+  },
+  {
+    "kind": "create",
     "module": "collections",
     "name": "view_create",
     "title": "Make a view"
@@ -1220,7 +1424,25 @@
   {
     "kind": "change",
     "module": "workspace",
+    "name": "workspace_template_apply",
+    "title": "Use workspace template"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "workspace_template_save",
+    "title": "Save workspace template"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
     "name": "workspace_theme_set",
     "title": "Offer theme to the workspace"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "workspace_update",
+    "title": "Change workspace"
   }
 ]

@@ -6,7 +6,9 @@ import { shortcutOn } from '../shell/shortcutModules'
 import { createShortcutMatcher, gSequences } from '../shell/shortcuts'
 import { shortcutSheet } from '../shell/shortcutSheet'
 import type { WebModule } from './define'
-import { captureEntries, moduleShortcuts, moduleThings, paletteEntries, sidebarRows, WEB_MODULES } from './registry'
+import { embedPickers, registeredEmbed } from './embeds'
+import { liveEventOwners, liveHandlerFor } from './live'
+import { captureEntries, composerExtras, makers, moduleShortcuts, moduleThings, paletteEntries, sidebarRows, thingTabs, WEB_MODULES } from './registry'
 
 // W1.13: the shell is drawn from the registrations. A module that exists only
 // in this test brings a route, a sidebar row, a palette entry, a shortcut, a
@@ -23,6 +25,22 @@ const fake: WebModule = {
   shortcuts: [{ action: 'go-scaffold', key: 'z', label: 'Scaffold', path: '/scaffold', rank: 99 }],
   things: [{ kind: 'scaffold_item', label: 'Scaffold item', icon: 'list' }],
   capture: [{ id: 'scaffold', label: 'New scaffold item', icon: 'list', path: '/scaffold?new=1' }],
+  embeds: [
+    {
+      id: 'scaffold-item',
+      match: (path) => {
+        const found = /^\/scaffold\/([^/]+)$/.exec(path)
+        return found ? { itemId: decodeURIComponent(found[1]) } : null
+      },
+      view: () => Promise.resolve({ default: () => null }),
+      loading: 'the item',
+      picker: { label: 'Scaffold item…', view: () => Promise.resolve({ default: () => null }) },
+    },
+  ],
+  live: [{ events: ['scaffold.updated'], handler: () => Promise.resolve({ default: () => undefined }) }],
+  tabs: [{ id: 'scaffold', thing: 'task', label: 'Scaffold', icon: 'list', rank: 99, view: () => Promise.resolve({ default: () => null }) }],
+  composer: [{ id: 'scaffold', label: 'Scaffold', icon: 'list', rank: 99, view: () => Promise.resolve({ default: () => null }) }],
+  makers: [{ id: 'scaffold', label: 'Scaffold item', icon: 'list', path: '/scaffold?new=1', rank: 99 }],
 }
 const withFake = [...WEB_MODULES, fake]
 
@@ -59,7 +77,22 @@ describe('a registration draws itself into the shell', () => {
     expect(captureEntries(everything, withFake).map((entry) => entry.id)).toContain('scaffold')
   })
 
+  it('adds what it draws in pages, the events it answers, its tabs, composer extras and makers (M1.5)', async () => {
+    expect(registeredEmbed('/scaffold/a%20b', withFake)).toMatchObject({ module: 'scaffold', params: { itemId: 'a b' } })
+    expect(registeredEmbed('/scaffold/a', WEB_MODULES)).toBeNull()
+    expect(embedPickers(everything, withFake).map((entry) => entry.id)).toContain('scaffold-item')
+    expect(liveEventOwners(withFake).get('scaffold.updated')?.id).toBe('scaffold')
+    expect(liveHandlerFor('scaffold.updated')).toBeNull()
+    await expect(liveHandlerFor('scaffold.updated', withFake)).resolves.toBeTypeOf('function')
+    expect(thingTabs('task', everything, withFake).map((tab) => tab.id)).toContain('scaffold')
+    expect(thingTabs('page', everything, withFake).map((tab) => tab.id)).not.toContain('scaffold')
+    expect(composerExtras(everything, withFake).map((extra) => extra.id)).toContain('scaffold')
+    expect(makers(everything, withFake).map((maker) => maker.id)).toContain('scaffold')
+  })
+
   it('takes them away with its module', () => {
+    expect(embedPickers(without('scaffold'), withFake).map((entry) => entry.id)).not.toContain('scaffold-item')
+    expect(makers(without('scaffold'), withFake).map((maker) => maker.id)).not.toContain('scaffold')
     expect(sidebarRows('home', without('scaffold'), withFake).map((row) => row.id)).not.toContain('scaffold')
     expect(captureEntries(without('scaffold'), withFake).map((entry) => entry.id)).not.toContain('scaffold')
   })

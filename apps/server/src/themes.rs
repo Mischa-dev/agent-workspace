@@ -566,6 +566,34 @@ pub(crate) async fn announce(
     Ok(())
 }
 
+/// A theme made already offered to the workspace, by a package install
+/// (M1.9): its installer owns it, and the install checked the workspace's
+/// settings permission. The document is checked first.
+pub(crate) async fn insert_offered(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    workspace_id: Uuid,
+    account: Uuid,
+    name: &str,
+    document: &ThemeDocument,
+) -> Result<Uuid, AppError> {
+    let id = Uuid::now_v7();
+    let body = serde_json::to_value(document)
+        .map_err(|_| AppError::Internal("serialize an installed theme"))?;
+    sqlx::query(
+        "INSERT INTO themes (id, workspace_id, owner_account_id, name, document, offered, \
+         offered_by_account_id) VALUES ($1, $2, $3, $4, $5, true, $3)",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .bind(account)
+    .bind(name)
+    .bind(&body)
+    .execute(&mut **transaction)
+    .await?;
+    announce(transaction, workspace_id, account, id, true).await?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
