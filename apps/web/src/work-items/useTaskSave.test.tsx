@@ -86,6 +86,21 @@ describe('useTaskSave', () => {
     await waitFor(() => expect(result.current.pending('title')).toBeNull())
   })
 
+  it('stops a queued suggestion when someone else changed the field meanwhile', async () => {
+    let answer: (value: unknown) => void = () => {}
+    vi.mocked(callOp).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)
+    const { client, result } = setup(vi.fn(), true)
+
+    act(() => result.current.save('title', { title: 'Parse the options' }))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
+    act(() => result.current.save('title', { title: 'Parse every flag' }))
+    // A live update brings someone else's title before the first answer.
+    act(() => client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, title: 'Parse the CLI', version: 2 }))
+    answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
+    await waitFor(() => expect(result.current.pending('title')?.state).toBe('conflict'))
+    expect(callOp).toHaveBeenCalledTimes(1)
+  })
+
   it('stops instead of overwriting when someone else changed the same field, and keeps yours only when asked', async () => {
     const theirs = { ...task, title: 'Parse the CLI flags', version: 2 }
     const mutateAsync = vi.fn().mockRejectedValueOnce(conflict(theirs)).mockResolvedValue({ ...theirs, title: 'Mine', version: 3 })

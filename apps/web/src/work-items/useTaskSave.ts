@@ -306,11 +306,12 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     change(id, { sent: { requestId, version: task.version } })
     const written = await callOp('task_update', input, { requestId })
     // A suggestion leaves the task as it was, so a change to the same field
-    // queued behind this one starts from what the task holds, not from what
-    // was suggested.
+    // queued behind this one starts from what this one started from (the
+    // task's value when it was sent), never from a live change since. A
+    // change that landed (their own task) already left the right base: it.
     const queued = entries.current.get(entry.field)
-    if (queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine) {
-      entries.current.set(entry.field, { ...queued, base: fieldValue(current(), entry.field) })
+    if (written.proposalId && queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine) {
+      entries.current.set(entry.field, { ...queued, base: entry.base })
     }
     change(id, null)
     if (written.proposalId) {
