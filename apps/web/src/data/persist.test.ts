@@ -118,6 +118,21 @@ describe('reading offline', () => {
     expect(await restoreOffline(client())).toBe(false)
   })
 
+  it('shows nothing from a copy cleared while it was being read', async () => {
+    const reading = client()
+    reading.setQueryData(queryKeys.timeline('p', 'c'), { messages: [{ id: 'm1' }] })
+    const stop = keepOffline(reading, 'alice', 10_000)
+    await saveOffline(reading, 'alice')
+    stop()
+
+    const restarted = client()
+    const restoring = restoreOffline(restarted)
+    const clearing = clearOffline()
+    expect(await restoring).toBe(false)
+    await clearing
+    expect(restarted.getQueryData(queryKeys.timeline('p', 'c'))).toBeUndefined()
+  })
+
   it('stops keeping and clears when the workspace switches it off', async () => {
     const cache = client()
     const target = { scope: 'workspace' as const, organizationId: 'ws-1' }

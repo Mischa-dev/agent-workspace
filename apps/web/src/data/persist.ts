@@ -229,8 +229,10 @@ export async function saveOffline(queryClient: QueryClient, owner: string): Prom
 export async function restoreOffline(queryClient: QueryClient): Promise<boolean> {
   const owner = offlineOwner()
   if (!owner) return false
+  const started = generation
   const copy = await store.get(owner).catch(() => undefined)
-  if (!copy || copy.owner !== owner) return false
+  // Cleared while it was read (signed out, someone else signed in): show none of it.
+  if (!copy || copy.owner !== owner || started !== generation || offlineOwner() !== owner) return false
   for (const kept of copy.queries) {
     // A fresher answer already here wins.
     if ((queryClient.getQueryState(kept.queryKey)?.dataUpdatedAt ?? 0) >= kept.updatedAt) continue
