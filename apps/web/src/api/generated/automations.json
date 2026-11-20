@@ -132,12 +132,6 @@
     "title": "Resolve comment thread"
   },
   {
-    "kind": "create",
-    "module": "agents",
-    "name": "connection_create",
-    "title": "Create connection"
-  },
-  {
     "kind": "change",
     "module": "agents",
     "name": "connection_redeliver",
@@ -152,20 +146,8 @@
   {
     "kind": "change",
     "module": "agents",
-    "name": "connection_secret_rotate",
-    "title": "Rotate connection secret"
-  },
-  {
-    "kind": "change",
-    "module": "agents",
     "name": "connection_test",
     "title": "Test webhook"
-  },
-  {
-    "kind": "change",
-    "module": "agents",
-    "name": "connection_update",
-    "title": "Update connection"
   },
   {
     "kind": "change",
@@ -204,22 +186,10 @@
     "title": "Mark all read"
   },
   {
-    "kind": "create",
-    "module": "workspace",
-    "name": "credential_create",
-    "title": "Make a secret"
-  },
-  {
     "kind": "change",
     "module": "workspace",
     "name": "credential_revoke",
     "title": "Revoke a secret"
-  },
-  {
-    "kind": "change",
-    "module": "workspace",
-    "name": "credential_rotate",
-    "title": "Rotate a secret"
   },
   {
     "kind": "create",
@@ -438,28 +408,10 @@
     "title": "Unbind an agent from a host"
   },
   {
-    "kind": "create",
-    "module": "agents",
-    "name": "host_enrolment_create",
-    "title": "Make a host enrolment code"
-  },
-  {
-    "kind": "change",
-    "module": "agents",
-    "name": "host_link",
-    "title": "Link an A2A agent"
-  },
-  {
     "kind": "change",
     "module": "agents",
     "name": "host_unlink",
     "title": "Unlink a host"
-  },
-  {
-    "kind": "create",
-    "module": "automations",
-    "name": "incoming_hook_create",
-    "title": "Make an incoming hook"
   },
   {
     "kind": "change",
@@ -472,12 +424,6 @@
     "module": "tasks",
     "name": "initiative_create",
     "title": "Create an initiative"
-  },
-  {
-    "kind": "create",
-    "module": "workspace",
-    "name": "invite_link_create",
-    "title": "Make an invitation link"
   },
   {
     "kind": "change",
@@ -634,12 +580,6 @@
     "module": "pages",
     "name": "page_make",
     "title": "Make a page from messages or blocks"
-  },
-  {
-    "kind": "create",
-    "module": "workspace",
-    "name": "person_create",
-    "title": "Add a person who hasn't signed in yet"
   },
   {
     "kind": "change",
@@ -1104,12 +1044,6 @@
     "title": "Link two things"
   },
   {
-    "kind": "create",
-    "module": "pages",
-    "name": "thing_link_create",
-    "title": "Make a link to one thing"
-  },
-  {
     "kind": "change",
     "module": "pages",
     "name": "thing_share_add",
@@ -1252,12 +1186,6 @@
     "module": "workspace",
     "name": "workspace_store_revoke",
     "title": "Stop using the workspace's own file bucket"
-  },
-  {
-    "kind": "change",
-    "module": "workspace",
-    "name": "workspace_store_set",
-    "title": "Use the workspace's own file bucket"
   },
   {
     "kind": "change",

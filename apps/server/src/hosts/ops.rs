@@ -136,6 +136,8 @@ impl Operation for HostEnrolmentCreate {
         to the host's own enrol step within 15 minutes; it is shown once and never stored. Each \
         call makes a new code.";
     const EMITS: &'static [&'static str] = &["host.enrolment_created"];
+    // The code is for a person to hand to the host; a rule has no one to show it to.
+    const AUTOMATION: bool = false;
 
     type Input = HostEnrolmentCreateInput;
     type Output = EnrolmentCode;
