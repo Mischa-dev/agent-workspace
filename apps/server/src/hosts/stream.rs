@@ -18,9 +18,10 @@ pub async fn delta(
     run_id: Uuid,
     delta: StreamDelta,
 ) -> Result<(), HostError> {
-    let holder = runs::credentials::resolve(&state.pool, token)
+    // The run's own token (K1.24's narrow token bound to the run).
+    let holder = crate::access::tokens::resolve(&state.pool, token)
         .await?
-        .filter(|holder| holder.run_id == run_id)
+        .filter(|holder| holder.run_id == Some(run_id))
         .ok_or(HostError::Unauthorized)?;
     if delta.delta.is_empty() || delta.delta.len() > MAX_STREAM_DELTA_BYTES {
         return Err(HostError::Invalid {
@@ -28,7 +29,7 @@ pub async fn delta(
             message: format!("Send 1 to {MAX_STREAM_DELTA_BYTES} bytes at a time."),
         });
     }
-    let run = runs::store::get(crate::db::scoped(&state.pool), holder.run_id)
+    let run = runs::store::get(crate::db::scoped(&state.pool), run_id)
         .await?
         .ok_or(HostError::Unauthorized)?;
     if runs::RunState::terminal_keys().contains(&run.state.as_str()) {
