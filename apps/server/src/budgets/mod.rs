@@ -117,10 +117,12 @@ pub async fn admit_call(
 }
 
 /// Whether `account` may start a run: refused once a hard budget on what
-/// runs report they cost, or the tokens they report, is used up.
+/// runs report they cost, or the tokens they report, is used up, on the
+/// account, its space or the conversation the run is for.
 pub async fn admit_run(
     transaction: &mut Transaction<'_, Postgres>,
     space: Uuid,
+    conversation: Option<Uuid>,
     account: Uuid,
 ) -> Result<(), AppError> {
     let workspace = workspace_of(transaction, space).await?;
@@ -134,6 +136,7 @@ pub async fn admit_run(
             Ask {
                 account_id: Some(account),
                 space_id: space,
+                conversation_id: conversation,
                 ..Ask::new(workspace, meter, 1)
             },
         )

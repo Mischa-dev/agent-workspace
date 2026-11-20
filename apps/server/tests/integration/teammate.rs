@@ -453,7 +453,8 @@ async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
         &world,
         rook,
         "page_write",
-        json!({"pageId": page, "body": "Second.", "expectedVersion": 1}),
+        // A link to the page, as the tool takes it, is the page too.
+        json!({"pageId": format!("https://example.test/pages/{page}"), "body": "Second.", "expectedVersion": 1}),
     )
     .await;
     assert_ne!(written["pendingReview"], true, "{written}");

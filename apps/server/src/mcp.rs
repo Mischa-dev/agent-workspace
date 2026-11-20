@@ -2290,8 +2290,20 @@ async fn guard_hand_written(
         "id",
     ]
     .iter()
-    .find_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
-    .and_then(|id| Uuid::parse_str(id).ok())
+    .find_map(|key| {
+        input
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(|id| (*key, id))
+    })
+    // Read as the tool reads it: an id or a link to it.
+    .and_then(|(key, id)| {
+        if key == "messageId" {
+            common::parse_message_id(id)
+        } else {
+            common::parse_id(id)
+        }
+    })
     .map_or(("project", principal.project_id), |id| (kind, id));
     let caller = crate::access::Caller::of_principal(principal, limits);
     let located = crate::ops::Located {
@@ -2656,29 +2668,9 @@ async fn run_tool(
             }
         }
     }
-    // A2.27: a workspace's guards see a change by a hand-written tool too,
-    // as they see an operation's (`ops::dispatch`).
-    if writes_while_unpaused_only(&request.name)
-        && let Some(workspace) = acting_in
-    {
-        match Box::pin(guard_hand_written(
-            &server.state,
-            &principal,
-            limits.clone(),
-            workspace,
-            &request,
-        ))
-        .await
-        {
-            Ok(None) => {}
-            Ok(Some(answer)) => return Ok(answer),
-            Err(error) => {
-                return Ok(refusal(&request.name, error.message().into_owned()));
-            }
-        }
-    }
     // A2.14: a hand-written tool spends its caller's call budgets as an
-    // operation does (`ops::dispatch`, which counts the operations).
+    // operation does (`ops::dispatch`, which counts the operations). Before
+    // the guard, so a call refused here never uses up a review's approval.
     if let Some(workspace) = acting_in {
         match Box::pin(crate::budgets::admit_call(
             &server.state.pool,
@@ -2703,6 +2695,27 @@ async fn run_tool(
                     &request.name,
                     "Couldn't check your access just now. Try again.".to_owned(),
                 ));
+            }
+        }
+    }
+    // A2.27: a workspace's guards see a change by a hand-written tool too,
+    // as they see an operation's (`ops::dispatch`).
+    if writes_while_unpaused_only(&request.name)
+        && let Some(workspace) = acting_in
+    {
+        match Box::pin(guard_hand_written(
+            &server.state,
+            &principal,
+            limits.clone(),
+            workspace,
+            &request,
+        ))
+        .await
+        {
+            Ok(None) => {}
+            Ok(Some(answer)) => return Ok(answer),
+            Err(error) => {
+                return Ok(refusal(&request.name, error.message().into_owned()));
             }
         }
     }
