@@ -633,7 +633,6 @@ async fn pipeline<O: Operation>(
             ctx.space_id,
             ctx.caller.account_id,
             writes,
-            ctx.request_id.as_deref(),
         ))
         .await?;
     }

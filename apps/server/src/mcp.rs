@@ -2677,6 +2677,35 @@ async fn run_tool(
             }
         }
     }
+    // A2.14: a hand-written tool spends its caller's call budgets as an
+    // operation does (`ops::dispatch`, which counts the operations).
+    if let Some(workspace) = acting_in {
+        match Box::pin(crate::budgets::admit_call(
+            &server.state.pool,
+            workspace,
+            Some(principal.project_id),
+            principal.actor_id,
+            writes_while_unpaused_only(&request.name),
+        ))
+        .await
+        {
+            Ok(()) => {}
+            Err(AppError::LimitReached(refusal)) => {
+                return Ok(rmcp::model::CallToolResponse::Complete(
+                    rmcp::model::CallToolResult::structured(
+                        crate::ops::OpError::LimitReached { refusal }.to_json(),
+                    ),
+                ));
+            }
+            Err(error) => {
+                tracing::error!(category = error.log_category(), "MCP budget check failed");
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
+        }
+    }
     let request_name = request.name.clone();
     let state = server.state.clone();
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(

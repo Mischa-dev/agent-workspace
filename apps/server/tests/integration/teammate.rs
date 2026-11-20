@@ -403,6 +403,73 @@ async fn guards_hold_hand_written_tools_too() {
     assert_eq!(next["pendingReview"], true, "{next}");
 }
 
+/// A conversation's memory page is that conversation's: a change to it held
+/// for review goes only to reviewers who can read the conversation, and
+/// with none who can, it is refused rather than shown to the others.
+#[tokio::test]
+async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_memory")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let channel = tool(
+        &world,
+        rook,
+        "channel_create",
+        json!({"projectId": space, "name": "rook-notes", "private": true}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel = channel["value"]["id"]
+        .as_str()
+        .or_else(|| channel["value"]["conversation"]["id"].as_str())
+        .or_else(|| channel["value"]["conversationId"].as_str())
+        .expect("channel")
+        .to_owned();
+    let memory = tool(
+        &world,
+        rook,
+        "memory_page_set",
+        json!({"conversation": channel, "body": "First.", "clientRequestId": Uuid::now_v7()}),
+    )
+    .await;
+    assert_eq!(memory["outcome"], "ok", "{memory}");
+    let page = memory["value"]["pageId"].as_str().expect("page").to_owned();
+    // The only reviewer isn't in the private channel.
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let written = tool(
+        &world,
+        rook,
+        "page_write",
+        json!({"pageId": page, "body": "Second.", "expectedVersion": 1}),
+    )
+    .await;
+    assert_ne!(written["pendingReview"], true, "{written}");
+    assert!(
+        written
+            .to_string()
+            .contains("none of its reviewers can read"),
+        "{written}"
+    );
+    let held = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds")
+        .fetch_one(world.pool())
+        .await
+        .expect("holds");
+    assert_eq!(held, 0);
+}
+
 /// A2.27: a team's own guards. A deny guard stops the changes it matches
 /// and nothing else; a review guard holds a change until a reviewer allows
 /// it, then the same call goes through once; declined, it is refused. A

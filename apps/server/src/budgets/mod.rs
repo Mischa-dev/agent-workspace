@@ -69,15 +69,15 @@ pub async fn admit_message(
 /// changes something: counted when asked, in its own short transaction
 /// before the call's begins, so the counter rows are never held while the
 /// call runs (a call it sets off, as the same account, would wait on them).
-/// A call that then fails still counts; a retry with the same request id
-/// counts once.
+/// Every call counts, a retry or a call that then fails too: a request id
+/// says nothing about what the call does, so reusing one must not skip the
+/// budget.
 pub async fn admit_call(
     pool: &sqlx::PgPool,
     workspace: Uuid,
     space: Option<Uuid>,
     account: Uuid,
     writes: bool,
-    request_id: Option<&str>,
 ) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     // The space first: a write holding it makes this wait, as the call
@@ -89,10 +89,7 @@ pub async fn admit_call(
             .execute(&mut *transaction)
             .await?;
     }
-    let call = request_id.map_or_else(
-        || Uuid::now_v7().to_string(),
-        |key| format!("{account}:{}", key.chars().take(120).collect::<String>()),
-    );
+    let call = Uuid::now_v7();
     let meters: &[&'static str] = if writes {
         &["operations", "writes"]
     } else {
@@ -128,7 +125,9 @@ pub async fn admit_run(
 ) -> Result<(), AppError> {
     let workspace = workspace_of(transaction, space).await?;
     let space = Some(space);
-    for meter in ["reported_cost_micros", "reported_tokens"] {
+    // In the order `record_run_usage` counts them, so the two never wait on
+    // each other's counters.
+    for meter in ["reported_tokens", "reported_cost_micros"] {
         // One more unit: at the limit is used up.
         admit(
             transaction,
@@ -204,18 +203,22 @@ pub async fn record_run_usage(
 /// a hard budget on deliveries holds it, the time it may go again.
 pub async fn admit_delivery(
     transaction: &mut Transaction<'_, Postgres>,
-    workspace: Uuid,
+    event: &crate::events::LoggedEvent,
     account: Uuid,
     key: &str,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>, AppError> {
+    // Where the event happened, so a budget on its space or conversation
+    // holds its pushes too.
     let ask = Ask {
         account_id: Some(account),
+        space_id: event.space_id,
+        conversation_id: event.conversation_id,
         record: Some(Recorded {
             source_kind: "delivery",
             source_id: None,
             dedupe_key: key,
         }),
-        ..Ask::new(workspace, "deliveries", 1)
+        ..Ask::new(event.workspace_id, "deliveries", 1)
     };
     match admit(transaction, ask).await {
         Ok(()) => Ok(None),
