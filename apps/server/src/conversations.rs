@@ -2989,7 +2989,7 @@ async fn conversation_timeline(
                     'projectId', item.project_id
                 ) ORDER BY item.number, item.id
             ), '[]'::jsonb)
-            FROM work_item_conversation_links link
+            FROM task_threads link
             JOIN task_rows item
               ON item.project_id = link.project_id AND item.id = link.work_item_id
             JOIN projects project ON project.id = item.project_id

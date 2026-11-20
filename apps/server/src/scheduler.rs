@@ -80,7 +80,7 @@ pub async fn run_host(
 
 async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), AppError> {
     let result = async {
-        crate::recovery::reconcile_owned(&state, &cluster, &lease).await?;
+        crate::hosts::builtin::recovery::reconcile_owned(&state, &cluster, &lease).await?;
         let jobs = crate::jobs::default_registry();
         let builtin = crate::hosts::builtin::transport::client(&state);
         let mut interval = tokio::time::interval(Duration::from_secs(1));

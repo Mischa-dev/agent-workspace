@@ -304,7 +304,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let (run_prompt, harness, linked) = sqlx::query_as::<_, (String, Option<String>, bool)>(
         r#"
         SELECT run.prompt, run.config ->> 'harness',
-               EXISTS (SELECT 1 FROM work_item_conversation_links link
+               EXISTS (SELECT 1 FROM task_threads link
                        WHERE link.work_item_id = launch.work_item_id
                          AND link.conversation_id = run.conversation_id)
         FROM launches launch JOIN agent_runs run ON run.id = launch.run_id
@@ -396,7 +396,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let runs_for_member_task = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM agent_runs run
-        JOIN work_item_conversation_links link ON link.conversation_id = run.conversation_id
+        JOIN task_threads link ON link.conversation_id = run.conversation_id
         WHERE link.work_item_id = $1
         "#,
     )

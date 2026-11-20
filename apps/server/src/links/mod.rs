@@ -10,9 +10,12 @@
 //! - a link from a message reads as one from its conversation, which is
 //!   what a reader can open.
 //!
-//! Explicit links (someone linked two things: a dependency, a relation)
-//! are written here too, with `put_explicit` and `drop_explicit`, which
-//! emit `link.created` and `link.deleted` on the `from` thing (K3.15).
+//! Explicit links (someone linked two things: a dependency, a relation, a
+//! task's page or thread, a board's task) are written here too, with
+//! `put_explicit` and `drop_explicit`, which emit `link.created` and
+//! `link.deleted` on the `from` thing (K3.15). Since K3.23 there is no
+//! other store for them; `task_links` and `board_links` are views over
+//! this one in the shape their readers had.
 //!
 //! Ends that are deleted (a removed message, a deleted task) don't count,
 //! nor do archived subtasks or archived records' field values. Nothing
@@ -200,6 +203,39 @@ pub async fn put_explicit(
     Ok(Ok(true))
 }
 
+/// [`put_explicit`] for a caller that has already found both ends with
+/// the actor's access: a refusal means an end went (or was never in the
+/// registry) meanwhile, which reads as not found.
+pub async fn put_checked(
+    connection: &mut PgConnection,
+    from: Uuid,
+    to: Uuid,
+    kind: &str,
+    by: Option<Uuid>,
+) -> Result<bool, AppError> {
+    match put_explicit(connection, from, to, kind, by).await? {
+        Ok(made) => Ok(made),
+        Err(Refused::NotThings | Refused::OtherWorkspace) => Err(AppError::NotFound("link")),
+    }
+}
+
+/// Whether `from` links to `to` with an explicit link of `kind`.
+pub async fn has_explicit(
+    connection: &mut PgConnection,
+    from: Uuid,
+    to: Uuid,
+    kind: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM links WHERE from_thing_id = $1 AND to_thing_id = $2                         AND kind = $3 AND origin = 'explicit')",
+    )
+    .bind(from)
+    .bind(to)
+    .bind(kind)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
 /// Take away an explicit link of `kind` from `from` to `to` (either way
 /// when `either_way`, for symmetric kinds). Whether one went.
 pub async fn drop_explicit(
@@ -235,4 +271,53 @@ pub async fn drop_explicit(
         }
     }
     Ok(!gone.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::source::{rust_files, server_src};
+
+    /// The link stores K3.15 and K3.23 dropped (K3.23's acceptance).
+    const DROPPED: &[&str] = &[
+        "work_item_dependencies",
+        "work_item_relations",
+        "thing_references",
+        "work_item_comment_references",
+        "work_item_links",
+        "work_item_conversation_links",
+        "whiteboard_links",
+    ];
+
+    /// `word` on its own, not inside a longer name
+    /// (`github_pull_request_work_item_links` keeps its table).
+    fn names(source: &str, word: &str) -> bool {
+        let ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+        source.match_indices(word).any(|(index, _)| {
+            !source[..index].bytes().next_back().is_some_and(ident)
+                && !source[index + word.len()..]
+                    .bytes()
+                    .next()
+                    .is_some_and(ident)
+        })
+    }
+
+    #[test]
+    fn no_rust_file_names_a_dropped_link_store() {
+        let named = rust_files(&server_src())
+            .into_iter()
+            .filter(|(path, _)| path != "links/mod.rs")
+            .flat_map(|(path, source)| {
+                DROPPED
+                    .iter()
+                    .filter(move |table| names(&source, table))
+                    .map(move |table| format!("{path} names {table}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(named.is_empty(), "{named:#?}");
+        assert!(names("FROM work_item_links link", "work_item_links"));
+        assert!(!names(
+            "FROM github_pull_request_work_item_links",
+            "work_item_links"
+        ));
+    }
 }

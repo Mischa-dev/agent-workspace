@@ -67,6 +67,11 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // digest names says whose it is, and the lookup checks that account's
     // standing before the request takes the account's scope.
     ("auth.credential", &["mcp.rs", "mcp/oauth.rs"]),
+    // A sign-in revoking the session its cookie still names: the revoke
+    // stages `session.revoked` in a workspace of that session's account,
+    // which the anonymous sign-in can't see (`widen_to_system`, one
+    // statement keyed by the cookie's digest).
+    ("auth.rotate", &["auth/mod.rs"]),
     // The built-in host's scheduler, recovery and host jobs: they claim runs
     // of every workspace, and check each against its run's space.
     (
@@ -74,7 +79,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
         &[
             "server.rs",
             "scheduler.rs",
-            "recovery.rs",
+            "hosts/builtin/recovery.rs",
+            "hosts/builtin/report.rs",
             "launch.rs",
             "runs/liveness.rs",
             "runs/usage.rs",

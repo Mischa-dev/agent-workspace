@@ -77,7 +77,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
             .await
             .expect("serve loopback application");
     });
-    let websocket_url = format!("ws://{address}/api/v1/realtime");
+    let websocket_url = format!("ws://{address}/api/v1/realtime?v=2");
 
     assert_upgrade_rejected(
         &websocket_url,
@@ -101,6 +101,16 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     )
     .await;
 
+    // Protocol 1 is gone (K5.15): a client that doesn't ask for 2 is told
+    // to upgrade.
+    assert_upgrade_rejected(
+        &format!("ws://{address}/api/v1/realtime"),
+        Some(ALLOWED_ORIGIN),
+        Some(&fixture.session_cookie()),
+        StatusCode::UPGRADE_REQUIRED,
+    )
+    .await;
+
     let request = websocket_request(
         &websocket_url,
         Some(ALLOWED_ORIGIN),
@@ -110,6 +120,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         .await
         .expect("authenticated WebSocket upgrade");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    say_hello(&mut socket).await;
 
     let foreign_event_id = Uuid::now_v7();
     realtime.publish(RealtimeEvent {
@@ -117,7 +128,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         kind: "message.delta",
         project_id: fixture.foreign_project_id,
         conversation_id: Some(fixture.foreign_conversation_id),
-        payload: serde_json::json!({"scope": "foreign"}),
+        payload: serde_json::json!({"delta": "foreign"}),
     });
     let own_event_id = Uuid::now_v7();
     realtime.publish(RealtimeEvent {
@@ -125,26 +136,19 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         kind: "message.delta",
         project_id: fixture.own_project_id,
         conversation_id: Some(fixture.own_conversation_id),
-        payload: serde_json::json!({"scope": "own"}),
+        payload: serde_json::json!({"delta": "own"}),
     });
 
-    let delivered = timeout(Duration::from_secs(3), socket.next())
+    let delivered = next_delta(&mut socket, Duration::from_secs(3))
         .await
-        .expect("same-Project realtime event deadline")
-        .expect("open WebSocket stream")
-        .expect("valid WebSocket message");
-    let ClientMessage::Text(delivered) = delivered else {
-        panic!("expected a realtime text event");
-    };
-    let delivered: serde_json::Value =
-        serde_json::from_str(delivered.as_str()).expect("decode realtime event");
+        .expect("same-Project realtime event deadline");
+    let _ = (own_event_id, foreign_event_id);
     assert_eq!(
-        delivered["event_id"],
-        serde_json::Value::String(own_event_id.to_string())
+        delivered["conversationId"],
+        fixture.own_conversation_id.to_string()
     );
-    assert_ne!(
-        delivered["event_id"],
-        serde_json::Value::String(foreign_event_id.to_string()),
+    assert_eq!(
+        delivered["delta"], "own",
         "the cross-Project event must be suppressed"
     );
 
@@ -161,12 +165,12 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         kind: "message.delta",
         project_id: fixture.own_project_id,
         conversation_id: Some(fixture.own_conversation_id),
-        payload: serde_json::json!({"scope": "disabled"}),
+        payload: serde_json::json!({"delta": "disabled"}),
     });
     assert!(
-        timeout(Duration::from_millis(300), socket.next())
+        next_delta(&mut socket, Duration::from_millis(300))
             .await
-            .is_err(),
+            .is_none(),
         "a disabled member must stop receiving invalidations on an existing socket"
     );
     sqlx::query(
@@ -183,19 +187,13 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         kind: "message.delta",
         project_id: fixture.own_project_id,
         conversation_id: Some(fixture.own_conversation_id),
-        payload: serde_json::json!({"scope": "re-enabled"}),
+        payload: serde_json::json!({"delta": "re-enabled"}),
     });
-    let resumed = timeout(Duration::from_secs(2), socket.next())
+    let resumed = next_delta(&mut socket, Duration::from_secs(2))
         .await
-        .expect("re-enabled realtime deadline")
-        .expect("open re-enabled WebSocket stream")
-        .expect("valid re-enabled WebSocket message");
-    let ClientMessage::Text(resumed) = resumed else {
-        panic!("expected a re-enabled realtime text event");
-    };
-    let resumed: serde_json::Value =
-        serde_json::from_str(resumed.as_str()).expect("decode re-enabled realtime event");
-    assert_eq!(resumed["event_id"], resumed_event_id.to_string());
+        .expect("re-enabled realtime deadline");
+    let _ = resumed_event_id;
+    assert_eq!(resumed["delta"], "re-enabled");
 
     let logout_response = reqwest::Client::new()
         .post(format!("http://{address}/api/v1/auth/logout"))
@@ -214,9 +212,14 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
             .expect("read revoked session")
     );
 
-    let closed = timeout(Duration::from_secs(2), socket.next())
-        .await
-        .expect("immediate logout revocation deadline");
+    let closed = loop {
+        let next = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("immediate logout revocation deadline");
+        if !matches!(next, Some(Ok(ClientMessage::Text(_)))) {
+            break next;
+        }
+    };
     match closed {
         Some(Ok(ClientMessage::Close(_))) | None => {}
         Some(Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed)) => {}
@@ -253,6 +256,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         .await
         .expect("resync WebSocket upgrade");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    say_hello(&mut lagged_socket).await;
 
     // Publishing without yielding deterministically overruns the server's
     // bounded broadcast receiver on this current-thread Tokio test runtime.
@@ -265,11 +269,17 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
             payload: serde_json::json!({"sequence": sequence}),
         });
     }
-    let lagged_close = timeout(Duration::from_secs(2), lagged_socket.next())
-        .await
-        .expect("lagged realtime close deadline")
-        .expect("lagged WebSocket stream")
-        .expect("valid lagged WebSocket message");
+    // Protocol 2 says `resync` first, then closes.
+    let lagged_close = loop {
+        let next = timeout(Duration::from_secs(2), lagged_socket.next())
+            .await
+            .expect("lagged realtime close deadline")
+            .expect("lagged WebSocket stream")
+            .expect("valid lagged WebSocket message");
+        if !matches!(next, ClientMessage::Text(_)) {
+            break next;
+        }
+    };
     let ClientMessage::Close(Some(close)) = lagged_close else {
         panic!("lagged realtime client did not receive a close frame: {lagged_close:?}");
     };
@@ -286,6 +296,49 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop isolated realtime schema");
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Protocol 2 starts with `hello`; the server answers `ready`.
+async fn say_hello(socket: &mut Socket) {
+    use futures_util::SinkExt;
+    socket
+        .send(ClientMessage::Text(r#"{"type":"hello"}"#.into()))
+        .await
+        .expect("hello");
+    loop {
+        let frame = timeout(Duration::from_secs(3), socket.next())
+            .await
+            .expect("ready deadline")
+            .expect("open stream")
+            .expect("valid message");
+        if let ClientMessage::Text(text) = frame {
+            let frame: serde_json::Value = serde_json::from_str(text.as_str()).expect("frame");
+            if frame["type"] == "ready" {
+                return;
+            }
+        }
+    }
+}
+
+/// The next stream delta within `within`, passing other frames (presence)
+/// by; None when none comes.
+async fn next_delta(socket: &mut Socket, within: Duration) -> Option<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let next = tokio::time::timeout_at(deadline, socket.next())
+            .await
+            .ok()?;
+        let Some(Ok(ClientMessage::Text(text))) = next else {
+            panic!("expected a realtime frame, got {next:?}");
+        };
+        let frame: serde_json::Value = serde_json::from_str(text.as_str()).expect("frame");
+        if frame["kind"] == "stream.delta" {
+            return Some(frame);
+        }
+    }
 }
 
 async fn assert_upgrade_rejected(

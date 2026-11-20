@@ -11,7 +11,11 @@
 //! workspace's) and write the same key, so a move or a prune first takes a
 //! lease on the file's row (`move_lease`): only its holder writes or
 //! deletes the file's bytes, and a destination object is deleted only
-//! while held, or once no row names it.
+//! while held, or once no row names it. A file another move or a prune
+//! holds is passed by; when the walk ends with such files left, another
+//! pass starts a few minutes later and walks only what isn't moved yet.
+
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,6 +33,11 @@ use crate::{
 pub const MOVE_KIND: &str = "files.move";
 /// Files copied per job.
 pub const BATCH: i64 = 100;
+/// Further passes over files that were held, at most; with the delay
+/// between them, longer than a lease lives.
+pub const PASSES: u32 = 24;
+/// How long after a walk the next pass starts.
+const PASS_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MovePayload {
@@ -39,6 +48,9 @@ pub struct MovePayload {
     /// The last file id the previous batch looked at.
     #[serde(default)]
     pub after: Option<Uuid>,
+    /// Which pass over the files this is; the first is 0.
+    #[serde(default)]
+    pub pass: u32,
 }
 
 /// What one batch did.
@@ -71,6 +83,17 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             if matches!(queued, jobs::Enqueued::Duplicate) {
                 tracing::debug!(%next, "the next file-move batch was already queued");
             }
+        } else if let Some(again) = next_pass(&context.state, &payload)
+            .await
+            .map_err(JobError::from)?
+        {
+            tracing::info!(
+                pass = again.pass,
+                "files were held; another move pass is queued"
+            );
+            queue(&context.state.pool, again)
+                .await
+                .map_err(JobError::from)?;
         }
         Ok(())
     });
@@ -97,6 +120,7 @@ pub async fn start(
             to: to.to_owned(),
             workspace,
             after: None,
+            pass: 0,
         },
     )
     .await
@@ -115,6 +139,7 @@ pub(crate) async fn start_in(
             to: to.to_owned(),
             workspace: Some(workspace),
             after: None,
+            pass: 0,
         }),
     )
     .await
@@ -129,7 +154,7 @@ async fn queue(pool: &PgPool, payload: MovePayload) -> Result<jobs::Enqueued, Ap
 /// doesn't collide with it.
 fn unique_key(payload: &MovePayload) -> String {
     format!(
-        "files.move:{}:{}:{}",
+        "files.move:{}:{}:{}{}",
         payload.to,
         payload
             .workspace
@@ -137,7 +162,11 @@ fn unique_key(payload: &MovePayload) -> String {
             .unwrap_or_default(),
         payload
             .after
-            .map_or_else(|| "start".to_owned(), |id| id.to_string())
+            .map_or_else(|| "start".to_owned(), |id| id.to_string()),
+        match payload.pass {
+            0 => String::new(),
+            pass => format!(":pass{pass}"),
+        }
     )
 }
 
@@ -148,7 +177,51 @@ fn job(payload: MovePayload) -> NewJob {
     if let Some(workspace) = payload.workspace {
         job = job.workspace(workspace);
     }
+    if payload.pass > 0 && payload.after.is_none() {
+        job = job.delay(PASS_DELAY);
+    }
     job
+}
+
+/// The pass to queue once a walk has ended: another from the start while
+/// files it would move are still in another store (held by another move or
+/// a prune when the walk passed them, let go since, or a copy that failed),
+/// up to `PASSES` more. None when every file is there, or the passes are
+/// spent.
+pub async fn next_pass(
+    state: &AppState,
+    payload: &MovePayload,
+) -> Result<Option<MovePayload>, AppError> {
+    if payload.pass >= PASSES {
+        return Ok(None);
+    }
+    // Files of every workspace, or of one.
+    let left = crate::tenancy::system(
+        "files.move",
+        Box::pin(
+            sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1 FROM files
+                    WHERE ($1::uuid IS NULL OR organization_id = $1)
+                      AND store_id <> $2
+                      AND blob_deleted_at IS NULL
+                      AND NOT ($3 AND members_only)
+                )
+                "#,
+            )
+            .bind(payload.workspace)
+            .bind(&payload.to)
+            .bind(payload.to.starts_with(super::store::WORKSPACE_PREFIX))
+            .fetch_one(crate::db::scoped(&state.pool)),
+        ),
+    )
+    .await?;
+    Ok(left.then(|| MovePayload {
+        after: None,
+        pass: payload.pass + 1,
+        ..payload.clone()
+    }))
 }
 
 #[derive(sqlx::FromRow)]
@@ -161,7 +234,8 @@ struct ToMove {
     sha256: String,
 }
 
-/// Copies the next batch of files that aren't in `to` yet.
+/// Copies the next batch of files that aren't in `to` yet; files already
+/// there are passed by in the walk itself.
 pub async fn move_batch(state: &AppState, payload: &MovePayload) -> Result<Moved, AppError> {
     // Files of every workspace, or of one.
     crate::tenancy::system("files.move", Box::pin(move_batch_here(state, payload))).await
@@ -183,6 +257,7 @@ async fn move_batch_here(state: &AppState, payload: &MovePayload) -> Result<Move
           AND ($2::uuid IS NULL OR organization_id = $2)
           AND blob_deleted_at IS NULL
           AND NOT ($4 AND members_only)
+          AND store_id <> $5
         ORDER BY id
         LIMIT $3
         "#,
@@ -192,6 +267,7 @@ async fn move_batch_here(state: &AppState, payload: &MovePayload) -> Result<Move
     .bind(BATCH)
     // A workspace's own bucket never takes a DM's or group's files.
     .bind(payload.to.starts_with(super::store::WORKSPACE_PREFIX))
+    .bind(&payload.to)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut moved = Moved {
@@ -200,7 +276,7 @@ async fn move_batch_here(state: &AppState, payload: &MovePayload) -> Result<Move
             .flatten(),
         ..Moved::default()
     };
-    for file in batch.iter().filter(|file| file.store_id != payload.to) {
+    for file in &batch {
         match copy(state, &target, file).await {
             Ok(true) => moved.moved += 1,
             Ok(false) => moved.skipped += 1,
@@ -282,7 +358,9 @@ async fn copy(state: &AppState, target: &FileStore, file: &ToMove) -> Result<boo
             // Still held, and the row still names the source: nothing names
             // what was written in the target. The lease is kept until the
             // copy is gone, so another move can't switch the row to bytes
-            // this one is deleting.
+            // this one is deleting. The renewal gives it a full hour, and
+            // each delete gives up after a minute, so the deletes end
+            // while it still holds the file.
             if renew(&state.pool, file.id, token).await? {
                 for key in &keys {
                     let _ = target.delete(key).await;
@@ -419,12 +497,18 @@ mod tests {
             to: "object".to_owned(),
             workspace: None,
             after: None,
+            pass: 0,
         };
         let next = MovePayload {
             after: Some(Uuid::now_v7()),
             ..start.clone()
         };
+        let again = MovePayload {
+            pass: 1,
+            ..start.clone()
+        };
         assert_ne!(unique_key(&start), unique_key(&next));
+        assert_ne!(unique_key(&start), unique_key(&again));
         assert_eq!(unique_key(&start), unique_key(&start.clone()));
     }
 }

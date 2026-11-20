@@ -38,6 +38,7 @@ pub mod ops;
 pub mod protocol;
 pub mod register;
 pub mod routes;
+pub mod stream;
 pub mod windows;
 
 /// The protocol version this server speaks, and every one it still serves.

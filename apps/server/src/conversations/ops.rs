@@ -877,15 +877,11 @@ impl Operation for ConversationTaskList {
             r#"
             WITH linked AS (
                 SELECT link.work_item_id, 'about' AS how, link.created_at
-                FROM work_item_links link
+                FROM task_links link
                 WHERE link.target_kind = 'conversation' AND link.target_id = $1
                 UNION ALL
-                SELECT link.work_item_id, 'about', link.created_at
-                FROM work_item_conversation_links link
-                WHERE link.conversation_id = $1
-                UNION ALL
                 SELECT link.work_item_id, 'made_from', link.created_at
-                FROM work_item_links link
+                FROM task_links link
                 JOIN messages message ON message.id = link.target_id
                 WHERE link.target_kind = 'message' AND message.conversation_id = $1
                   AND message.removed_at IS NULL

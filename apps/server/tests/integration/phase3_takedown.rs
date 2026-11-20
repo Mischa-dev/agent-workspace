@@ -286,7 +286,7 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         "deliveries",
         "reply_requests",
         "conversation_pins",
-        "work_item_links",
+        "links",
         "conversations",
         "project_decisions",
         "message_reactions",

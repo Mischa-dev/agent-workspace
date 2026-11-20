@@ -24,7 +24,7 @@ pub(crate) const MAX_AWARENESS_BYTES: usize = 1_024;
 pub(crate) const TYPING_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
 /// How long someone shows as typing after they last said so.
 pub(crate) const TYPING_SHOWS_FOR: chrono::TimeDelta = chrono::TimeDelta::seconds(6);
-/// How long a protocol 2 connection has to say `hello` before it is served
+/// How long a connection has to say `hello` before it is served
 /// without resuming.
 pub(crate) const HELLO_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -35,8 +35,10 @@ pub struct WireQuery {
 }
 
 impl WireQuery {
-    pub(crate) fn protocol(self) -> u8 {
-        if self.v == Some(2) { 2 } else { 1 }
+    /// Whether the connection asked for protocol 2, the only one served
+    /// since K5.15 removed protocol 1.
+    pub(crate) fn is_current(self) -> bool {
+        self.v == Some(2)
     }
 }
 

@@ -110,7 +110,11 @@ pub mod rate_limit;
 pub mod reactions;
 pub mod read_state;
 pub mod realtime;
-pub mod recovery;
+/// Recovery of the built-in host's runs, which lives with the host
+/// (`hosts::builtin::recovery`).
+pub mod recovery {
+    pub use crate::hosts::builtin::recovery::*;
+}
 pub mod releases;
 pub mod replies;
 pub mod repositories;

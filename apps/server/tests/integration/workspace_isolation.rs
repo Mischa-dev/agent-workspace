@@ -4059,7 +4059,7 @@ async fn check_realtime(
             .expect("serve");
     });
 
-    let mut request = format!("ws://{address}/api/v1/realtime")
+    let mut request = format!("ws://{address}/api/v1/realtime?v=2")
         .into_client_request()
         .expect("WebSocket request");
     request
@@ -4070,6 +4070,23 @@ async fn check_realtime(
         HeaderValue::from_str(&a.browser.cookie).expect("cookie header"),
     );
     let (mut socket, _) = connect_async(request).await.expect("A's WebSocket");
+    // Protocol 2: `hello`, then everything after `ready` is live.
+    futures_util::SinkExt::send(
+        &mut socket,
+        ClientMessage::Text(r#"{"type":"hello"}"#.into()),
+    )
+    .await
+    .expect("hello");
+    loop {
+        let Ok(Some(Ok(ClientMessage::Text(frame)))) =
+            timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            panic!("A's socket closed before ready");
+        };
+        if frame.as_str().contains(r#""type":"ready""#) {
+            break;
+        }
+    }
 
     let (stop_log, log) = crate::support::live::follow_log(pool, realtime, Some(0)).await;
 
