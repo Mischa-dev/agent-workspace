@@ -179,8 +179,11 @@ async fn delta_route(
     ) else {
         return Ok(None);
     };
-    let Some(worker_actor_id) =
-        crate::runs::store::worker_actor_of(crate::db::scoped(&state.pool), run).await?
+    // The run's own account, on any host (a built-in run, an assistant's or
+    // a linked host's).
+    let Some(account_id) = crate::runs::store::get(crate::db::scoped(&state.pool), run)
+        .await?
+        .map(|run| run.account_id)
     else {
         return Ok(None);
     };
@@ -197,7 +200,7 @@ async fn delta_route(
     )
     .bind(conversation)
     .bind(event.project_id)
-    .bind(worker_actor_id)
+    .bind(account_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }

@@ -11,7 +11,8 @@ use super::protocol::HostError;
 use crate::{AppState, realtime::RealtimeEvent, runs};
 
 /// Shows one piece of a run's streamed reply. Refused for another run's
-/// credential, a run that has ended, or a run with no conversation.
+/// credential, a run that has ended, a run with no conversation, or one
+/// whose agent can no longer read its conversation.
 pub async fn delta(
     state: &AppState,
     token: &str,
@@ -44,6 +45,17 @@ pub async fn delta(
             message: "The run has no conversation to show its reply in.".to_owned(),
         });
     };
+    // Words go only where the run's agent can still read: one taken out of
+    // the conversation since the run started streams nothing more there.
+    let visible = sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+        .bind(conversation_id)
+        .bind(run.account_id)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await
+        .map_err(crate::error::AppError::from)?;
+    if !visible {
+        return Err(HostError::App(crate::error::AppError::Forbidden));
+    }
     crate::realtime::ephemeral::stream_delta(
         state,
         RealtimeEvent {

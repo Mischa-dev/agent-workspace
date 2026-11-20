@@ -326,18 +326,7 @@ pub(super) async fn check_summaries(
 /// A clone URL without any user name or token in it. Registration refuses
 /// '@', but older or seeded rows aren't constrained in the database.
 pub(crate) fn public_clone_url(value: &str) -> String {
-    match value.split_once("://") {
-        Some((scheme, rest)) => {
-            let (authority, path) = match rest.find('/') {
-                Some(index) => rest.split_at(index),
-                None => (rest, ""),
-            };
-            let host = authority.rsplit('@').next().unwrap_or(authority);
-            format!("{scheme}://{host}{path}")
-        }
-        // scp-style "git@github.com:owner/name.git"
-        None => value.rsplit('@').next().unwrap_or(value).to_owned(),
-    }
+    agent_workspace_builtin_host::git::without_user_info(value)
 }
 
 // ---------------------------------------------------------------------------

@@ -322,3 +322,36 @@ async fn built_in_tokens_are_reported_priced_and_counted_once() {
     .expect("the budget meter");
     assert_eq!(counted, Some(2_200_000));
 }
+
+/// A1.17: a run's reply streams live only while its agent can read the
+/// conversation. One taken out of it (the channel made private without
+/// it) streams nothing more there, though its token still holds.
+#[tokio::test]
+async fn a_reply_streams_only_while_its_agent_can_read_the_conversation() {
+    let Some((setup, seed, _temporary)) = seeded("a1_builtin_stream_gate").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let run_id = blocked_run(pool, &seed, "builtin-stream").await;
+    let state = app_state(pool);
+    started(&state, run_id).await;
+    let reports = agent_workspace_server::hosts::builtin::report::open(&state, run_id)
+        .await
+        .expect("the run's reports");
+    reports
+        .stream(Uuid::now_v7(), "Working on it".to_owned())
+        .await
+        .expect("shown while the agent reads the channel");
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+        .bind(seed.channel_id)
+        .execute(pool)
+        .await
+        .expect("the channel made private");
+    assert!(
+        reports
+            .stream(Uuid::now_v7(), "Still here".to_owned())
+            .await
+            .is_err(),
+        "a run whose agent can't read its conversation streams nothing there"
+    );
+}
