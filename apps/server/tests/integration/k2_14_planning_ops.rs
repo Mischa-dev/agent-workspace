@@ -452,9 +452,13 @@ async fn a_plan_import_updates_the_tasks_a_space_already_has() {
     .await;
     ok(&committed);
     for _ in 0..10 {
-        if plans::commit_next_step(&setup.pool, import)
-            .await
-            .expect("step")
+        // The job runs in the workspace's scope.
+        if super::support::as_job(
+            setup.organization_id,
+            plans::commit_next_step(&setup.pool, import),
+        )
+        .await
+        .expect("step")
             == Step::Done
         {
             break;

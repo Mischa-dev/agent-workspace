@@ -407,6 +407,19 @@ async fn verify_http(
     headers: HeaderMap,
     ApiJson(request): ApiJson<TokenRequest>,
 ) -> Result<Json<VerifiedResponse>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(verify_http_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn verify_http_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<TokenRequest>,
+) -> Result<Json<VerifiedResponse>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     if !well_formed(&request.token, VERIFY_PREFIX) {
         state.rate_limits.note_invitation_failure().await;
@@ -490,6 +503,17 @@ struct ResetAvailability {
 async fn reset_available_http(
     State(state): State<AppState>,
 ) -> Result<Json<ResetAvailability>, AppError> {
+    // Server-wide: whether any workspace can send mail, asked before anyone signs in.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(reset_available_http_here(State(state))),
+    )
+    .await
+}
+
+async fn reset_available_http_here(
+    State(state): State<AppState>,
+) -> Result<Json<ResetAvailability>, AppError> {
     Ok(Json(ResetAvailability {
         available: mail::any_configured(&state).await?,
     }))
@@ -526,6 +550,23 @@ fn normalize_reset_key(value: &str) -> Option<String> {
 }
 
 async fn request_reset_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<ResetRequest>,
+) -> Result<(StatusCode, Json<ResetAccepted>), AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(request_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn request_reset_http_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<ResetRequest>,
@@ -745,6 +786,23 @@ async fn inspect_reset_http(
     headers: HeaderMap,
     ApiJson(request): ApiJson<TokenRequest>,
 ) -> Result<Json<ResetInspection>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(inspect_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn inspect_reset_http_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<TokenRequest>,
+) -> Result<Json<ResetInspection>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     state.rate_limits.check_invitation(&request.token).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -787,6 +845,23 @@ impl Drop for CompleteRequest {
 }
 
 async fn complete_reset_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<CompleteRequest>,
+) -> Result<StatusCode, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(complete_reset_http_here(
+            State(state),
+            headers,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn complete_reset_http_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(mut request): ApiJson<CompleteRequest>,

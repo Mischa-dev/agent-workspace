@@ -217,9 +217,11 @@ async fn triage_lands_orders_rules_and_wakes_snoozes() {
     .execute(pool)
     .await
     .expect("snooze due");
-    let woken = agent_workspace_server::work_items::triage::wake_snoozed(pool)
-        .await
-        .expect("wake");
+    let woken = crate::support::as_server_job(
+        agent_workspace_server::work_items::triage::wake_snoozed(pool),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken, 1);
     assert_eq!(status_of(first.clone()).await.2, None);
     assert!(in_queue(first.clone()).await);

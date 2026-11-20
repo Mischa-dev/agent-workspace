@@ -57,25 +57,30 @@ async fn ask(
         .fetch_one(pool)
         .await
         .expect("the run's agent");
-    let mut transaction = agent_workspace_server::db::scoped_tx(pool)
+    let workspace = super::run_workspace(pool, run_id).await;
+    let appended = super::as_job(workspace, async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(pool)
+            .await
+            .expect("transaction");
+        let appended = agent_workspace_server::runs::ops::append(
+            &mut transaction,
+            Reporter::Account { account_id },
+            run_id,
+            vec![NewActivity {
+                client_id: activity["id"].as_str().expect("id").to_owned(),
+                kind: "interrupt".to_owned(),
+                occurred_at: chrono::Utc::now(),
+                step_ref: None,
+                parent_ref: None,
+                summary: activity["summary"].as_str().map(str::to_owned),
+                payload: activity["payload"].clone(),
+            }],
+        )
         .await
-        .expect("transaction");
-    let appended = agent_workspace_server::runs::ops::append(
-        &mut transaction,
-        Reporter::Account { account_id },
-        run_id,
-        vec![NewActivity {
-            client_id: activity["id"].as_str().expect("id").to_owned(),
-            kind: "interrupt".to_owned(),
-            occurred_at: chrono::Utc::now(),
-            step_ref: None,
-            parent_ref: None,
-            summary: activity["summary"].as_str().map(str::to_owned),
-            payload: activity["payload"].clone(),
-        }],
-    )
-    .await
-    .unwrap_or_else(|error| panic!("raise the request: {error:?}"));
-    transaction.commit().await.expect("commit");
+        .unwrap_or_else(|error| panic!("raise the request: {error:?}"));
+        transaction.commit().await.expect("commit");
+        appended
+    })
+    .await;
     appended.requests[0].request_id
 }

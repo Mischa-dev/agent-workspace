@@ -46,6 +46,15 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            // Spend limits (H1.27): a limit's scope is the workspace, an
+            // account, a space or a conversation, mapped with every other id.
+            KindDecl {
+                kind: "spend_limits",
+                table: "spend_limits",
+                references: &[("set_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
             KindDecl {
                 kind: "saved_searches",
                 table: "saved_searches",
@@ -124,7 +133,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("removed_by_actor_id", "actors"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // A move in progress on this server (K5.13).
+                exclude: &["move_lease", "move_lease_until"],
             },
             KindDecl {
                 kind: "layout_presets",
@@ -350,10 +360,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "billing_events",
                 "deliveries this server took from its billing provider (H1.33); billing stays with the server that bills",
-            ),
-            (
-                "spend_limits",
-                "nothing sets one yet: H1.27, which adds the operations that do, adds them to the export",
             ),
             (
                 "workspace_transfers",

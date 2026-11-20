@@ -762,6 +762,19 @@ async fn files_move_between_stores_and_resume() {
         .join(setup.organization_id.simple().to_string());
     let on_disk_count = || std::fs::read_dir(&folder).expect("folder").count();
     assert_eq!(on_disk_count(), 250);
+    // Another move (a workspace's, say) holds one file: this one passes it
+    // by and writes nothing of it.
+    let held = ids[5].parse::<Uuid>().expect("id");
+    let held_key = format!("{}/{}", setup.organization_id.simple(), held.simple());
+    sqlx::query(
+        "UPDATE files SET move_lease = $2, move_lease_until = now() + interval '1 hour' \
+         WHERE id = $1",
+    )
+    .bind(held)
+    .bind(Uuid::now_v7())
+    .execute(&setup.pool)
+    .await
+    .expect("hold");
 
     let mut payload = files::migrate::MovePayload {
         to: "object".to_owned(),
@@ -771,7 +784,11 @@ async fn files_move_between_stores_and_resume() {
     let first = files::migrate::move_batch(&state, &payload)
         .await
         .expect("first batch");
-    assert_eq!((first.moved, first.failed), (100, 0));
+    assert_eq!((first.moved, first.failed, first.skipped), (99, 0, 1));
+    assert!(
+        !fake.objects.lock().expect("lock").contains_key(&held_key),
+        "nothing written for a held file"
+    );
     // Stopped here; a file uploaded now goes to the new store.
     let (status, during) = upload(
         &on_object,
@@ -797,6 +814,28 @@ async fn files_move_between_stores_and_resume() {
         }
     }
     assert_eq!(batches, 3);
+    // Let go, it moves on the next pass; the rest are already there.
+    sqlx::query("UPDATE files SET move_lease = NULL, move_lease_until = NULL WHERE id = $1")
+        .bind(held)
+        .execute(&setup.pool)
+        .await
+        .expect("let go");
+    let mut again = files::migrate::MovePayload {
+        after: None,
+        ..payload.clone()
+    };
+    let mut moved_again = 0;
+    loop {
+        let moved = files::migrate::move_batch(&state, &again)
+            .await
+            .expect("again");
+        moved_again += moved.moved;
+        match moved.next {
+            Some(next) => again.after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(moved_again, 1);
     let stores: Vec<(String, String, Option<String>)> =
         sqlx::query_as("SELECT storage_key, store_id, moved_from_store_id FROM files ORDER BY id")
             .fetch_all(&setup.pool)
@@ -852,15 +891,21 @@ async fn files_move_between_stores_and_resume() {
 const TINY_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 async fn op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
+    let path = format!("/api/v2/w/{}/ops/{name}", setup.organization_id);
+    op_at(setup, &path, input).await
+}
+
+/// An operation on a DM or group, which is in no workspace: its target says
+/// where it acts.
+async fn direct_op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
+    op_at(setup, &format!("/api/v2/ops/{name}"), input).await
+}
+
+async fn op_at(setup: &Setup, path: &str, input: Value) -> (StatusCode, Value) {
     let key = Uuid::now_v7().to_string();
     let (status, body) = send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v2/w/{}/ops/{name}", setup.organization_id),
-            Some(&key),
-            input,
-        ),
+        setup.browser.request("POST", path, Some(&key), input),
     )
     .await;
     if body["outcome"] == "ok" {
@@ -873,7 +918,11 @@ async fn op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
 /// Sends bytes to a direct upload link as a client would.
 async fn put_direct(started: &Value, bytes: Vec<u8>) -> reqwest::StatusCode {
     let mut request = reqwest::Client::new()
-        .put(started["url"].as_str().expect("url"))
+        .put(
+            started["url"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a link to send to: {started}")),
+        )
         .body(bytes);
     for (name, value) in started["headers"].as_object().expect("headers") {
         request = request.header(name, value.as_str().expect("header"));
@@ -934,7 +983,7 @@ async fn direct_uploads_skip_the_server() {
     let (fake, endpoint) = start_fake().await;
     let root = tempfile::tempdir().expect("data root");
     let keys = tempfile::tempdir().expect("keys");
-    let (app, _state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
+    let (app, state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
     let setup = Setup { app, ..setup };
     let work = create_project(&setup, "WORK", "Work").await;
     let channel = create_channel(&setup, &work, "general").await;
@@ -1075,6 +1124,76 @@ async fn direct_uploads_skip_the_server() {
             .keys()
             .any(|key| key.ends_with(&image_id.simple().to_string()))
     );
+
+    // Unfinished uploads hold their size: with room for 30 more bytes, a
+    // 20-byte start goes and a second one is refused until the first ends.
+    let (_, usage) = op(&setup, "workspace_usage_get", json!({})).await;
+    let stored = usage["meters"]
+        .as_array()
+        .expect("meters")
+        .iter()
+        .find(|meter| meter["meter"] == "storage_bytes")
+        .and_then(|meter| meter["used"].as_i64())
+        .expect("stored bytes");
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, meter, period, \
+         hard_limit, set_by_actor_id) \
+         SELECT $1, $2, 'workspace', $2, 'storage_bytes', 'month', $3, actor_id \
+         FROM users WHERE login_name = 'owner'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .bind(stored + 30)
+    .execute(&setup.pool)
+    .await
+    .expect("storage limit");
+    let twenty = vec![b'r'; 20];
+    let start_twenty = |name: &'static str| {
+        op(
+            &setup,
+            "file_upload_start",
+            json!({"conversationId": channel, "name": name, "size": twenty.len(),
+                   "sha256": sha256_hex(&twenty)}),
+        )
+    };
+    let (status, first) = start_twenty("first.bin").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = start_twenty("second.bin").await;
+    assert_eq!(second["outcome"], "limit_reached", "{status} {second}");
+
+    // A day on, the unfinished upload and its bytes go; the finished one's
+    // bytes stay with its file.
+    assert_eq!(
+        put_direct(&first, twenty.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    let first_key = key_of(&first);
+    let big_key = key_of(&started);
+    sqlx::query("UPDATE file_uploads SET created_at = now() - interval '2 days'")
+        .execute(&setup.pool)
+        .await
+        .expect("a day on");
+    files::cleanup(&state).await.expect("cleanup");
+    let objects = fake.objects.lock().expect("lock").clone();
+    assert!(
+        !objects.contains_key(&first_key),
+        "the unfinished bytes went"
+    );
+    assert!(
+        objects.contains_key(&big_key),
+        "a finished upload keeps its bytes"
+    );
+    let left =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_uploads WHERE finished_at IS NULL")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("uploads");
+    assert_eq!(left, 0);
+    let pending = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_objects_pending")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("pending");
+    assert_eq!(pending, 0, "deleted bytes leave no pending entry");
 }
 
 /// K5.20: a workspace's own bucket takes its new uploads, through the
@@ -1185,6 +1304,83 @@ async fn a_workspace_bucket_takes_new_uploads() {
         assert_eq!(found, 0, "the secret is in {table}");
     }
 
+    // A group's file is for its members: it stays in the server's store,
+    // whose keys the workspace's managers don't hold, by either path.
+    let space = space(&setup).await;
+    let (rook, _) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let (status, group) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("group-rook"),
+            json!({"name": "plans", "memberIds": [rook]}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let own_before = own.objects.lock().expect("lock").len();
+    let (status, private) = upload(
+        &setup.app,
+        &setup.browser,
+        &format!("/api/v1/conversations/{group}/files?name=private.txt"),
+        Body::from("for the group only"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{private}");
+    let private = private["id"].as_str().expect("file").to_owned();
+    let (stored, members_only): (String, bool) =
+        sqlx::query_as("SELECT store_id, members_only FROM files WHERE id = $1::uuid")
+            .bind(&private)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("row");
+    assert_eq!((stored.as_str(), members_only), ("object", true));
+    let bytes = b"straight, for the group".to_vec();
+    let (_, started) = direct_op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": group, "name": "g.txt", "size": bytes.len(),
+               "sha256": sha256_hex(&bytes)}),
+    )
+    .await;
+    assert_eq!(
+        put_direct(&started, bytes.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(own.objects.lock().expect("lock").len(), own_before);
+    assert_eq!(fake.objects.lock().expect("lock").len(), 2);
+    // Moving the workspace's files into its bucket passes the group's by.
+    let moved = files::migrate::move_batch(
+        &state,
+        &files::migrate::MovePayload {
+            to: store_id.clone(),
+            workspace: Some(setup.organization_id),
+            after: None,
+        },
+    )
+    .await
+    .expect("move");
+    assert_eq!(moved.failed, 0);
+    let stored: String = sqlx::query_scalar("SELECT store_id FROM files WHERE id = $1::uuid")
+        .bind(&private)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("row");
+    assert_eq!(stored, "object");
+    let (status, _) = direct_op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": started["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
     // Stopping: new uploads go to the server's store; old files still read.
     let (status, cleared) = op(&setup, "workspace_store_revoke", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
@@ -1196,7 +1392,7 @@ async fn a_workspace_bucket_takes_new_uploads() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{later}");
-    assert_eq!(fake.objects.lock().expect("lock").len(), 1);
+    assert_eq!(fake.objects.lock().expect("lock").len(), 3);
     let response = get(
         &setup.app,
         Some(&setup.browser),
@@ -1206,9 +1402,12 @@ async fn a_workspace_bucket_takes_new_uploads() {
     assert_eq!(bytes_of(response).await, b"in the workspace's bucket");
 
     // Deleting the workspace's files reaches its own bucket too.
-    for store in files::workspace_store::all_of(&state, setup.organization_id)
-        .await
-        .expect("stores")
+    for store in crate::support::as_job(
+        setup.organization_id,
+        files::workspace_store::all_of(&state, setup.organization_id),
+    )
+    .await
+    .expect("stores")
     {
         store
             .delete_workspace(setup.organization_id)

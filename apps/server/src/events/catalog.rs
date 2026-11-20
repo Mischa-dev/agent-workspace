@@ -908,6 +908,16 @@ pub static ACCOUNT_ACCESS_CHANGED: EventType = signal(
     None,
     "What someone may see changed",
 );
+/// A session was signed out (H1.63 follow-up): staged by a trigger on
+/// `sessions`, whatever revoked it, so a live connection that opens later
+/// on any instance with one of its tickets is refused. The payload names
+/// the session; the account is the audience.
+pub static SESSION_REVOKED: EventType = signal(
+    "session.revoked",
+    "workspace",
+    None,
+    "Someone signed out of a session",
+);
 pub static ACCOUNT_REF_CHANGED: EventType = signal(
     "account.ref_changed",
     "agents",
@@ -1050,6 +1060,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONNECTION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_ACCESS_CHANGED,
+        &SESSION_REVOKED,
         &ACCOUNT_REF_CHANGED,
         &THING_SHARE_CHANGED,
         &GROUP_CHANGED,

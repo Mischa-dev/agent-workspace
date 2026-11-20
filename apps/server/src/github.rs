@@ -2405,6 +2405,11 @@ async fn refresh_pull_request(
 }
 
 pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
+    // GitHub's job queue holds jobs of every workspace.
+    crate::tenancy::system("github.jobs", Box::pin(drain_jobs_here(state))).await
+}
+
+async fn drain_jobs_here(state: &AppState) -> Result<(), AppError> {
     loop {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one
@@ -5498,7 +5503,14 @@ async fn receive_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    match receive_webhook_inner(&state, &headers, &body).await {
+    // A signed delivery names its installation, and so its workspace, only
+    // once it is read.
+    match crate::tenancy::system(
+        "github.webhook",
+        receive_webhook_inner(&state, &headers, &body),
+    )
+    .await
+    {
         Ok(duplicate) => {
             let status = if duplicate {
                 StatusCode::OK
