@@ -11,7 +11,8 @@ export default {
   things: [{ kind: 'sheet', label: 'Sheet', icon: 'table' }],
   embeds: [
     {
-      // A sheet's range: /projects/{projectId}/sheets/{sheetId}, with ?tab= and ?range=, or ?name= for a named range.
+      // A sheet's range: /projects/{projectId}/sheets/{sheetId}, with ?tab= and ?range=, ?name= for a named
+      // range, or ?chart= for one of its charts (C1.18).
       id: 'sheet-range',
       match: (path, search) => {
         const found = /^\/projects\/([^/]+)\/sheets\/([^/]+)\/?$/.exec(path)
@@ -22,6 +23,7 @@ export default {
               tabId: search.get('tab') || null,
               range: search.get('range') || null,
               name: search.get('name') || null,
+              chart: search.get('chart') || null,
             }
           : null
       },
@@ -30,5 +32,5 @@ export default {
       picker: { label: 'Sheet…', part: 'area.sheets', view: () => import('./SheetEmbedPicker') },
     },
   ],
-  live: [{ events: ['sheet.updated', 'sheet.ranges_changed'], handler: () => import('./live') }],
+  live: [{ events: ['sheet.updated', 'sheet.ranges_changed', 'sheet.charts_changed'], handler: () => import('./live') }],
 } satisfies WebModule

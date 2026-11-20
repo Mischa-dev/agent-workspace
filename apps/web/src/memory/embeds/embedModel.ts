@@ -61,6 +61,12 @@ export function sheetEmbed(projectId: string, sheet: { id: string; name: string 
   }
 }
 
+/** The path an embed of a sheet's chart keeps (C1.18), and its label. */
+export function sheetChartEmbed(projectId: string, sheet: { id: string; name: string }, chart: { id: string; title: string }) {
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
+  return { href: `${path}?chart=${encodeURIComponent(chart.id)}`, label: `${sheet.name} · ${chart.title}` }
+}
+
 /** The path a file of the page keeps, and its label (the file's name). */
 export function fileEmbed(file: { id: string; name: string }) {
   return { href: `/files/${encodeURIComponent(file.id)}`, label: file.name }

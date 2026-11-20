@@ -443,11 +443,10 @@ pub(super) struct FileUploadArguments {
     /// With taskId: hold the file for a comment instead, attached when you
     /// pass its fileId in task_comment's attachmentIds.
     pub for_comment: Option<bool>,
-    /// Or keep the file on another thing you can edit, such as a page:
-    /// {"kind": "page", "id": "<page ID>"}. Show it in the page with a block
-    /// of its own: `[name](/files/<fileId> "embed")` in page_write. On a
-    /// record ({"kind": "record", "id": "<record ID>"}), then name its
-    /// fileId in one of the record's file fields with record_write.
+    /// Or keep the file on a collection record you can edit:
+    /// {"kind": "record", "id": "<record ID>"}, then name its fileId in one
+    /// of the record's file fields with record_write. (page_file_upload
+    /// keeps a file on a page.)
     pub thing: Option<ThingArgument>,
     /// The file name people see, such as report.md or screenshot.png.
     pub name: String,
@@ -467,7 +466,7 @@ pub(super) struct FileUploadArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ThingArgument {
-    /// "page" or "record".
+    /// "record".
     pub kind: String,
     /// Its ID.
     pub id: String,
@@ -515,14 +514,17 @@ pub(super) async fn file_upload(
         arguments.thing.as_ref(),
     ) {
         (None, None, Some(thing)) => {
-            let Some(kind) = files::ThingKind::parse(thing.kind.trim()) else {
-                return ToolResult::invalid(
-                    "thing",
-                    "Files can be kept on a page or a record: kind \"page\" or \"record\".",
-                );
+            let kind = match files::ThingKind::parse(thing.kind.trim()) {
+                Some(kind @ files::ThingKind::Record) => kind,
+                _ => {
+                    return ToolResult::invalid(
+                        "thing",
+                        "Files can be kept on a record here: kind \"record\". page_file_upload keeps a file on a page.",
+                    );
+                }
             };
             let Some(thing_id) = parse_id(&thing.id) else {
-                return ToolResult::invalid("thing", "Pass the page's or record's ID.");
+                return ToolResult::invalid("thing", "Pass the record's ID.");
             };
             thing_upload_destination(state, principal, kind, thing_id).await
         }
@@ -539,7 +541,7 @@ pub(super) async fn file_upload(
         _ => {
             return ToolResult::invalid(
                 "conversationId",
-                "Pass one of conversationId, taskId or thing.",
+                "Pass one of conversationId, taskId or thing (page_file_upload keeps a file on a page).",
             );
         }
     };

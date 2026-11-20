@@ -646,6 +646,30 @@ async fn any_revision_comes_back_as_a_new_one() {
         revisions.push(written["value"]["revision"].as_i64().expect("revision"));
     }
     let now = *revisions.last().expect("revisions");
+    // C1.34: snapshots past 30 days move to the file store, all but the
+    // sheet's latest, and the revisions built on them still come back.
+    sqlx::query(
+        "UPDATE sheet_snapshots SET created_at = now() - interval '40 days' WHERE sheet_id::text = $1",
+    )
+    .bind(&sheet)
+    .execute(&setup.pool)
+    .await
+    .expect("age the snapshots");
+    let state = crate::support::app::state_on(&setup.pool);
+    let moved = crate::support::as_server_job(
+        agent_workspace_server::sheets::history::compact_snapshots(&state),
+    )
+    .await
+    .expect("compact");
+    assert!(moved > 0, "old snapshots move out");
+    let inline = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM sheet_snapshots WHERE sheet_id::text = $1 AND payload_key IS NULL",
+    )
+    .bind(&sheet)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left inline");
+    assert_eq!(inline, 1, "the latest snapshot stays");
     // Step 12: A1 held 12, before the row moved it and before the tab.
     let twelve = revisions[11];
     let shown = call("history_show", json!({"thing": sheet, "version": twelve})).await;
@@ -881,4 +905,348 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
     )
     .await;
     assert_eq!(removed["outcome"], "not_found", "{removed}");
+}
+
+/// C1.15: a strict rule refuses what breaks it, naming the rule, whether a
+/// cell or a row by header is written; a lenient one keeps the input; the
+/// rules move with inserted rows.
+#[tokio::test]
+async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
+    let Some(setup) = setup("c1_sheet_validation").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "VAL", "Validation").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "VAL",
+            "name": "Tracker",
+            "tabs": [{"add": "Work"}],
+            "cells": [
+                {"cell": "A1", "input": "Task"},
+                {"cell": "B1", "input": "Done"},
+                {"cell": "C1", "input": "Effort"},
+                {"cell": "A2", "input": "Paint"},
+            ],
+            "validations": [{"tab": "Work", "rules": [
+                {"range": "b2:b50", "allow": "list", "choices": ["Yes", "No"], "hint": "Pick one"},
+                {"range": "C2:C50", "allow": "number", "min": 1, "max": 5, "whole": true, "strict": false},
+                {"range": "D2:D50", "allow": "number", "max": 5},
+            ]}],
+            "clientRequestId": "tracker-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    let maybe = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B2", "input": "Maybe"}], "clientRequestId": "maybe"}),
+    )
+    .await;
+    assert_eq!(maybe["outcome"], "invalid_request", "{maybe}");
+    let said = maybe.to_string();
+    assert!(
+        said.contains("B2:B50") && said.contains("Yes, No") && said.contains("Pick one"),
+        "the rule is named: {said}"
+    );
+    let by_row = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "rows": [{"tab": "Work", "keyColumn": "Task", "values": {"Task": "Paint", "Done": "Later"}}],
+               "clientRequestId": "later"}),
+    )
+    .await;
+    assert_eq!(by_row["outcome"], "invalid_request", "{by_row}");
+
+    let fine = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [
+            {"tab": "Work", "cell": "B2", "input": "yes"},
+            {"tab": "Work", "cell": "C2", "input": "9"},
+        ], "clientRequestId": "fine"}),
+    )
+    .await;
+    assert_eq!(
+        fine["outcome"], "ok",
+        "lenient rules keep the input: {fine}"
+    );
+
+    let inserted = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 2}], "clientRequestId": "insert"}),
+    )
+    .await;
+    assert_eq!(inserted["outcome"], "ok", "{inserted}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let tab = read["value"]["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tab| tab["name"] == "Work")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(tab["validations"][0]["range"], "B4:B52", "{tab}");
+    assert_eq!(tab["validations"][1]["range"], "C4:C52", "{tab}");
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B4", "input": "Maybe"}], "clientRequestId": "maybe-2"}),
+    )
+    .await;
+    assert_eq!(
+        moved["outcome"], "invalid_request",
+        "the rule moved: {moved}"
+    );
+    // A number the engine keeps in its own form ("6.0" as "6") is still
+    // checked.
+    let written_otherwise = call(
+        "sheet_write",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "D4", "input": "6.0"}], "clientRequestId": "six"}),
+    )
+    .await;
+    assert_eq!(
+        written_otherwise["outcome"], "invalid_request",
+        "{written_otherwise}"
+    );
+}
+
+/// C1.18: a chart over a named range follows its cells: it reads them as
+/// they are, keeps to the range as rows go in above it, and draws an SVG
+/// for agents; one whose range is removed says so instead of guessing.
+#[tokio::test]
+async fn a_chart_over_a_named_range_follows_its_cells() {
+    let Some(setup) = setup("c1_sheet_charts").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "CHART", "Charts").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "CHART",
+            "name": "Costs",
+            "cells": [
+                {"cell": "A1", "input": "Item"}, {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "Rent"}, {"cell": "B2", "input": "1200"},
+                {"cell": "A3", "input": "Food"}, {"cell": "B3", "input": "300"},
+            ],
+            "clientRequestId": "costs-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let named = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "range": "A1:B3", "clientRequestId": "spend"}),
+    )
+    .await;
+    assert_eq!(named["outcome"], "ok", "{named}");
+    let refused = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nothing", "source": "Nowhere", "clientRequestId": "bad-chart"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let charted = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Spend", "style": "bar", "source": "Spend", "clientRequestId": "chart-1"}),
+    )
+    .await;
+    assert_eq!(charted["outcome"], "ok", "{charted}");
+    let chart = charted["value"]["chartId"]
+        .as_str()
+        .expect("chart")
+        .to_owned();
+    let read = |call_name: &'static str| {
+        let chart = chart.clone();
+        let sheet = sheet.clone();
+        let call = &call;
+        async move { call(call_name, json!({"sheetId": sheet, "chartId": chart})).await }
+    };
+    let first = read("sheet_chart_get").await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(
+        first["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 300.0}]),
+        "{first}"
+    );
+    assert!(
+        first["value"]["svg"]
+            .as_str()
+            .is_some_and(|svg| svg.starts_with("<svg")),
+        "{first}"
+    );
+
+    // A cell changes, and rows go in above: the chart reads the range where it is.
+    let changed = call(
+        "sheet_write",
+        json!({"projectId": "CHART", "sheet": sheet, "cells": [{"cell": "B3", "input": "450"}],
+               "clientRequestId": "costs-2"}),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "CHART", "sheet": sheet,
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 2}], "clientRequestId": "costs-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let after = read("sheet_chart_get").await;
+    assert_eq!(
+        after["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 450.0}]),
+        "{after}"
+    );
+
+    // The range goes: the chart says what it draws isn't there.
+    let removed = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "remove": true, "clientRequestId": "unspend"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let gone = read("sheet_chart_get").await;
+    assert_eq!(gone["value"]["found"], false, "{gone}");
+    let dropped = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "chartId": chart, "remove": true, "clientRequestId": "drop-chart"}),
+    )
+    .await;
+    assert_eq!(dropped["outcome"], "ok", "{dropped}");
+    assert_eq!(dropped["value"]["charts"], json!([]), "{dropped}");
+}
+
+/// C1.10: every sheet write is a change, listed with the cells it touched
+/// and undone in a step: cells changed since are left and named, the undo
+/// can itself be undone, and a write that moved rows is outlined but put
+/// back by a restore instead.
+#[tokio::test]
+async fn a_sheet_write_is_undone_in_a_step() {
+    let Some(setup) = setup("c1_10_sheet_undo").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "UNDO", "Undo").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({"projectId": "UNDO", "name": "Budget",
+               "cells": [{"cell": "A1", "input": "1"}, {"cell": "B1", "input": "=A1*2"}],
+               "clientRequestId": "undo-0"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let write = |cells: Value, key: &'static str| {
+        call(
+            "sheet_write",
+            json!({"projectId": "UNDO", "sheet": "Budget", "cells": cells, "clientRequestId": key}),
+        )
+    };
+    let three = write(
+        json!([{"cell": "A1", "input": "5"}, {"cell": "A2", "input": "7"}, {"cell": "C1", "input": "3"}]),
+        "undo-1",
+    )
+    .await;
+    assert_eq!(three["outcome"], "ok", "{three}");
+    let later = write(json!([{"cell": "C1", "input": "4"}]), "undo-2").await;
+    assert_eq!(later["outcome"], "ok", "{later}");
+
+    let list = |key: &'static str| {
+        let _ = key;
+        call(
+            "change_list",
+            json!({"thingKind": "sheet", "thingId": sheet}),
+        )
+    };
+    let changes = list("list-1").await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let listed = changes["value"]["changes"].as_array().expect("changes");
+    assert_eq!(listed.len(), 3, "{changes}");
+    let middle = &listed[1];
+    assert_eq!(
+        middle["touched"]["cells"].as_array().map(Vec::len),
+        Some(3),
+        "{changes}"
+    );
+    assert_eq!(middle["undoable"], true, "{changes}");
+
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    assert_eq!(undo["value"]["skipped"], json!(["Sheet1!C1"]), "{undo}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "UNDO", "sheet": "Budget"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(1.0), "{read}");
+    assert_eq!(value_at(&read, "B1"), json!(2.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
+    assert_eq!(value_at(&read, "C1"), json!(4.0), "{read}");
+
+    let again = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-again"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    let redo = call(
+        "change_undo",
+        json!({"changeSetId": undo["value"]["change"]["id"], "clientRequestId": "undo-redo"}),
+    )
+    .await;
+    assert_eq!(redo["outcome"], "ok", "{redo}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "UNDO", "sheet": "Budget"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(5.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), json!(7.0), "{read}");
+
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "UNDO", "sheet": "Budget",
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}],
+               "cells": [{"cell": "A1", "input": "top"}], "clientRequestId": "undo-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let changes = list("list-2").await;
+    assert_eq!(
+        changes["value"]["changes"][0]["undoable"], false,
+        "{changes}"
+    );
 }

@@ -126,6 +126,7 @@ describe('live documents from the realtime socket', () => {
       ['project', PROJECT, 'sheets', 'list'],
       undefined,
       undefined,
+      undefined,
     ])
     // The third refetches this sheet's discussion summaries, and no other's.
     const summaries = invalidate.mock.calls[2]?.[0]?.predicate
@@ -139,6 +140,11 @@ describe('live documents from the realtime socket', () => {
       ({ queryKey: ['op', null, 'dashboard_get', { dashboard: PAGE }], state: { data: { tiles: [{ kind: 'sheet', sheet }] } } }) as unknown as Parameters<NonNullable<typeof charts>>[0]
     expect(charts?.(dashboard(COLLECTION))).toBe(true)
     expect(charts?.(dashboard('other'))).toBe(false)
+    // The fifth redraws this sheet's own charts (C1.18).
+    const own = invalidate.mock.calls[4]?.[0]?.predicate
+    expect(own?.(query(['op', null, 'sheet_chart_get', { sheetId: COLLECTION, chartId: PAGE }]))).toBe(true)
+    expect(own?.(query(['op', null, 'sheet_chart_get', { sheetId: 'other', chartId: PAGE }]))).toBe(false)
+    expect(sheetChange(envelope('sheet.charts_changed', { sheetId: COLLECTION }))).toEqual({ sheetId: COLLECTION })
     // Its named ranges changing is a change to it too.
     expect(sheetChange(envelope('sheet.ranges_changed', { sheetId: COLLECTION }))).toEqual({ sheetId: COLLECTION })
   })

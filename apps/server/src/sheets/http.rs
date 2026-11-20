@@ -349,6 +349,8 @@ struct TabBody {
     column_widths: Json_,
     /// Its conditional formats, the first that applies winning.
     conditional_formats: Json_,
+    /// Its validation rules (dropdowns, checkboxes, limits).
+    validations: Json_,
     /// The last row and column holding something (0 when it's empty).
     rows: i32,
     columns: i32,
@@ -408,6 +410,8 @@ struct SheetBody {
     can_suggest: bool,
     /// The sheet's named ranges, by name (C1.20).
     ranges: Vec<super::ranges::NamedRange>,
+    /// The sheet's charts, in order (C1.18).
+    charts: Vec<super::charts::Chart>,
 }
 
 async fn sheet_body(
@@ -438,6 +442,7 @@ async fn sheet_body(
     )
     .await?;
     let ranges = super::ranges::named(&mut *connection, sheet.id).await?;
+    let charts = super::charts::list(&mut *connection, sheet.id).await?;
     Ok(SheetBody {
         sheet: SheetSummary {
             id: sheet.id.to_string(),
@@ -466,6 +471,7 @@ async fn sheet_body(
                     frozen_rows: tab.frozen_rows,
                     column_widths: tab.column_widths,
                     conditional_formats: tab.conditional_formats,
+                    validations: tab.validations,
                     rows,
                     columns,
                 }
@@ -478,6 +484,7 @@ async fn sheet_body(
         can_edit,
         can_suggest,
         ranges,
+        charts,
     })
 }
 
@@ -804,6 +811,12 @@ enum ChangeRequest {
         tab: String,
         rules: Vec<super::conditional::ConditionalRule>,
     },
+    /// Replace a tab's validation rules.
+    #[serde(rename_all = "camelCase")]
+    Validations {
+        tab: String,
+        rules: Vec<super::validation::ValidationRule>,
+    },
 }
 
 impl ChangeRequest {
@@ -885,6 +898,10 @@ impl ChangeRequest {
                 patch: look.patch()?,
             },
             Self::ConditionalFormats { tab, rules } => Change::ConditionalFormats {
+                tab: Some(tab),
+                rules,
+            },
+            Self::Validations { tab, rules } => Change::Validations {
                 tab: Some(tab),
                 rules,
             },
@@ -1466,6 +1483,7 @@ mod tests {
             frozen_rows: 1,
             column_widths: Json_::Object(Map::new()),
             conditional_formats: Json_::Array(Vec::new()),
+            validations: Json_::Array(Vec::new()),
         };
         let tabs = vec![tab("Summary"), tab("Data")];
         assert_eq!(

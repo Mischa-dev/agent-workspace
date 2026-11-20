@@ -1687,6 +1687,7 @@ struct NotificationRow {
     subject_id: Uuid,
     project_id: Uuid,
     workspace_id: Uuid,
+    workspace_slug: Option<String>,
     project_name: String,
     direct_space: bool,
     actor_id: Option<Uuid>,
@@ -1743,6 +1744,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                COALESCE(n.project_id, direct_scope_id()) AS project_id,
                COALESCE(project.organization_id, conversation.workspace_id, direct_scope_id())
                    AS workspace_id,
+               workspace.slug AS workspace_slug,
                COALESCE(project.name, 'Messages') AS project_name,
                n.project_id IS NULL AS direct_space,
                n.actor_id, actor_member.display_name AS actor_name,
@@ -1816,6 +1818,8 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
           ON n.actor_id IS NOT NULL
         LEFT JOIN actors actor ON actor.id = n.actor_id
         LEFT JOIN conversations conversation ON conversation.id = n.conversation_id
+        LEFT JOIN organizations workspace
+          ON workspace.id = COALESCE(project.organization_id, conversation.workspace_id)
         LEFT JOIN conversations comments_parent
           ON comments_parent.id = conversation.parent_channel_id
         LEFT JOIN messages message ON message.id = n.message_id
@@ -2350,7 +2354,10 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
     .unwrap_or_else(|| Target::space(row.project_id, Place::Home).legacy_path());
     // Built (and stored) in today's shape; written as this server writes
     // links, in the notification's workspace.
-    let workspace = WorkspaceAddress::id(row.workspace_id);
+    let workspace = match &row.workspace_slug {
+        Some(slug) => WorkspaceAddress::new(row.workspace_id, slug.clone()),
+        None => WorkspaceAddress::id(row.workspace_id),
+    };
     let href = addresses.from_legacy(&workspace, &href);
     let request = match (
         row.request_kind.clone(),

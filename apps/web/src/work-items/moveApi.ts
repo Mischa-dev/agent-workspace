@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { legacyPathOf } from '../app/href'
 import type { FieldType, FieldValue } from '../fields/fieldModel'
 
 /** Moving a task, with its subtasks, to another project (AWD-102). */
@@ -93,7 +94,8 @@ export function listMoveDestinations(projectId: string, taskId: string) {
 export function movedTo(task: MoveDone['moved'][number]): { projectId: string; path: string } | null {
   try {
     const path = new URL(task.url, window.location.origin).pathname
-    const match = /^\/projects\/([^/]+)\/work-items\/([^/]+)$/.exec(path)
+    // Either shape of address: the server writes /w/<ws>/s/<space>/tasks/<id>.
+    const match = /^\/projects\/([^/]+)\/work-items\/([^/]+)$/.exec(legacyPathOf(path))
     return match ? { projectId: decodeURIComponent(match[1]), path } : null
   } catch {
     return null

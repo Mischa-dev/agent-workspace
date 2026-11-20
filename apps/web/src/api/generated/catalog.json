@@ -658,7 +658,9 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "page.updated"
+      "page.updated",
+      "sheet.updated",
+      "whiteboard.updated"
     ],
     "idempotent": true,
     "kind": "change",
@@ -3494,6 +3496,22 @@
     "title": "Create page"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.attached"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_file_upload",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Keep a file on a page"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -3536,6 +3554,22 @@
     "preview": false,
     "proposable": false,
     "title": "Make a page from messages or blocks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_move",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Move a page to another space"
   },
   {
     "automation": true,
@@ -4913,6 +4947,36 @@
     "title": "Update setting"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_chart_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read a sheet chart"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.charts_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_chart_set",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Chart a sheet range"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -4927,6 +4991,22 @@
     "preview": false,
     "proposable": false,
     "title": "Name a sheet range"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_row_add",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Add a sheet row"
   },
   {
     "automation": false,
@@ -6163,6 +6243,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_ask",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Ask about part of a board"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "whiteboard.created"
     ],
     "idempotent": true,
@@ -6236,6 +6332,22 @@
     "preview": false,
     "proposable": false,
     "title": "List whiteboard templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "whiteboard_to_tasks",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Make tasks from a board's notes"
   },
   {
     "automation": true,

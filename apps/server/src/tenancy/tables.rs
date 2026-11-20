@@ -212,6 +212,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("scheduled_messages", ORGANIZATION_ID),
     ("secrets", ORGANIZATION_ID),
     ("settings", ORGANIZATION_ID),
+    ("sheet_charts", WORKSPACE_ID),
     ("sheet_cells", WORKSPACE_ID),
     ("sheet_cleared_cells", WORKSPACE_ID),
     ("sheet_named_ranges", WORKSPACE_ID),

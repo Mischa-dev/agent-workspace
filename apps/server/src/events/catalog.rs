@@ -454,6 +454,38 @@ pub static PAGE_DISCUSSION_CHANGED: EventType = signal(
     "A page's comments or suggestions changed",
 )
 .legacy(&["page.discussion.updated"]);
+// --- comments, proposals and changes on documents (C1.28) ------------------
+/// A comment on a task, page, sheet, board or record: about the thing, with
+/// the message's id (never its text).
+pub static COMMENT_CREATED: EventType = fact(
+    "comment.created",
+    "messages",
+    None,
+    "Someone commented on a task, page, sheet, whiteboard or record",
+)
+.automatable();
+/// Someone proposed a change to a page, sheet or board.
+pub static PROPOSAL_CREATED: EventType = fact(
+    "proposal.created",
+    "workspace",
+    None,
+    "Someone proposed a change to a page, sheet or whiteboard",
+)
+.automatable();
+pub static PROPOSAL_DECIDED: EventType = fact(
+    "proposal.decided",
+    "workspace",
+    None,
+    "A proposed change was accepted, rejected or withdrawn",
+);
+/// A change to a page, sheet or board was undone in a step.
+pub static CHANGE_UNDONE: EventType = fact(
+    "change.undone",
+    "pages",
+    None,
+    "A change to a page, sheet or whiteboard was undone",
+);
+
 pub static PAGE_COMMENTED: EventType = fact(
     "page.commented",
     "pages",
@@ -511,6 +543,12 @@ pub static SHEET_RANGES_CHANGED: EventType = fact(
     "sheets",
     Some("sheet"),
     "A sheet's named ranges were added, changed or removed",
+);
+pub static SHEET_CHARTS_CHANGED: EventType = fact(
+    "sheet.charts_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's charts were added, changed or removed",
 );
 pub static SHEET_PROPOSALS_CHANGED: EventType = fact(
     "sheet.proposals_changed",
@@ -947,6 +985,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_REPLY_REQUESTS_CHANGED,
         &CONVERSATION_READ,
         &MESSAGE_CREATED,
+        &COMMENT_CREATED,
+        &PROPOSAL_CREATED,
+        &PROPOSAL_DECIDED,
+        &CHANGE_UNDONE,
         &MESSAGE_MENTIONED,
         &MESSAGE_EDITED,
         &MESSAGE_REMOVED,
@@ -1001,6 +1043,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_VERSION_RESTORED,
         &SHEET_VIEWS_CHANGED,
         &SHEET_RANGES_CHANGED,
+        &SHEET_CHARTS_CHANGED,
         &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
         &DATA_CONNECTION_CHANGED,

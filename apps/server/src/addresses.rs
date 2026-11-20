@@ -1,12 +1,11 @@
-//! Web addresses (K4.18): the one place the server builds a link into the
+//! Web addresses (K4.18, K4.19): the one place the server builds a link into the
 //! web app, for notifications, mail, push, search, tool results and
 //! anything else that hands a person or an agent somewhere to go.
 //!
-//! A link names a [`Target`] and the workspace it lives in. The server writes
-//! today's shapes (`/projects/<id>/...`, `/messages/<id>`, `/inbox`) until
-//! the web app serves workspace addresses; then [`Addresses::of`] changes to
-//! [`Addresses::WORKSPACE`] in one step (K4.19), every link names its
-//! workspace (`/w/<slug>/s/<space>/tasks/<id>`), and the old shape goes. The new shape is always worked out
+//! A link names a [`Target`] and the workspace it lives in. Since K4.19
+//! every link names its workspace (`/w/<slug>/s/<space>/tasks/<id>`);
+//! today's shapes (`/projects/<id>/...`, `/messages/<id>`, `/inbox`) are only
+//! the input the address is worked out from. The new shape is always worked out
 //! from the old one by [`workspace_path`], the same function the resolver
 //! (`GET /api/v1/links/resolve`, [`resolve`]) uses for links people already
 //! have, so a built link and a resolved one can never disagree.
@@ -27,8 +26,10 @@
 //! /settings/account/...                       no workspace
 //! ```
 //!
-//! `{ws}` is the workspace's slug when the link knows it, else its id: the
-//! web accepts `/w/<id>/...` and replaces it with the slug (K4 §3.10).
+//! `{ws}` is the workspace's slug when the link knows it, else its id (the
+//! web accepts `/w/<id>/...` and replaces it with the slug, K4 §3.10), else
+//! `-` ([`CURRENT_WORKSPACE`]) where nothing names the workspace: the web
+//! opens the one the person used last, and a space in its own workspace.
 
 pub mod resolve;
 
@@ -59,8 +60,12 @@ impl WorkspaceAddress {
         }
     }
 
-    /// What goes after `/w/`.
+    /// What goes after `/w/`. DMs and groups live in no workspace (the
+    /// direct scope), and open in whichever one the person is in: `-`.
     pub fn segment(&self) -> String {
+        if self.id == crate::spaces::DIRECT {
+            return CURRENT_WORKSPACE.to_owned();
+        }
         self.slug.clone().unwrap_or_else(|| self.id.to_string())
     }
 }
@@ -186,8 +191,19 @@ impl Target {
         )
     }
 
+    /// The target's address where its workspace isn't at hand:
+    /// `/w/-/...`, which the web opens in the workspace the person used last
+    /// (and a space's address in the space's own workspace). Build it with a
+    /// [`Linker`] where a connection is at hand, so the link names the
+    /// workspace.
+    pub fn href(&self) -> String {
+        anywhere(&self.legacy_path())
+    }
+
     /// Today's address (the shape the web has served since before
-    /// workspaces were in the address).
+    /// workspaces were in the address). Links are no longer written in it:
+    /// it is the input [`workspace_path`] turns into an address, and the
+    /// shape stored notification details keep until they are read.
     pub fn legacy_path(&self) -> String {
         match *self {
             Self::Home => "/home".to_owned(),
@@ -263,17 +279,20 @@ impl Addresses {
         workspace_addresses: true,
     };
 
-    /// The shape this server writes. There is no setting: it is today's
-    /// shape until the web serves workspace addresses (K4.19).
+    /// The shape this server writes. There is no setting: since K4.19 the
+    /// web serves workspace addresses and every link names its workspace.
+    /// `LEGACY` stays for reads that write no link and for today's shape
+    /// kept in stored notification details, which are converted when read.
     pub fn of(_state: &AppState) -> Self {
-        Self::LEGACY
+        Self::WORKSPACE
     }
 
-    /// The path of `target`, in `workspace` when it is known (see [`link`]).
+    /// The path of `target`, in `workspace` when it is known, else in the
+    /// workspace the person used last (`/w/-/...`; see [`link`]).
     pub fn link(self, workspace: Option<Uuid>, target: &Target) -> String {
         match workspace {
             Some(workspace) => self.in_workspace(workspace, target),
-            // Today's shape, which the web resolves to its workspace.
+            None if self.workspace_addresses => target.href(),
             None => target.legacy_path(),
         }
     }
@@ -422,6 +441,23 @@ impl Linker {
         Ok(self.addresses.from_legacy(&workspace, legacy))
     }
 
+    /// A path in today's shape for a thing that lives in `workspace` but no
+    /// space (a DM's thread), in this server's shape.
+    pub async fn legacy_in_workspace(
+        &mut self,
+        connection: &mut PgConnection,
+        workspace: Uuid,
+        legacy: &str,
+    ) -> Result<String, AppError> {
+        if !self.addresses.workspace_addresses {
+            return Ok(legacy.to_owned());
+        }
+        let workspace = self
+            .workspace_of(connection, (Owner::Workspace, workspace))
+            .await?;
+        Ok(self.addresses.from_legacy(&workspace, legacy))
+    }
+
     async fn workspace_of(
         &mut self,
         connection: &mut PgConnection,
@@ -470,9 +506,8 @@ impl Linker {
 }
 
 /// The path of `target` where a link is built with only the server state
-/// at hand: in `workspace` when the caller knows it, else in today's shape,
-/// which the web and the resolver still open once links name their
-/// workspace (K4.19).
+/// at hand: in `workspace` when the caller knows it, else in the workspace
+/// the person used last (`/w/-/...`, [`Target::href`]).
 pub fn link(state: &AppState, workspace: Option<Uuid>, target: &Target) -> String {
     Addresses::of(state).link(workspace, target)
 }
@@ -484,6 +519,27 @@ pub fn with_query(path: String, query: &str) -> String {
     }
     let joiner = if path.contains('?') { '&' } else { '?' };
     format!("{path}{joiner}{query}")
+}
+
+/// Stands for "the workspace the person used last" in an address the server
+/// writes without knowing the workspace. Never a slug; the web resolves it
+/// (app/href.ts's `CURRENT_WORKSPACE`).
+pub const CURRENT_WORKSPACE: &str = "-";
+
+/// A path written in today's shape, as an address in the workspace the
+/// person used last (`/w/-/...`). A path that isn't a workspace's page
+/// (account settings, sign-in) or is already an address comes back as it is.
+pub fn anywhere(legacy: &str) -> String {
+    workspace_path(CURRENT_WORKSPACE, legacy).unwrap_or_else(|| legacy.to_owned())
+}
+
+/// Serde: a link a query still builds in today's shape (a JSON column), as
+/// an address in the workspace the person used last ([`anywhere`]).
+pub fn deserialize_anywhere<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let legacy = <String as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(anywhere(&legacy))
 }
 
 /// A workspace's address: its id and current slug.
@@ -792,6 +848,24 @@ mod tests {
             Addresses::WORKSPACE.url("https://example.test/", &workspace, &Target::Inbox),
             format!("https://example.test/w/{}/inbox", id(9))
         );
+    }
+
+    #[test]
+    fn a_link_that_knows_no_workspace_opens_the_last_one_used() {
+        let s = id(1);
+        let task = Target::task(s, id(2));
+        assert_eq!(task.href(), format!("/w/-/s/{s}/tasks/{}", id(2)));
+        assert_eq!(Addresses::WORKSPACE.link(None, &task), task.href());
+        assert_eq!(
+            Addresses::WORKSPACE.link(Some(id(9)), &task),
+            format!("/w/{}/s/{s}/tasks/{}", id(9), id(2))
+        );
+        assert_eq!(Addresses::LEGACY.link(None, &task), task.legacy_path());
+        assert_eq!(
+            anywhere("/settings/account/profile"),
+            "/settings/account/profile"
+        );
+        assert_eq!(anywhere("/w/acme/inbox"), "/w/acme/inbox");
     }
 
     #[test]

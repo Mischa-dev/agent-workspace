@@ -211,3 +211,55 @@
   display: flex;
   gap: var(--space-2);
 }
+
+/* Who changed the board last, with an Undo (C1.10). */
+.aw-wb__recent {
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+/* Comments on elements (C1.31): pins and the selection's actions sit over
+   the canvas without taking its pointer. */
+.aw-wb__overlay {
+  /* Above Excalidraw's canvases (1 and 2), below its toolbars and menus (4). */
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.aw-wb__pin {
+  position: absolute;
+  pointer-events: auto;
+  transform: translate(-50%, -100%);
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-small);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+}
+
+.aw-wb__pin.is-unread {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.aw-wb__pin:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-wb__selection-actions {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+}
