@@ -4,7 +4,7 @@ import {
   QueryClientProvider,
 } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
 import { SessionBoundary } from './SessionBoundary'
@@ -30,6 +30,13 @@ const signedOutSession: SessionResponse = {
 }
 
 describe('normal session expiry', () => {
+  // The connection loads its invalidation table as it opens. Load it first,
+  // so a short test never ends with that import still in flight (it then
+  // fails once the environment is torn down).
+  beforeAll(async () => {
+    await import('../realtime/handlers/table')
+  })
+
   // Signed in, the boundary refetches the session and opens the realtime
   // socket. Keep both off the network: a real connection from jsdom fails
   // differently on each Node version (on Node 22 it rejects outside the test).

@@ -3,6 +3,7 @@ import { lazy, Suspense, useState } from 'react'
 import {
   Banner,
   Button,
+  Checkbox,
   Dialog,
   IconButton,
   Row,
@@ -19,6 +20,10 @@ import { useFieldMutations, useFields, type FieldScope, type OptionInput } from 
 import { CATEGORY_LABELS, FIELD_TYPES, STATUS_CATEGORIES, formulaShown, isSystemType, typeLabel, type FieldDefinition, type FieldType, type StatusCategory } from './fieldModel'
 import { buttonDraft, buttonInput } from './buttonDraft'
 import type { FormulaContext } from './FormulaEditor'
+import { RollupEditor } from './RollupEditor'
+import { rollupDraft } from './rollupDraft'
+import { RulesEditor } from './RulesEditor'
+import { rulesDraft, rulesInput, takesRules } from './rulesDraft'
 
 // A formula's or a button's editor loads when such a field is edited.
 const ButtonEditor = lazy(() => import('./ButtonEditor').then((module) => ({ default: module.ButtonEditor })))
@@ -95,6 +100,7 @@ export function FieldManager({ scope }: { scope: FieldScope }) {
       meta={[
         typeLabel(field.type),
         field.type === 'link' ? (field.target === 'page' ? 'to a page' : field.target === 'record' ? 'to a record' : 'to a task') : null,
+        field.type === 'relation' && field.inverse ? 'both ways' : null,
         field.options.filter((option) => !option.archived).length
           ? field.options
               .filter((option) => !option.archived)
@@ -166,8 +172,8 @@ export function FieldDialog({
 }: {
   /** Where formula and button fields can be made and edited (a collection's records); left out, neither is offered. */
   formulas?: FormulaContext
-  /** Collections a new link field can hold the records of (AWD-110). */
-  linkable?: ReadonlyArray<{ id: string; name: string }>
+  /** Collections a new link field can hold the records of (AWD-110); relations take the ones that don't act like tasks. */
+  linkable?: ReadonlyArray<{ id: string; name: string; actsLikeTask?: boolean }>
   field: FieldDefinition | null
   onClose: () => void
   /** The field as it was saved, before the dialog closes. */
@@ -192,18 +198,39 @@ export function FieldDialog({
   const [formula, setFormula] = useState(initialFormula)
   const isFormula = type === 'formula'
   const isButton = type === 'button'
+  const isRollup = type === 'rollup'
+  const related = linkable.filter((collection) => !collection.actsLikeTask)
+  const [relationTarget, setRelationTarget] = useState(() => related[0]?.id ?? '')
+  const [twoWay, setTwoWay] = useState(true)
+  const [pairName, setPairName] = useState('')
+  const [rollup, setRollup] = useState(() => rollupDraft(field, formulas?.fields ?? []))
+  const [initialRollup] = useState(() => JSON.stringify(rollup))
   const [button, setButton] = useState(() => buttonDraft(field, formulas?.fields ?? []))
   const [initialButton] = useState(() => JSON.stringify(button.steps.map(({ operation, arguments: input }) => [operation, input])))
+  const [rules, setRules] = useState(() => rulesDraft(field))
+  const [initialRules] = useState(() => JSON.stringify(rules))
+  // Rules are for collection fields (where formulas are offered too).
+  const hasRules = Boolean(formulas) && takesRules(type)
   const status = type === 'status'
   // A new status field without options gets the server's three.
   const choices = type === 'single_choice' || type === 'multiple_choice' || (status && (Boolean(field) || options.length > 0))
   // Tasks have their own status and record columns; a collection can have any type.
-  const offered = FIELD_TYPES.filter((entry) => (scope.path !== undefined || entry.tasks !== false) && ((entry.type !== 'formula' && entry.type !== 'button') || formulas))
+  const offered = FIELD_TYPES.filter(
+    (entry) => (scope.path !== undefined || entry.tasks !== false) && (!['formula', 'button', 'relation', 'rollup'].includes(entry.type) || formulas),
+  )
   const pending = create.isPending || update.isPending
   const submit = () => {
     setProblem(null)
     if (!name.trim()) return setProblem('Give the field a name.')
     if (isFormula && formulas && !formula.trim()) return setProblem('Write the formula.')
+    if (type === 'relation' && !field && !relationTarget) return setProblem('Pick the collection whose records it lists.')
+    if (isRollup && !rollup.relation) return setProblem('Add a Related records field first: a rollup reads the records it names.')
+    if (isRollup && rollup.aggregate !== 'count' && !rollup.field) return setProblem('Pick the field of the related records it reads.')
+    const rollupInput = isRollup ? { relation: rollup.relation, aggregate: rollup.aggregate, ...(rollup.field ? { field: rollup.field } : {}) } : undefined
+    const ruled = hasRules ? rulesInput(rules, type) : null
+    if (ruled && 'problem' in ruled) return setProblem(ruled.problem)
+    const rulesSettings = ruled && 'input' in ruled ? ruled.input : undefined
+    const rulesChanged = Boolean(rulesSettings) && JSON.stringify(rules) !== initialRules
     const pressed = isButton && formulas ? buttonInput(button) : null
     if (pressed && 'problem' in pressed) return setProblem(pressed.problem)
     const buttonSettings = pressed && 'input' in pressed ? pressed.input : undefined
@@ -234,6 +261,8 @@ export function FieldDialog({
           ...(optionInputs ? { options: optionInputs } : {}),
           ...(isFormula && formulas && formula.trim() !== initialFormula.trim() ? { formula: formula.trim() } : {}),
           ...(buttonSettings && buttonChanged ? { button: buttonSettings } : {}),
+          ...(rollupInput && JSON.stringify(rollup) !== initialRollup ? { rollup: rollupInput } : {}),
+          ...(rulesSettings && rulesChanged ? { rules: rulesSettings } : {}),
         },
         done,
       )
@@ -246,8 +275,11 @@ export function FieldDialog({
           description: description.trim(),
           ...(optionInputs ? { options: optionInputs } : {}),
           ...(type === 'link' ? { target } : {}),
+          ...(type === 'relation' ? { target: `record:${relationTarget}`, twoWay, ...(twoWay && pairName.trim() ? { pairName: pairName.trim() } : {}) } : {}),
+          ...(rollupInput ? { rollup: rollupInput } : {}),
           ...(isFormula ? { formula: formula.trim() } : {}),
           ...(buttonSettings ? { button: buttonSettings } : {}),
+          ...(rulesSettings && rulesChanged ? { rules: rulesSettings } : {}),
         },
         done,
       )
@@ -298,6 +330,28 @@ export function FieldDialog({
           ))}
         </SelectField>
       ) : null}
+      {!field && type === 'relation' ? (
+        <>
+          <SelectField label="Lists records of" onChange={(event) => setRelationTarget(event.target.value)} value={relationTarget}>
+            {related.map((collection) => (
+              <option key={collection.id} value={collection.id}>
+                {collection.name}
+              </option>
+            ))}
+          </SelectField>
+          <Checkbox checked={twoWay} label="Also list them on the other side, kept in step" onChange={setTwoWay} />
+          {twoWay ? (
+            <TextField
+              hint="The field on the other collection. Leave it empty to use this collection’s name."
+              label="Name on the other side"
+              maxLength={60}
+              onChange={(event) => setPairName(event.target.value)}
+              value={pairName}
+            />
+          ) : null}
+        </>
+      ) : null}
+      {isRollup && formulas ? <RollupEditor draft={rollup} fields={formulas.fields} onChange={setRollup} projectId={scope.projectId} /> : null}
       <TextField
         hint="Optional. Shown when someone fills it in."
         label="Description"
@@ -391,6 +445,14 @@ export function FieldDialog({
           </Button>
           {field ? <p className="aw-pagesection__desc">A removed option is archived: {records} that have it keep it.</p> : null}
         </fieldset>
+      ) : null}
+      {hasRules ? (
+        <RulesEditor
+          draft={rules}
+          onChange={setRules}
+          options={options.map((option) => option.name.trim()).filter(Boolean)}
+          type={type}
+        />
       ) : null}
     </Dialog>
   )

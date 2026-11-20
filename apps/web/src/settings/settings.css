@@ -325,18 +325,6 @@
 }
 
 /* Shared pieces */
-.aw-row__metaline.aw-wrap {
-  flex-wrap: wrap;
-  gap: var(--space-half) 0;
-  font: var(--t-small);
-}
-
-.aw-row__metaline.aw-wrap > * + *::before {
-  content: '·';
-  margin: 0 var(--space-1-5);
-  color: var(--content-fg-muted);
-}
-
 .aw-onetime__actions {
   display: flex;
   flex-wrap: wrap;

@@ -11,7 +11,7 @@ import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { NONE, PICKER_LABELS, allowedStatuses, useDebouncedValue } from './pickerModel'
 import '../styles/work.css'
 
-export type PickerField = 'status' | 'priority' | 'assignee' | 'labels' | 'milestone' | 'type'
+export type PickerField = 'status' | 'priority' | 'assignee' | 'delegate' | 'labels' | 'milestone' | 'type'
 
 export type PickerCurrent = {
   statusId?: string
@@ -19,6 +19,9 @@ export type PickerCurrent = {
   assigneeId?: string | null
   /** Shown first in the assignee list even when the search doesn't return them. */
   assignee?: AssignableActor | null
+  /** Who the task is handed to (T1.22), shown first like the assignee. */
+  delegateId?: string | null
+  delegate?: AssignableActor | null
   labelIds?: string[]
   milestoneId?: string | null
   typeId?: string
@@ -28,6 +31,7 @@ export type PickResult =
   | { field: 'status'; status: WorkItemStatus }
   | { field: 'priority'; priority: WorkItemPriority }
   | { field: 'assignee'; actor: AssignableActor | null }
+  | { field: 'delegate'; actor: AssignableActor | null }
   | { field: 'milestone'; milestone: MilestoneRef | null }
   | { field: 'type'; type: { id: string; name: string } }
   | { field: 'labels'; add: string[]; remove: string[] }
@@ -104,6 +108,16 @@ export function FieldPicker({
         />
       ) : null}
       {field === 'assignee' ? <AssigneeOptions current={current} label={label} onClose={close} onPick={onPick} projectId={projectId} /> : null}
+      {field === 'delegate' ? (
+        <AssigneeOptions
+          current={{ assigneeId: current.delegateId, assignee: current.delegate }}
+          field="delegate"
+          label={label}
+          onClose={close}
+          onPick={onPick}
+          projectId={projectId}
+        />
+      ) : null}
       {field === 'milestone' ? <MilestoneOptions current={current} label={label} onClose={close} onPick={onPick} projectId={projectId} /> : null}
       {field === 'labels' ? (
         <LabelOptions
@@ -161,12 +175,15 @@ function StatusOptions({
 
 function AssigneeOptions({
   current,
+  field = 'assignee',
   label,
   onClose,
   onPick,
   projectId,
 }: {
   current: PickerCurrent
+  /** Which person field it picks: the owner, or who it's handed to. */
+  field?: 'assignee' | 'delegate'
   label: string
   onClose: () => void
   onPick: (result: PickResult) => void
@@ -181,7 +198,7 @@ function AssigneeOptions({
     return [...pinned, ...found]
   }, [actors.data, current.assignee, debounced])
   const options: ComboboxOption[] = [
-    ...(debounced.trim() ? [] : [{ value: NONE, label: 'Unassigned', leading: <Icon name="unassigned" size={16} /> }]),
+    ...(debounced.trim() ? [] : [{ value: NONE, label: field === 'delegate' ? 'Nobody' : 'Unassigned', leading: <Icon name="unassigned" size={16} /> }]),
     ...list.map((actor) => ({
       value: actor.id,
       label: actor.displayName,
@@ -196,7 +213,7 @@ function AssigneeOptions({
       loading={actors.isFetching}
       onClose={onClose}
       onQueryChange={setQuery}
-      onSelect={(value) => onPick({ field: 'assignee', actor: value === NONE ? null : (list.find((actor) => actor.id === value) ?? null) })}
+      onSelect={(value) => onPick({ field, actor: value === NONE ? null : (list.find((actor) => actor.id === value) ?? null) })}
       options={options}
       placeholder="Search people and agents"
       selected={[current.assigneeId ?? NONE]}

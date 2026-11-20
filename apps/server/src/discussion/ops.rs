@@ -44,7 +44,7 @@ impl ThingInput {
 
 /// Who is commenting, and through which edge, for the audit rows of what
 /// the comment opens.
-fn creator(ctx: &OpContext) -> ThreadCreator {
+pub(crate) fn creator(ctx: &OpContext) -> ThreadCreator {
     let (session_id, channel, client_name, credential, grant, class) = match &ctx.edge {
         Edge::Web { session_id } => (
             Some(*session_id),

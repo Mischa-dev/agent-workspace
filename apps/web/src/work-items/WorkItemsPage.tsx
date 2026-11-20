@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
@@ -8,13 +9,16 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useShellPage } from '../shell/shellStore'
+import { listProjectTaskViews, viewKeys } from '../views/api'
+import { focusViewField, pressViewButton, ViewCommands } from '../views/useViewCommands'
+import type { PageCommand } from '../shell/commandStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ErrorState, ListSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { BoardSkeleton } from './BoardSkeleton'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
-import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
+import { activeFilterKeys, clearFilters, parametersFromRemembered, rememberedState } from './listModel'
 import { notify } from './notice'
 import { TaskPanel } from './TaskPanel'
 import { useListState } from './useListState'
@@ -22,6 +26,8 @@ import { WorkItemList } from './WorkItemList'
 import './work.css'
 
 const ViewsMenu = lazy(() => import('./ViewsMenu'))
+// The triage queue's decisions show on its own view (T1.23).
+const TriageBar = lazy(() => import('./TriageBar').then((module) => ({ default: module.TriageBar })))
 // Managing labels loads when someone opens it.
 const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 // The board is its own chunk: most visits open the list.
@@ -96,6 +102,9 @@ export function WorkItemsPage() {
     [state.task, update],
   )
   const closeTask = useCallback(() => update((current) => ({ ...current, task: null })), [update])
+  const savedView = parameters.get('savedView')
+  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listProjectTaskViews(projectId), staleTime: 60_000, enabled: Boolean(savedView) })
+  const triage = Boolean(savedView) && views.data?.views.some((entry) => entry.id === savedView && entry.builtin === 'triage') === true
 
   // Until the page can draw, the shell keeps the space the address names.
   useShellPage(
@@ -158,9 +167,29 @@ export function WorkItemsPage() {
       {newButton}
     </>
   )
+  // The view's actions in the command menu (T1.27), beside Create task.
+  const tasksWord = experience.word('task', 'many')
+  const viewCommands: PageCommand[] = (
+    [
+    { id: 'search', label: `Search ${tasksWord}`, icon: 'search', onSelect: () => focusViewField('.aw-filterbar input[type="search"]') },
+    { id: 'filter', label: `Filter ${tasksWord}…`, icon: 'list', onSelect: () => pressViewButton('Filter', '.aw-filterbar') },
+    { id: 'options', label: 'View options…', icon: 'settings', keywords: ['sort', 'group', 'columns'], onSelect: () => pressViewButton('View options', '.aw-filterbar') },
+    ...(hasFilters ? [{ id: 'clear', label: 'Clear filters', icon: 'x' as const, onSelect: () => update((current) => clearFilters(current)) }] : []),
+    ...(board
+      ? [
+          view === 'board'
+            ? { id: 'as-list', label: 'Show as a list', icon: 'list' as const, onSelect: () => update((current) => ({ ...current, view: 'list' as const })) }
+            : { id: 'as-board', label: 'Show as a board', icon: 'board' as const, onSelect: () => update((current) => ({ ...current, view: 'board' as const })) },
+        ]
+      : []),
+    { id: 'done', label: shown.showDone ? `Hide done ${tasksWord}` : `Show done ${tasksWord}`, icon: 'circle-check', onSelect: toggleDone },
+    ...(readOnly ? [] : [{ id: 'labels', label: 'Manage labels…', icon: 'bookmark' as const, onSelect: () => setManagingLabels(true) }]),
+    ] satisfies PageCommand[]
+  ).map((command) => ({ ...command, id: `tasks-view:${command.id}` }))
   return (
     <>
       <div className={view === 'board' ? 'aw-page aw-page--full aw-workpage aw-workpage--board' : 'aw-page aw-page--full aw-workpage'}>
+        <ViewCommands commands={viewCommands} source="tasks-view" />
         <NavigationSyncAlert {...navigationSync} />
         <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')} />
         <WorkTabs current="items" projectId={projectId} />
@@ -169,6 +198,11 @@ export function WorkItemsPage() {
           <Banner className="aw-page__banner" icon="archive">
             This project is archived, so its tasks can’t change.
           </Banner>
+        ) : null}
+        {triage ? (
+          <Suspense fallback={null}>
+            <TriageBar disabled={readOnly} onDone={closeTask} projectId={projectId} taskId={state.task} />
+          </Suspense>
         ) : null}
         {workflow.isPending ? (view === 'board' ? <BoardSkeleton /> : <ListSkeleton label={`Loading ${experience.word('task', 'many')}`} rows={6} />) : null}
         {workflow.isError ? <ErrorState error={workflow.error} onRetry={() => void workflow.refetch()} title={`${experience.label('task', 'many')} didn’t load`} /> : null}

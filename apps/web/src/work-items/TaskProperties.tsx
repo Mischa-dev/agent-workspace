@@ -102,6 +102,7 @@ export function TaskProperties({
     )
 
   const assignee = item.assignee
+  const delegate = item.delegate ?? null
   const fields = [
     field(
       'Status',
@@ -150,6 +151,27 @@ export function TaskProperties({
         !assignee,
       ),
     ),
+    experience.shows('task.delegate')
+      ? field(
+          'Delegate',
+          pickerButton(
+            'delegate',
+            `Handed to: ${delegate?.displayName ?? 'nobody'}. Change`,
+            delegate ? (
+              <>
+                <Avatar kind={actorKind(delegate.kind)} name={delegate.displayName} seed={delegate.actorId} size={18} />
+                <span className="aw-prop__text">{delegate.displayName}</span>
+              </>
+            ) : (
+              <>
+                <Icon name="unassigned" size={16} />
+                {rail ? 'Not handed to anyone' : 'Delegate'}
+              </>
+            ),
+            !delegate,
+          ),
+        )
+      : null,
     experience.shows('task.labels')
       ? field(
           'Labels',
@@ -261,6 +283,8 @@ export function TaskProperties({
             priority: item.priority,
             assigneeId: assignee?.actorId ?? null,
             assignee: assignee ? { id: assignee.actorId, displayName: assignee.displayName, handle: assignee.handle, kind: assignee.kind } : null,
+            delegateId: delegate?.actorId ?? null,
+            delegate: delegate ? { id: delegate.actorId, displayName: delegate.displayName, handle: delegate.handle, kind: delegate.kind } : null,
             labelIds: item.labels.map((label) => label.id),
             milestoneId: item.milestone?.id ?? null,
             typeId: item.itemType.id,

@@ -22,16 +22,12 @@ import { SelectionBar } from './SelectionBar'
 import { useDoneCount, useDoneItems } from './useDoneWork'
 import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
 import { pageHasFocus, useOpenAsYouGo, useTaskShortcuts } from './shortcutKeys'
-import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
+import { editErrorMessage, useApplyPick } from './taskEdits'
 import type { WorkItemCard, WorkItemWorkflow } from './types'
 import { useWindowedRows } from '../ui/useWindowedRows'
+import { PICKER_KEYS } from '../views/viewKeys'
 import '../styles/work.css'
 
-const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
-
-function editTarget(card: WorkItemCard): EditTarget {
-  return { id: card.id, projectId: card.projectId, version: card.version, key: card.key }
-}
 
 /**
  * Custom field columns go just before the assignee, which ends the row, or
@@ -288,7 +284,7 @@ export function WorkItemList({
     if (!picker) return
     const targets = picker.targets
     applyPick.mutate(
-      { projectId, result, targets: targets.map(editTarget) },
+      { projectId, result, targets },
       {
         onSuccess: () => {
           if (targets.length > 1) notify({ tone: 'success', title: `Changed ${countLabel(targets.length, 'task')}` })

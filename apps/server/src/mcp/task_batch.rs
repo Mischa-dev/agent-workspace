@@ -2166,6 +2166,10 @@ async fn apply_update(
             "assignee",
             "That person can't be assigned tasks here: only active people and agents in the project can.".to_owned(),
         ),
+        UpdateWorkItemOutcome::InvalidDelegate => problem(
+            "delegate",
+            "That person can't be handed tasks here: only active people and agents in the project can.".to_owned(),
+        ),
         UpdateWorkItemOutcome::TooManyLabels { limit, would_have } => problem(
             "addLabels",
             format!(

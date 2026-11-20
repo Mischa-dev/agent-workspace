@@ -6,6 +6,8 @@ import { isApiError } from '../api/errors'
 import { opQuery } from '../api/ops'
 import { readLocal, writeLocal } from '../app/localDrafts'
 import { toastError } from '../app/mutations'
+import { useCollections } from '../collections/api'
+import { collectionHref } from '../projects/locations'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
@@ -185,18 +187,29 @@ function PagesList({ projectId, space }: { projectId: string; space?: boolean })
   const hasGuide = Boolean(pages.data?.pages.some((page) => page.isGuide))
   const canEdit = Boolean(pages.data?.canEdit)
   const transfers = useProjectExperience(projectId).shows('page.import_export')
+  // T1.36: the space's pages as a collection, to give them fields and list
+  // them through views.
+  const collections = useCollections(projectId)
+  const asCollection = collections.data?.collections.find((collection) => collection.builtin === 'pages')
   return (
     <>
       <PageHeader
         actions={
-          canEdit ? (
-            <>
-              {transfers ? <PageImportButton pagesHref={base} projectId={projectId} /> : null}
-              <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
-                New page
-              </Button>
-            </>
-          ) : null
+          <>
+            {asCollection ? (
+              <ButtonLink icon="table" to={collectionHref(projectId, asCollection.id)} variant="secondary">
+                Fields and views
+              </ButtonLink>
+            ) : null}
+            {canEdit ? (
+              <>
+                {transfers ? <PageImportButton pagesHref={base} projectId={projectId} /> : null}
+                <Button icon="plus" onClick={() => setCreating({ title: '' })} variant="primary">
+                  New page
+                </Button>
+              </>
+            ) : null}
+          </>
         }
         icon="list"
         title="Pages"
@@ -337,14 +350,17 @@ export function PageDetailPage() {
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
-/** A page shown as a tab on a channel (C1.26), in the channel's own frame. */
+/**
+ * A page shown as a tab on a channel (C1.26), in the channel's own frame.
+ * The channel stays the space's last place: the page doesn't remember itself.
+ */
 export function PageInChannel({ pageId, project }: { pageId: string; project: Project }) {
-  return <PageDetail key={pageId} pageId={pageId} project={project} />
+  return <PageDetail inChannel key={pageId} pageId={pageId} project={project} />
 }
 
 type Viewing = { version: number; title: string; body: string }
 
-function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
+function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolean; pageId: string; project: Project }) {
   const projectId = project.id
   const queryClient = useQueryClient()
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
@@ -448,7 +464,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   )
   return (
     <>
-      <RememberPlace location={{ kind: 'page', pageId }} project={project} />
+      {inChannel ? null : <RememberPlace location={{ kind: 'page', pageId }} project={project} />}
       <PageHeader
         actions={
           editing ? null : (

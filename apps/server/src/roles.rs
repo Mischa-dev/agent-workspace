@@ -101,8 +101,13 @@ pub(crate) fn effective(grant: RoleGrant, limit: Option<PermissionSet>) -> Permi
 }
 
 /// A limit as stored: NULL is no limit.
+/// A stored limit allows the writing levels below the ones it names, so
+/// an app limited to editing tasks may also suggest a change to one
+/// (`PermissionSet::implied_writes`); seeing stays only where it's named.
 fn stored_limit(keys: Option<&[String]>) -> PermissionSet {
-    keys.map_or_else(PermissionSet::all, PermissionSet::from_keys)
+    keys.map_or_else(PermissionSet::all, |keys| {
+        PermissionSet::from_keys(keys).implied_writes()
+    })
 }
 
 #[derive(Debug, FromRow)]
@@ -2301,6 +2306,21 @@ mod tests {
             "{edit}"
         );
         assert!(!edit.contains("custom_role_allows"), "{edit}");
+    }
+
+    /// A limit allowing a writing level allows the writing levels below
+    /// it, so an app limited to editing tasks can still suggest one; it
+    /// never adds seeing.
+    #[test]
+    fn a_limit_allows_the_lesser_writes_but_not_seeing() {
+        let limit = stored_limit(Some(&["tasks.edit".to_owned()]));
+        assert!(limit.contains(Permission::TasksSuggest));
+        assert!(limit.contains(Permission::TasksEdit));
+        assert!(!limit.contains(Permission::TasksView));
+        assert!(!limit.contains(Permission::TasksDelete));
+        let seen = stored_limit(Some(&["tasks.view".to_owned(), "tasks.edit".to_owned()]));
+        assert!(seen.contains(Permission::TasksView));
+        assert_eq!(stored_limit(None), PermissionSet::all());
     }
 
     fn caller(role: MembershipRole) -> Standing {

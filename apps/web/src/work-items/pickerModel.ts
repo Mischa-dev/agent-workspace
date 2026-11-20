@@ -7,6 +7,7 @@ export const PICKER_LABELS: Record<PickerField, string> = {
   status: 'Change status',
   priority: 'Change priority',
   assignee: 'Assign to',
+  delegate: 'Hand to',
   labels: 'Change labels',
   milestone: 'Set milestone',
   type: 'Change type',

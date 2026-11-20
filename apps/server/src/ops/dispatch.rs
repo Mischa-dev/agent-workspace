@@ -191,18 +191,25 @@ async fn task_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    // K2.14: a bulk change's first task too, which says where it acts (the
-    // command resolves the rest).
-    for field in [
+    // Single task fields, then each task of a list (K2.14: a bulk change's
+    // first task says where it acts) and a link's task.
+    let mut places = [
         "/taskId",
         "/workItemId",
         "/parentId",
         "/parentWorkItemId",
-        "/taskIds/0",
+        "/duplicateOf",
         "/links/0/taskId",
-    ] {
+    ]
+    .iter()
+    .map(|field| (*field).to_owned())
+    .collect::<Vec<String>>();
+    if let Some(list) = input.get("taskIds").and_then(Value::as_array) {
+        places.extend((0..list.len().min(100)).map(|index| format!("/taskIds/{index}")));
+    }
+    for field in places {
         let Some((space_key, number)) = input
-            .pointer(field)
+            .pointer(&field)
             .and_then(Value::as_str)
             .and_then(crate::mcp::split_task_key)
             .map(|(key, number)| (key.to_owned(), number))
@@ -266,12 +273,16 @@ async fn task_keys_to_ids(
             .filter(|(_, preference)| Some(*preference) == best)
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
+        // A list's later tasks are the command's to report one by one: a
+        // key this caller can't resolve stays as it was.
+        let later_in_list = field.starts_with("/taskIds/") && field != "/taskIds/0";
         match found.as_slice() {
             [id] => {
-                if let Some(slot) = input.pointer_mut(field) {
+                if let Some(slot) = input.pointer_mut(&field) {
                     *slot = Value::String(id.to_string());
                 }
             }
+            _ if later_in_list => {}
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(
@@ -582,6 +593,7 @@ async fn pipeline<O: Operation>(
         start_queued_runs: false,
         keyed: false,
         audited: false,
+        after_commit: Vec::new(),
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -732,6 +744,9 @@ async fn pipeline<O: Operation>(
     }
     if call.start_queued_runs {
         crate::scheduler::kick(state.clone());
+    }
+    for work in std::mem::take(&mut call.after_commit) {
+        work(state.clone()).await;
     }
     Ok(answer)
 }

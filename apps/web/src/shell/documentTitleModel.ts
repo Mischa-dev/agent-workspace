@@ -36,6 +36,7 @@ const STATIC_TITLES: [RegExp, string][] = [
   [/^\/home\/?$/, 'Home'],
   [/^\/inbox\/?$/, 'Inbox'],
   [/^\/my-work\/?$/, 'My work'],
+  [/^\/initiatives\/?$/, 'Initiatives'],
   [/^\/later\/?$/, 'Later'],
   [/^\/runs\/?$/, 'Runs'],
   [/^\/runs\/.+$/, 'Run'],

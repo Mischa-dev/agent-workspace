@@ -6,6 +6,7 @@ import { isApiError } from '../api/errors'
 import { useFieldMutations } from '../fields/api'
 import { clausesWithinLimits, type FieldClause, type FieldDefinition } from '../fields/fieldModel'
 import { FieldDialog } from '../fields/FieldManager'
+import { projectLocationHref } from '../projects/locations'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
@@ -41,6 +42,8 @@ import { RecordPanel } from './RecordPanel'
 import { CollectionTableView } from './CollectionTableView'
 import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
+import { focusViewField, pressViewButton, ViewCommands } from '../views/useViewCommands'
+import type { PageCommand } from '../shell/commandStore'
 
 // Forms are managed now and then, so their dialog loads when it opens.
 // The board, list, gallery, calendar, timeline and chart pieces load when a view first uses them.
@@ -51,12 +54,14 @@ const CollectionListView = lazy(() => import('./CollectionListView').then((modul
 const CollectionChartView = lazy(() => import('./CollectionChartView').then((module) => ({ default: module.CollectionChartView })))
 const CollectionTimelineView = lazy(() => import('./CollectionTimelineView').then((module) => ({ default: module.CollectionTimelineView })))
 const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
+const TemplatesDialog = lazy(() => import('./TemplatesDialog').then((module) => ({ default: module.TemplatesDialog })))
 
 const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
 
 type Dialogs =
   | { kind: 'details' }
   | { kind: 'forms' }
+  | { kind: 'templates' }
   | { kind: 'field'; field: FieldDefinition | null }
   | { kind: 'new-view' }
   | { kind: 'rename-view'; view: CollectionView }
@@ -169,8 +174,15 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   // and settings stay; its fields change here like any collection's (T1.11).
   const tasks = collection.data.collection.builtin === 'tasks'
   const taskLike = tasks || collection.data.collection.actsLikeTask === true
-  // A link to such a record (an embed, an old link) opens its task.
-  if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
+  // The built-in Pages collection (T1.36) lists the space's pages: a record
+  // opens its page, and only its fields change here.
+  const pages = collection.data.collection.builtin === 'pages'
+  const builtin = tasks || pages
+  const opensElsewhere = taskLike || pages
+  const elsewhere = (id: string) =>
+    pages ? projectLocationHref(projectId, { kind: 'page', pageId: id }) : `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+  // A link to such a record (an embed, an old link) opens its task or page.
+  if (opensElsewhere && recordId) return <Navigate replace to={elsewhere(recordId)} />
   const body = { ...collection.data, canBuild: collection.data.canChangeFields }
   // Shared views first, then the person's own.
   const views = [...body.views].sort((left, right) => Number(right.shared) - Number(left.shared) || left.position - right.position)
@@ -197,7 +209,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   const recordQuery = recordsParams(recordsQuery)
   const layout = view?.type ?? 'table'
   const recordHref = (id: string) => {
-    if (taskLike) return `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(id)}`
+    if (opensElsewhere) return elsewhere(id)
     const next = new URLSearchParams(params)
     next.set('record', id)
     return `?${next.toString()}`
@@ -296,9 +308,10 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
-    ...(canBuild && tasks ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
-    ...(canBuild && !tasks
+    ...(body.canEditRecords && !pages ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(body.canEditRecords && !taskLike && !pages ? [{ label: 'Templates…', icon: 'copy' as const, onSelect: () => setDialog({ kind: 'templates' }) }] : []),
+    ...(canBuild && builtin ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
+    ...(canBuild && !builtin
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
           { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
@@ -320,18 +333,44 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
     edits,
     filtered,
     onClearFilters: clearFilters,
-    onOpenRecord: taskLike ? (id: string) => navigate(recordHref(id)) : openRecord,
+    onOpenRecord: opensElsewhere ? (id: string) => navigate(recordHref(id)) : openRecord,
     openRecordId: recordId,
     params: recordQuery,
     projectId,
   }
-  const panel = recordId && !taskLike ? (
+  // The view's actions in the command menu (T1.27), the same ones its toolbar offers.
+  const dated = layout === 'calendar' || layout === 'timeline'
+  const viewCommands: PageCommand[] = (
+    [
+    ...(editable && !pages ? [{ id: 'new-record', label: 'New record', icon: 'plus' as const, onSelect: () => void newRecord() }] : []),
+    { id: 'search', label: 'Search records', icon: 'search', onSelect: () => focusViewField('[data-view-actions] input[type="search"]') },
+    { id: 'filter', label: 'Filter records…', icon: 'list', onSelect: () => pressViewButton('Filter') },
+    layout === 'chart'
+      ? { id: 'chart', label: 'Chart settings…', icon: 'chart', onSelect: () => pressViewButton('Chart') }
+      : { id: 'sort', label: 'Sort records…', icon: 'arrow-down', onSelect: () => pressViewButton('Sort') },
+    ...(layout === 'gallery' || dated ? [] : [{ id: 'group', label: layout === 'board' ? 'Columns by…' : 'Group records…', icon: 'board' as const, onSelect: () => pressViewButton(layout === 'board' ? 'Columns by' : 'Group') }]),
+    ...(dated ? [{ id: 'dates', label: 'Dates shown…', icon: 'clock' as const, onSelect: () => pressViewButton('Dates') }] : []),
+    ...(dated || layout === 'chart' ? [] : [{ id: 'fields', label: layout === 'table' ? 'Show or hide columns…' : 'Show or hide fields…', icon: 'panel-right' as const, onSelect: () => pressViewButton(layout === 'table' ? 'Columns' : 'Fields') }]),
+    ...(changed && canSaveViews && view ? [{ id: 'save-view', label: `Save changes to ${view.name}`, icon: 'check' as const, onSelect: () => void saveView() }] : []),
+    ...(changed && view ? [{ id: 'reset-view', label: `Reset ${view.name}`, icon: 'undo' as const, onSelect: () => dropDraft(view.id) }] : []),
+    ...(body.archivedRecords > 0 || showArchived
+      ? [{ id: 'archived', label: showArchived ? 'Show current records' : 'Show archived records', icon: 'archive' as const, onSelect: () => setShowArchived(!showArchived) }]
+      : []),
+    ...(canAddViews ? [{ id: 'new-view', label: 'New view…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'new-view' }) }] : []),
+    ...(canBuild ? [{ id: 'add-field', label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
+    ...views
+      .filter((entry) => entry.id !== view?.id)
+      .map((entry) => ({ id: `view-${entry.id}`, label: `Open view: ${entry.name}`, icon: 'table' as const, onSelect: () => void navigate(`?view=${encodeURIComponent(entry.id)}`) })),
+    ] satisfies PageCommand[]
+  ).map((command) => ({ ...command, id: `collection-view:${command.id}` }))
+  const panel = recordId && !opensElsewhere ? (
     <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
   ) : undefined
 
   return (
     <>
       <div className="aw-page aw-page--full aw-collection">
+        <ViewCommands commands={viewCommands} source="collection-view" />
         <ShellPanel onDismiss={closeRecord} panel={panel} panelKey={recordId ?? undefined} />
         <PageHeader
           actions={
@@ -339,7 +378,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
               {collectionMenu.length ? (
                 <Menu items={collectionMenu} label="Collection options" placement="bottom-end" trigger={<IconButton icon="more" label="Collection options" />} />
               ) : null}
-              {editable ? (
+              {editable && !pages ? (
                 <Button icon="plus" onClick={() => void newRecord()} variant="primary">
                   New record
                 </Button>
@@ -487,11 +526,16 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
           <FormsDialog body={body} onClose={() => setDialog(null)} projectId={projectId} />
         </Suspense>
       ) : null}
+      {dialog?.kind === 'templates' ? (
+        <Suspense fallback={null}>
+          <TemplatesDialog body={body} onClose={() => setDialog(null)} onOpenRecord={openRecord} projectId={projectId} />
+        </Suspense>
+      ) : null}
       {dialog?.kind === 'field' ? (
         <FieldDialog
           field={dialog.field}
-          formulas={body.collection.actsLikeTask || body.collection.builtin ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
-          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && !entry.builtin)}
+          formulas={body.collection.actsLikeTask ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
+          linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && entry.builtin !== 'tasks')}
           onClose={() => setDialog(null)}
           records="records"
           scope={fieldScope(projectId, collectionId)}
