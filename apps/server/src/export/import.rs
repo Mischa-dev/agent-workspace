@@ -71,6 +71,8 @@ const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 /// How much more an entry over a megabyte may unpack to than it weighs.
 const MAX_RATIO: u64 = 400;
+/// The longest the store may go quiet while an import's archive arrives.
+const ARCHIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 /// The longest line read.
 const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -498,16 +500,18 @@ pub async fn start_import(
         };
         let key = format!("{}/imports/{}.awx", workspace.simple(), id.simple());
         let file = tokio::fs::File::open(input.path).await.map_err(io)?;
-        store
+        let written = store
             .put_stream(&key, tokio_util::io::ReaderStream::new(file), u64::MAX)
             .await?;
         crate::db::scoped_one(&state.pool, async |connection| {
             sqlx::query(
-                "UPDATE workspace_transfers SET store_id = $2, file_key = $3 WHERE id = $1",
+                "UPDATE workspace_transfers SET store_id = $2, file_key = $3, byte_size = $4 \
+                 WHERE id = $1",
             )
             .bind(id)
             .bind(store.id())
             .bind(&key)
+            .bind(i64::try_from(written.length).unwrap_or(i64::MAX))
             .execute(&mut *connection)
             .await?;
             events::emit(connection, transfer::changed(workspace, id, input.owner)).await?;
@@ -824,18 +828,20 @@ struct Claimed {
     copy: bool,
     store_id: String,
     key: String,
+    /// The archive's size as stored: it is read back no further.
+    size: u64,
     cursor: Cursor,
 }
 
 async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppError> {
     let row = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Value, bool)>(
+        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Option<i64>, Value, bool)>(
             "UPDATE workspace_transfers SET state = 'running', \
                  lease_until = now() + make_interval(secs => $2) \
              WHERE id = $1 AND direction = 'import' AND state IN ('queued', 'running') \
                AND (lease_until IS NULL OR lease_until < now()) \
-             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, cursor, \
-                       id_mode = 'copy'",
+             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, byte_size, \
+                       cursor, id_mode = 'copy'",
         )
         .bind(transfer)
         .bind(f64::from(LEASE_SECONDS))
@@ -843,10 +849,12 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
         .await
     })
     .await?;
-    let Some((workspace, requester, store_id, key, cursor, copy)) = row else {
+    let Some((workspace, requester, store_id, key, size, cursor, copy)) = row else {
         return Ok(None);
     };
-    let (Some(store_id), Some(key)) = (store_id, key) else {
+    let (Some(store_id), Some(key), Some(size)) =
+        (store_id, key, size.and_then(|size| u64::try_from(size).ok()))
+    else {
         return Err(AppError::Internal("the import's archive was never stored"));
     };
     Ok(Some(Claimed {
@@ -855,6 +863,7 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
         copy,
         store_id,
         key,
+        size,
         cursor: serde_json::from_value(cursor).unwrap_or_default(),
     }))
 }
@@ -943,8 +952,23 @@ async fn unpack(
     let mut stream = stored.body.into_data_stream();
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    while let Some(chunk) = stream.next().await {
-        file.write_all(&chunk.map_err(io)?).await.map_err(io)?;
+    // Read back only as stored: at most its recorded size, and a store
+    // that goes quiet is given up on.
+    let mut read = 0_u64;
+    loop {
+        let next = tokio::time::timeout(ARCHIVE_IDLE, stream.next())
+            .await
+            .map_err(|_| AppError::Internal("the import's archive stopped arriving"))?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.map_err(io)?;
+        read += chunk.len() as u64;
+        if read > claimed.size {
+            return Err(AppError::Internal("the import's archive is bigger than stored").into());
+        }
+        file.write_all(&chunk).await.map_err(io)?;
+    }
+    if read != claimed.size {
+        return Err(AppError::Internal("the import's archive is not the one stored").into());
     }
     file.flush().await.map_err(io)?;
     drop(file);
