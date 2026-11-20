@@ -180,7 +180,7 @@ export function WhiteboardsPage() {
 function BoardCard({ board }: { board: Whiteboard }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { preset } = useTheme()
+  const { shownPreset: preset } = useTheme()
   const [renaming, setRenaming] = useState(false)
   const [purging, setPurging] = useState(false)
   const purge = useMutation({

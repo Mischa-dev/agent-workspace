@@ -661,6 +661,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversations_mark_read",
     "custom_emoji_create",
     "custom_emoji_update",
+    "theme_create",
+    "theme_update",
+    "theme_delete",
+    "workspace_theme_set",
     "comment_create",
     "comment_thread_update",
     "message_delete",
@@ -1512,6 +1516,8 @@ struct Targets {
     schedule: Uuid,
     /// The workspace's own emoji (C2.19).
     custom_emoji: Uuid,
+    /// The owner's own theme.
+    theme: Uuid,
     /// A thread in the sheet's comments (C1.3).
     comment_thread: Uuid,
     /// A shared filter view of the sheet (C1.16).
@@ -1956,8 +1962,10 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     let mut hosts = [Uuid::nil(); 4];
     for (index, host) in hosts.iter_mut().enumerate() {
         let account = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+            "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
         )
+        .bind(organization)
         .fetch_one(pool)
         .await
         .expect("host account");
@@ -2051,6 +2059,19 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("custom emoji");
+    // A theme of the owner's, to change, offer and delete.
+    let theme = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO themes (id, workspace_id, owner_account_id, name, document) \
+         VALUES ($1, $2, $3, 'Net theme', $4)",
+    )
+    .bind(theme)
+    .bind(organization)
+    .bind(owner)
+    .bind(json!({"format": 1, "light": {"base": "quiet", "tokens": {}}, "dark": {"base": "quiet-dark", "tokens": {}}}))
+    .execute(pool)
+    .await
+    .expect("theme");
     // C1.3: the sheet's comments and a thread in them, to resolve.
     let (comments, comment_thread) = (Uuid::now_v7(), Uuid::now_v7());
     for (id, kind, parent, visibility, subject) in [
@@ -2102,6 +2123,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         sheet_view,
         schedule,
         custom_emoji,
+        theme,
         comment_thread,
         hosts,
         proposal,
@@ -6313,6 +6335,7 @@ async fn check_own_mcp(
 
 #[allow(clippy::too_many_lines)]
 fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> Vec<McpCase> {
+    let theme_document = json!({"format": 1, "light": {"base": "quiet", "tokens": {}}, "dark": {"base": "quiet-dark", "tokens": {}}});
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     let task_version = |task: Uuid| version("work_items", task);
@@ -6666,6 +6689,37 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "custom_emoji_update",
             json!({"id": ax.custom_emoji, "retired": true}),
             vec![json!({"id": bx.custom_emoji, "retired": true})],
+        ),
+        // Themes: one is made in the workspace called; B's can't be read,
+        // changed, offered or deleted from A.
+        mcp_case(
+            "theme_create",
+            json!({"name": "Net new", "document": theme_document, "clientRequestId": "net-theme"}),
+            vec![json!({"workspace": b.organization, "name": "Net new", "document": theme_document, "clientRequestId": "net-theme-b"})],
+        ),
+        mcp_case(
+            "theme_update",
+            json!({"id": ax.theme, "expectedVersion": 1, "name": "Net renamed"}),
+            vec![
+                json!({"id": bx.theme, "expectedVersion": 1, "name": "Net renamed"}),
+                json!({"workspace": b.organization, "id": bx.theme, "expectedVersion": 1, "name": "Net renamed"}),
+            ],
+        ),
+        mcp_case(
+            "workspace_theme_set",
+            json!({"themeId": ax.theme, "offered": true}),
+            vec![
+                json!({"themeId": bx.theme, "offered": true}),
+                json!({"workspace": b.organization, "themeId": bx.theme, "offered": true}),
+            ],
+        ),
+        mcp_case(
+            "theme_delete",
+            json!({"id": ax.theme}),
+            vec![
+                json!({"id": bx.theme}),
+                json!({"workspace": b.organization, "id": bx.theme}),
+            ],
         ),
         // C2.13: keywords are the caller's own, in the workspace called; a
         // workspace the caller isn't in takes none.

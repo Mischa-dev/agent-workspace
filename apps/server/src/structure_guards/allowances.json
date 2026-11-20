@@ -2,9 +2,6 @@
   "access_bypasses": {
   },
   "account_kind_checks": {
-    "auth/mod.rs": 2,
-    "policy.rs": 2,
-    "push/actions.rs": 1
   },
   "account_kind_strings": {},
   "active_run_states_literal": {

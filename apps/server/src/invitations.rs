@@ -116,6 +116,9 @@ struct InvitationAccess {
     organization_membership_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given in the project (K1.27).
+    #[sqlx(default)]
+    project_group_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -150,6 +153,7 @@ struct InvitationMutationRow {
     organization_membership_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    project_group_permissions: Option<Vec<String>>,
     project_membership_enabled: bool,
 }
 
@@ -430,6 +434,7 @@ pub(crate) async fn revoke_invitation_in(
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
         project_role_permissions: row.project_role_permissions,
+        project_group_permissions: row.project_group_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
@@ -530,6 +535,7 @@ pub(crate) async fn replace_invitation_in(
         organization_membership_enabled: row.organization_membership_enabled,
         project_role: row.project_role,
         project_role_permissions: row.project_role_permissions,
+        project_group_permissions: row.project_group_permissions,
         project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
@@ -615,6 +621,8 @@ async fn lock_invitation_for_mutation(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
@@ -1133,6 +1141,8 @@ async fn invitation_access(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1164,6 +1174,8 @@ async fn lock_invitation_access(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1199,7 +1211,10 @@ fn authorize_manage(
     let grant = RoleGrant::stored(
         &access.project_role,
         access.project_role_permissions.as_deref(),
-    )?;
+    )?
+    .with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
     let manager = crate::access::tier::stored_high(&access.organization_role)
         && crate::access::membership_allows(
             actor_id,
@@ -1339,6 +1354,8 @@ async fn require_issuer_still_grants(
                organization_membership.enabled AS organization_membership_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1416,6 +1433,7 @@ mod tests {
             organization_membership_enabled: true,
             project_role: "owner".to_owned(),
             project_role_permissions: None,
+            project_group_permissions: None,
             project_membership_enabled: true,
         };
         let actor_id = Uuid::now_v7();

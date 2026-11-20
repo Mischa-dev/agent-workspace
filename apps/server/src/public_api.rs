@@ -730,6 +730,13 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
+        // The note on clientRequestId that ends a write's tool description:
+        // the introduction says it once for every operation (said per
+        // operation, it passed the size budget).
+        let description = tool.description.as_deref().unwrap_or_default();
+        let description = description
+            .strip_suffix(crate::ops::mcp::RETRY_NOTE)
+            .unwrap_or(description);
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
         drop_optional_nulls(&mut input);
@@ -780,7 +787,7 @@ pub(crate) fn document() -> Value {
         let mut post = json!({
             "operationId": name,
             "summary": title,
-            "description": tool.description.as_deref().unwrap_or_default(),
+            "description": description,
             "tags": [tag],
             "requestBody": {
                 "required": true,

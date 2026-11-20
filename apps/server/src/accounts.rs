@@ -11,6 +11,7 @@
 //! (`claims`); K1.6 the one way to create an agent (`create_agent`).
 
 mod agents;
+mod apps;
 pub mod claims;
 pub mod credential_ops;
 pub mod join;
@@ -19,6 +20,7 @@ mod people;
 pub mod refs;
 
 pub use agents::{NewAgent, create_agent};
+pub use apps::{create_app, ensure_worker};
 pub use people::{NewPerson, Person, create_person};
 
 use serde::{Deserialize, Serialize};

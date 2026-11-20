@@ -3,13 +3,21 @@ import { isThemePreset, sanitizeOverrides, type ThemePreset } from './slots'
 export const APPEARANCE_STORAGE_KEY = 'agent-workspace:appearance:v2'
 const LEGACY_STORAGE_KEY = 'agent-workspace:appearance:v1'
 
-/** A preset, or "system": Daylight in light mode and Midnight in dark mode. */
+/** A preset, or "system": Quiet, light or dark as the device is. */
 export type ThemeChoice = ThemePreset | 'system'
+/** Which half of a custom theme shows: the device's, or always light or dark. */
+export type ModePreference = 'system' | 'light' | 'dark'
+/** A custom theme someone picked; the document itself is cached (customTheme.ts) and read with theme_get. */
+export type CustomThemeChoice = { id: string; workspaceId: string }
 export type DensityPreference = 'comfortable' | 'compact'
 export type TextSizePreference = 'small' | 'default' | 'large'
 
 export type AppearancePreferences = {
   theme: ThemeChoice
+  /** A custom theme, shown instead of `theme` while it's set. */
+  customTheme: CustomThemeChoice | null
+  mode: ModePreference
+  /** Colours changed on a built-in theme before custom themes; the app turns them into a custom theme once. */
   overrides: Record<string, string>
   density: DensityPreference
   textSize: TextSizePreference
@@ -18,9 +26,11 @@ export type AppearancePreferences = {
   panelWidth: number | null
 }
 
-/** Until someone picks a theme, it follows the device: Daylight in light mode, Midnight in dark. */
+/** Until someone picks a theme, it's Quiet, following the device between light and dark. */
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
   theme: 'system',
+  customTheme: null,
+  mode: 'system',
   overrides: {},
   density: 'comfortable',
   textSize: 'default',
@@ -43,10 +53,21 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
+const ID = /^[0-9a-f-]{36}$/i
+
+function customTheme(value: unknown): CustomThemeChoice | null {
+  const found = record(value)
+  return typeof found.id === 'string' && ID.test(found.id) && typeof found.workspaceId === 'string' && ID.test(found.workspaceId)
+    ? { id: found.id, workspaceId: found.workspaceId }
+    : null
+}
+
 export function normalizeAppearancePreferences(value: unknown): AppearancePreferences {
   const candidate = record(value)
   return {
     theme: candidate.theme === 'system' || isThemePreset(candidate.theme) ? candidate.theme : DEFAULT_APPEARANCE.theme,
+    customTheme: customTheme(candidate.customTheme),
+    mode: candidate.mode === 'light' || candidate.mode === 'dark' ? candidate.mode : 'system',
     overrides: sanitizeOverrides(candidate.overrides),
     density: candidate.density === 'compact' ? 'compact' : 'comfortable',
     textSize: candidate.textSize === 'small' || candidate.textSize === 'large' ? candidate.textSize : 'default',
@@ -85,5 +106,11 @@ export function writeAppearancePreferences(
 
 export function resolvePreset(theme: ThemeChoice, prefersDark: boolean): ThemePreset {
   if (theme !== 'system') return theme
-  return prefersDark ? 'midnight' : 'daylight'
+  return prefersDark ? 'quiet-dark' : 'quiet'
+}
+
+/** The half of a custom theme that shows. */
+export function resolveMode(mode: ModePreference, prefersDark: boolean): 'light' | 'dark' {
+  if (mode !== 'system') return mode
+  return prefersDark ? 'dark' : 'light'
 }

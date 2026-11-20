@@ -36,6 +36,8 @@ struct AccessRow {
     organization_enabled: bool,
     project_role: String,
     project_role_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given in the project (K1.27).
+    project_group_permissions: Option<Vec<String>>,
     project_enabled: bool,
 }
 
@@ -652,7 +654,10 @@ fn authorize_access(
     let grant = RoleGrant::stored(
         &access.project_role,
         access.project_role_permissions.as_deref(),
-    )?;
+    )?
+    .with_groups(crate::access::group_permissions(
+        access.project_group_permissions.as_deref(),
+    ));
     if crate::access::membership_allows(
         actor_id,
         project_id,
@@ -772,6 +777,8 @@ fn access_sql(lock: bool) -> &'static str {
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -792,6 +799,8 @@ fn access_sql(lock: bool) -> &'static str {
                organization_membership.enabled AS organization_enabled,
                project_membership.role AS project_role,
                workspace_role_permissions(project_membership.role_id) AS project_role_permissions,
+               space_group_permissions(project_membership.actor_id, project.id)
+                 AS project_group_permissions,
                project_membership.enabled AS project_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -835,7 +844,7 @@ fn member_list_sql() -> &'static str {
         "WHEN EXISTS (SELECT 1 FROM execution_profiles profile WHERE profile.project_id = membership.project_id AND profile.owner_actor_id = membership.actor_id) THEN 'disabled' ",
         "ELSE 'not_configured' END AS profile_readiness ",
         "FROM project_memberships membership JOIN projects project ON project.id = membership.project_id ",
-        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') ", // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
+        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent', 'integration') ", // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
         "LEFT JOIN users user_account ON user_account.actor_id = actor.id ",
         "JOIN organization_memberships organization_membership ON organization_membership.organization_id = project.organization_id AND organization_membership.actor_id = actor.id ",
         "LEFT JOIN project_memberships inviter ON inviter.project_id = membership.project_id AND inviter.actor_id = membership.invited_by_actor_id ",
@@ -869,7 +878,7 @@ fn member_query_sql() -> &'static str {
            END AS profile_readiness
     FROM project_memberships membership
     JOIN projects project ON project.id = membership.project_id
-    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
+    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
     LEFT JOIN users user_account ON user_account.actor_id = actor.id
     JOIN organization_memberships organization_membership
       ON organization_membership.organization_id = project.organization_id
@@ -1071,8 +1080,8 @@ async fn member_candidates(
         JOIN organization_memberships om ON om.organization_id = profile.organization_id
           AND om.actor_id = profile.actor_id AND om.enabled
         LEFT JOIN users u ON u.actor_id = actor.id
-        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in)
-          AND (actor.kind = 'external_agent' OR u.status = 'active') -- // kind-check: mechanical (a person signs in with an active user account)
+        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps)
+          AND (actor.kind <> 'human' OR u.status = 'active') -- // kind-check: mechanical (a person signs in with an active user account)
           AND NOT EXISTS (SELECT 1 FROM project_memberships pm WHERE pm.project_id = $1 AND pm.actor_id = actor.id)
         ORDER BY profile.display_name, actor.id LIMIT 200
     "#).bind(project_id).fetch_all(&state.pool).await?))
@@ -1165,8 +1174,8 @@ pub(crate) async fn add_member(
         FROM projects p
         JOIN organization_actor_profiles profile ON profile.organization_id = p.organization_id AND profile.actor_id = $2
         JOIN organization_memberships om ON om.organization_id = p.organization_id AND om.actor_id = $2 AND om.enabled
-        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in)
-        WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active')) -- // kind-check: mechanical (a person signs in with an active user account)
+        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps)
+        WHERE p.id = $1 AND (a.kind <> 'human' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active')) -- // kind-check: mechanical (a person signs in with an active user account)
         FOR SHARE OF om, a
     "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;

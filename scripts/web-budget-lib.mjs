@@ -15,12 +15,14 @@ import { join, relative } from 'node:path'
 //
 // Measured November 2026 (W1.15: the data router in the shell; feature
 // stylesheets moved from the first paint into the routes that use them).
+// The first-paint limits measured again on 2026-11-17 for custom themes,
+// which the shell applies (Quiet in tokens.css, a theme's tokens and CSS).
 export const WEB_ASSET_LIMITS = Object.freeze({
-  // index.html's scripts and module preloads: 486,736 raw / 154,185 gzip.
-  initialJavascriptRawBytes: 535_410,
-  initialJavascriptGzipBytes: 169_604,
-  // index.html's stylesheets (tokens, base, components, shell, kit): 61,731.
-  initialCssRawBytes: 67_905,
+  // index.html's scripts and module preloads: 534,081 raw / 170,028 gzip.
+  initialJavascriptRawBytes: 587_489,
+  initialJavascriptGzipBytes: 187_030,
+  // index.html's stylesheets (tokens, base, components, shell, kit): 66,701.
+  initialCssRawBytes: 73_371,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest measured 56,135 raw (collections) and 16,415 gzip (task panel).
   chunkJavascriptRawBytes: 61_749,

@@ -94,7 +94,7 @@ fn granted(row: &RoleRow) -> Result<PermissionSet, OpError> {
 }
 
 /// The workspaces a caller reaches: where they're an active member, or the
-/// one their space-scoped credential is in.
+/// one their space-scoped credential is in, within its credential's limit.
 pub async fn reach(connection: &mut PgConnection, caller: &Caller) -> Result<Vec<Uuid>, OpError> {
     let workspaces = match caller.confined_space {
         Some(space) => {
@@ -117,7 +117,14 @@ pub async fn reach(connection: &mut PgConnection, caller: &Caller) -> Result<Vec
             .await
         }
     };
-    workspaces.map_err(|error| OpError::logged("access", &error.into()))
+    let mut workspaces = workspaces.map_err(|error| OpError::logged("access", &error.into()))?;
+    // A credential's limit (a token's workspace, an app's delegation) keeps
+    // the workspaces it doesn't name out: a token for one workspace reaches
+    // that one, whatever else its account belongs to.
+    if let Some(limits) = &caller.limits {
+        workspaces.retain(|workspace| limits.organizations.contains_key(workspace));
+    }
+    Ok(workspaces)
 }
 
 /// Check that `caller` may run an operation needing `permission` (or, with

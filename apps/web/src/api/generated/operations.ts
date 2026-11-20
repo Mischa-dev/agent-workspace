@@ -562,6 +562,12 @@ export type TemplateSubtask = { description?: string | null; title: string }
 
 export type TemplateView = { archived?: boolean; collectionId: string; fields: Record<string, unknown>; id: string; name: string; title: string; version: number }
 
+export type ThemeDocument = { css?: string; dark: ThemeMode; format: number; light: ThemeMode }
+
+export type ThemeMode = { base: string; tokens?: Record<string, string> }
+
+export type ThemeSummary = { darkBase: string; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThingInput = { id: string; kind: SubjectKind }
 
 export type ThingKind = "page"
@@ -1808,6 +1814,26 @@ export type TemplateUpdateInput = { acceptanceCriteria?: string[] | null; archiv
 
 export type TemplateUpdateOutput = { created: boolean; template: unknown }
 
+export type ThemeCreateInput = { document: ThemeDocument; name: string }
+
+export type ThemeCreateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeDeleteInput = { id: string }
+
+export type ThemeDeleteOutput = { deleted: boolean; id: string }
+
+export type ThemeGetInput = { id: string }
+
+export type ThemeGetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeListInput = Record<string, never>
+
+export type ThemeListOutput = { builtIn: string[]; canOffer: boolean; format: number; themes: ThemeSummary[] }
+
+export type ThemeUpdateInput = { document?: ThemeDocument | null; expectedVersion: number; id: string; name?: string | null }
+
+export type ThemeUpdateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingLinkOutput = { changed: boolean }
@@ -1943,6 +1969,10 @@ export type WorkspaceStoreRevokeOutput = { moving: boolean; store?: WorkspaceSto
 export type WorkspaceStoreSetInput = { accessKeyId: string; bucket: string; endpoint: string; moveExisting?: boolean; pathStyle?: boolean; prefix?: string; region: string; secretAccessKey: string }
 
 export type WorkspaceStoreSetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
+
+export type WorkspaceThemeSetInput = { offered: boolean; themeId: string }
+
+export type WorkspaceThemeSetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
 
 export type WorkspaceTransferGetInput = { transferId: string }
 
@@ -2256,6 +2286,11 @@ export type Operations = {
   template_create: { input: TemplateCreateInput; output: TemplateCreateOutput }
   template_list: { input: TemplateListInput; output: TemplateListOutput }
   template_update: { input: TemplateUpdateInput; output: TemplateUpdateOutput }
+  theme_create: { input: ThemeCreateInput; output: ThemeCreateOutput }
+  theme_delete: { input: ThemeDeleteInput; output: ThemeDeleteOutput }
+  theme_get: { input: ThemeGetInput; output: ThemeGetOutput }
+  theme_list: { input: ThemeListInput; output: ThemeListOutput }
+  theme_update: { input: ThemeUpdateInput; output: ThemeUpdateOutput }
   thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
   thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
   thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
@@ -2290,6 +2325,7 @@ export type Operations = {
   workspace_store_get: { input: WorkspaceStoreGetInput; output: WorkspaceStoreGetOutput }
   workspace_store_revoke: { input: WorkspaceStoreRevokeInput; output: WorkspaceStoreRevokeOutput }
   workspace_store_set: { input: WorkspaceStoreSetInput; output: WorkspaceStoreSetOutput }
+  workspace_theme_set: { input: WorkspaceThemeSetInput; output: WorkspaceThemeSetOutput }
   workspace_transfer_get: { input: WorkspaceTransferGetInput; output: WorkspaceTransferGetOutput }
   workspace_transfer_list: { input: WorkspaceTransferListInput; output: WorkspaceTransferListOutput }
   workspace_usage_get: { input: WorkspaceUsageGetInput; output: WorkspaceUsageGetOutput }

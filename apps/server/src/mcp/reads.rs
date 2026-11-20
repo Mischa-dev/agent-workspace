@@ -359,9 +359,10 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
     if !principal.can_read() {
         return false;
     }
-    let role = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+    let role = sqlx::query_as::<_, (String, Option<Vec<String>>, Option<Vec<String>>)>(
         r#"
-        SELECT pm.role, workspace_role_permissions(pm.role_id)
+        SELECT pm.role, workspace_role_permissions(pm.role_id),
+               space_group_permissions(pm.actor_id, pm.project_id)
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
         JOIN organization_memberships om
@@ -382,9 +383,13 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
     .await
     .ok()
     .flatten();
-    let Some(grant) = role.and_then(|(role, permissions)| {
+    let Some(grant) = role.and_then(|(role, permissions, groups)| {
         parse_membership_role(&role)?;
-        RoleGrant::stored(&role, permissions.as_deref()).ok()
+        Some(
+            RoleGrant::stored(&role, permissions.as_deref())
+                .ok()?
+                .with_groups(crate::access::group_permissions(groups.as_deref())),
+        )
     }) else {
         return false;
     };

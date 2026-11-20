@@ -75,7 +75,7 @@ export function WhiteboardPage() {
 function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: string }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { preset } = useTheme()
+  const { shownPreset: preset } = useTheme()
   const detail = useQuery({ queryKey: whiteboardKeys.detail(whiteboardId), queryFn: () => getWhiteboard(whiteboardId) })
   // The scene loads once; after that the canvas keeps itself current.
   const scene = useQuery({

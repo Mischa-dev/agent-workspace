@@ -110,17 +110,22 @@ async fn space_keys_to_ids(
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         // K4.9: "me" is the caller's personal space in the named workspace,
         // made on first use; a credential held to one space never reaches it.
+        // Only a caller who could then use it makes it: not a preview, a
+        // read-only credential, or a credential held to other spaces (whose
+        // limits name no new space), so nothing is written for a call the
+        // checks after this would refuse.
         if input.pointer(field).and_then(Value::as_str) == Some("me") {
             if let (Some(workspace), None) = (request.workspace, request.caller.confined_space) {
+                let caller = &request.caller;
+                let make = !request.preview && caller.can_write && caller.limits.is_none();
                 let mut tx = crate::db::scoped_tx(&state.pool)
                     .await
                     .map_err(|error| OpError::logged("personal space", &error.into()))?;
-                let space = crate::spaces::personal::personal(
-                    &mut tx,
-                    workspace,
-                    request.caller.account_id,
-                )
-                .await
+                let space = if make {
+                    crate::spaces::personal::personal(&mut tx, workspace, caller.account_id).await
+                } else {
+                    crate::spaces::personal::existing(&mut tx, workspace, caller.account_id).await
+                }
                 .map_err(|error| OpError::logged("personal space", &error))?;
                 tx.commit()
                     .await

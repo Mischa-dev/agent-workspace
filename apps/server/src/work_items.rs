@@ -311,6 +311,7 @@ struct ProjectMembershipRow {
     project_archived_at: Option<String>,
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     membership_enabled: bool,
 }
 
@@ -319,6 +320,9 @@ impl ProjectMembershipRow {
     pub(super) fn may(&self, permission: Permission) -> Result<bool, AppError> {
         Ok(self.membership_enabled
             && RoleGrant::stored(&self.role, self.role_permissions.as_deref())?
+                .with_groups(crate::access::group_permissions(
+                    self.group_permissions.as_deref(),
+                ))
                 .permissions()
                 .contains(permission))
     }
@@ -3383,6 +3387,7 @@ async fn project_membership(
                project.archived_at::text AS project_archived_at,
                membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions(membership.actor_id, project.id) AS group_permissions,
                membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
@@ -3411,6 +3416,7 @@ async fn lock_project_membership(
             project_archived_at: membership.project_archived_at,
             role: membership.role,
             role_permissions: membership.role_permissions,
+            group_permissions: membership.group_permissions,
             membership_enabled: membership.enabled,
         }))
 }
@@ -3435,6 +3441,7 @@ fn authorize_work_item(
         project_archived_at: membership.project_archived_at.clone(),
         role: membership.role.clone(),
         role_permissions: membership.role_permissions.clone(),
+        group_permissions: membership.group_permissions.clone(),
         enabled: membership.membership_enabled,
     };
     match authorize_mutation(&command_actor, &command_membership, action, work_item_id)? {
