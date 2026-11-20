@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
@@ -9,6 +9,9 @@ import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState } from '../ui'
 import { CURRENT_WORKSPACE, isWorkspacePath, setCurrentWorkspaceSlug, spaceIdOf, withinWorkspace, workspaceHref, workspaceSlugOf } from './href'
 import { rememberWorkspace, resolveWorkspace, useWorkspace, WorkspaceContext } from './workspace'
+
+// Loads after the page: it keeps recent reading on this device when the person and workspace allow it (W1.31).
+const OfflineReading = lazy(() => import('../data/OfflineReading'))
 
 /** The workspace of the space with this id (`''`: none), from the rail's list or the space's own read. */
 function useSpaceWorkspace(spaceId: string | null): string | undefined {
@@ -50,6 +53,9 @@ export function WorkspaceProvider() {
         <Outlet />
         {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
         <CommandCenter />
+        <Suspense fallback={null}>
+          <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} workspaces={session.organizations} />
+        </Suspense>
       </AvatarSourcesProvider>
     </WorkspaceContext.Provider>
   )
@@ -57,7 +63,8 @@ export function WorkspaceProvider() {
 
 /**
  * `/w/:ws`: a workspace the person is in shows its pages; `/w/-/...` opens
- * the last one used; any other slug says the person isn't in it.
+ * the last one used; `/w/<its id>/...` opens the same page at its slug; any
+ * other slug says the person isn't in it.
  */
 export function WorkspaceBoundary() {
   const { ws = '' } = useParams()
@@ -70,6 +77,11 @@ export function WorkspaceBoundary() {
     return <Navigate replace state={location.state} to={`${workspaceHref(workspace.slug, rest || '/home')}${location.search}${location.hash}`} />
   }
   if (!session.organizations.some((organization) => organization.slug === ws)) {
+    // The server writes a workspace's id where it doesn't know the slug: the same page at the slug.
+    const byId = session.organizations.find((organization) => organization.id === ws)
+    if (byId) {
+      return <Navigate replace state={location.state} to={`${workspaceHref(byId.slug, withinWorkspace(location.pathname) || '/home')}${location.search}${location.hash}`} />
+    }
     return <NotInWorkspacePage workspaces={session.organizations} />
   }
   return <SpaceInWorkspace ws={ws} />

@@ -139,6 +139,7 @@ mod notifications;
 mod oauth_agent;
 mod offline;
 mod oidc_sign_in;
+mod ops_automation_preview;
 mod ops_decisions;
 mod ops_edges;
 mod ops_kernel;

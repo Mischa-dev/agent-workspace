@@ -387,6 +387,15 @@ pub async fn describe(
     .await?
     .into_iter()
     .collect();
+    // Rollups name fields by name: the related collection's too.
+    let field_names: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM field_definitions WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .collect();
     Ok(CollectionDefinition {
         name: collection.name.clone(),
         description: collection.description.clone(),
@@ -434,6 +443,52 @@ pub async fn describe(
                     .button
                     .as_ref()
                     .map(|button| fields::button::shown(button, definitions)),
+                rollup: field.config.rollup.as_ref().and_then(|rollup| {
+                    Some(fields::rollup::RollupInput {
+                        relation: field_names.get(&rollup.relation)?.clone(),
+                        field: match rollup.target {
+                            Some(target) => Some(field_names.get(&target)?.clone()),
+                            None => None,
+                        },
+                        aggregate: rollup.aggregate.as_str().to_owned(),
+                    })
+                }),
+                rules: field
+                    .config
+                    .rules
+                    .as_ref()
+                    .filter(|rules| !rules.is_empty())
+                    .map(|rules| {
+                        let mut written = fields::rules::RulesInput::from(rules);
+                        // A choice's default by its option's name, which
+                        // reads the same where the options are made again.
+                        // Only active options are written out, so a default
+                        // naming an archived one is left out, as making a
+                        // record leaves out a default that no longer fits.
+                        written.default =
+                            written.default.and_then(|default| match field.field_type {
+                                FieldType::SingleChoice
+                                | FieldType::MultipleChoice
+                                | FieldType::Status => {
+                                    let active = |id: &Value| {
+                                        id.as_str()
+                                            .and_then(|id| id.parse::<Uuid>().ok())
+                                            .is_some_and(|id| {
+                                                field.config.options.iter().any(|option| {
+                                                    option.id == id && !option.archived
+                                                })
+                                            })
+                                    };
+                                    let fits = match &default {
+                                        Value::Array(ids) => ids.iter().all(active),
+                                        id => active(id),
+                                    };
+                                    fits.then(|| fields::display_value(field, &default, &|_| None))
+                                }
+                                _ => Some(default),
+                            });
+                        written
+                    }),
                 ..FieldWrite::default()
             })
             .collect(),

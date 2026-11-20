@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { GalleryPiece } from './GalleryPiece'
+import { renderPiece } from './testing'
 
 type Item = { id: string; title: string; owner: string }
 
@@ -17,7 +18,7 @@ describe('GalleryPiece', () => {
     window.innerWidth = width
     const onOpen = vi.fn()
     const onLoadMore = vi.fn()
-    render(
+    renderPiece(
       <GalleryPiece
         badge={(item) => `#${item.id}`}
         details={(item) => <span>{item.owner}</span>}
@@ -41,7 +42,7 @@ describe('GalleryPiece', () => {
   })
 
   it('shows what it’s given when there are no items', () => {
-    render(<GalleryPiece empty={<p>Nothing yet</p>} href={() => '/'} items={[]} label="Ideas" title={() => ''} />)
+    renderPiece(<GalleryPiece empty={<p>Nothing yet</p>} href={() => '/'} items={[]} label="Ideas" title={() => ''} />)
     expect(screen.getByText('Nothing yet')).toBeVisible()
     expect(screen.queryByRole('list')).toBeNull()
   })

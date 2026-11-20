@@ -1,9 +1,10 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
-import { useUpdateWorkItem } from './hooks'
+import { discardOutbound, useOutbound } from '../data/outbound'
+import { useQueueWorkItemUpdate, useUpdateWorkItem } from './hooks'
 import { inOrder, remember } from '../views/saveQueue'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
 import { undoableTaskChange } from './taskUndo'
@@ -47,6 +48,25 @@ export const FIELD_NAMES: Record<BuiltInField, string> = {
 }
 
 type Patch = Omit<WorkItemPatch, 'expectedVersion'>
+
+/**
+ * Fields whose change can wait on this device while the connection is down
+ * (W1.30): plain values the page can show at once. The rest need the server
+ * to say what they became, so offline they stop as a failed save.
+ */
+const WAITS_OFFLINE: ReadonlySet<TaskField> = new Set<TaskField>(['title', 'description', 'priority', 'startDate', 'dueDate', 'estimate'])
+
+/** The task with a change that's waiting on this device shown in it. */
+function showing(task: WorkItem, patch: Patch): WorkItem {
+  const next = { ...task }
+  if (patch.title !== undefined) next.title = patch.title
+  if (patch.description !== undefined) next.description = patch.description
+  if (patch.priority !== undefined) next.priority = patch.priority
+  if (patch.startDate !== undefined) next.startDate = patch.startDate
+  if (patch.dueDate !== undefined) next.dueDate = patch.dueDate
+  if (patch.estimate !== undefined) next.estimate = patch.estimate
+  return next
+}
 
 function customId(field: TaskField) {
   return field.startsWith('field:') ? field.slice('field:'.length) : null
@@ -155,10 +175,12 @@ type Entry = {
   mine: string | null
   /** What the person saw before the change. If the task holds something else when it's sent, someone else changed it. */
   base: string
-  /** Waiting for the saves ahead of it, being sent, or stopped for the person to decide. */
-  state: 'waiting' | 'saving' | 'conflict' | 'failed'
+  /** Waiting for the saves ahead of it, being sent, kept on this device until the connection is back, or stopped for the person to decide. */
+  state: 'waiting' | 'saving' | 'queued' | 'conflict' | 'failed'
   theirs: WorkItem | null
   message: string | null
+  /** The request id it waits under, while queued. */
+  outbound?: string
 }
 
 /** A field's save as the page shows it. `text` is the typed title or description, kept until it's saved or let go. */
@@ -184,6 +206,7 @@ const MAX_ATTEMPTS = 4
  */
 export function useTaskSave(item: WorkItem) {
   const update = useUpdateWorkItem()
+  const queueable = useQueueWorkItemUpdate()
   const queryClient = useQueryClient()
   const [problem, setProblem] = useState<SaveProblem | null>(null)
   // The saves live in a ref, so the queue always reads the latest; the page renders from the copy in state.
@@ -240,12 +263,23 @@ export function useTaskSave(item: WorkItem) {
       }
       change(id, { state: 'saving' })
       try {
-        const saved = await update.mutateAsync({
+        const input = {
           projectId: task.projectId,
           workItemId: task.id,
           idempotencyKey: crypto.randomUUID(),
           patch: { expectedVersion: task.version, ...entry.patch },
-        })
+        }
+        const saved = WAITS_OFFLINE.has(entry.field)
+          ? await queueable.mutateAsync({ ...input, label: `The ${fieldName(entry.field)} of ${task.key}` })
+          : await update.mutateAsync(input)
+        if (saved === null) {
+          // Offline: it's kept on this device and goes when the connection is back. Meanwhile the page shows it.
+          const key = queryKeys.workItem(projectId, taskId)
+          const cached = queryClient.getQueryData<WorkItem>(key)
+          if (cached) queryClient.setQueryData(key, showing(cached, entry.patch))
+          change(id, { state: 'queued', outbound: input.idempotencyKey })
+          return
+        }
         // A change queued behind this one started from what this one sent,
         // but the server may have stored it written its own way (a URL gains
         // https://). That's still the person's own change, not someone
@@ -272,6 +306,26 @@ export function useTaskSave(item: WorkItem) {
     change(id, { state: 'failed', message: 'The task kept changing while this saved. Try again.' })
   }
 
+  // A queued change is done once it's gone from the device; one the server refused comes back as a failed save.
+  const waiting = useOutbound(`task:${taskId}`)
+  useEffect(() => {
+    let changed = false
+    for (const entry of [...entries.current.values()]) {
+      if (entry.state !== 'queued' || !entry.outbound) continue
+      const kept = waiting.find((candidate) => candidate.id === entry.outbound)
+      if (kept && !kept.refused) continue
+      changed = true
+      if (!kept) {
+        entries.current.delete(entry.field)
+        continue
+      }
+      entries.current.set(entry.field, { ...entry, state: 'failed', message: kept.refused ?? null, outbound: undefined })
+      void discardOutbound(kept.id)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workItem(projectId, taskId) })
+    }
+    if (changed) setShown(new Map(entries.current))
+  }, [projectId, queryClient, shown, taskId, waiting])
+
   // One task's saves go one at a time, with the list's and board's (T1.27).
   const enqueue = (id: number) => {
     void inOrder(`task:${taskId}`, () => attempt(id).catch(() => change(id, { state: 'failed', message: 'That didn’t save. Try again.' })))
@@ -281,7 +335,7 @@ export function useTaskSave(item: WorkItem) {
   const baseFor = useCallback(
     (field: TaskField) => {
       const entry = entries.current.get(field)
-      if (entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving')) return entry.mine
+      if (entry && entry.mine !== null && (entry.state === 'waiting' || entry.state === 'saving' || entry.state === 'queued')) return entry.mine
       return fieldValue(current(), field)
     },
     [current],
@@ -337,7 +391,7 @@ export function useTaskSave(item: WorkItem) {
     const entry = shown.get(field)
     if (!entry) return null
     const text = field === 'title' ? (entry.patch.title ?? null) : field === 'description' ? (entry.patch.description ?? null) : null
-    return { state: entry.state === 'waiting' ? 'saving' : entry.state, text, theirs: entry.theirs, message: entry.message }
+    return { state: entry.state === 'waiting' || entry.state === 'queued' ? 'saving' : entry.state, text, theirs: entry.theirs, message: entry.message }
   }
 
   const values = [...shown.values()]
@@ -346,6 +400,8 @@ export function useTaskSave(item: WorkItem) {
     .filter((entry) => (entry.state === 'conflict' || entry.state === 'failed') && entry.field !== 'title' && entry.field !== 'description')
     .map((entry) => ({ field: entry.field, state: entry.state as 'conflict' | 'failed', theirs: entry.theirs, message: entry.message }))
   const saving = values.some((entry) => entry.state === 'waiting' || entry.state === 'saving')
+  /** Changes kept on this device until the connection is back. */
+  const queued = values.some((entry) => entry.state === 'queued')
 
   /** For other task writes (dependencies, relations): a conflict loads the newer task and says so. */
   const fail = useCallback(
@@ -366,6 +422,7 @@ export function useTaskSave(item: WorkItem) {
     discard,
     stopped,
     saving,
+    queued,
     problem,
     fail,
     clearProblem: () => setProblem(null),

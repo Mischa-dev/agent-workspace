@@ -25,8 +25,8 @@ describe('buildOpenInCodexLink', () => {
     const url = new URL(result.href!)
     expect(url.protocol).toBe('codex:')
     expect(url.searchParams.get('originUrl')).toBe('https://github.com/owner/repo.git')
-    expect(url.searchParams.get('prompt')).toContain('Project URL: https://workspace.example/projects/project%20id')
-    expect(url.searchParams.get('prompt')).toContain('Task URL: https://workspace.example/projects/project%20id/work-items/item%2Fid')
+    expect(url.searchParams.get('prompt')).toContain('Project URL: https://workspace.example/w/-/s/project%20id')
+    expect(url.searchParams.get('prompt')).toContain('Task URL: https://workspace.example/w/-/s/project%20id/tasks/item%2Fid')
   })
 
   it.each([

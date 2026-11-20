@@ -1,0 +1,6 @@
+{"type":"ready","protocol":2,"position":"40","resumed":false,"replayed":0}
+{"type":"event","position":"41","event":{"event_id":"00000000-0000-7000-8000-000000002004","event_cursor":41,"version":1,"project_id":"00000000-0000-7000-8000-000000000001","conversationId":"00000000-0000-7000-8000-000000000002","type":"conversation.message.created","occurred_at":"2026-11-19T08:00:04Z","payload":{"authorActorId":"00000000-0000-7000-8000-000000001001","conversationId":"00000000-0000-7000-8000-000000000002","messageId":"00000000-0000-7000-8000-000000003004","sequence":9}}}
+{"type":"resync","reason":"too_far_behind","position":"41"}
+{"$":"close"}
+{"$":"open"}
+{"type":"ready","protocol":2,"position":"9000","resumed":false,"replayed":0}

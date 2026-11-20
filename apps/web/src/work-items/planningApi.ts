@@ -1,14 +1,11 @@
 import { requestJson } from '../api/client'
-import { normalizeCard, normalizeWorkItem, normalizeWorkflow } from './api'
+import { callOp } from '../api/ops'
+import { getWorkItem, normalizeCard, normalizeWorkflow } from './api'
 import type { BulkChanges, Milestone, ProjectLabel, TaskRelationKind, WorkflowUpdate } from './types'
-import { actorRefs, boolean, list, milestone, projectLabel, record } from './wire'
+import { boolean, list, milestone, projectLabel, record } from './wire'
 
 function projectPath(projectId: string, path: string) {
   return `/api/v1/projects/${encodeURIComponent(projectId)}/${path}`
-}
-
-function taskPath(projectId: string, workItemId: string, command: string) {
-  return projectPath(projectId, `work-items/${encodeURIComponent(workItemId)}/${command}`)
 }
 
 export async function bulkUpdateWorkItems(input: {
@@ -40,10 +37,9 @@ export async function createLabel(input: {
   description?: string
   idempotencyKey: string
 }) {
-  const { projectId, idempotencyKey, ...json } = input
-  return projectLabel(
-    await requestJson<unknown>(projectPath(projectId, 'labels'), { method: 'POST', idempotencyKey, json }),
-  )
+  const { projectId, idempotencyKey, ...fields } = input
+  const { label } = await callOp('label_create', { projectId, ...fields }, { requestId: idempotencyKey })
+  return projectLabel(label)
 }
 
 export async function updateLabel(input: {
@@ -56,14 +52,9 @@ export async function updateLabel(input: {
   archived?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, labelId, idempotencyKey, ...json } = input
-  return projectLabel(
-    await requestJson<unknown>(projectPath(projectId, `labels/${encodeURIComponent(labelId)}`), {
-      method: 'PATCH',
-      idempotencyKey,
-      json,
-    }),
-  )
+  const { projectId, labelId, idempotencyKey, expectedVersion, ...fields } = input
+  const { label } = await callOp('label_update', { projectId, label: labelId, ...fields }, { requestId: idempotencyKey, expectedVersion })
+  return projectLabel(label)
 }
 
 export async function listMilestones(projectId: string, includeArchived = false): Promise<{ milestones: Milestone[]; canEdit: boolean }> {
@@ -72,6 +63,9 @@ export async function listMilestones(projectId: string, includeArchived = false)
   return { milestones: list(payload.milestones).map(milestone), canEdit: boolean(payload.canEdit) }
 }
 
+/** A milestone's target date as the milestone ops take it: "" clears it. */
+const targetDate = (value: string | null | undefined) => (value === null ? '' : value)
+
 export async function createMilestone(input: {
   projectId: string
   name: string
@@ -79,9 +73,13 @@ export async function createMilestone(input: {
   targetDate?: string | null
   idempotencyKey: string
 }) {
-  const { projectId, idempotencyKey, ...json } = input
+  const { projectId, idempotencyKey, ...fields } = input
   return milestone(
-    await requestJson<unknown>(projectPath(projectId, 'milestones'), { method: 'POST', idempotencyKey, json }),
+    await callOp(
+      'milestone_create',
+      { projectId, ...fields, targetDate: targetDate(fields.targetDate) },
+      { requestId: idempotencyKey },
+    ),
   )
 }
 
@@ -97,13 +95,15 @@ export async function updateMilestone(input: {
   initiativeId?: string | null
   idempotencyKey: string
 }) {
-  const { projectId, milestoneId, idempotencyKey, ...json } = input
+  const { projectId, milestoneId, idempotencyKey, expectedVersion, initiativeId, ...fields } = input
+  // The operation takes the initiative as `initiative`, with "" to take it out of one.
+  const initiative = initiativeId === undefined ? {} : { initiative: initiativeId ?? '' }
   return milestone(
-    await requestJson<unknown>(projectPath(projectId, `milestones/${encodeURIComponent(milestoneId)}`), {
-      method: 'PATCH',
-      idempotencyKey,
-      json,
-    }),
+    await callOp(
+      'milestone_update',
+      { projectId, milestoneId, ...fields, ...initiative, targetDate: targetDate(fields.targetDate) },
+      { requestId: idempotencyKey, expectedVersion },
+    ),
   )
 }
 
@@ -116,10 +116,9 @@ export async function setDependencies(input: {
   remove?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, workItemId, idempotencyKey, ...json } = input
-  return normalizeWorkItem(
-    await requestJson<unknown>(taskPath(projectId, workItemId, 'dependencies'), { method: 'POST', idempotencyKey, json }),
-  )
+  const { projectId, workItemId, idempotencyKey, expectedVersion, ...link } = input
+  await callOp('task_link', { taskId: workItemId, ...link }, { requestId: idempotencyKey, expectedVersion })
+  return getWorkItem(projectId, workItemId)
 }
 
 export async function setRelation(input: {
@@ -132,21 +131,15 @@ export async function setRelation(input: {
   close?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, workItemId, idempotencyKey, ...json } = input
-  return normalizeWorkItem(
-    await requestJson<unknown>(taskPath(projectId, workItemId, 'relations'), { method: 'POST', idempotencyKey, json }),
-  )
+  const { projectId, workItemId, idempotencyKey, expectedVersion, target, ...link } = input
+  await callOp('task_link', { taskId: workItemId, otherTaskId: target, ...link }, { requestId: idempotencyKey, expectedVersion })
+  return getWorkItem(projectId, workItemId)
 }
 
 export async function setWatching(input: { projectId: string; workItemId: string; watching: boolean; idempotencyKey: string }) {
-  const payload = record(
-    await requestJson<unknown>(taskPath(input.projectId, input.workItemId, 'watch'), {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: { watching: input.watching },
-    }),
-  )
-  return { watching: boolean(payload.watching), watchers: actorRefs(payload.watchers) }
+  await callOp('task_watch_set', { taskId: input.workItemId, watching: input.watching }, { requestId: input.idempotencyKey })
+  const task = await getWorkItem(input.projectId, input.workItemId)
+  return { watching: task.watching, watchers: task.watchers }
 }
 
 export async function saveWorkflow(input: { projectId: string; workflow: WorkflowUpdate; idempotencyKey: string }) {

@@ -12,22 +12,26 @@ afterEach(() => {
 })
 
 describe('RepositorySettings', () => {
-  it('requires explicit trust and registers only the normalized GitHub HTTPS identity', async () => {
+  it('requires explicit trust and registers the repository by its GitHub identity, without a clone address', async () => {
+    let registered = false
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (!init?.method || init.method === 'GET') {
-        return jsonResponse({ repositories: [], capabilities: { manage: true } })
+        return jsonResponse({ repositories: registered ? [repository({ preparationState: 'pending' })] : [], capabilities: { manage: true } })
       }
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      expect(String(_input)).toContain('repository_create')
       expect(body).toMatchObject({
+        projectId,
         githubRepositoryId: 123456,
         owner: 'Mischa-dev',
         name: 'agent-workspace',
-        cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
         defaultBranch: 'main',
         trustAcknowledged: true,
       })
+      expect(body).not.toHaveProperty('cloneUrl')
       expect(new Headers(init.headers).get('idempotency-key')).toBe('repository-key')
-      return jsonResponse(repository({ preparationState: 'pending' }))
+      registered = true
+      return jsonResponse({ outcome: 'ok', value: { done: 'added', repository: { id: repository().id } } })
     })
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('crypto', { randomUUID: () => 'repository-key' })

@@ -12,6 +12,7 @@ import type { ComposerSubmission } from './composerModel'
 import { ForwardedQuote } from './ForwardedQuote'
 import { ReplyQuote } from './ReplyQuote'
 import { useLongPress } from './useLongPress'
+import { useTyping } from '../realtime/realtimeContext'
 import { MessageContent } from './MessageContent'
 import { parseMessageContent } from './messageContentModel'
 import { thingsLinkedIn } from '../modules/references/thingLinks'
@@ -748,6 +749,54 @@ export function PendingMessages({
       ))}
     </>
   )
+}
+
+/** The name a timeline gives an account, from the last message it wrote there. */
+function nameIn(entries: readonly ConversationTimelineEntry[], actorId: string) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const author = entries[index].message?.author
+    if (author?.id === actorId) return author.displayName
+  }
+  return null
+}
+
+/**
+ * Who else is writing a message here now (W1.6), named from the timeline.
+ * The line is always there, empty when nobody is, so screen readers hear it
+ * change.
+ */
+export function TypingNow({
+  conversationId,
+  entries,
+  viewerId,
+}: {
+  conversationId: string
+  entries: readonly ConversationTimelineEntry[]
+  viewerId: string
+}) {
+  const typing = useTyping(conversationId)
+  const others = Object.keys(typing).filter((id) => id !== viewerId)
+  const names = others.map((id) => nameIn(entries, id)).filter((name): name is string => name !== null)
+  return (
+    <div aria-live="polite" className="aw-typing" data-part="conversation-typing">
+      {others.length ? (
+        <>
+          <Dots />
+          <span>{typingText(others.length, names)}</span>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+/** "Dana is typing", with names the timeline knows and "someone" for the rest. */
+function typingText(count: number, names: readonly string[]) {
+  if (count >= 3) return 'Several people are typing'
+  if (count === 2) {
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`
+    return names.length === 1 ? `${names[0]} and someone else are typing` : 'Two people are typing'
+  }
+  return `${names[0] ?? 'Someone'} is typing`
 }
 
 /** What an agent is writing right now, formatted as it streams in. */

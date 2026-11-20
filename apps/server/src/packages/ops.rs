@@ -936,6 +936,7 @@ impl Operation for PackageRemove {
                         .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
                         archived += changed.len();
                         for (page, space, version) in changed {
+                            crate::collections::pages::page_record_changed(tx, space, page).await?;
                             crate::page_docs::store::page_updated(tx, space, page, version).await?;
                         }
                         continue;

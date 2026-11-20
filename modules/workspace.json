@@ -270,6 +270,6 @@
     "slash": [],
     "setup": ["template", "workspace", "roles"]
   },
-  "settings": ["notifications.*", "files.*", "layout.*", "access.*"],
+  "settings": ["notifications.*", "files.*", "layout.*", "access.*", "offline.*"],
   "nouns": []
 }

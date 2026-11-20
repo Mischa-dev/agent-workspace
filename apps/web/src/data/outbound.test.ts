@@ -58,6 +58,43 @@ describe('the outbound queue (W1.30)', () => {
     expect(vi.mocked(callOp).mock.calls.slice(1).map(([, input]) => (input as { title: string }).title)).toEqual(['First', 'Second'])
   })
 
+  it('sends a later edit made offline on top of the version the earlier one reached', async () => {
+    vi.mocked(callOp).mockRejectedValue(offline())
+    await queueOp('task_update', { taskId: 't1', expectedVersion: 4, title: 'One' } as never, { thing: 'task:t1', label: 'Task edit' })
+    await queueOp('task_update', { taskId: 't1', expectedVersion: 4, priority: 'high' } as never, { thing: 'task:t1', label: 'Task edit' })
+
+    vi.mocked(callOp).mockReset()
+    vi.mocked(callOp).mockResolvedValueOnce({ version: 5 } as never).mockResolvedValue({ version: 6 } as never)
+    await flushOutbound()
+
+    expect(vi.mocked(callOp).mock.calls.map(([, input]) => (input as { expectedVersion: number }).expectedVersion)).toEqual([4, 5])
+  })
+
+  it('keeps the version an earlier edit reached when the connection drops before the next', async () => {
+    vi.mocked(callOp).mockRejectedValue(offline())
+    await queueOp('task_update', { taskId: 't1', expectedVersion: 4, title: 'One' } as never, { thing: 'task:t1', label: 'Task edit' })
+    await queueOp('task_update', { taskId: 't1', expectedVersion: 4, priority: 'high' } as never, { thing: 'task:t1', label: 'Task edit' })
+
+    vi.mocked(callOp).mockReset()
+    vi.mocked(callOp).mockResolvedValueOnce({ version: 5 } as never).mockRejectedValueOnce(offline())
+    await flushOutbound()
+    expect(outboundEntries()).toHaveLength(1)
+
+    vi.mocked(callOp).mockReset()
+    vi.mocked(callOp).mockResolvedValue({ version: 6 } as never)
+    await flushOutbound()
+    expect(vi.mocked(callOp).mock.calls.map(([, input]) => (input as { expectedVersion: number }).expectedVersion)).toEqual([5])
+  })
+
+  it('touches nothing kept while nobody is known to be signed in', async () => {
+    vi.mocked(callOp).mockRejectedValue(offline())
+    await queueOp('task_update', { taskId: 't1', expectedVersion: 4, title: 'One' } as never, { thing: 'task:t1', label: 'Task edit' })
+    setLocalDraftOwner(null)
+    await flushOutbound()
+    setLocalDraftOwner('actor-a')
+    expect(outboundEntries()).toHaveLength(1)
+  })
+
   it('keeps a refusal with its reason, holds that thing’s later writes, and sends the rest', async () => {
     vi.mocked(callOp).mockRejectedValue(offline())
     await queueOp('task_update', { taskId: 't1', title: 'Refused' } as never, { thing: 'task:t1', label: 'Task edit' })
