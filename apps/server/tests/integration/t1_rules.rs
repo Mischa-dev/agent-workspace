@@ -96,6 +96,27 @@ async fn field_rules_hold_on_every_way_in() {
     );
     assert_eq!(rules_of("Added")["default"], json!("today"), "{described}");
 
+    // A default whose option was archived since is left out of the
+    // definition, which only writes out active options; the other rules stay.
+    for change in [
+        json!({"projectId": "WORK", "name": "Bins", "fields": [
+            {"name": "Kind", "type": "single_choice", "options": [{"name": "Bolt"}, {"name": "Nut"}],
+             "rules": {"default": "Nut", "required": true}}]}),
+        json!({"projectId": "WORK", "collection": "Bins", "fields": [
+            {"field": "Kind", "options": [{"name": "Bolt"}]}]}),
+    ] {
+        let changed = call("collection_write", change).await;
+        assert_eq!(changed["outcome"], "ok", "{changed}");
+    }
+    let bins = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Bins"}),
+    )
+    .await;
+    let kind = &bins["value"]["definition"]["fields"][0];
+    assert_eq!(kind["rules"]["required"], json!(true), "{bins}");
+    assert!(kind["rules"]["default"].is_null(), "{bins}");
+
     // Defaults fill what's left out; a value given wins.
     let written =
         write(json!([{"title": "Hex bolt", "fields": {"Code": "HEX-1", "Kind": "Bolt"}}])).await;

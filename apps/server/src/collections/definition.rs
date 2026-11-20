@@ -462,14 +462,31 @@ pub async fn describe(
                         let mut written = fields::rules::RulesInput::from(rules);
                         // A choice's default by its option's name, which
                         // reads the same where the options are made again.
-                        written.default = written.default.map(|default| match field.field_type {
-                            FieldType::SingleChoice
-                            | FieldType::MultipleChoice
-                            | FieldType::Status => {
-                                fields::display_value(field, &default, &|_| None)
-                            }
-                            _ => default,
-                        });
+                        // Only active options are written out, so a default
+                        // naming an archived one is left out, as making a
+                        // record leaves out a default that no longer fits.
+                        written.default =
+                            written.default.and_then(|default| match field.field_type {
+                                FieldType::SingleChoice
+                                | FieldType::MultipleChoice
+                                | FieldType::Status => {
+                                    let active = |id: &Value| {
+                                        id.as_str()
+                                            .and_then(|id| id.parse::<Uuid>().ok())
+                                            .is_some_and(|id| {
+                                                field.config.options.iter().any(|option| {
+                                                    option.id == id && !option.archived
+                                                })
+                                            })
+                                    };
+                                    let fits = match &default {
+                                        Value::Array(ids) => ids.iter().all(active),
+                                        id => active(id),
+                                    };
+                                    fits.then(|| fields::display_value(field, &default, &|_| None))
+                                }
+                                _ => Some(default),
+                            });
                         written
                     }),
                 ..FieldWrite::default()
