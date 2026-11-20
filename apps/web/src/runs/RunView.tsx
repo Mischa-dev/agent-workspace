@@ -181,7 +181,9 @@ function RunBody({ run }: { run: RunDetail }) {
   const details: { label: string; value: ReactNode }[] = [{ label: 'Project', value: run.projectName }]
   if (run.agentName) details.push({ label: 'Agent', value: run.agentName })
   if (run.harnessName ?? run.harness) details.push({ label: 'Harness', value: run.harnessName ?? run.harness })
-  details.push({ label: 'Model', value: [run.model, run.reasoning, run.speed].filter(Boolean).join(' · ') || 'Harness default' })
+  // A run on the harness's own default says nothing worth a row (UI round 1).
+  const model = [run.model, run.reasoning, run.speed].filter(Boolean).join(' · ')
+  if (model) details.push({ label: 'Model', value: model })
   if (run.taskId) {
     details.push({ label: 'Task', value: <Link to={workItemHref(run.projectId, run.taskId)}>{runTitle({ ...run, threadName: null })}</Link> })
   }
@@ -268,12 +270,17 @@ function RunBody({ run }: { run: RunDetail }) {
       <div className="aw-runs__details">
         <DetailList items={details} />
       </div>
-      <Section id="run-files" title="Files changed">
-        <RunDiff live={live} run={run} />
-      </Section>
-      <Section id="run-tests" title="Tests">
-        <TestsSummary run={run} />
-      </Section>
+      {/* Empty sections on a run still working are promises, not news: they appear once there's something in them. */}
+      {live && !run.files?.length ? null : (
+        <Section id="run-files" title="Files changed">
+          <RunDiff live={live} run={run} />
+        </Section>
+      )}
+      {run.tests.runs === 0 ? null : (
+        <Section id="run-tests" title="Tests">
+          <TestsSummary run={run} />
+        </Section>
+      )}
       <Section
         actions={
           <div className="aw-runs__actions">
@@ -333,7 +340,9 @@ function TestsSummary({ run }: { run: RunDetail }) {
         </>
       )}
       {last ? `${last} ` : null}
-      Across {countLabel(tests.runs, 'test run')}: {tests.passed} passed, {tests.failed} failed, {tests.skipped} skipped.
+      {tests.passed + tests.failed + tests.skipped === 0
+        ? `${countLabel(tests.runs, 'test run')}, with no counts reported.`
+        : `Across ${countLabel(tests.runs, 'test run')}: ${tests.passed} passed, ${tests.failed} failed, ${tests.skipped} skipped.`}
     </p>
   )
 }
