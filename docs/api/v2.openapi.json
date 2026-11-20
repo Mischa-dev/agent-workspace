@@ -20142,155 +20142,7 @@
                         "paused": {
                           "const": false
                         },
-                        "preview": {
-                          "type": "boolean"
-                        },
-                        "replaySafe": {
-                          "type": "boolean"
-                        },
-                        "replayed": {
-                          "type": "boolean"
-                        },
-                        "requestId": {
-                          "type": "string"
-                        },
-                        "value": {
-                          "description": "What trying a rule would do, worked out without doing any of it.",
-                          "properties": {
-                            "actions": {
-                              "description": "One entry per action, in order.",
-                              "items": {
-                                "$ref": "#/components/schemas/PreviewStep"
-                              },
-                              "type": "array"
-                            },
-                            "skipped": {
-                              "description": "Why nothing would happen, when nothing would (the maker can't see\nthe task, say).",
-                              "type": [
-                                "string",
-                                "null"
-                              ]
-                            },
-                            "tasks": {
-                              "description": "How many tasks the actions would work on: the task tried, or for\nschedules and capacity windows the tasks matching the conditions.",
-                              "format": "uint",
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "tasks",
-                            "actions"
-                          ],
-                          "title": "PreviewView",
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "outcome",
-                        "value"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "details": {
-                          "type": "object"
-                        },
-                        "field": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "module": {
-                          "type": "string"
-                        },
-                        "outcome": {
-                          "enum": [
-                            "unauthenticated",
-                            "not_found",
-                            "invalid_request",
-                            "permission_denied",
-                            "conflict",
-                            "rate_limited",
-                            "limit_reached",
-                            "workspace_suspended",
-                            "too_large",
-                            "temporarily_unavailable"
-                          ]
-                        },
-                        "retryCategory": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "outcome",
-                        "message",
-                        "retryCategory"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "properties": {
-                        "outcome": {
-                          "const": "ok"
-                        },
-                        "paused": {
-                          "const": true
-                        },
-                        "preview": {
-                          "type": "boolean"
-                        },
-                        "replaySafe": {
-                          "type": "boolean"
-                        },
-                        "replayed": {
-                          "type": "boolean"
-                        },
-                        "requestId": {
-                          "type": "string"
-                        },
-                        "value": {
-                          "properties": {
-                            "status": {
-                              "const": "paused"
-                            }
-                          },
-                          "required": [
-                            "status"
-                          ],
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "outcome",
-                        "paused",
-                        "value"
-                      ],
-                      "type": "object"
-                    }
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Done: outcome ok, with the value."
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "properties": {
-                        "outcome": {
-                          "const": "ok"
-                        },
-                        "paused": {
+                        "pendingReview": {
                           "const": false
                         },
                         "preview": {
@@ -20386,12 +20238,73 @@
                       "type": "object"
                     },
                     {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
                       "properties": {
                         "outcome": {
                           "const": "ok"
                         },
                         "paused": {
-                          "const": true
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
                         },
                         "preview": {
                           "type": "boolean"
@@ -20406,23 +20319,130 @@
                           "type": "string"
                         },
                         "value": {
+                          "description": "What trying a rule would do, worked out without doing any of it.",
                           "properties": {
-                            "status": {
-                              "const": "paused"
+                            "actions": {
+                              "description": "One entry per action, in order.",
+                              "items": {
+                                "$ref": "#/components/schemas/PreviewStep"
+                              },
+                              "type": "array"
+                            },
+                            "skipped": {
+                              "description": "Why nothing would happen, when nothing would (the maker can't see\nthe task, say).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "tasks": {
+                              "description": "How many tasks the actions would work on: the task tried, or for\nschedules and capacity windows the tasks matching the conditions.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
                             }
                           },
                           "required": [
-                            "status"
+                            "tasks",
+                            "actions"
                           ],
+                          "title": "PreviewView",
                           "type": "object"
                         }
                       },
                       "required": [
                         "outcome",
-                        "paused",
                         "value"
                       ],
                       "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
                     }
                   ],
                   "type": "object"
