@@ -50,7 +50,9 @@ pub fn writes(registry: &Registry) -> String {
 }
 
 /// The operations a rule may run (marked for automations, not a read and not
-/// an automation's own), with only what the builder's picker shows.
+/// an automation's own, and not one that needs the version of what it
+/// changes, which a rule has no way to know when it fires), with only what
+/// the builder's picker shows.
 pub fn automations(registry: &Registry) -> String {
     let operations = registry
         .entries()
@@ -59,6 +61,7 @@ pub fn automations(registry: &Registry) -> String {
             meta.automation
                 && !["query", "describe"].contains(&meta.kind.key())
                 && !meta.name.starts_with("automation_")
+                && !needs_version(&(entry.meta.input_schema)())
         })
         .map(|entry| {
             let meta = &entry.meta;
@@ -66,4 +69,12 @@ pub fn automations(registry: &Registry) -> String {
         })
         .collect::<Vec<_>>();
     super::pretty(&Value::Array(operations))
+}
+
+/// Whether an operation's input requires `expectedVersion`.
+fn needs_version(schema: &Value) -> bool {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| required.iter().any(|field| field == "expectedVersion"))
 }

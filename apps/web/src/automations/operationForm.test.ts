@@ -66,6 +66,19 @@ describe('an operation as a rule action', () => {
     expect(() => operationInput(schema, { extra: '{nope' }, 'space-1')).toThrow('Extra isn’t valid JSON.')
   })
 
+  it('sends an unticked box when it was touched or the operation needs it, and leaves an untouched one out', () => {
+    const schema = operationInputSchema(DOCUMENT, 'thing_make')!
+    const base = { title: 'T', size: 'small' }
+    expect(operationInput(schema, { ...base, urgent: false }, 'space-1')).toMatchObject({ urgent: false })
+    expect(operationInput(schema, base, 'space-1')).not.toHaveProperty('urgent')
+    const needed = { ...schema, required: [...(schema.required ?? []), 'urgent'] }
+    expect(operationInput(needed, base, 'space-1')).toMatchObject({ urgent: false })
+  })
+
+  it('never offers an operation that needs the version of what it changes', () => {
+    expect(AUTOMATION_OPERATIONS.some((entry) => entry.name === 'task_update')).toBe(false)
+  })
+
   it('offers only operations the registry marks for automations, never reads or rules themselves', () => {
     expect(AUTOMATION_OPERATIONS.length).toBeGreaterThan(0)
     const marked = new Map((catalog as { name: string; automation: boolean }[]).map((entry) => [entry.name, entry.automation]))
