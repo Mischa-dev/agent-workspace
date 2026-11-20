@@ -238,6 +238,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
             &setup.pool,
             project_id.parse::<Uuid>().expect("project"),
             collection.parse::<Uuid>().expect("collection"),
+            None,
         ),
     )
     .await

@@ -6,11 +6,13 @@ import { ChartFigure } from '../collections/CollectionChartView'
 import { chartNumber } from '../collections/collectionModel'
 import { Icon, countLabel } from '../ui'
 import { additive, figurePoints, measureWords, tileHref } from './dashboardModel'
+import { AnswerTable } from './AnswerTable'
+import { answerWords } from './outsideDataModel'
 
-/** One tile: a view's chart, count or first records, a sheet block's chart, or a note. */
+/** One tile: a view's chart, count or first records, a sheet block's chart, a query's stored answer, or a note. */
 export function DashboardTile({ menu, projectId, tile }: { menu: ReactNode; projectId: string; tile: TileEntry }) {
   const figures = tile.figures ?? null
-  const title = tile.title || figures?.viewName || (tile.kind === 'text' ? '' : tile.kind === 'sheet' ? 'Sheet' : 'View')
+  const title = tile.title || figures?.viewName || (tile.kind === 'text' ? '' : tile.kind === 'sheet' ? 'Sheet' : tile.kind === 'query' ? 'Query' : 'View')
   const href = tile.kind !== 'text' && !tile.unseen ? tileHref(projectId, tile) : null
   return (
     <section aria-label={title || 'Note'} className={`aw-dash__tile aw-dash__tile--w${tile.width} aw-dash__tile--h${tile.height}`}>
@@ -18,7 +20,14 @@ export function DashboardTile({ menu, projectId, tile }: { menu: ReactNode; proj
         <header className="aw-dash__tilehead">
           <div className="aw-dash__tiletitle">
             {title ? <h2>{href ? <Link to={href}>{title}</Link> : title}</h2> : null}
-            {figures ? <span className="aw-dash__tilesub">{figures.collectionName}</span> : null}
+            {figures && tile.kind === 'query' ? (
+              <span className="aw-dash__tilesub">
+                {figures.running ? 'Running… · ' : ''}
+                {answerWords({ ranAt: figures.ranAt, rowCount: Number(figures.total), truncated: figures.truncated === true })}
+              </span>
+            ) : figures ? (
+              <span className="aw-dash__tilesub">{figures.collectionName}</span>
+            ) : null}
           </div>
           {menu}
         </header>
@@ -40,6 +49,15 @@ function body(tile: TileEntry) {
   }
   const figures = tile.figures
   if (!figures) return <p className="aw-dash__unseen">No figures to show.</p>
+  if (figures.error) {
+    return (
+      <p className="aw-dash__unseen">
+        <Icon name="info" size={16} />
+        {figures.error}
+      </p>
+    )
+  }
+  if (figures.viewType === 'query') return <AnswerTable answer={{ columns: figures.columns ?? [], rows: figures.rows ?? [] }} />
   if (figures.viewType !== 'chart') {
     return (
       <div className="aw-dash__list">
@@ -66,7 +84,7 @@ function body(tile: TileEntry) {
         <span className="aw-dash__number">{overall === null ? '—' : chartNumber(overall)}</span>
         <figcaption>
           {label}
-          {counting ? '' : ` across ${countLabel(figures.total, tile.kind === 'sheet' ? 'row' : 'record')}`}
+          {counting ? '' : ` across ${countLabel(figures.total, tile.kind === 'view' ? 'record' : 'row')}`}
         </figcaption>
       </figure>
     )

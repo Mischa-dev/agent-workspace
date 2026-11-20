@@ -1265,6 +1265,10 @@ async fn follow(
     if row.subject_kind.as_deref() == Some(crate::hosts::register::REGISTER_SUBJECT) {
         crate::hosts::register::settled(transaction, row, by).await?;
     }
+    // A proposal is accepted or rejected from its card (T1.41).
+    if row.subject_kind.as_deref() == Some(crate::proposals::REQUEST_SUBJECT) {
+        crate::proposals::settled(transaction, row, by).await?;
+    }
     // A run waiting on it goes on, and its host (the built-in one too,
     // A1.16) hears the answer.
     if let Some(run_id) = row.run_id {

@@ -25,10 +25,14 @@ export type CollectionSummary = {
   archived: boolean
   version: number
   updatedAt: string
-  /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. */
-  builtin?: 'tasks' | null
+  /** "tasks" for the project's built-in Tasks collection: its records are tasks, changed on task screens. "pages" for its built-in Pages collection (T1.36): its records are its pages, whose fields change here. */
+  builtin?: 'tasks' | 'pages' | null
   /** Its records are tasks (AWD-110): a status, assignee and the rest, a key like AWD-12, and a task page. */
   actsLikeTask?: boolean
+  /** The statuses its tasks use, by ID; left out when they use all of the space's. */
+  taskStatuses?: string[]
+  /** The status its new tasks start in; left out for the space's default. */
+  startStatusId?: string
 }
 
 export type SortRule = { field: string; direction: 'asc' | 'desc' }
@@ -123,7 +127,17 @@ export type RecordPage = {
 
 /** One value as it read before and after a change. */
 export type HistoryChange = { field: string; name: string; before: unknown; after: unknown }
-export type HistoryEntry = { id: string; action: string; actor: string; via: string | null; changes: HistoryChange[]; version: number; at: string }
+export type HistoryEntry = {
+  id: string
+  action: string
+  actor: string
+  via: string | null
+  /** Who accepted it, when it was someone's proposal. */
+  acceptedBy: string | null
+  changes: HistoryChange[]
+  version: number
+  at: string
+}
 
 export type RecordBody = { record: CollectionRecord; references: FieldReference[]; history: HistoryEntry[] }
 
@@ -148,8 +162,10 @@ export function normalizeCollection(value: unknown): CollectionSummary {
     archived: raw.archived === true,
     version: asNumber(raw.version, 1),
     updatedAt: asString(raw.updatedAt),
-    builtin: raw.builtin === 'tasks' ? 'tasks' : null,
+    builtin: raw.builtin === 'tasks' || raw.builtin === 'pages' ? raw.builtin : null,
     actsLikeTask: raw.actsLikeTask === true || raw.builtin === 'tasks',
+    ...(Array.isArray(raw.taskStatuses) ? { taskStatuses: raw.taskStatuses.filter((id): id is string => typeof id === 'string') } : {}),
+    ...(typeof raw.startStatusId === 'string' ? { startStatusId: raw.startStatusId } : {}),
   }
 }
 
@@ -312,6 +328,7 @@ function normalizeRecordBody(value: unknown): RecordBody {
         action: asString(item.action),
         actor: asString(item.actor),
         via: typeof item.via === 'string' && item.via ? item.via : null,
+        acceptedBy: typeof item.acceptedBy === 'string' && item.acceptedBy ? item.acceptedBy : null,
         changes: asArray(item.changes).map((change) => {
           const parts = asRecord(change)
           return { field: asString(parts.field), name: asString(parts.name), before: parts.before ?? null, after: parts.after ?? null }
@@ -351,7 +368,16 @@ export async function getCollection(projectId: string, collectionId: string) {
 export async function updateCollection(
   projectId: string,
   collectionId: string,
-  input: { expectedVersion: number; name?: string; description?: string; titleName?: string; archived?: boolean; actsLikeTask?: boolean },
+  input: {
+    expectedVersion: number
+    name?: string
+    description?: string
+    titleName?: string
+    archived?: boolean
+    actsLikeTask?: boolean
+    /** The statuses its tasks use ([] for all) and the one they start in, replaced together. */
+    workflow?: { statuses: string[]; startStatusId: string | null }
+  },
 ) {
   return normalizeBody(await requestJson<unknown>(collectionPath(projectId, collectionId), { method: 'PATCH', idempotencyKey: crypto.randomUUID(), json: input }))
 }

@@ -74,6 +74,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "stop",
             // Something already sent goes out again, unchanged (a webhook delivery).
             "redeliver",
+            // A saved query read and found right, or shared (T1.35).
+            "review",
+            "share",
             // A harmless signed ping, to check an address answers.
             "test",
             "press",
@@ -98,6 +101,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "resume",
             // A host's published action runs (A2.19).
             "run",
+            // Something a space can use is turned on, such as triage (T1.23).
+            "enable",
             // Someone makes their own what another owned, such as an agent
             // whose owning workspace is being deleted (K1.33).
             "take",

@@ -306,6 +306,9 @@ pub(crate) async fn field_write(
                     position: arguments.position,
                     formula: None,
                     button: None,
+                    rollup: None,
+                    pair: None,
+                    rules: None,
                 },
             )
             .await?;
@@ -422,6 +425,8 @@ pub(crate) async fn field_write(
                 archived: arguments.archived,
                 formula: None,
                 button: None,
+                rollup: None,
+                rules: None,
                 expected_version: arguments.expected_version,
             },
         )

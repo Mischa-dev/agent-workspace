@@ -6,7 +6,9 @@ import { normalizeWorkItem, updateWorkItem } from './api'
 import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
-import type { BulkChanges, BulkProblem, WorkItem, WorkItemPatch } from './types'
+import type { BulkChanges, BulkProblem, WorkItem, WorkItemCard, WorkItemPatch } from './types'
+import { inOrder, remember, type Undoable } from '../views/saveQueue'
+import { undoableTaskChange } from './taskUndo'
 
 /** The PATCH fields for a picker result. */
 export function pickToPatch(result: PickResult): Omit<WorkItemPatch, 'expectedVersion'> {
@@ -17,6 +19,8 @@ export function pickToPatch(result: PickResult): Omit<WorkItemPatch, 'expectedVe
       return { priority: result.priority }
     case 'assignee':
       return { assigneeActorId: result.actor?.id ?? null }
+    case 'delegate':
+      return { delegateActorId: result.actor?.id ?? null }
     case 'milestone':
       return { milestoneId: result.milestone?.id ?? null }
     case 'type':
@@ -31,7 +35,7 @@ export function pickToPatch(result: PickResult): Omit<WorkItemPatch, 'expectedVe
 
 /** The bulk changes for a picker result, or null where bulk can't express it (type). */
 export function pickToBulk(result: PickResult): BulkChanges | null {
-  if (result.field === 'type') return null
+  if (result.field === 'type' || result.field === 'delegate') return null
   return pickToPatch(result) as BulkChanges
 }
 
@@ -78,6 +82,9 @@ export function editErrorMessage(error: unknown, subject = 'That change'): strin
 
 export type EditTarget = { id: string; projectId: string; version: number; key: string }
 
+/** Whether a target is a whole card, which says what a change replaces, so Undo can take it back. */
+const isCard = (target: EditTarget | WorkItemCard): target is WorkItemCard => 'status' in target
+
 /**
  * Applies one picker result to one task (PATCH) or several (bulk, all or
  * nothing). Lists refetch afterwards either way.
@@ -85,16 +92,33 @@ export type EditTarget = { id: string; projectId: string; version: number; key: 
 export function useApplyPick() {
   const invalidate = useInvalidateWorkItems()
   return useMutation({
-    mutationFn: async ({ projectId, result, targets }: { projectId: string; result: PickResult; targets: EditTarget[] }) => {
+    mutationFn: async ({ projectId, result, targets }: { projectId: string; result: PickResult; targets: Array<EditTarget | WorkItemCard> }) => {
+      const patch = pickToPatch(result)
+      // Undo takes the change back on each task the picker changed (T1.27).
+      const undos = targets.flatMap((target) => (isCard(target) ? (undoableTaskChange(`Changed the ${result.field} of ${target.key}`, target, patch) ?? []) : []))
+      const undo: Undoable | null =
+        undos.length === targets.length && undos.length
+          ? {
+              label: undos.length === 1 ? undos[0].label : `Changed the ${result.field} of ${undos.length} tasks`,
+              undo: async (client) => {
+                const failed = (await Promise.allSettled(undos.map((one) => one.undo(client)))).filter((outcome) => outcome.status === 'rejected')
+                if (failed.length === 1) throw (failed[0] as PromiseRejectedResult).reason
+                if (failed.length) throw new Error(`${failed.length} of them changed since, so they weren’t undone.`)
+              },
+            }
+          : null
       if (targets.length === 1 || result.field === 'type') {
         for (const target of targets) {
-          await updateWorkItem({
-            projectId: target.projectId,
-            workItemId: target.id,
-            idempotencyKey: crypto.randomUUID(),
-            patch: { expectedVersion: target.version, ...pickToPatch(result) },
-          })
+          await inOrder(`task:${target.id}`, () =>
+            updateWorkItem({
+              projectId: target.projectId,
+              workItemId: target.id,
+              idempotencyKey: crypto.randomUUID(),
+              patch: { expectedVersion: target.version, ...patch },
+            }),
+          )
         }
+        if (undo) remember(undo)
         return
       }
       const changes = pickToBulk(result)
@@ -105,6 +129,7 @@ export function useApplyPick() {
         changes,
         idempotencyKey: crypto.randomUUID(),
       })
+      if (undo) remember(undo)
     },
     onSettled: (_result, _error, input) => void invalidate(input.projectId),
   })

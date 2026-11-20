@@ -4,7 +4,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
 import { useUpdateWorkItem } from './hooks'
+import { inOrder, remember } from '../views/saveQueue'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
+import { undoableTaskChange } from './taskUndo'
 import type { WorkItem, WorkItemPatch } from './types'
 
 /** The parts of a task that save on their own, one at a time; each custom field is `field:<id>`. */
@@ -16,6 +18,7 @@ type BuiltInField =
   | 'status'
   | 'priority'
   | 'assignee'
+  | 'delegate'
   | 'type'
   | 'labels'
   | 'milestone'
@@ -32,6 +35,7 @@ export const FIELD_NAMES: Record<BuiltInField, string> = {
   status: 'status',
   priority: 'priority',
   assignee: 'assignee',
+  delegate: 'delegate',
   type: 'type',
   labels: 'labels',
   milestone: 'milestone',
@@ -68,6 +72,8 @@ export function fieldValue(item: WorkItem, field: TaskField): string {
       return item.priority
     case 'assignee':
       return item.assignee?.actorId ?? ''
+    case 'delegate':
+      return item.delegate?.actorId ?? ''
     case 'type':
       return item.itemType.id
     case 'labels':
@@ -105,6 +111,8 @@ function patchValue(field: TaskField, patch: Patch): string | null {
       return patch.priority ?? ''
     case 'assignee':
       return patch.assigneeActorId ?? ''
+    case 'delegate':
+      return patch.delegateActorId ?? ''
     case 'type':
       return patch.typeId ?? ''
     case 'labels':
@@ -165,7 +173,8 @@ export type PendingSave = {
 const MAX_ATTEMPTS = 4
 
 /**
- * Saves each field of a task as soon as it changes, one save at a time.
+ * Saves each field of a task as soon as it changes, one save at a time,
+ * through the shared save queue, so Undo can take the last one back.
  *
  * Every change remembers what the person saw before making it. If someone
  * else changed that same field in the meantime, nothing is overwritten: the
@@ -181,7 +190,6 @@ export function useTaskSave(item: WorkItem) {
   const entries = useRef(new Map<TaskField, Entry>())
   const [shown, setShown] = useState<ReadonlyMap<TaskField, Entry>>(() => new Map())
   const lastId = useRef(0)
-  const queue = useRef<Promise<void>>(Promise.resolve())
   const fallback = useRef(item)
   useLayoutEffect(() => {
     fallback.current = item
@@ -248,6 +256,8 @@ export function useTaskSave(item: WorkItem) {
           entries.current.set(entry.field, { ...queued, base: holds })
         }
         change(id, null)
+        const undo = undoableTaskChange(`Changed the ${fieldName(entry.field)} of ${task.key}`, task, entry.patch)
+        if (undo) remember(undo)
         return
       } catch (error) {
         const theirs = conflictCurrent(error)
@@ -262,10 +272,9 @@ export function useTaskSave(item: WorkItem) {
     change(id, { state: 'failed', message: 'The task kept changing while this saved. Try again.' })
   }
 
+  // One task's saves go one at a time, with the list's and board's (T1.27).
   const enqueue = (id: number) => {
-    queue.current = queue.current.then(() =>
-      attempt(id).catch(() => change(id, { state: 'failed', message: 'That didn’t save. Try again.' })),
-    )
+    void inOrder(`task:${taskId}`, () => attempt(id).catch(() => change(id, { state: 'failed', message: 'That didn’t save. Try again.' })))
   }
 
   /** What the person sees for a field right now: their own change on its way, or the task's value. */

@@ -87,13 +87,14 @@ export function DashboardDetailsDialog({
   )
 }
 
-type Kind = 'view' | 'sheet' | 'text'
+type Kind = 'view' | 'sheet' | 'query' | 'text'
 type Style = 'bar' | 'line' | 'donut' | 'number'
 
 /**
  * Adds a tile, or changes one: a view of one of the project's collections
  * (a chart view shows as its chart), a block of a sheet as a chart (C1.20),
- * or a note. A shared dashboard offers shared views only.
+ * a saved query's stored answer over outside data (T1.34), or a note. A
+ * shared dashboard offers shared views and shared queries only.
  */
 export function TileDialog({
   onClose,
@@ -116,6 +117,10 @@ export function TileDialog({
   const [sheet, setSheet] = useState(tile?.sheet ?? '')
   const [range, setRange] = useState(tile?.range ?? '')
   const [style, setStyle] = useState<Style>(tile?.style ?? 'bar')
+  const [query, setQuery] = useState(tile?.query ?? '')
+  const [queryLook, setQueryLook] = useState<Style | 'table'>(tile?.kind === 'query' ? (tile.style ?? 'table') : 'table')
+  const queries = useQuery({ ...opQuery('data_query_list', { spaceId: projectId }), enabled: kind === 'query' })
+  const offeredQueries = (queries.data?.queries ?? []).filter((entry) => !shared || entry.shared || entry.id === query)
   const [width, setWidth] = useState(tile?.width ?? 6)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
@@ -130,6 +135,7 @@ export function TileDialog({
     if (kind === 'view' && !view) return setProblem('Pick a view to show.')
     if (kind === 'text' && !text.trim()) return setProblem('Write the note.')
     if (kind === 'sheet' && (!sheet || !range.trim())) return setProblem('Pick a sheet and the cells to chart.')
+    if (kind === 'query' && !query) return setProblem('Pick a saved query to show.')
     setBusy(true)
     try {
       await onSave({
@@ -140,7 +146,8 @@ export function TileDialog({
         text: kind === 'text' ? text.trim() : null,
         sheet: kind === 'sheet' ? sheet : null,
         range: kind === 'sheet' ? range.trim() : null,
-        style: kind === 'sheet' ? style : null,
+        query: kind === 'query' ? query : null,
+        style: kind === 'sheet' ? style : kind === 'query' && queryLook !== 'table' ? queryLook : null,
         width,
         height: tile?.height ?? (kind === 'text' ? 1 : 2),
       })
@@ -179,6 +186,7 @@ export function TileDialog({
           options={[
             { value: 'view', label: 'A view' },
             { value: 'sheet', label: 'A sheet' },
+            { value: 'query', label: 'A query' },
             { value: 'text', label: 'A note' },
           ]}
           value={kind}
@@ -270,10 +278,36 @@ export function TileDialog({
             <option value="number">One number: the total</option>
           </SelectField>
         </>
+      ) : kind === 'query' ? (
+        <>
+          <SelectField
+            hint={shared ? 'A shared dashboard shows shared queries: their last reviewed answer, stored.' : 'Shows the query’s stored answer. Run it again from Outside data.'}
+            label="Saved query"
+            onChange={(event) => setQuery(event.target.value)}
+            required
+            value={query}
+          >
+            <option value="">{queries.isPending ? 'Loading…' : offeredQueries.length ? 'Pick a query' : 'No queries to show'}</option>
+            {offeredQueries.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+                {entry.shared ? '' : ' (not shared)'}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField label="Show it as" onChange={(event) => setQueryLook(event.target.value as Style | 'table')} value={queryLook}>
+            <option value="table">A table</option>
+            <option value="bar">Bars: labels from the first column, numbers from the second</option>
+            <option value="line">A line</option>
+            <option value="donut">A donut</option>
+            <option value="number">One number: the total</option>
+          </SelectField>
+        </>
       ) : (
         <TextArea label="Note" maxLength={2000} onChange={(event) => setText(event.target.value)} required rows={4} value={text} />
       )}
-      <TextField hint={kind === 'view' ? 'Optional; the view’s name when left empty.' : kind === 'sheet' ? 'Optional; the range’s name when left empty.' : 'Optional.'} label="Title" maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
+      <TextField
+        hint={kind === 'view' ? 'Optional; the view’s name when left empty.' : kind === 'sheet' ? 'Optional; the range’s name when left empty.' : kind === 'query' ? 'Optional; the query’s name when left empty.' : 'Optional.'} label="Title" maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
       <SelectField label="Width" onChange={(event) => setWidth(Number(event.target.value))} value={String(width)}>
         {TILE_WIDTHS.map((option) => (
           <option key={option} value={option}>

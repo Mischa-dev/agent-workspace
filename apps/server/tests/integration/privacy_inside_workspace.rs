@@ -571,6 +571,11 @@ const ACCOUNT_ROUTES_EXCUSED: &[(&str, &str)] = &[
         "/api/v1/projects/{project_id}/timeline",
         "the people on tasks the caller can see; P0.22's net walks it",
     ),
+    (
+        "/api/v1/my-work",
+        "the caller's own tasks, and the leads and update authors of spaces they are in (T1.43); \
+         workspace_isolation walks it",
+    ),
 ];
 
 /// What one caller in A must never read of B, and how it calls.
@@ -3393,7 +3398,17 @@ async fn channel_writes_keep_to_private_channels() {
         .person("lena", "member")
         .person("omar", "member")
         .person("nate", "member")
+        .person("tess", "member")
         .custom_role("Read only", &["projects.view", "directory.view"])
+        .custom_role(
+            "Tasks, no posting",
+            &[
+                "projects.view",
+                "directory.view",
+                "tasks.view",
+                "tasks.create",
+            ],
+        )
         .build("privacy_channel_writes")
         .await
     else {
@@ -3566,6 +3581,42 @@ async fn channel_writes_keep_to_private_channels() {
         made_from,
         vec![Some(Uuid::parse_str(&shown).expect("shown"))]
     );
+    // T1.28: an internal form is answered by those who may add records, as
+    // themselves; a read-only role neither answers nor changes it.
+    let (status, form) = op(
+        &lena.browser,
+        "form_create",
+        json!({"collection": collection, "name": "Intake"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{form}");
+    let form = form["value"]["id"].as_str().expect("form").to_owned();
+    let (status, answered) = op(
+        &omar.browser,
+        "form_answer_send",
+        json!({"form": form, "answers": {"title": "From Omar"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    for (name, input) in [
+        (
+            "form_answer_send",
+            json!({"form": form, "answers": {"title": "From Nate"}}),
+        ),
+        ("form_update", json!({"form": form, "name": "Nate's"})),
+        (
+            "form_create",
+            json!({"collection": collection, "name": "Nate's own"}),
+        ),
+        // T1.30: nor templates or schedules.
+        (
+            "record_template_create",
+            json!({"collection": collection, "name": "Nate's", "title": "Nate's"}),
+        ),
+    ] {
+        let (status, refused) = op(&nate.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {refused}");
+    }
     let request = lena.browser.request(
         "GET",
         &format!("/api/v1/conversations/{open}/timeline"),
@@ -3583,6 +3634,41 @@ async fn channel_writes_keep_to_private_channels() {
         chips,
         Some(json!([{"kind": "record", "id": made["value"]["id"]}])),
         "{timeline}"
+    );
+
+    // Someone who may make tasks but not post in the channel makes one from
+    // a message quietly: saySo posts nothing for them.
+    let tess = &world.people["tess"];
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Tasks, no posting"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(tess.actor)
+    .execute(pool)
+    .await
+    .expect("tess's role");
+    let system_entries = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM conversation_entries WHERE conversation_id = $1::uuid AND kind = 'system'",
+        )
+        .bind(&open)
+        .fetch_one(pool)
+        .await
+        .expect("system entries")
+    };
+    let before = system_entries().await;
+    let (status, quiet) = op(
+        &tess.browser,
+        "task_create",
+        json!({"projectId": work, "title": "Quietly", "fromMessageId": shown, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{quiet}");
+    assert_eq!(
+        system_entries().await,
+        before,
+        "a reader announced in the channel"
     );
 
     // C2.8: a channel's Tasks tab lists what its tasks are only to people
@@ -4358,6 +4444,426 @@ async fn groups_give_spaces_and_guests_see_only_theirs() {
     world.finish().await;
 }
 
+/// T1.23: triage decisions need `tasks.edit`, and a space's triage rules
+/// and queue `tasks.workflow`, whatever the account. A viewer reads the
+/// rules but triages nothing and writes no rule; the owner does both.
+#[tokio::test]
+async fn triage_keeps_to_the_edit_and_workflow_permissions() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TRI")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .connected_app("laptop")
+        .build("privacy_triage")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, laptop) = (&world.agents["rook"], &world.apps["laptop"]);
+    let as_owner = |name: &'static str, arguments: Value| async move {
+        laptop.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let as_rook = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+    let enabled = as_rook("triage_enable", json!({"spaceId": "TRI"})).await;
+    assert_eq!(enabled["outcome"], "permission_denied", "{enabled}");
+    let enabled = as_owner("triage_enable", json!({"spaceId": "TRI"})).await;
+    assert_eq!(enabled["outcome"], "ok", "{enabled}");
+    let made = as_owner(
+        "task_create",
+        json!({"projectId": "TRI", "title": "Arrived", "status": "Triage", "clientRequestId": "tri-1"}),
+    )
+    .await;
+    let key = made["value"]["key"].as_str().expect("key").to_owned();
+    let rule = json!({"spaceId": "TRI", "name": "Keep", "action": {"kind": "keep"}});
+
+    let listed = as_rook("triage_rule_list", json!({"spaceId": "TRI"})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let refused = as_rook("triage_rule_set", rule.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let accept = json!({"taskIds": [key], "action": "accept"});
+    let refused = as_rook("triage_decide", accept.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/triage_decide",
+            Some("privacy-triage-vera"),
+            accept.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "{status} {refused}"
+    );
+
+    let written = as_owner("triage_rule_set", rule).await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let accepted = as_owner("triage_decide", accept).await;
+    assert_eq!(accepted["outcome"], "ok", "{accepted}");
+
+    // Cycles (T1.24): the same split. A viewer reads them, sets nothing
+    // up and puts no task in one.
+    let refused = as_rook("cycle_set", json!({"spaceId": "TRI", "enabled": true})).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let enabled = as_owner("cycle_set", json!({"spaceId": "TRI", "enabled": true})).await;
+    assert_eq!(enabled["outcome"], "ok", "{enabled}");
+    let listed = as_rook("cycle_list", json!({"spaceId": "TRI"})).await;
+    assert_eq!(
+        listed["value"]["cycles"].as_array().map(Vec::len),
+        Some(3),
+        "{listed}"
+    );
+    let opened = as_owner("task_open", json!({"taskId": key})).await;
+    let planned = json!({"taskId": key, "expectedVersion": opened["value"]["task"]["version"], "cycle": "current"});
+    let refused = as_rook("task_update", planned.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let planned = as_owner("task_update", planned).await;
+    assert_eq!(planned["outcome"], "ok", "{planned}");
+
+    // Project status (T1.43): a viewer reads it, posts no update and sets
+    // nothing; an update in a private channel they aren't in stays out of
+    // what they read.
+    let private = as_owner(
+        "channel_create",
+        json!({"projectId": "TRI", "name": "leads", "private": true}),
+    )
+    .await;
+    assert_eq!(private["outcome"], "ok", "{private}");
+    let posted = as_owner(
+        "project_update_create",
+        json!({"spaceId": "TRI", "health": "off_track", "text": "Quietly off track.",
+               "channelId": private["value"]["id"], "clientRequestId": "tri-update"}),
+    )
+    .await;
+    assert_eq!(posted["outcome"], "ok", "{posted}");
+    let read = as_rook("project_status_get", json!({"spaceId": "TRI"})).await;
+    assert_eq!(read["value"]["health"], "off_track", "{read}");
+    assert!(read["value"]["latestUpdate"].is_null(), "{read}");
+    let refused = as_rook(
+        "project_update_create",
+        json!({"spaceId": "TRI", "health": "on_track", "text": "Fine.",
+               "clientRequestId": "rook-update"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let refused = as_rook(
+        "project_status_set",
+        json!({"spaceId": "TRI", "health": "on_track"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // Initiatives (T1.26) are records of the workspace's own space: a
+    // viewer there reads them and starts none.
+    let started = as_owner(
+        "initiative_create",
+        json!({"title": "Owner's plan", "clientRequestId": "owner-plan"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer', role_id = NULL \
+         WHERE actor_id = $1 \
+           AND project_id = (SELECT project_id FROM collections WHERE role = 'initiatives')",
+    )
+    .bind(rook.actor)
+    .execute(world.pool())
+    .await
+    .expect("viewer in the workspace space");
+    // Milestones (T1.42): a viewer can't reorder them.
+    let made = as_owner(
+        "milestone_write",
+        json!({"projectId": "TRI", "name": "Ordered", "clientRequestId": "ordered"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let refused = as_rook(
+        "milestone_reorder",
+        json!({"milestoneId": made["value"]["id"], "position": 1}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let refused = as_rook(
+        "initiative_create",
+        json!({"title": "Viewer's plan", "clientRequestId": "viewer-plan"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let listed = as_rook("initiative_list", json!({})).await;
+    assert_eq!(
+        listed["value"]["initiatives"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+    world.finish().await;
+}
+
+/// Outside data (T1.34, T1.35) keeps to the roles that connect it: someone
+/// without data.connect doesn't see connections, draft queries or any
+/// query's SQL, and can't change, review, run or remove a draft; a role
+/// that connects data but doesn't share it can't share an answer.
+#[tokio::test]
+async fn outside_data_keeps_to_roles_that_connect_it() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("mara", "member")
+        .custom_role_on("Connects data", "admin", &["projects.view", "data.connect"])
+        .person("cleo", "member")
+        .build("privacy_outside_data")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Connects data"]).expect("role id"))
+    .bind(work)
+    .bind(world.people["cleo"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow");
+    let owner = &world.owner.browser;
+    let (_, made) = op(
+        owner,
+        "data_connection_create",
+        json!({"spaceId": work, "name": "Warehouse",
+               "address": "postgresql://reader:hunter2@db.example.com/sales"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert!(!made.to_string().contains("hunter2"), "{made}");
+    let connection = made["value"]["id"].clone();
+    let (_, saved) = op(
+        owner,
+        "data_query_create",
+        json!({"spaceId": work, "connection": connection, "name": "Secret sauce",
+               "statement": "SELECT 'secret-sauce-sql' AS recipe"}),
+    )
+    .await;
+    assert_eq!(saved["outcome"], "ok", "{saved}");
+    let query = saved["value"]["id"].clone();
+
+    let mara = &world.people["mara"].browser;
+    let (_, listed) = op(mara, "data_query_list", json!({"spaceId": work})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(!listed.to_string().contains("Secret sauce"), "{listed}");
+    for (name, input) in [
+        ("data_connection_list", json!({"spaceId": work})),
+        (
+            "data_connection_update",
+            json!({"connection": connection, "name": "Mine"}),
+        ),
+        ("data_connection_delete", json!({"connection": connection})),
+        ("data_query_get", json!({"query": query})),
+        (
+            "data_query_update",
+            json!({"query": query, "statement": "SELECT 2"}),
+        ),
+        (
+            "data_query_review",
+            json!({"query": query, "state": "reviewed"}),
+        ),
+        ("data_query_run", json!({"query": query})),
+        ("data_query_delete", json!({"query": query})),
+    ] {
+        let (status, body) = op(mara, name, input).await;
+        assert_ne!(body["outcome"], "ok", "mara {name}: {status} {body}");
+        assert!(!body.to_string().contains("secret-sauce-sql"), "{body}");
+    }
+
+    // Cleo connects data but doesn't share it.
+    let cleo = &world.people["cleo"].browser;
+    let (_, reviewed) = op(
+        cleo,
+        "data_query_review",
+        json!({"query": query, "state": "reviewed"}),
+    )
+    .await;
+    assert_eq!(reviewed["outcome"], "ok", "{reviewed}");
+    let (_, refused) = op(
+        cleo,
+        "data_query_share",
+        json!({"query": query, "shared": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // Shared by the owner, its answer is mara's to see, its SQL still not.
+    let (_, shared) = op(
+        owner,
+        "data_query_share",
+        json!({"query": query, "shared": true}),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (_, seen) = op(mara, "data_query_get", json!({"query": query})).await;
+    assert_eq!(seen["outcome"], "ok", "{seen}");
+    assert!(!seen.to_string().contains("secret-sauce-sql"), "{seen}");
+    let (_, still) = op(
+        mara,
+        "data_query_update",
+        json!({"query": query, "name": "Mara's"}),
+    )
+    .await;
+    assert_ne!(still["outcome"], "ok", "{still}");
+    world.finish().await;
+}
+
+/// T1.41: a role without edit on records changes none, a suggest-only role
+/// only proposes, and neither decides a proposal or puts a version back.
+#[tokio::test]
+async fn record_changes_keep_to_roles_that_edit_records() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("nell", "member")
+        .person("sage", "member")
+        .connected_app("Desk")
+        .custom_role("Reads only", &["projects.view", "directory.view"])
+        .custom_role(
+            "Suggests",
+            &[
+                "projects.view",
+                "collections.suggest",
+                "requests.raise",
+                "directory.view",
+            ],
+        )
+        .build("privacy_record_changes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    for (person, role) in [("nell", "Reads only"), ("sage", "Suggests")] {
+        sqlx::query(
+            "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+        )
+        .bind(Uuid::parse_str(&world.roles[role]).expect("role id"))
+        .bind(work)
+        .bind(world.people[person].actor)
+        .execute(pool)
+        .await
+        .expect("narrow");
+    }
+    let desk = &world.apps["Desk"];
+    let tool = |name: &'static str, arguments: Value| async move {
+        desk.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let made = tool(
+        "collection_write",
+        json!({"projectId": "WORK", "name": "Accounts", "fields": [{"name": "Tier", "type": "text"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let written = tool(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Accounts", "clientRequestId": "acct",
+               "records": [{"title": "Globex", "fields": {"Tier": "gold"}}]}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let record = written["value"]["records"][0]["id"].clone();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let (nell, sage) = (&world.people["nell"].browser, &world.people["sage"].browser);
+    let (_, refused) = op(
+        nell,
+        "record_update",
+        json!({"record": record, "fields": {"Tier": "lead"}}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let (_, proposed) = op(
+        sage,
+        "record_update",
+        json!({"record": record, "fields": {"Tier": "platinum"}}),
+    )
+    .await;
+    assert_eq!(proposed["outcome"], "ok", "{proposed}");
+    let proposal = proposed["value"]["proposalId"].clone();
+    assert!(proposal.is_string(), "{proposed}");
+    for (who, browser) in [("nell", nell), ("sage", sage)] {
+        let (_, decided) = op(
+            browser,
+            "proposal_decide",
+            json!({"proposalId": proposal, "decision": "accept"}),
+        )
+        .await;
+        assert_ne!(decided["outcome"], "ok", "{who}: {decided}");
+        let (_, restored) = op(
+            browser,
+            "history_restore",
+            json!({"thing": record, "version": 1, "expectedVersion": 1}),
+        )
+        .await;
+        assert_ne!(restored["outcome"], "ok", "{who}: {restored}");
+        // Nor upload a file to it (T1.20): that's editing.
+        let (status, uploaded) = send(
+            app,
+            browser.request(
+                "POST",
+                &format!(
+                    "/api/v1/things/record/{}/files?name=sneaky.txt",
+                    record.as_str().expect("id")
+                ),
+                None,
+                json!("sneaky"),
+            ),
+        )
+        .await;
+        assert_eq!(status.as_u16(), 404, "{who}: {uploaded}");
+    }
+    let files = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM files WHERE thing_kind = 'record' AND thing_id = $1::uuid",
+    )
+    .bind(record.as_str().expect("id"))
+    .fetch_one(pool)
+    .await
+    .expect("files");
+    assert_eq!(files, 0);
+    let tier: Value =
+        sqlx::query_scalar("SELECT field_values FROM collection_records WHERE id = $1::uuid")
+            .bind(record.as_str().expect("id"))
+            .fetch_one(pool)
+            .await
+            .expect("record");
+    assert!(tier.to_string().contains("gold"), "{tier}");
+    world.finish().await;
+}
+
 /// A2.9: following and ambient mode keep to what the caller may see and
 /// do. A member can't follow a DM they aren't in, nor set ambient mode
 /// there; a viewer (no `replies.steer`) can't set it in a channel; and what
@@ -4575,6 +5081,19 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .await;
     assert_ne!(edited["outcome"], "ok", "{edited}");
     assert!(!edited.to_string().contains(&word), "{edited}");
+    // Nor list it among the space's Pages records, by any view of them.
+    let (_, records) = world.agents["rook"]
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "record_query",
+                arguments: json!({ "projectId": "WORK", "collection": "Pages" }),
+            },
+        )
+        .await;
+    assert_eq!(records["outcome"], "ok", "{records}");
+    assert!(!records.to_string().contains(&page), "{records}");
+    assert!(!records.to_string().contains("plans"), "{records}");
     // Nor its live document, its discussion or an export of it.
     for path in ["document", "discussion", "export?format=markdown"] {
         let (status, read) = send(

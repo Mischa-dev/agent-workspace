@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 
 use rmcp::schemars::{self, JsonSchema};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ use crate::{
 };
 
 /// What a task write did.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskWritten {
     /// The task's id.
@@ -58,6 +58,14 @@ pub struct TaskWritten {
     /// The task's labels after the change, when the call changed them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
+    /// When the caller's role only suggests on tasks: the proposal the
+    /// change became, for someone who edits the task to accept or reject
+    /// (proposal_decide). The task itself is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    /// The parts the proposal sets, each with how it read before and after.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposed: Vec<Value>,
 }
 
 impl TaskWritten {
@@ -131,6 +139,8 @@ fn written(result: writes::WriteResult) -> Result<TaskWritten, OpError> {
             url,
             message,
             labels,
+            proposal_id: None,
+            proposed: Vec::new(),
         }),
         Result::Conflict {
             retry_category,

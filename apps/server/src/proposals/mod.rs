@@ -9,8 +9,12 @@
 //! (block edits by lasting id and hash); sheets through
 //! `sheets::proposals` (cells, each with the input it read; C1.11); boards
 //! through `whiteboards::proposals` (elements, each with the copy it read;
-//! C1.11). Records join later; until then a proposal of another kind can't
-//! be decided here.
+//! C1.11); records through `collections::record_proposals` (fields, each
+//! with the stored value it read; T1.41); tasks through
+//! `mcp::task_proposals` (their own fields and custom fields, likewise;
+//! T1.41). A record or task proposal raises a request card for the people
+//! who edit it (`raise_request`); answering the card decides the proposal
+//! (`settled`).
 //!
 //! `proposal_list` and `proposal_decide` (in `ops.rs`) are the one way to
 //! read and decide them; the page tools and routes for suggestions stay as
@@ -26,7 +30,7 @@ use uuid::Uuid;
 use crate::{access, error::AppError, memory::Writer, page_docs::suggestions};
 
 /// The kinds a proposal can be about today.
-pub const PROPOSABLE_KINDS: &[&str] = &["page", "sheet", "whiteboard"];
+pub const PROPOSABLE_KINDS: &[&str] = &["page", "record", "sheet", "task", "whiteboard"];
 
 /// A proposal as it's listed.
 #[derive(Clone, Debug, Serialize, FromRow, JsonSchema)]
@@ -75,6 +79,8 @@ const SELECT: &str = r#"
              WHEN 'page' THEN (SELECT page.title FROM project_pages page WHERE page.id = proposal.thing_id)
              WHEN 'sheet' THEN (SELECT sheet.name FROM sheets sheet WHERE sheet.id = proposal.thing_id)
              WHEN 'whiteboard' THEN (SELECT board.title FROM whiteboards board WHERE board.id = proposal.thing_id)
+             WHEN 'record' THEN (SELECT record.title FROM collection_records record WHERE record.id = proposal.thing_id)
+             WHEN 'task' THEN (SELECT task.title FROM task_rows task WHERE task.id = proposal.thing_id)
            END AS thing_title,
            proposal.space_id, proposal.operation, proposal.author_actor_id AS author_id,
            author.display_name AS author, proposal.note, proposal.base_version,
@@ -253,8 +259,201 @@ pub async fn decide(
             )
             .await
         }
+        "record" if parts.is_some() => Ok(Err(suggestions::Refusal::NotYours(
+            "A record proposal is accepted whole; parts are for sheets and whiteboards.",
+        ))),
+        "record" => {
+            let creator = sqlx::query_scalar::<_, Uuid>(
+                "SELECT created_by_actor_id FROM collection_records WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            let may_edit = access::write_mode(
+                transaction,
+                caller,
+                "record",
+                space_id,
+                creator == Some(caller.account_id),
+                Some("collections"),
+            )
+            .await?
+            .is_ok_and(|grant| grant.mode == access::WriteMode::Direct);
+            let may_build = access::check(
+                transaction,
+                caller,
+                access::Need::permission(crate::ops::Perm::CollectionsBuild),
+                access::Target::Space(space_id),
+            )
+            .await?
+            .is_ok();
+            let decided = crate::collections::record_proposals::decide(
+                transaction,
+                writer,
+                may_edit,
+                may_build,
+                thing_id,
+                proposal_id,
+                decision,
+            )
+            .await?;
+            if decided.is_ok() {
+                crate::requests::withdraw_about(transaction, REQUEST_SUBJECT, &[proposal_id])
+                    .await?;
+            }
+            Ok(decided)
+        }
+        "task" if parts.is_some() => Ok(Err(suggestions::Refusal::NotYours(
+            "A task proposal is accepted whole; parts are for sheets and whiteboards.",
+        ))),
+        "task" => {
+            let creator = sqlx::query_scalar::<_, Uuid>(
+                "SELECT created_by_actor_id FROM work_items WHERE id = $1",
+            )
+            .bind(thing_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            let may_edit = access::write_mode(
+                transaction,
+                caller,
+                "task",
+                space_id,
+                creator == Some(caller.account_id),
+                Some("tasks"),
+            )
+            .await?
+            .is_ok_and(|grant| grant.mode == access::WriteMode::Direct);
+            let decided = crate::mcp::task_proposals::decide(
+                transaction,
+                writer,
+                may_edit,
+                thing_id,
+                proposal_id,
+                decision,
+            )
+            .await?;
+            if decided.is_ok() {
+                crate::requests::withdraw_about(transaction, REQUEST_SUBJECT, &[proposal_id])
+                    .await?;
+            }
+            Ok(decided)
+        }
         _ => Ok(Err(suggestions::Refusal::NotYours(
             "Proposals on this kind of thing can't be decided yet.",
         ))),
+    }
+}
+
+/// What a proposal's request card is about.
+pub const REQUEST_SUBJECT: &str = "proposal";
+
+/// Raises the request card that asks the people who edit a thing to decide
+/// a proposal on it: its creator (when that isn't the author) and the
+/// space's owners and admins. Answering it decides the proposal
+/// (`settled`).
+pub async fn raise_request(
+    transaction: &mut Transaction<'_, Postgres>,
+    proposal_id: Uuid,
+    title: &str,
+    creator: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    let Some((workspace_id, space_id, author)) = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+        "SELECT workspace_id, space_id, author_actor_id FROM proposals WHERE id = $1",
+    )
+    .bind(proposal_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let accounts = creator
+        .filter(|creator| *creator != author)
+        .map(|creator| vec![creator.to_string()])
+        .unwrap_or_default();
+    let raised = crate::requests::open(
+        transaction,
+        crate::requests::Origin {
+            account_id: author,
+            workspace_id,
+            space_id: Some(space_id),
+            run_id: None,
+            host_request_ref: None,
+            conversation_id: None,
+            work_item_id: None,
+            subject: Some((REQUEST_SUBJECT, proposal_id)),
+            field: "proposal",
+        },
+        &serde_json::json!({
+            "kind": "proposal",
+            "title": title,
+            "options": [
+                {"id": "accept", "label": "Accept", "style": "approve"},
+                {"id": "reject", "label": "Reject", "style": "deny"},
+            ],
+            "allowText": false,
+            "audience": {"accounts": accounts, "roles": ["owner", "admin"]},
+            "expiresInSeconds": 7 * 24 * 3600,
+        }),
+    )
+    .await;
+    let raised = match raised {
+        Ok(raised) => raised,
+        // Nobody to ask (or too many open): the proposal still waits on
+        // the thing itself.
+        Err(crate::requests::OpenError::Refused { .. }) => return Ok(None),
+        Err(crate::requests::OpenError::App(error)) => return Err(error),
+    };
+    sqlx::query("UPDATE proposals SET request_id = $2 WHERE id = $1")
+        .bind(proposal_id)
+        .bind(raised.request_id)
+        .execute(&mut **transaction)
+        .await?;
+    crate::requests::announce_raised(transaction, raised.request_id).await?;
+    Ok(Some(raised.request_id))
+}
+
+/// A proposal's request card was answered: accept or reject the proposal
+/// as whoever answered, who must edit the thing. A card that expired or
+/// was withdrawn leaves the proposal waiting.
+pub(crate) async fn settled(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &crate::requests::RequestRow,
+    by: Option<Uuid>,
+) -> Result<(), AppError> {
+    let (Some(proposal_id), Some(by)) = (row.subject_id, by) else {
+        return Ok(());
+    };
+    if row.status != "answered" {
+        return Ok(());
+    }
+    let decision = match row
+        .answer
+        .as_ref()
+        .and_then(|answer| answer.get("optionId"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("accept") => Decision::Accept,
+        Some("reject") => Decision::Reject,
+        _ => return Ok(()),
+    };
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM actors WHERE id = $1")
+        .bind(by)
+        .fetch_one(&mut **transaction)
+        .await?;
+    let actor_kind = crate::accounts::actor_kind(&kind)?;
+    let caller = access::Caller::person(by, actor_kind);
+    let writer = Writer {
+        actor_id: by,
+        actor_kind,
+        via_grant_id: None,
+        confined_project: None,
+    };
+    match decide(transaction, &caller, writer, proposal_id, decision, None).await? {
+        Ok(_) | Err(suggestions::Refusal::AlreadyDecided(_)) => Ok(()),
+        Err(suggestions::Refusal::NotYours(_)) => Err(AppError::Forbidden),
+        Err(suggestions::Refusal::NotFound) => Err(AppError::NotFound("proposal")),
+        Err(suggestions::Refusal::Archived | suggestions::Refusal::Stale(_)) => {
+            Err(AppError::Conflict("proposal", "stale"))
+        }
     }
 }

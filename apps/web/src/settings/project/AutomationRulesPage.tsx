@@ -81,6 +81,10 @@ function describeTrigger(trigger: Trigger): string {
       return 'When a record is added'
     case 'record_changed':
       return 'When a record changes'
+    case 'record_matches':
+      return 'When a record starts matching'
+    case 'field_changed':
+      return trigger.to?.length ? 'When a record’s field changes to a value' : 'When a record’s field changes'
     case 'page_changed':
       return trigger.pageId ? 'When this page changes' : 'When a page changes'
     case 'sheet_changed':
@@ -134,7 +138,7 @@ function describeAction(action: RuleAction): string {
     case 'post_message':
       return 'post a message'
     case 'run_operation':
-      return `run ${action.operation}`
+      return action.operation === 'task_create' ? 'create a task' : `run ${action.operation}`
     case 'ask_agent':
       return 'ask an agent'
   }

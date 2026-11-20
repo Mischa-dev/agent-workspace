@@ -97,7 +97,7 @@ export function CollectionsListPage() {
                 leading={<Icon name="table" size={18} />}
                 meta={[
                   collection.actsLikeTask ? countLabel(collection.records, 'task') : countLabel(collection.records, 'record'),
-                  collection.builtin === 'tasks' ? 'Built in: your tasks, in any view' : collection.description || null,
+                  collection.builtin === 'tasks' ? 'Built in: your tasks, in any view' : collection.builtin === 'pages' ? 'Built in: your pages, with their fields' : collection.description || null,
                   collection.updatedAt ? `changed ${formatRelative(collection.updatedAt)}` : null,
                 ]
                   .filter(Boolean)
