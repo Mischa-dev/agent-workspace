@@ -1820,6 +1820,8 @@ struct TheirProject {
     role_id: Option<Uuid>,
     caller_role: Option<String>,
     caller_permissions: Option<Vec<String>>,
+    /// What the caller's groups are given in the project (K1.27).
+    caller_groups: Option<Vec<String>>,
     caller_enabled: bool,
 }
 
@@ -1832,6 +1834,7 @@ fn manage_refusal(
     project_id: Uuid,
     role: Option<&str>,
     permissions: Option<&[String]>,
+    groups: Option<&[String]>,
     enabled: bool,
 ) -> Result<Option<&'static str>, AppError> {
     let Some(role) = role else {
@@ -1840,7 +1843,8 @@ fn manage_refusal(
         ));
     };
     let permission = Action::MembershipManage.permission();
-    let grant = RoleGrant::stored(role, permissions)?;
+    let grant =
+        RoleGrant::stored(role, permissions)?.with_groups(crate::access::group_permissions(groups));
     if !crate::access::membership_allows(caller.actor_id, project_id, grant, enabled, permission) {
         return Ok(Some(
             if crate::access::limit_hides(caller.actor_id, project_id, permission) {
@@ -1866,6 +1870,7 @@ async fn apply_to_their_projects(
         SELECT membership.project_id, membership.role, custom_role_id(membership.role_id) AS role_id,
                caller_membership.role AS caller_role,
                workspace_role_permissions(caller_membership.role_id) AS caller_permissions,
+               space_group_permissions($3, project.id) AS caller_groups,
                COALESCE(caller_membership.enabled, false) AS caller_enabled
         FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
@@ -1905,6 +1910,7 @@ async fn apply_to_their_projects(
         role_id,
         caller_role,
         caller_permissions,
+        caller_groups,
         caller_enabled,
     } in memberships
     {
@@ -1931,6 +1937,7 @@ async fn apply_to_their_projects(
             project_id,
             caller_role.as_deref(),
             caller_permissions.as_deref(),
+            caller_groups.as_deref(),
             caller_enabled,
         )? {
             skipped.push(SkippedProject { project_id, reason });

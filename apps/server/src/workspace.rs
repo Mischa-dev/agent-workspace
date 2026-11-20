@@ -254,7 +254,7 @@ async fn load_workspace(
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND actor.kind IN ('human', 'external_agent')) AS member_count, -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
+                   AND actor.kind IN ('human', 'external_agent', 'integration')) AS member_count, -- // kind-check: mechanical (counts accounts that sign in, as the Members page lists them)
                (SELECT count(*) FROM organization_memberships membership
                  JOIN actors actor ON actor.id = membership.actor_id
                  WHERE membership.organization_id = organization.id AND membership.enabled
@@ -476,6 +476,9 @@ struct MemberView {
     joined_at: DateTime<Utc>,
     project_count: i64,
     is_you: bool,
+    /// Whether the workspace can be handed to them: an owner has to sign in
+    /// to use it, which an app account can't.
+    may_own: bool,
     capabilities: MemberCapabilities,
 }
 
@@ -502,7 +505,7 @@ const MEMBER_COLUMNS: &str = r#"
 const MEMBER_FROM: &str = r#"
     FROM organization_memberships membership
     JOIN actors actor ON actor.id = membership.actor_id
-     AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to list)
+     AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps; the system and workers aren't members to list)
     LEFT JOIN organization_actor_profiles profile
       ON profile.organization_id = membership.organization_id
      AND profile.actor_id = membership.actor_id
@@ -510,6 +513,12 @@ const MEMBER_FROM: &str = r#"
     LEFT JOIN workspace_roles held ON held.organization_id = membership.organization_id
      AND (held.id = membership.role_id OR (membership.role_id IS NULL AND held.key = membership.role))
 "#;
+
+/// Whether an account of this kind signs in itself. An app account acts
+/// only through the hosts and connections it was made for.
+fn signs_in(kind: &str) -> bool {
+    kind != "integration" // kind-check: mechanical (whether the account can sign in at all)
+}
 
 fn member_view(
     row: MemberRow,
@@ -521,6 +530,7 @@ fn member_view(
     let is_you = row.actor_id == principal.actor_id;
     let connects_apps = row.kind == "human"; // kind-check: mechanical (apps act for the person who connected them)
     let capabilities = member_capabilities(caller, is_you, target_tier, connects_apps, row.enabled);
+    let may_own = signs_in(&row.kind);
     Ok(MemberView {
         actor_id: row.actor_id,
         kind: row.kind,
@@ -533,6 +543,7 @@ fn member_view(
         agent_limit: (caller.may(Permission::MembersManage) || is_you)
             .then_some(row.agent_limit)
             .flatten(),
+        may_own,
         enabled: row.enabled,
         version: row.version,
         joined_at: row.joined_at,
@@ -733,7 +744,7 @@ async fn lock_member(
         SELECT actor.kind, membership.role, membership.enabled, membership.version
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
-         AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that sign in; the system and workers aren't members to manage)
+         AND actor.kind IN ('human', 'external_agent', 'integration') -- // kind-check: mechanical (accounts that sign in: people, agents and apps, as the Members page lists them; the system and workers aren't members to manage)
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
         FOR UPDATE OF membership
         "#,
@@ -900,7 +911,8 @@ async fn transfer_ownership(
     if caller.role != MembershipRole::Owner {
         return Err(AppError::Forbidden);
     }
-    // Any active member can be given the workspace, a person or an agent.
+    // Any active member who signs in can be given the workspace, a person
+    // or an agent.
     let target = lock_member(&mut transaction, organization_id, request.actor_id).await?;
     let target_active = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM actors WHERE id = $1 AND status = 'active')",
@@ -911,10 +923,16 @@ async fn transfer_ownership(
     if !target.enabled || !target_active {
         return Err(AppError::NotFound("workspace member"));
     }
+    // An owner has to sign in to use the workspace or hand it on.
+    if !signs_in(&target.kind) {
+        return Err(AppError::Validation("new owner"));
+    }
     sqlx::query(
         r#"
         UPDATE organization_memberships
         SET role = CASE WHEN actor_id = $2 THEN $4 ELSE $5 END, role_id = NULL,
+            -- An owner's membership lasts.
+            expires_at = CASE WHEN actor_id = $2 THEN NULL ELSE expires_at END,
             role_explicit = true, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND actor_id IN ($2, $3)
         "#,

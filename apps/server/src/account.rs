@@ -269,6 +269,7 @@ struct ProjectContext {
     organization_id: Uuid,
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     handle: String,
 }
 
@@ -1412,6 +1413,7 @@ async fn require_project_manager(
         r#"
         SELECT project.organization_id, membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions,
                membership.handle
         FROM projects project
         JOIN project_memberships membership
@@ -1435,6 +1437,7 @@ async fn require_project_manager(
         project_id,
         &project.role,
         project.role_permissions.as_deref(),
+        project.group_permissions.as_deref(),
     ) {
         Ok(project)
     } else {
@@ -1447,10 +1450,12 @@ fn may_manage_execution(
     project_id: Uuid,
     role: &str,
     role_permissions: Option<&[String]>,
+    group_permissions: Option<&[String]>,
 ) -> bool {
     let Ok(role) = RoleGrant::stored(role, role_permissions) else {
         return false;
     };
+    let role = role.with_groups(crate::access::group_permissions(group_permissions));
     if role.role() == MembershipRole::Worker {
         return false;
     }
@@ -1507,6 +1512,7 @@ async fn require_profile_owner(
         access: AccountAccess,
         role: String,
         role_permissions: Option<Vec<String>>,
+        group_permissions: Option<Vec<String>>,
     }
     let row = sqlx::query_as::<_, Row>(
         r#"
@@ -1516,7 +1522,9 @@ async fn require_profile_owner(
                account.account_state,
                profile.id AS profile_id, profile.status AS profile_status,
                membership.role,
-               workspace_role_permissions(membership.role_id) AS role_permissions
+               workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions(profile.owner_actor_id, profile.project_id)
+                 AS group_permissions
         FROM execution_profiles profile
         JOIN provider_accounts account
           ON account.id = profile.provider_account_id
@@ -1551,6 +1559,7 @@ async fn require_profile_owner(
         project_id,
         &row.role,
         row.role_permissions.as_deref(),
+        row.group_permissions.as_deref(),
     ) {
         Ok(row.access)
     } else {

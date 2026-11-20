@@ -570,7 +570,8 @@ const MESSAGES_SQL: &str = r#"
                 ELSE ts_headline('english', message.plain_text, query.q,
                                  'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') END AS snippet,
            COALESCE(message.project_id, direct_scope_id()) AS project_id,
-           COALESCE(project.organization_id, message.workspace_id) AS workspace_id,
+           -- A DM or group is kept where its conversation says (ruling R20).
+           COALESCE(project.organization_id, conversation.workspace_id) AS workspace_id,
            COALESCE(project.name, 'Messages') AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            author.display_name AS author, message.created_at::text AS at,

@@ -137,7 +137,8 @@ async fn begin_write<T>(
         && role_allows(
             principal,
             project_id,
-            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref())
+                .with_groups(membership.group_permissions.clone()),
             Action::SheetEdit,
         );
     if !edits && !suggest_ok {

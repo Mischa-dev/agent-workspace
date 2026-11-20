@@ -63,15 +63,17 @@ pub fn router() -> Router<AppState> {
 struct ProjectAccessRow {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
     handle: String,
 }
 
 impl ProjectAccessRow {
     fn grant(&self) -> Result<RoleGrant, AppError> {
-        Ok(RoleGrant::stored(
-            &self.role,
-            self.role_permissions.as_deref(),
-        )?)
+        Ok(
+            RoleGrant::stored(&self.role, self.role_permissions.as_deref())?.with_groups(
+                crate::access::group_permissions(self.group_permissions.as_deref()),
+            ),
+        )
     }
 }
 
@@ -1152,6 +1154,7 @@ async fn require_project_action(
     let access = sqlx::query_as::<_, ProjectAccessRow>(
         r#"
         SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions,
                membership.handle
         FROM projects project
         JOIN project_memberships membership

@@ -164,6 +164,7 @@ pub async fn run_jobs(
 struct ProjectAccess {
     role: String,
     role_permissions: Option<Vec<String>>,
+    group_permissions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -5310,11 +5311,16 @@ async fn ensure_github_actor(
         .await?;
         return Ok(actor_id);
     }
-    let actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(actor_id)
-        .execute(&mut **transaction)
+    let workspace: Uuid = sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&mut **transaction)
         .await?;
+    let actor_id = crate::accounts::create_app(
+        transaction,
+        crate::accounts::Owner::Workspace(workspace),
+        None,
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, enabled) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration', true)",
     )
@@ -6344,7 +6350,8 @@ pub(crate) async fn require_project_access_as(
 ) -> Result<RoleGrant, AppError> {
     let access = sqlx::query_as::<_, ProjectAccess>(
         r#"
-        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions
+        SELECT membership.role, workspace_role_permissions(membership.role_id) AS role_permissions,
+               space_group_permissions($2, project.id) AS group_permissions
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -6363,7 +6370,9 @@ pub(crate) async fn require_project_access_as(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("project"))?;
-    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?;
+    let role = RoleGrant::stored(&access.role, access.role_permissions.as_deref())?.with_groups(
+        crate::access::group_permissions(access.group_permissions.as_deref()),
+    );
     if crate::access::membership_allows(actor_id, project_id, role, true, action.permission()) {
         Ok(role)
     } else {

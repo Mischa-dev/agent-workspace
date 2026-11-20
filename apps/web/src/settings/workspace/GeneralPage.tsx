@@ -230,7 +230,7 @@ function TransferSection({ workspace }: { workspace: Workspace }) {
     queryFn: () => listWorkspaceMembers(workspace.id),
     enabled: open,
   })
-  const candidates = (members.data?.members ?? []).filter((member) => member.enabled && !member.isYou)
+  const candidates = (members.data?.members ?? []).filter((member) => member.enabled && !member.isYou && member.mayOwn)
   const chosen = candidates.find((member) => member.actorId === actorId) ?? null
   // Handing over a workspace can't be taken back by you, so the name is typed to confirm.
   const confirmed = typed.trim() === workspace.name
