@@ -21,6 +21,7 @@ macro_rules! tool_op {
             $(home: $home:literal,)?
             $(resource: $resource:expr,)?
             $(audited: $audited:literal,)?
+            $(shown_once: [$($shown:literal),*],)?
             title: $title:literal,
             description: $description:expr,
             emits: [$($emit:literal),*],
@@ -41,6 +42,7 @@ macro_rules! tool_op {
             $(const SPANS_WORKSPACES: bool = $spans;)?
             $(const HOME_WORKSPACE_BY_DEFAULT: bool = $home;)?
             $(const RESOURCE: Option<crate::ops::ResourceAddress> = Some($resource);)?
+            $(const SHOWN_ONCE: &'static [&'static str] = &[$($shown),*];)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];

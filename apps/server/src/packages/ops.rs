@@ -902,6 +902,17 @@ impl Operation for PackageRemove {
                 current: None,
             });
         }
+        // An upgraded install's parts belong to the install that replaced it
+        // (or were left as they are): only the current one is removed.
+        if state == "superseded" {
+            return Err(OpError::Conflict {
+                reason: ConflictReason::State { code: "superseded" },
+                message: "That install was upgraded: remove the install that replaced it \
+                          (package_list shows it)."
+                    .into(),
+                current: None,
+            });
+        }
         let mut archived = 0usize;
         if input.parts == RemoveParts::Archive {
             let made = install::created_objects(tx, install_id).await?;

@@ -372,6 +372,8 @@ tool_op!(InvitationCreate {
     permission: None,
     idempotency: Dispatcher,
     audited: true,
+    // A join link is a bearer credential: never kept for a replay.
+    shown_once: ["joinUrl"],
     title: "Invite",
     description: "Invite someone to a space with a join link (role admin, member, viewer or a \
         custom role, never above yours), or to its workspace (wholeWorkspace: true, with a note). \
@@ -393,6 +395,8 @@ tool_op!(InvitationUpdate {
     idempotency: Dispatcher,
     destructive: true,
     audited: true,
+    // A join link is a bearer credential: never kept for a replay.
+    shown_once: ["joinUrl"],
     title: "Revoke or replace invitation",
     description: "Revoke an invitation (revoke: true), or replace it with a new link \
         (replace: true, returned once), with the version invitation_list shows.",

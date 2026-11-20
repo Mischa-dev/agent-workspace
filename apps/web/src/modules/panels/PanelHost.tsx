@@ -9,7 +9,7 @@
 // own, whose finish answers like a press.
 
 import { useQuery } from '@tanstack/react-query'
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { callOp, newRequestId, opKey, type OpOutput } from '../../api/ops'
 import { Banner, Button, ErrorState, ListSkeleton } from '../../ui'
@@ -55,7 +55,12 @@ export function PanelHost({
   place: PanelPlace
 }) {
   const { moduleId, panel, spaceId, thing, workspaceId } = place
-  const input = { moduleId, panel, spaceId, thing }
+  const thingKind = thing?.kind
+  const thingId = thing?.id
+  const input = useMemo(
+    () => ({ moduleId, panel, spaceId, thing: thingKind && thingId ? { kind: thingKind, id: thingId } : undefined }),
+    [moduleId, panel, spaceId, thingKind, thingId],
+  )
   const opened = useQuery({
     queryKey: opKey('module_panel_open', input, workspaceId),
     queryFn: ({ signal }) => callOp('module_panel_open', input, { workspaceId, signal, retries: 0 }),
@@ -125,17 +130,28 @@ export function PanelHost({
     setAfter((last) => ({ ...(last?.from === from ? last : {}), from, frame: null }))
   }, [onClose, opened.data, openedWithFrame])
 
-  // The module asked to be asked again after a while.
+  // The module asked to be asked again after a while. It is asked with the
+  // state it last gave, so a stateful panel carries on where it was.
   const { refetch, dataUpdatedAt } = opened
   const refreshAfter = shown?.refreshAfter
   useEffect(() => {
     const seconds = refreshAfter
     if (!seconds || finished) return
     const timer = window.setTimeout(() => {
-      if (!pressing.current) void refetch()
+      if (pressing.current) return
+      if (state === undefined) {
+        void refetch()
+        return
+      }
+      callOp('module_panel_open', { ...input, state }, { workspaceId, retries: 0 }).then(
+        (value) => {
+          if (!pressing.current) take(value.answer)
+        },
+        (error: unknown) => setFailed(error),
+      )
     }, seconds * 1000)
     return () => window.clearTimeout(timer)
-  }, [refreshAfter, finished, refetch, dataUpdatedAt, after])
+  }, [refreshAfter, finished, refetch, dataUpdatedAt, after, state, take, input, workspaceId])
 
   const onAction = async (action: PanelAction) => {
     pressing.current = true

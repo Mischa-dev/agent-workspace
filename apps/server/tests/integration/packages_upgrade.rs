@@ -268,6 +268,15 @@ async fn an_upgrade_keeps_local_changes_detaches_and_only_grows() {
     .expect("detached");
     assert_eq!(detached, 2, "the agent template and #lobby");
 
+    // Nor removed: its parts are the new install's now, or left as they are.
+    let removed = tool(
+        &world,
+        "package_remove",
+        json!({"installId": install, "parts": "archive", "clientRequestId": "remove-old"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "conflict", "{removed}");
+
     // The old install can't be upgraded again.
     let old = tool(
         &world,
@@ -298,6 +307,37 @@ async fn an_upgrade_keeps_local_changes_detaches_and_only_grows() {
     assert_eq!(lines["skill:triage"], "keep", "{preview}");
     assert_eq!(lines["collection:feedback"], "keep", "{preview}");
     assert!(!lines.contains_key("agent:triage_agent"), "{preview}");
+    // Someone edits the guide again after that preview: its plan is stale,
+    // so taking theirs can't overwrite an edit nobody saw.
+    sqlx::query(
+        "UPDATE project_pages SET body = 'Welcome, edited again.' \
+         WHERE project_id = $1::uuid AND title = 'Studio guide'",
+    )
+    .bind(&space)
+    .execute(&pool)
+    .await
+    .expect("edit the guide");
+    let stale = tool(
+        &world,
+        "package_upgrade",
+        json!({"installId": second, "package": v3,
+               "planHash": preview["value"]["planHash"],
+               "choices": {"page:guide": "take_theirs"},
+               "clientRequestId": "studio-v3-stale"}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    assert_eq!(
+        page_body(&pool, &space, "Studio guide").await,
+        "Welcome, edited again."
+    );
+    let preview = tool(
+        &world,
+        "package_upgrade_preview",
+        json!({"installId": second, "package": v3}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
     let upgraded = tool(
         &world,
         "package_upgrade",

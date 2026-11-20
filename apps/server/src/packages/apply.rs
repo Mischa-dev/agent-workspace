@@ -241,6 +241,21 @@ pub(crate) async fn install(
     place: &Place,
     plan: &Plan,
 ) -> Result<Installed, InstallError> {
+    install_keeping(tx, who, package, document, place, plan, &HashMap::new()).await
+}
+
+/// [`install`], with the collections an earlier version installed (by
+/// package key): an upgrade's new parts name those, even where the
+/// collection was renamed here or upstream.
+pub(crate) async fn install_keeping(
+    tx: &mut Transaction<'static, Postgres>,
+    who: &Installer<'_>,
+    package: &Package,
+    document: &Value,
+    place: &Place,
+    plan: &Plan,
+    kept_collections: &HashMap<String, Uuid>,
+) -> Result<Installed, InstallError> {
     use crate::workspace_templates::{self as templates, TemplateDefinition, TemplateProject};
 
     let workspace = who.workspace;
@@ -502,7 +517,10 @@ pub(crate) async fn install(
             }
             ContentKind::Collection => {
                 let name = body["name"].as_str().unwrap_or("").trim();
-                if let Some(space) = space
+                if let Some(id) = kept_collections.get(&part.key) {
+                    collections.insert(part.key.clone(), *id);
+                    record(&mut objects, "collection", &part.key, *id);
+                } else if let Some(space) = space
                     && let Some(id) = sqlx::query_scalar::<_, Uuid>(
                         "SELECT id FROM collections WHERE project_id = $1 \
                          AND archived_at IS NULL AND lower(name) = lower($2)",

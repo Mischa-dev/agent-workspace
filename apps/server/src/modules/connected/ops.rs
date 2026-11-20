@@ -480,10 +480,13 @@ pub struct ThingUpsertInput {
 }
 
 impl Targeted for ThingUpsertInput {
+    /// A change is checked at the thing where it is, so an app taken out of
+    /// a space can't reach what it left there.
     fn target(&self) -> Target {
-        match &self.space_id {
-            Some(space) => Target::Space(space.id()),
-            None => Target::Workspace(None),
+        match (&self.id, &self.space_id) {
+            (Some(id), _) => Target::thing("thing", id.id()),
+            (None, Some(space)) => Target::Space(space.id()),
+            (None, None) => Target::Workspace(None),
         }
     }
 }
@@ -509,6 +512,16 @@ impl Operation for ThingUpsert {
         call: &mut OpCall<'_>,
         input: ThingUpsertInput,
     ) -> Result<super::things::ConnectedThingView, OpError> {
+        // A thing stays in the space it was made in.
+        if input.id.is_some()
+            && let Some(space) = input.space_id
+            && Some(space.id()) != call.ctx.space_id
+        {
+            return Err(OpError::invalid(
+                "spaceId",
+                "A thing stays in the space it was made in. Leave spaceId out to change it.",
+            ));
+        }
         let upsert = super::things::Upsert {
             id: input.id.map(|id| id.id()),
             kind: input.kind.trim(),

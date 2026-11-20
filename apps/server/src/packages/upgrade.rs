@@ -420,6 +420,19 @@ pub(crate) async fn plan(
             existing_id: Some(object.id),
         });
     }
+    // Each part as it is here now: an edit between the preview and the
+    // upgrade changes the plan, so a choice made on the preview can't
+    // overwrite what nobody saw.
+    let here = objects
+        .iter()
+        .filter(|object| object.action != "detached")
+        .map(|object| {
+            (
+                format!("{}:{}", object.kind, object.key),
+                object.now.clone(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let plan_hash = format!(
         "sha256:{}",
         hex::encode(Sha256::digest(
@@ -427,6 +440,7 @@ pub(crate) async fn plan(
                 "install": old.id,
                 "digest": install_plan.digest,
                 "items": items,
+                "here": here,
                 "turnsOff": install_plan.turns_off,
                 "turnsOn": install_plan.turns_on,
             }))
@@ -635,7 +649,23 @@ pub(crate) async fn upgrade(
         let field = format!("package.collection:{}", object.key);
         take_new(tx, who, &growing, "collection", object.id, body, &field).await?;
     }
-    let installed = apply::install(tx, who, package, document, &place, &install_plan).await?;
+    // New parts name the collections this install already has by their
+    // package key, whatever they are called now.
+    let kept_collections = objects
+        .iter()
+        .filter(|object| object.kind == "collection" && object.action != "detached")
+        .map(|object| (object.key.clone(), object.id))
+        .collect::<HashMap<_, _>>();
+    let installed = apply::install_keeping(
+        tx,
+        who,
+        package,
+        document,
+        &place,
+        &install_plan,
+        &kept_collections,
+    )
+    .await?;
     let new_install = installed.install_id;
     let space = installed.space_id.or(old.space_id);
 

@@ -804,6 +804,36 @@ async fn a_connected_module_runs_its_operations_and_sends_in_its_events() {
     .await;
     assert_eq!(changed.1["value"]["version"], 2, "{}", changed.1);
     assert_eq!(changed.1["value"]["existed"], true);
+    // Taken out of the space, the app can't reach the thing it left there.
+    let left = sqlx::query(
+        "DELETE FROM project_memberships membership USING module_apps app \
+         WHERE membership.project_id = $1 AND membership.actor_id = app.account_id \
+           AND app.module_id = $2::uuid",
+    )
+    .bind(work)
+    .bind(&connected.module)
+    .execute(&pool)
+    .await
+    .expect("app leaves the project");
+    assert_eq!(left.rows_affected(), 1);
+    let outside = as_app(
+        &world,
+        &connected.secret,
+        "thing_upsert",
+        json!({"kind": "acme.build", "id": thing, "title": "Build 214", "status": "failed"}),
+    )
+    .await;
+    assert_ne!(outside.0, StatusCode::OK, "{}", outside.1);
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, role_id, display_name, handle) \
+         SELECT gen_random_uuid(), $1, app.account_id, 'member', app.role_id, 'Builds', 'builds-app' \
+         FROM module_apps app WHERE app.module_id = $2::uuid",
+    )
+    .bind(work)
+    .bind(&connected.module)
+    .execute(&pool)
+    .await
+    .expect("app joins the project again");
     let forged = tool(
         &world,
         "helper",

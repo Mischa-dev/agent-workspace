@@ -246,6 +246,30 @@ pub(super) async fn open_host(
     let token = crate::auth::random_token();
     let digest = Sha256::digest(token.as_bytes()).to_vec();
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // The viewer must still reach where the launch was opened: someone
+    // taken out of the space since can't open it.
+    let place = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT workspace_id, space_id FROM module_frame_launches \
+         WHERE id = $1 AND account_id = $2",
+    )
+    .bind(launch_id)
+    .bind(principal.actor_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some((workspace_id, space_id)) = place else {
+        return Ok(gone(scheme));
+    };
+    let target = match space_id {
+        Some(space) => crate::access::Target::Space(space),
+        None => crate::access::Target::Workspace(workspace_id),
+    };
+    let caller = principal.caller()?;
+    if crate::access::check(&mut transaction, &caller, crate::access::Need::SEE, target)
+        .await?
+        .is_err()
+    {
+        return Ok(gone(scheme));
+    }
     let opened = sqlx::query_as::<_, (String, String, String)>(
         "UPDATE module_frame_launches launch SET opened_at = now(), token_digest = $3 \
          WHERE launch.id = $1 AND launch.account_id = $2 AND launch.opened_at IS NULL \
