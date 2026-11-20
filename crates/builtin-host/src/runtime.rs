@@ -2,8 +2,10 @@
 //! it carries out. Everything here goes through the public host protocol.
 
 pub mod commands;
+pub mod recovery;
 pub mod reply;
 pub mod report;
 pub mod requests;
+pub mod start;
 pub mod turn;
 pub mod windows;

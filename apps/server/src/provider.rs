@@ -44,15 +44,7 @@ pub struct StartedProviderRun {
     pub provider_thread_id: String,
 }
 
-#[derive(Debug)]
-pub(crate) enum ProviderRecovery {
-    Completed { message: String },
-    Resumed { latest_turn_status: String },
-    UnboundTurn,
-    MismatchedTurn,
-    RejectedMessage,
-    Unavailable,
-}
+pub(crate) use agent_workspace_builtin_host::runtime::recovery::HarnessRecovery as ProviderRecovery;
 
 /// The provider account behind an execution profile, and the adapter that
 /// runs it.

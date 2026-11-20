@@ -131,6 +131,7 @@ impl Host for RemoteHost {
         input: StartInput,
     ) -> Result<Uuid, AppError> {
         let prompt = input.prompt.unwrap_or_else(|| run.title.clone());
+        let repository = start_repository(transaction, run).await?;
         let body = json!({
             "agent": {"accountId": run.account_id, "hostAgentRef": host_agent_ref},
             "input": {"prompt": prompt},
@@ -144,8 +145,10 @@ impl Host for RemoteHost {
             "title": run.title,
             "requestedBy": run.requested_by_account_id.map(|id| json!({"accountId": id})),
             "settings": input.settings.unwrap_or_else(|| run.settings.clone()),
-            // A repository token comes with A1.18's code-host seam.
-            "repository": Value::Null,
+            // The code the run works on, so a host needs no read of the
+            // server's tables to start it (A1.17). A repository token comes
+            // with A1.18's code-host seam.
+            "repository": repository,
         });
         let row = commands::issue(
             transaction,
@@ -320,4 +323,41 @@ pub async fn start_run(
         .start(transaction, &run, &host_agent_ref, input)
         .await?;
     Ok((run, command_id))
+}
+
+/// The repository a run works on, for its start: its conversation's (a
+/// code thread's), with its space's key for naming the run's branch. Null
+/// for a run with no repository.
+async fn start_repository(
+    transaction: &mut Transaction<'_, Postgres>,
+    run: &RunRow,
+) -> Result<Value, AppError> {
+    let Some(conversation_id) = run.conversation_id else {
+        return Ok(Value::Null);
+    };
+    let found = sqlx::query_as::<_, (Uuid, String, String, String)>(
+        r#"
+        SELECT repository.id, repository.clone_url, repository.default_branch,
+               project.project_key
+          FROM conversations conversation
+          JOIN repositories repository ON repository.id = conversation.repository_id
+          JOIN projects project ON project.id = repository.project_id
+         WHERE conversation.id = $1
+           AND conversation_visible_to(conversation.id, $2)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(run.account_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    Ok(match found {
+        Some((id, clone_url, default_branch, space_key)) => json!({
+            "id": id,
+            // Never a user name or token, whatever an older row holds.
+            "cloneUrl": crate::mcp::code::public_clone_url(&clone_url),
+            "defaultBranch": default_branch,
+            "spaceKey": space_key,
+        }),
+        None => Value::Null,
+    })
 }

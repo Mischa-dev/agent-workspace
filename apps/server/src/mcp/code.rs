@@ -325,7 +325,7 @@ pub(super) async fn check_summaries(
 
 /// A clone URL without any user name or token in it. Registration refuses
 /// '@', but older or seeded rows aren't constrained in the database.
-fn public_clone_url(value: &str) -> String {
+pub(crate) fn public_clone_url(value: &str) -> String {
     match value.split_once("://") {
         Some((scheme, rest)) => {
             let (authority, path) = match rest.find('/') {
