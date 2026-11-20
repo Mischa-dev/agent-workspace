@@ -428,6 +428,13 @@ pub(crate) async fn read_moved_payload(
     store_id: Option<&str>,
     key: &str,
 ) -> Result<Value, AppError> {
+    if let Some(warmed) = stores.warmed_payloads() {
+        // Moved after the payloads were read: no network call in here.
+        return warmed.get(key).cloned().ok_or(AppError::Conflict(
+            "version",
+            "That version was put away a moment ago. Try again.",
+        ));
+    }
     let store = stores
         .open(store_id.unwrap_or(crate::files::store::LOCAL))
         .await?;
@@ -440,6 +447,56 @@ pub(crate) async fn read_moved_payload(
     .map_err(|_| AppError::Internal("a moved version couldn't be read"))?;
     serde_json::from_slice(&json)
         .map_err(|_| AppError::Internal("a moved version couldn't be read"))
+}
+
+/// The stores to show or restore `version` of `id` from, inside a
+/// transaction: the moved payload it reads (a board version's elements, the
+/// sheet snapshot it builds on) is read here first, before any transaction
+/// opens, as `cold::warm_page` does for pages. A payload moved after this
+/// is refused under the transaction rather than read there.
+pub async fn warm_moved<'a>(
+    state: &'a crate::AppState,
+    kind: &str,
+    id: Uuid,
+    version: i64,
+) -> Result<crate::files::store::Stores<'a>, AppError> {
+    let query = match kind {
+        "whiteboard" => {
+            "SELECT payload_key, payload_store_id FROM whiteboard_revisions \
+             WHERE whiteboard_id = $1 AND revision = $2::int AND payload_key IS NOT NULL"
+        }
+        "sheet" => {
+            "SELECT payload_key, payload_store_id FROM ( \
+                 SELECT payload_key, payload_store_id FROM sheet_snapshots \
+                 WHERE sheet_id = $1 AND revision <= $2 ORDER BY revision DESC LIMIT 1 \
+             ) latest WHERE payload_key IS NOT NULL"
+        }
+        _ => {
+            return Ok(crate::files::store::Stores::warmed(
+                state,
+                Default::default(),
+            ));
+        }
+    };
+    let moved = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (String, Option<String>)>(query)
+            .bind(id)
+            .bind(version)
+            .fetch_optional(&mut *connection)
+            .await
+    })
+    .await?;
+    let mut payloads = std::collections::HashMap::new();
+    if let Some((key, store_id)) = moved {
+        let payload = read_moved_payload(
+            &crate::files::store::Stores::of(state),
+            store_id.as_deref(),
+            &key,
+        )
+        .await?;
+        payloads.insert(key, payload);
+    }
+    Ok(crate::files::store::Stores::warmed(state, payloads))
 }
 
 /// Who restores, as each kind's own write path wants it.

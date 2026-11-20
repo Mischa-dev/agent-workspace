@@ -70,10 +70,13 @@ pub struct StoredBytes {
 /// Opens the store a row names by its id (a history payload's), for code
 /// that reads rows kept in several stores: the configured store for new
 /// writes, any other by id.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Stores<'a> {
     pool: &'a sqlx::PgPool,
     config: &'a AppConfig,
+    /// Moved payloads read before a transaction opened, by key. When set,
+    /// nothing else is read from a store (`history::read_moved_payload`).
+    warmed: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl<'a> Stores<'a> {
@@ -81,7 +84,25 @@ impl<'a> Stores<'a> {
         Self {
             pool: &state.pool,
             config: &state.config,
+            warmed: None,
         }
+    }
+
+    /// Only these payloads, already read: for use inside a transaction.
+    pub fn warmed(
+        state: &'a crate::AppState,
+        payloads: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            warmed: Some(payloads),
+            ..Self::of(state)
+        }
+    }
+
+    pub(crate) fn warmed_payloads(
+        &self,
+    ) -> Option<&std::collections::HashMap<String, serde_json::Value>> {
+        self.warmed.as_ref()
     }
 
     /// Where new payloads go.

@@ -1003,6 +1003,7 @@ struct Kind<'a> {
 /// One kind's rows as lines in `things/<module>/<kind>.jsonl`, oldest
 /// first, so a row comes after the rows of its own kind it points at (a
 /// reply after its parent). Returns how many.
+#[allow(clippy::too_many_arguments)]
 async fn write_kind(
     connection: &mut PgConnection,
     zip: &mut ZipWriter<std::fs::File>,
