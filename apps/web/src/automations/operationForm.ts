@@ -142,12 +142,14 @@ export function operationFormValues(schema: OpenApiSchema, input: Record<string,
 
 /**
  * What the form's values send: numbers as numbers, lines as lists, JSON
- * parsed, empty answers left out, and the rule's own space filled in where
+ * parsed, empty answers left out (an unticked box only when the operation
+ * doesn't need it and it wasn't touched), and the rule's own space filled in where
  * the operation asks for one. Text keeps its {{variables}} for the rule to
  * fill when it fires. Throws with the field to fix.
  */
 export function operationInput(schema: OpenApiSchema, values: FormValues, spaceId: string): Record<string, unknown> {
   const input: Record<string, unknown> = {}
+  const required = new Set(schema.required ?? [])
   for (const [id, property] of Object.entries(schema.properties ?? {})) {
     if (SPACE_FIELDS.has(id)) {
       input[id] = spaceId
@@ -157,7 +159,10 @@ export function operationInput(schema: OpenApiSchema, values: FormValues, spaceI
     const value: FormValue | undefined = values[id]
     const shape = shapeOf(id, property)
     if (shape === 'checkbox') {
+      // Ticked sends true; unticked sends false when the operation needs an
+      // answer or the box was touched, and nothing when it was left alone.
       if (value === true) input[id] = true
+      else if (value === false || required.has(id)) input[id] = false
       continue
     }
     if (value === undefined || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0)) continue

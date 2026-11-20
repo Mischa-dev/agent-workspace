@@ -222,6 +222,12 @@
     "title": "Retire custom emoji"
   },
   {
+    "kind": "change",
+    "module": "tasks",
+    "name": "cycle_set",
+    "title": "Set up cycles"
+  },
+  {
     "kind": "create",
     "module": "dashboards",
     "name": "dashboard_create",
@@ -238,6 +244,48 @@
     "module": "dashboards",
     "name": "dashboard_update",
     "title": "Change a dashboard"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_connection_delete",
+    "title": "Remove an outside data connection"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "data_query_create",
+    "title": "Save an outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_delete",
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_review",
+    "title": "Review a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_run",
+    "title": "Run a saved outside data query"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_share",
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "data_query_update",
+    "title": "Change a saved outside data query"
   },
   {
     "kind": "create",
@@ -300,6 +348,24 @@
     "title": "Follow"
   },
   {
+    "kind": "create",
+    "module": "collections",
+    "name": "form_answer_send",
+    "title": "Answer a form"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "form_create",
+    "title": "Create a form"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "form_update",
+    "title": "Change a form"
+  },
+  {
     "kind": "change",
     "module": "code",
     "name": "github_automation_update",
@@ -349,12 +415,6 @@
   },
   {
     "kind": "change",
-    "module": "workspace",
-    "name": "history_restore",
-    "title": "Restore a version"
-  },
-  {
-    "kind": "change",
     "module": "agents",
     "name": "host_agent_bind",
     "title": "Bind an agent to a host"
@@ -394,6 +454,12 @@
     "module": "automations",
     "name": "incoming_hook_delete",
     "title": "Delete an incoming hook"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "initiative_create",
+    "title": "Create an initiative"
   },
   {
     "kind": "create",
@@ -478,6 +544,12 @@
     "module": "tasks",
     "name": "milestone_create",
     "title": "Create milestone"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "milestone_reorder",
+    "title": "Reorder milestones"
   },
   {
     "kind": "change",
@@ -577,6 +649,18 @@
   },
   {
     "kind": "change",
+    "module": "tasks",
+    "name": "project_status_set",
+    "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "project_update_create",
+    "title": "Post a project update"
+  },
+  {
+    "kind": "change",
     "module": "workspace",
     "name": "proposal_decide",
     "title": "Decide a proposal"
@@ -607,9 +691,45 @@
   },
   {
     "kind": "create",
+    "module": "collections",
+    "name": "record_template_create",
+    "title": "Create a record template"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "record_template_update",
+    "title": "Change a record template"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "record_update",
+    "title": "Update a record"
+  },
+  {
+    "kind": "create",
     "module": "tasks",
     "name": "recurring_create",
     "title": "Schedule a template"
+  },
+  {
+    "kind": "create",
+    "module": "collections",
+    "name": "recurring_record_create",
+    "title": "Make records on a schedule"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "recurring_record_delete",
+    "title": "Stop a recurring record"
+  },
+  {
+    "kind": "change",
+    "module": "collections",
+    "name": "recurring_record_update",
+    "title": "Change a recurring record"
   },
   {
     "kind": "change",
@@ -860,12 +980,6 @@
   {
     "kind": "change",
     "module": "tasks",
-    "name": "task_archive",
-    "title": "Archive task"
-  },
-  {
-    "kind": "change",
-    "module": "tasks",
     "name": "task_claim",
     "title": "Claim task"
   },
@@ -898,12 +1012,6 @@
     "module": "tasks",
     "name": "task_create_many",
     "title": "Create many tasks"
-  },
-  {
-    "kind": "change",
-    "module": "tasks",
-    "name": "task_criteria_update",
-    "title": "Task acceptance criteria"
   },
   {
     "kind": "create",
@@ -944,18 +1052,6 @@
   {
     "kind": "change",
     "module": "tasks",
-    "name": "task_restore",
-    "title": "Restore task"
-  },
-  {
-    "kind": "change",
-    "module": "tasks",
-    "name": "task_update",
-    "title": "Update task"
-  },
-  {
-    "kind": "change",
-    "module": "tasks",
     "name": "task_update_many",
     "title": "Update many tasks"
   },
@@ -988,12 +1084,6 @@
     "module": "workspace",
     "name": "theme_delete",
     "title": "Delete theme"
-  },
-  {
-    "kind": "change",
-    "module": "workspace",
-    "name": "theme_update",
-    "title": "Change theme"
   },
   {
     "kind": "change",
@@ -1036,6 +1126,24 @@
     "module": "channels",
     "name": "thread_update",
     "title": "Update thread"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_decide",
+    "title": "Triage tasks"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_enable",
+    "title": "Turn on triage"
+  },
+  {
+    "kind": "change",
+    "module": "tasks",
+    "name": "triage_rule_set",
+    "title": "Write a triage rule"
   },
   {
     "kind": "create",

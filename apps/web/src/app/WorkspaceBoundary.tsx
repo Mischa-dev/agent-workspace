@@ -54,7 +54,7 @@ export function WorkspaceProvider() {
         {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
         <CommandCenter />
         <Suspense fallback={null}>
-          <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} />
+          <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} workspaces={session.organizations} />
         </Suspense>
       </AvatarSourcesProvider>
     </WorkspaceContext.Provider>
@@ -63,7 +63,8 @@ export function WorkspaceProvider() {
 
 /**
  * `/w/:ws`: a workspace the person is in shows its pages; `/w/-/...` opens
- * the last one used; any other slug says the person isn't in it.
+ * the last one used; `/w/<its id>/...` opens the same page at its slug; any
+ * other slug says the person isn't in it.
  */
 export function WorkspaceBoundary() {
   const { ws = '' } = useParams()
@@ -76,6 +77,11 @@ export function WorkspaceBoundary() {
     return <Navigate replace state={location.state} to={`${workspaceHref(workspace.slug, rest || '/home')}${location.search}${location.hash}`} />
   }
   if (!session.organizations.some((organization) => organization.slug === ws)) {
+    // The server writes a workspace's id where it doesn't know the slug: the same page at the slug.
+    const byId = session.organizations.find((organization) => organization.id === ws)
+    if (byId) {
+      return <Navigate replace state={location.state} to={`${workspaceHref(byId.slug, withinWorkspace(location.pathname) || '/home')}${location.search}${location.hash}`} />
+    }
     return <NotInWorkspacePage workspaces={session.organizations} />
   }
   return <SpaceInWorkspace ws={ws} />

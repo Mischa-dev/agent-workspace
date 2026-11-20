@@ -95,11 +95,13 @@ export async function updateMilestone(input: {
   initiativeId?: string | null
   idempotencyKey: string
 }) {
-  const { projectId, milestoneId, idempotencyKey, expectedVersion, ...fields } = input
+  const { projectId, milestoneId, idempotencyKey, expectedVersion, initiativeId, ...fields } = input
+  // The operation takes the initiative as `initiative`, with "" to take it out of one.
+  const initiative = initiativeId === undefined ? {} : { initiative: initiativeId ?? '' }
   return milestone(
     await callOp(
       'milestone_update',
-      { projectId, milestoneId, ...fields, targetDate: targetDate(fields.targetDate) },
+      { projectId, milestoneId, ...fields, ...initiative, targetDate: targetDate(fields.targetDate) },
       { requestId: idempotencyKey, expectedVersion },
     ),
   )

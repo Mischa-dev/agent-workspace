@@ -1,15 +1,16 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { useEffectiveSettings } from '../settings/api'
-import { offlineOwner, offlineReadingOn } from './offlinePointer'
+import { useOfflineGate, type WorkspaceRef } from './offlineGate'
+import { offlineOwner } from './offlinePointer'
 import { clearOffline, keepOffline } from './persist'
 
-function Keeper({ actorId, workspaceId }: { actorId: string; workspaceId: string }) {
+function Keeper({ actorId, workspaceId, workspaces }: { actorId: string; workspaceId: string; workspaces: readonly WorkspaceRef[] }) {
   const queryClient = useQueryClient()
-  const effective = useEffectiveSettings({ scope: 'workspace', organizationId: workspaceId })
-  // Unknown (offline, or still loading) changes nothing.
-  const on = effective.data ? offlineReadingOn(effective.data) : null
+  // On in this workspace, and allowed in every workspace the person is in:
+  // the kept copy holds what they read in all of them. Unknown (offline, or
+  // still loading) changes nothing.
+  const { on } = useOfflineGate(workspaceId, workspaces)
   useEffect(() => {
     if (on === null) return
     if (!on) {
@@ -22,6 +23,14 @@ function Keeper({ actorId, workspaceId }: { actorId: string; workspaceId: string
 }
 
 /** Keeps the signed-in person's recent reading on this device while they and their workspace allow it (W1.31). */
-export default function OfflineReading({ actorId, workspaceId }: { actorId: string; workspaceId: string | null | undefined }) {
-  return workspaceId ? <Keeper actorId={actorId} workspaceId={workspaceId} /> : null
+export default function OfflineReading({
+  actorId,
+  workspaceId,
+  workspaces,
+}: {
+  actorId: string
+  workspaceId: string | null | undefined
+  workspaces: readonly WorkspaceRef[]
+}) {
+  return workspaceId ? <Keeper actorId={actorId} workspaceId={workspaceId} workspaces={workspaces} /> : null
 }

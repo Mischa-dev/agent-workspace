@@ -123,12 +123,32 @@ describe('reading offline', () => {
     const target = { scope: 'workspace' as const, organizationId: 'ws-1' }
     cache.setQueryData(settingsKeys.effective(target), settings({ 'offline.reading': true }))
     render(
-      createElement(QueryClientProvider, { client: cache }, createElement(OfflineReading, { actorId: 'alice', workspaceId: 'ws-1' })),
+      createElement(QueryClientProvider, { client: cache }, createElement(OfflineReading, { actorId: 'alice', workspaceId: 'ws-1', workspaces: [{ id: 'ws-1', name: 'One' }] })),
     )
     await waitFor(() => expect(offlineOwner()).toBe('alice'))
 
     await act(async () => {
       cache.setQueryData(settingsKeys.effective(target), settings({ 'offline.reading': true, 'offline.allowed': false }))
+    })
+    await waitFor(() => expect(offlineOwner()).toBeNull())
+    expect(await restoreOffline(client())).toBe(false)
+  })
+
+  it('keeps nothing while another workspace the person is in doesn’t allow it', async () => {
+    const cache = client()
+    const mine = { scope: 'workspace' as const, organizationId: 'ws-1' }
+    const theirs = { scope: 'workspace' as const, organizationId: 'ws-2' }
+    cache.setQueryData(settingsKeys.effective(mine), settings({ 'offline.reading': true }))
+    cache.setQueryData(settingsKeys.effective(theirs), settings({}))
+    const workspaces = [
+      { id: 'ws-1', name: 'One' },
+      { id: 'ws-2', name: 'Two' },
+    ]
+    render(createElement(QueryClientProvider, { client: cache }, createElement(OfflineReading, { actorId: 'alice', workspaceId: 'ws-1', workspaces })))
+    await waitFor(() => expect(offlineOwner()).toBe('alice'))
+
+    await act(async () => {
+      cache.setQueryData(settingsKeys.effective(theirs), settings({ 'offline.allowed': false }))
     })
     await waitFor(() => expect(offlineOwner()).toBeNull())
     expect(await restoreOffline(client())).toBe(false)
