@@ -593,8 +593,20 @@
       "label": "The table piece"
     },
     {
+      "class": "aw-list-piece",
+      "label": "A list piece: rows of things"
+    },
+    {
       "class": "aw-pboard",
       "label": "A board piece: columns of cards"
+    },
+    {
+      "class": "aw-blocks",
+      "label": "A module's panel"
+    },
+    {
+      "class": "aw-block",
+      "label": "One block in a module's panel"
     },
     {
       "class": "aw-calendar",

@@ -1,5 +1,6 @@
 import { here } from '../app/href'
 import { apiUrl, requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { isDarkScheme, type ThemePreset } from '../theme/slots'
 
 export type Whiteboard = {
@@ -94,7 +95,8 @@ export function listWhiteboards(filters: { q?: string; deleted?: boolean; projec
   return requestJson<{ whiteboards: Whiteboard[]; workspaces: Workspace[] }>(`${base}${suffix}`)
 }
 
-export function createWhiteboard(input: {
+/** Makes a whiteboard through `whiteboard_create`, then reads it back whole for the page it opens. */
+export async function createWhiteboard(input: {
   title: string
   organizationId?: string
   projectId?: string
@@ -102,18 +104,22 @@ export function createWhiteboard(input: {
   /** Start from this template: a template board's id or a built-in's name. */
   fromTemplateId?: string
 }) {
-  return requestJson<WhiteboardDetail>(base, { method: 'POST', json: input })
+  const { link, organizationId, ...rest } = input
+  const created = await callOp('whiteboard_create', { ...rest, workspaceId: organizationId, linkTo: link })
+  return getWhiteboard(created.whiteboard.id)
 }
 
 export function getWhiteboard(id: string) {
   return requestJson<WhiteboardDetail>(board(id))
 }
 
-export function updateWhiteboard(
+/** Renames, trashes, restores or makes a template of a whiteboard (`whiteboard_update`), and reads it back. */
+export async function updateWhiteboard(
   id: string,
-  change: { title?: string; projectId?: string | null; deleted?: boolean; isTemplate?: boolean; expectedVersion?: number },
+  change: { title?: string; projectId?: string; deleted?: boolean; isTemplate?: boolean; expectedVersion?: number },
 ) {
-  return requestJson<WhiteboardDetail>(board(id), { method: 'PATCH', json: change })
+  await callOp('whiteboard_update', { whiteboardId: id, ...change })
+  return getWhiteboard(id)
 }
 
 /** Deletes a whiteboard in the trash for good, with its drawing, images and history. */
@@ -126,8 +132,9 @@ export function emptyWhiteboardTrash() {
   return requestJson<{ deleted: number }>('/api/v1/whiteboard-trash/empty', { method: 'POST', json: {} })
 }
 
-export function duplicateWhiteboard(id: string, title?: string) {
-  return requestJson<WhiteboardDetail>(`${board(id)}/duplicate`, { method: 'POST', json: title ? { title } : {} })
+export async function duplicateWhiteboard(id: string, title?: string) {
+  const copy = await callOp('whiteboard_duplicate', { whiteboardId: id, title })
+  return getWhiteboard(copy.whiteboard.id)
 }
 
 export function getScene(id: string, since?: number) {
@@ -148,15 +155,13 @@ export function getFile(id: string, fileId: string) {
 }
 
 
+/** Shows a whiteboard on a task, project or page (`whiteboard_link`); linking twice changes nothing. */
 export function linkWhiteboard(id: string, targetKind: LinkTargetKind, targetId: string) {
-  return requestJson<WhiteboardDetail>(`${board(id)}/links`, { method: 'POST', json: { targetKind, targetId } })
+  return callOp('whiteboard_link', { whiteboardId: id, targetKind, targetId })
 }
 
 export function unlinkWhiteboard(id: string, targetKind: string, targetId: string) {
-  return requestJson<WhiteboardDetail>(
-    `${board(id)}/links/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`,
-    { method: 'DELETE' },
-  )
+  return callOp('whiteboard_link', { whiteboardId: id, targetKind, targetId, remove: true })
 }
 
 export function linkedWhiteboards(targetKind: LinkTargetKind, targetId: string) {

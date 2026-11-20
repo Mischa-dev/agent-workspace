@@ -14,7 +14,11 @@ const secondMessageStreamId = '019fb600-0000-7000-8000-00000000000f'
 const secondRunId = '019fb600-0000-7000-8000-000000000010'
 
 class WebSocketStub extends EventTarget {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
   static instances: WebSocketStub[] = []
+  readyState = WebSocketStub.CONNECTING
+  send = vi.fn()
   close = vi.fn()
 
   constructor(public readonly url: string) {

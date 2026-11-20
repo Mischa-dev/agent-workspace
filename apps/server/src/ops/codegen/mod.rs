@@ -48,6 +48,10 @@ pub fn generate(registry: &Registry) -> Result<Vec<Generated>, String> {
             content: catalog::writes(registry),
         },
         Generated {
+            path: "apps/web/src/api/generated/automations.json",
+            content: catalog::automations(registry),
+        },
+        Generated {
             path: "docs/api/v2.openapi.json",
             content: pretty(&openapi::document(registry)?),
         },
@@ -112,6 +116,30 @@ fn bare(mut schema: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rule's actions are stored and listed as written, so an operation
+    /// that takes a secret is never one a rule may run.
+    #[test]
+    fn rules_never_run_an_operation_that_takes_a_secret() {
+        let registry = crate::ops::registry();
+        let runs = |name: &str| {
+            registry
+                .get(name)
+                .is_some_and(|entry| entry.meta.runs_in_rules())
+        };
+        for secret in [
+            "workspace_store_set",
+            "host_link",
+            "credential_create",
+            "credential_rotate",
+            "connection_secret_rotate",
+            "host_enrolment_create",
+        ] {
+            assert!(registry.get(secret).is_some(), "{secret} is registered");
+            assert!(!runs(secret), "{secret} takes a secret");
+        }
+        assert!(runs("task_comment_create"));
+    }
 
     #[test]
     fn generated_files_are_current() {

@@ -1,11 +1,11 @@
-import { here } from '../app/href'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 
 import { opQuery } from '../api/ops'
+import { here } from '../app/href'
 import { useWorkspaceId } from '../app/workspace'
 import { projectLocationHref } from '../projects/locations'
-import { EmptyState, ErrorState, ListSkeleton, formatRelative, plainPreview } from '../ui'
+import { ListPiece, ListPieceTitle } from '../pieces/ListPiece'
+import { EmptyState, ErrorState, Icon, ListSkeleton, formatRelative, plainPreview } from '../ui'
 
 /** Drafts (C2.28): what you started writing and haven't sent, on any device. */
 export function DraftsList() {
@@ -24,27 +24,33 @@ export function DraftsList() {
       </EmptyState>
     )
   }
+  const hrefOf = (draft: (typeof list)[number]) =>
+    draft.conversationKind === 'dm' || draft.conversationKind === 'group'
+      ? here(`/messages/${encodeURIComponent(draft.conversationId)}`)
+      : projectLocationHref(draft.spaceId, {
+          kind: draft.conversationKind === 'thread' ? 'thread' : 'channel',
+          conversationId: draft.conversationId,
+        })
+  const textOf = (draft: (typeof list)[number]) =>
+    typeof (draft.draft as { text?: unknown }).text === 'string' ? (draft.draft as { text: string }).text : ''
   return (
-    <ul aria-label="Drafts" className="aw-later__list">
-      {list.map((draft) => {
-        const text = typeof (draft.draft as { text?: unknown }).text === 'string' ? (draft.draft as { text: string }).text : ''
-        const href =
-          draft.conversationKind === 'dm' || draft.conversationKind === 'group'
-            ? here(`/messages/${encodeURIComponent(draft.conversationId)}`)
-            : projectLocationHref(draft.spaceId, {
-                kind: draft.conversationKind === 'thread' ? 'thread' : 'channel',
-                conversationId: draft.conversationId,
-              })
-        return (
-          <li className="aw-later__row" key={draft.conversationId}>
-            <Link className="aw-later__draft" to={href}>
-              <strong>{draft.conversationName ?? (draft.conversationKind === 'dm' ? 'Direct message' : 'Conversation')}</strong>
-              <span>{plainPreview(text, 160)}</span>
-              <small>{formatRelative(draft.updatedAt)}</small>
-            </Link>
-          </li>
-        )
-      })}
-    </ul>
+    <ListPiece
+      aside={(draft) => <time dateTime={draft.updatedAt}>{formatRelative(draft.updatedAt)}</time>}
+      itemKey={(draft) => draft.conversationId}
+      items={list}
+      label="Drafts"
+      leading={() => (
+        <span className="aw-later__icon">
+          <Icon name="compose" size={16} />
+        </span>
+      )}
+      meta={(draft) => plainPreview(textOf(draft), 160)}
+      title={(draft) => (
+        <ListPieceTitle to={hrefOf(draft)}>
+          {draft.conversationName ?? (draft.conversationKind === 'dm' ? 'Direct message' : 'Conversation')}
+        </ListPieceTitle>
+      )}
+      wholeRow
+    />
   )
 }

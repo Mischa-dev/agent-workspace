@@ -394,6 +394,8 @@ export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
+export type PreviewStep = { action: unknown; kind: string; summary: string }
+
 export type ProjectHeader = { id: string; key: string; name: string; role: string; url: string }
 
 export type ProjectLine = { archived?: boolean; id: string; key: string; messagesSpace: boolean; name: string; openTasks: number; role: string; unreadConversations: number; url: string; version: number }
@@ -745,6 +747,10 @@ export type AutomationHistoryOutput = unknown
 export type AutomationListInput = { projectId: string }
 
 export type AutomationListOutput = unknown
+
+export type AutomationPreviewInput = { projectId: string; ruleId: string; taskId?: string | null }
+
+export type AutomationPreviewOutput = { actions: PreviewStep[]; skipped?: string | null; tasks: number }
 
 export type AutomationRunStartInput = { projectId: string; ruleId: string; taskId?: string | null }
 
@@ -2047,6 +2053,7 @@ export type Operations = {
   automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
   automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }
   automation_list: { input: AutomationListInput; output: AutomationListOutput }
+  automation_preview: { input: AutomationPreviewInput; output: AutomationPreviewOutput }
   automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
   automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }

@@ -6,7 +6,7 @@ import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/ty
 import type { AppState, BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { useNavigate } from 'react-router-dom'
 
-import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { useOptionalRealtime, useWatchDocument } from '../realtime/realtimeContext'
 import { onWhiteboardChange } from '../realtime/liveDocuments'
 import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
@@ -68,6 +68,8 @@ export default function BoardCanvas({
   const realtime = useOptionalRealtime()
   const live = realtime?.connection === 'live'
   const resync = realtime?.resyncGeneration ?? 0
+  // In the board's live room while it is open (W1.6).
+  useWatchDocument(whiteboardId ? { kind: 'whiteboard', id: whiteboardId } : null)
   const api = useRef<ExcalidrawImperativeAPI | null>(null)
   // What the server holds starts as the scene that came with the page.
   const [known] = useState<Known>(() => {

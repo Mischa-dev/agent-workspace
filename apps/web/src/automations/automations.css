@@ -151,3 +151,51 @@
 .aw-rule-form .aw-field {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* W1.42: an operation's input inside a rule's action, and trying a rule. */
+.aw-rule-operation {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-rule-try {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-rule-try__task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--t-ui);
+}
+
+.aw-rule-try__input {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  overflow-wrap: anywhere;
+}
+
+.aw-rule-try__input > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-rule-try__input dt {
+  color: var(--content-fg-muted);
+}
+
+.aw-rule-try__input dd {
+  margin: 0;
+  color: var(--content-fg);
+}
+
+.aw-rule-conditions__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+}

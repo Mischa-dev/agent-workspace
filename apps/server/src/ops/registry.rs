@@ -43,6 +43,57 @@ pub struct OpMeta {
     pub output_schema: fn() -> Value,
 }
 
+impl OpMeta {
+    /// Whether a rule may run it (W1.42): marked for automations, a write,
+    /// not an automation's own, not one that needs the version of what it
+    /// changes (a rule can't know it when it fires), and not one that takes a
+    /// secret or answers with one shown once: a rule's actions and runs are
+    /// stored and listed as written, and nobody is there to be shown it.
+    pub fn runs_in_rules(&self) -> bool {
+        let schema = (self.input_schema)();
+        self.automation
+            && !["query", "describe"].contains(&self.kind.key())
+            && !self.name.starts_with("automation_")
+            && !needs_version(&schema)
+            && !takes_secret(&schema)
+            && self.shown_once.is_empty()
+            && !takes_secret(&(self.output_schema)())
+    }
+}
+
+/// Whether an input schema requires `expectedVersion`.
+fn needs_version(schema: &Value) -> bool {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| required.iter().any(|field| field == "expectedVersion"))
+}
+
+/// Whether any field, at any depth, holds a secret: a token, a password, a
+/// secret or private key, or an API key.
+fn takes_secret(schema: &Value) -> bool {
+    // A token is the field's last word (`token`, `accessToken`), so token
+    // counts and design tokens (`tokens`, `inputTokens`) aren't secrets.
+    const SECRET: [&str; 5] = ["secret", "password", "passphrase", "privatekey", "apikey"];
+    match schema {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            let named = if key == "properties" {
+                value.as_object().is_some_and(|properties| {
+                    properties.keys().any(|name| {
+                        let name = name.to_ascii_lowercase().replace('_', "");
+                        name.ends_with("token") || SECRET.iter().any(|secret| name.contains(secret))
+                    })
+                })
+            } else {
+                false
+            };
+            named || takes_secret(value)
+        }),
+        Value::Array(items) => items.iter().any(takes_secret),
+        _ => false,
+    }
+}
+
 type Call = for<'a> fn(&'a AppState, DispatchRequest, Value) -> BoxFuture<'a, Answer>;
 
 /// Whether a caller may run it on a target, without running it
