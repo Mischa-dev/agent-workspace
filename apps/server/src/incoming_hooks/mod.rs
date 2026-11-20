@@ -20,6 +20,9 @@
 //! delivery that doesn't check out is refused and kept without its body,
 //! with the reason, so the hook's owner can see what was turned away.
 //! Deliveries are counted per hook and per workspace in the shared limits.
+//! The bodies a hook holds count against the workspace's storage, and a
+//! hook holds at most so many at once: past either, a delivery is answered
+//! 429 before anything is stored.
 
 pub mod ops;
 
@@ -50,6 +53,11 @@ pub const TIMESTAMP_HEADER: &str = "x-hook-timestamp";
 pub const SIGNATURE_HEADER: &str = "x-hook-signature";
 /// The largest body a hook takes.
 pub const MAX_BODY_BYTES: usize = 65_536;
+/// The most delivery bodies one hook holds at once, and their bytes. Bodies
+/// are kept for thirty days (`retention`); past either, a delivery is
+/// answered 429 and nothing is stored until older ones are cleared.
+const MAX_HELD_DELIVERIES: i64 = 50_000;
+const MAX_HELD_BYTES: i64 = 256 * 1024 * 1024;
 /// How far a delivery's timestamp may be from now.
 const MAX_SKEW_SECONDS: i64 = 300;
 /// How much of the body `{{delivery.text}}` gives a rule.
@@ -517,6 +525,66 @@ async fn receive_here(
         ));
     }
     let key = key.unwrap_or_default();
+    // The hook's row is held while its counts are checked and added to, so
+    // two deliveries can't both take its last room.
+    let (held, held_bytes) = sqlx::query_as::<_, (i32, i64)>(
+        "SELECT held_deliveries, held_bytes FROM incoming_hooks WHERE id = $1 FOR UPDATE",
+    )
+    .bind(hook_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let taken = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM incoming_hook_deliveries \
+         WHERE hook_id = $1 AND delivery_key = $2 AND outcome = 'accepted')",
+    )
+    .bind(hook_id)
+    .bind(&key)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if taken {
+        // A retry of a delivery already taken: nothing runs again.
+        transaction.rollback().await?;
+        return Ok(answer(
+            StatusCode::OK,
+            json!({ "status": "duplicate", "deliveryId": key }),
+        ));
+    }
+    let size = i64::try_from(body.len()).unwrap_or(i64::MAX);
+    if i64::from(held) >= MAX_HELD_DELIVERIES || held_bytes.saturating_add(size) > MAX_HELD_BYTES {
+        transaction.rollback().await?;
+        tracing::info!(%hook_id, "incoming hook delivery refused: the hook is full");
+        return Ok(answer(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({
+                "status": "refused",
+                "reason": "hook_full",
+                "message": "This hook holds as many deliveries as it keeps. Try again later.",
+            }),
+        ));
+    }
+    // The body counts against the workspace's storage.
+    match crate::metering::admit(
+        &mut transaction,
+        crate::metering::Ask::new(target.workspace_id, "storage_bytes", size),
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(AppError::LimitReached(_)) => {
+            // Kept: the refusal's notice to whoever can raise the limit.
+            transaction.commit().await?;
+            tracing::info!(%hook_id, "incoming hook delivery refused: workspace storage is full");
+            return Ok(answer(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({
+                    "status": "refused",
+                    "reason": "storage_full",
+                    "message": "The workspace this hook belongs to is out of storage.",
+                }),
+            ));
+        }
+        Err(error) => return Err(error),
+    }
     let accepted = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO incoming_hook_deliveries
@@ -543,10 +611,14 @@ async fn receive_here(
             json!({ "status": "duplicate", "deliveryId": key }),
         ));
     };
-    sqlx::query("UPDATE incoming_hooks SET last_delivery_at = now() WHERE id = $1")
-        .bind(hook_id)
-        .execute(&mut *transaction)
-        .await?;
+    sqlx::query(
+        "UPDATE incoming_hooks SET last_delivery_at = now(), \
+         held_deliveries = held_deliveries + 1, held_bytes = held_bytes + $2 WHERE id = $1",
+    )
+    .bind(hook_id)
+    .bind(size)
+    .execute(&mut *transaction)
+    .await?;
     crate::events::emit(
         &mut transaction,
         crate::events::NewEvent::thing(

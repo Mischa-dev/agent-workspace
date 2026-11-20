@@ -800,7 +800,9 @@ async fn gauge(
                      WHERE organization_id = $1 AND blob_deleted_at IS NULL \
                      UNION ALL \
                      SELECT image_bytes FROM link_previews \
-                     WHERE organization_id = $1 AND image_key IS NOT NULL) stored",
+                     WHERE organization_id = $1 AND image_key IS NOT NULL \
+                     UNION ALL \
+                     SELECT held_bytes FROM incoming_hooks WHERE workspace_id = $1) stored",
             )
             .bind(workspace)
             .fetch_one(&mut *connection)
