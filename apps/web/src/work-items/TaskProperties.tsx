@@ -300,6 +300,7 @@ export function TaskProperties({
             save.save(result.field, pickToPatch(result))
           }}
           projectId={item.projectId}
+          suggesting={suggesting}
           workflow={workflow}
         />
       ) : null}

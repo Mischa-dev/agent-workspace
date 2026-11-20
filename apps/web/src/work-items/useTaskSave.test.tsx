@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../api/errors'
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useUpdateWorkItem } from './hooks'
 import { EMPTY_PLANNING } from './testFixtures'
@@ -11,6 +12,7 @@ import type { WorkItem } from './types'
 import { useTaskSave } from './useTaskSave'
 
 vi.mock('./hooks', () => ({ useUpdateWorkItem: vi.fn() }))
+vi.mock('../api/ops', async (original) => ({ ...(await original<typeof import('../api/ops')>()), callOp: vi.fn() }))
 
 const task: WorkItem = {
   id: 'task-a',
@@ -40,17 +42,34 @@ const task: WorkItem = {
 const conflict = (current: WorkItem) =>
   new ApiError({ status: 409, code: 'conflict', message: 'The task changed.', details: { reason: 'version', currentVersion: current.version, current: { task: current, whole: true } } })
 
-function setup(mutateAsync: ReturnType<typeof vi.fn>) {
+function setup(mutateAsync: ReturnType<typeof vi.fn>, suggest = false) {
   vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useUpdateWorkItem>)
   const client = new QueryClient()
   client.setQueryData(queryKeys.workItem(task.projectId, task.id), task)
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  return { client, ...renderHook(() => useTaskSave(task), { wrapper }) }
+  return { client, ...renderHook(() => useTaskSave(task, { suggest }), { wrapper }) }
 }
 
 afterEach(() => vi.clearAllMocks())
 
 describe('useTaskSave', () => {
+  it('suggests through task_update, and a retry of a lost answer reuses the request id', async () => {
+    const mutateAsync = vi.fn()
+    vi.mocked(callOp)
+      .mockRejectedValueOnce(new ApiError({ status: 503, code: 'temporarily_unavailable', message: 'Try again.' }))
+      .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: true, proposalId: 'p1' })
+    const { result } = setup(mutateAsync, true)
+
+    act(() => result.current.save('priority', { priority: 'high' }))
+    await waitFor(() => expect(result.current.stopped).toHaveLength(1))
+    act(() => result.current.retry('priority'))
+    await waitFor(() => expect(result.current.stopped).toHaveLength(0))
+    expect(mutateAsync).not.toHaveBeenCalled()
+    const [first, second] = vi.mocked(callOp).mock.calls
+    expect(first[1]).toEqual({ taskId: task.id, expectedVersion: 1, priority: 'high' })
+    expect(second[2]?.requestId).toBe(first[2]?.requestId)
+  })
+
   it('stops instead of overwriting when someone else changed the same field, and keeps yours only when asked', async () => {
     const theirs = { ...task, title: 'Parse the CLI flags', version: 2 }
     const mutateAsync = vi.fn().mockRejectedValueOnce(conflict(theirs)).mockResolvedValue({ ...theirs, title: 'Mine', version: 3 })

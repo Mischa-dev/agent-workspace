@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
-import { callOp } from '../api/ops'
+import { callOp, newRequestId } from '../api/ops'
 import { showToast } from '../ui'
 import { getWorkItem } from './api'
 import { useUpdateWorkItem } from './hooks'
@@ -163,6 +163,12 @@ type Entry = {
   state: 'waiting' | 'saving' | 'conflict' | 'failed'
   theirs: WorkItem | null
   message: string | null
+  /**
+   * A suggestion's request id and the version it was made against. Trying
+   * the same change again on the same version reuses the id, so a proposal
+   * whose answer was lost is answered again rather than made twice.
+   */
+  sent: { requestId: string; version: number } | null
 }
 
 /** A field's save as the page shows it. `text` is the typed title or description, kept until it's saved or let go. */
@@ -296,7 +302,9 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
       change(id, { state: 'failed', message: `Only someone who edits this task can change its ${name}.` })
       return
     }
-    const written = await callOp('task_update', input)
+    const requestId = entry.sent?.version === task.version ? entry.sent.requestId : newRequestId()
+    change(id, { sent: { requestId, version: task.version } })
+    const written = await callOp('task_update', input, { requestId })
     change(id, null)
     if (written.proposalId) {
       showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
@@ -331,7 +339,7 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     // A change that replaces one not sent yet starts from what the person saw before either.
     const from = previous?.state === 'waiting' ? previous.base : (base ?? baseFor(field))
     lastId.current += 1
-    const entry: Entry = { id: lastId.current, field, patch, mine: patchValue(field, patch), base: from, state: 'waiting', theirs: null, message: null }
+    const entry: Entry = { id: lastId.current, field, patch, mine: patchValue(field, patch), base: from, state: 'waiting', theirs: null, message: null, sent: null }
     entries.current.set(field, entry)
     publish()
     enqueue(entry.id)
@@ -349,6 +357,8 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
       state: 'waiting',
       theirs: null,
       message: null,
+      // A changed patch is a new request.
+      sent: patch ? null : entry.sent,
     })
     publish()
     enqueue(entry.id)
