@@ -815,18 +815,19 @@ async fn files_move_between_stores_and_resume() {
         }
     }
     assert_eq!(batches, 3);
-    // The walk ended with a file held, so another pass comes.
-    let mut again = files::migrate::next_pass(&state, &payload)
-        .await
-        .expect("next pass")
-        .expect("a pass for the held file");
-    assert_eq!((again.after, again.pass), (None, 1));
-    // Let go, it moves on that pass; the rest are already there.
+    // The walk ended with a file held, so another pass comes, even once
+    // the file is let go before the walk's end is looked at.
     sqlx::query("UPDATE files SET move_lease = NULL, move_lease_until = NULL WHERE id = $1")
         .bind(held)
         .execute(&setup.pool)
         .await
         .expect("let go");
+    let mut again = files::migrate::next_pass(&state, &payload)
+        .await
+        .expect("next pass")
+        .expect("a pass for the file left behind");
+    assert_eq!((again.after, again.pass), (None, 1));
+    // It moves on that pass; the rest are already there.
     let mut moved_again = 0;
     loop {
         let moved = files::migrate::move_batch(&state, &again)
@@ -844,7 +845,7 @@ async fn files_move_between_stores_and_resume() {
             .await
             .expect("after the pass")
             .is_none(),
-        "nothing held, no further pass"
+        "everything moved, no further pass"
     );
     let stores: Vec<(String, String, Option<String>)> =
         sqlx::query_as("SELECT storage_key, store_id, moved_from_store_id FROM files ORDER BY id")

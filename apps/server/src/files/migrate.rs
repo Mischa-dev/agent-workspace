@@ -184,8 +184,10 @@ fn job(payload: MovePayload) -> NewJob {
 }
 
 /// The pass to queue once a walk has ended: another from the start while
-/// files it would move are still held (by another move or a prune), up to
-/// `PASSES` more. None when nothing is held, or the passes are spent.
+/// files it would move are still in another store (held by another move or
+/// a prune when the walk passed them, let go since, or a copy that failed),
+/// up to `PASSES` more. None when every file is there, or the passes are
+/// spent.
 pub async fn next_pass(
     state: &AppState,
     payload: &MovePayload,
@@ -194,7 +196,7 @@ pub async fn next_pass(
         return Ok(None);
     }
     // Files of every workspace, or of one.
-    let held = crate::tenancy::system(
+    let left = crate::tenancy::system(
         "files.move",
         Box::pin(
             sqlx::query_scalar::<_, bool>(
@@ -205,7 +207,6 @@ pub async fn next_pass(
                       AND store_id <> $2
                       AND blob_deleted_at IS NULL
                       AND NOT ($3 AND members_only)
-                      AND move_lease_until > now()
                 )
                 "#,
             )
@@ -216,7 +217,7 @@ pub async fn next_pass(
         ),
     )
     .await?;
-    Ok(held.then(|| MovePayload {
+    Ok(left.then(|| MovePayload {
         after: None,
         pass: payload.pass + 1,
         ..payload.clone()

@@ -125,40 +125,57 @@ pub async fn under_lease<T>(
     let Waited::Took(token) = token else {
         return work.await;
     };
-    tokio::pin!(work);
-    let mut renew = tokio::time::interval(RENEW);
-    renew.tick().await;
-    let mut renewed_at = tokio::time::Instant::now();
-    let result = loop {
-        tokio::select! {
-            result = &mut work => break result,
-            _ = renew.tick() => {
-                // A renewal that hangs counts as failed, so the fence below
-                // is reached in time.
-                match tokio::time::timeout(RENEW, take(pool, holder)).await {
-                    Ok(Ok(Some(_))) => renewed_at = tokio::time::Instant::now(),
-                    Ok(Ok(None)) => {
-                        break Err(anyhow::anyhow!(
-                            "{LEASE} was taken over while starting; exiting"
-                        ));
+    // The work lives in this block, so when the lease can't be kept it is
+    // dropped (an open migration's transaction with it) before anything
+    // below runs.
+    let (result, finished) = {
+        tokio::pin!(work);
+        let mut renew = tokio::time::interval(RENEW);
+        renew.tick().await;
+        let mut renewed_at = tokio::time::Instant::now();
+        loop {
+            tokio::select! {
+                result = &mut work => break (result, true),
+                _ = renew.tick() => {
+                    // A renewal that hangs counts as failed, so the fence below
+                    // is reached in time.
+                    match tokio::time::timeout(RENEW, take(pool, holder)).await {
+                        Ok(Ok(Some(_))) => renewed_at = tokio::time::Instant::now(),
+                        Ok(Ok(None)) => {
+                            break (
+                                Err(anyhow::anyhow!(
+                                    "{LEASE} was taken over while starting; exiting"
+                                )),
+                                false,
+                            );
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(%error, "{LEASE} not renewed; trying again");
+                        }
+                        Err(_) => tracing::warn!("{LEASE} renewal timed out; trying again"),
                     }
-                    Ok(Err(error)) => {
-                        tracing::warn!(%error, "{LEASE} not renewed; trying again");
+                    // Fenced: the work stops before the lease can lapse and
+                    // another process take it while this one still writes.
+                    if lapsing(renewed_at.elapsed()) {
+                        break (
+                            Err(anyhow::anyhow!(
+                                "{LEASE} not renewed for {}s; stopping before it can lapse",
+                                renewed_at.elapsed().as_secs()
+                            )),
+                            false,
+                        );
                     }
-                    Err(_) => tracing::warn!("{LEASE} renewal timed out; trying again"),
-                }
-                // Fenced: the work stops (dropped here, which rolls back an
-                // open migration) before the lease can lapse and another
-                // process take it while this one still writes.
-                if lapsing(renewed_at.elapsed()) {
-                    break Err(anyhow::anyhow!(
-                        "{LEASE} not renewed for {}s; stopping before it can lapse",
-                        renewed_at.elapsed().as_secs()
-                    ));
                 }
             }
         }
     };
+    // Stopped by the fence or a takeover, the lease isn't let go: it runs
+    // out on its own, so the database has a round or more to finish
+    // cancelling what the dropped work had in flight before another
+    // process can take it.
+    if !finished {
+        return result;
+    }
     if let Err(error) = release(pool, holder, token).await {
         tracing::warn!(%error, "{LEASE} not released; it runs out instead");
     }
