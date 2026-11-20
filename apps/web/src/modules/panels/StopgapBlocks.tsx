@@ -126,6 +126,10 @@ function Buttons({ block, onAction }: { block: PanelBlock; onAction: PanelBlocks
   )
 }
 
+function formIdentity(block: PanelBlock): string {
+  return JSON.stringify([record(record(block.submit).action).id ?? null, Object.keys(record(record(block.schema).properties)), block.values ?? null])
+}
+
 function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<string, string>; onAction: PanelBlocksProps['onAction'] }) {
   const schema = record(block.schema)
   const properties = record(schema.properties)
@@ -152,7 +156,7 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
     setBusy(true)
     setFailed(null)
     try {
-      await onAction({ id: text(record(submit.action).id), values })
+      await onAction({ id: text(record(submit.action).id), values: { ...record(record(submit.action).values), ...values } })
     } catch (error) {
       setFailed(error instanceof Error ? error.message : 'That didn’t go through.')
     } finally {
@@ -167,22 +171,23 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
         const label = text(field.title) || name
         const hint = text(field.description) || undefined
         const error = errors[name]
-        const choices = list(field.enum ?? record(field.items).enum).map(text)
+        // The schema's own values (a number stays a number); shown as text.
+        const choices = list(field.enum ?? record(field.items).enum)
         const widget = text(widgets[name])
         if (field.type === 'boolean') {
           return <Checkbox checked={values[name] === true} description={error ?? hint} key={name} label={label} onChange={(checked) => set(name, checked)} />
         }
         if (field.type === 'array') {
-          const picked = new Set(list(values[name]).map(text))
+          const picked = list(values[name])
           return (
             <fieldset className="aw-panel-form__choices" key={name}>
               <legend>{label}</legend>
-              {choices.map((choice) => (
+              {choices.map((choice, index) => (
                 <Checkbox
-                  checked={picked.has(choice)}
-                  key={choice}
-                  label={choice}
-                  onChange={(checked) => set(name, checked ? [...picked, choice] : [...picked].filter((item) => item !== choice))}
+                  checked={picked.includes(choice)}
+                  key={index}
+                  label={text(choice)}
+                  onChange={(checked) => set(name, checked ? [...picked.filter((item) => item !== choice), choice] : picked.filter((item) => item !== choice))}
                 />
               ))}
               {error ? <p className="aw-field__note" role="alert">{error}</p> : null}
@@ -190,12 +195,18 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
           )
         }
         if (choices.length > 0 || widget === 'select' || widget === 'radio') {
+          // Options are told apart by position, so the value sent back is the
+          // schema's own; with no choice yet the empty option shows, and a
+          // required field can't be sent until one is made.
+          const at = choices.length > 0 ? choices.indexOf(values[name]) : -1
+          const chosen = choices.length > 0 ? (at < 0 ? '' : String(at)) : text(values[name])
+          const pick = (value: string) => set(name, value === '' ? '' : choices.length > 0 ? choices[Number(value)] : value)
           return (
-            <SelectField error={error} hint={hint} key={name} label={label} onChange={(event) => set(name, event.target.value)} required={required.has(name)} value={text(values[name])}>
-              {required.has(name) ? null : <option value="">–</option>}
-              {choices.map((choice) => (
-                <option key={choice} value={choice}>
-                  {choice}
+            <SelectField error={error} hint={hint} key={name} label={label} onChange={(event) => pick(event.target.value)} required={required.has(name)} value={chosen}>
+              {required.has(name) && at >= 0 ? null : <option value="">{required.has(name) ? 'Choose…' : '–'}</option>}
+              {choices.map((choice, index) => (
+                <option key={index} value={String(index)}>
+                  {text(choice)}
                 </option>
               ))}
             </SelectField>
@@ -213,6 +224,7 @@ function Form({ block, errors, onAction }: { block: PanelBlock; errors: Record<s
             label={label}
             onChange={(event) => set(name, numeric ? (event.target.value === '' ? '' : Number(event.target.value)) : event.target.value)}
             required={required.has(name)}
+            step={field.type === 'number' ? 'any' : undefined}
             type={numeric ? 'number' : 'text'}
             value={text(values[name])}
           />
@@ -392,7 +404,9 @@ function Block({ block, errors, onAction }: { block: PanelBlock; errors: Record<
     case 'buttons':
       return <Buttons block={block} onAction={onAction} />
     case 'form':
-      return <Form block={block} errors={errors} onAction={onAction} />
+      // A different form, or new values from the module, starts afresh;
+      // the same form shown again keeps what was typed.
+      return <Form block={block} errors={errors} key={formIdentity(block)} onAction={onAction} />
     case 'section':
       return (
         <section className="aw-panel-section" data-part="panel-section">

@@ -143,6 +143,33 @@ async fn space_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
+    // AWD-96: "workspace" in `projectId` names the workspace's own space,
+    // as MCP's key resolution reads it; the caller joins it (as everyone in
+    // the workspace is) only when the call could then write there.
+    if input
+        .pointer("/projectId")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.trim().eq_ignore_ascii_case("workspace"))
+        && let (Some(workspace), None) = (request.workspace, request.caller.confined_space)
+    {
+        let caller = &request.caller;
+        let join = !request.preview && caller.can_write && caller.limits.is_none();
+        let mut tx = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        let space = if join {
+            crate::spaces::workspace::join(&mut tx, workspace, caller.account_id).await
+        } else {
+            crate::spaces::workspace::find(&mut tx, workspace).await
+        }
+        .map_err(|error| OpError::logged("workspace space", &error))?;
+        tx.commit()
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        if let (Some(space), Some(slot)) = (space, input.pointer_mut("/projectId")) {
+            *slot = Value::String(space.to_string());
+        }
+    }
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         // K4.9: "me" is the caller's personal space in the named workspace,
         // made on first use; a credential held to one space never reaches it.

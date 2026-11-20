@@ -134,9 +134,12 @@ export function PanelHost({
   // state it last gave, so a stateful panel carries on where it was.
   const { refetch, dataUpdatedAt } = opened
   const refreshAfter = shown?.refreshAfter
+  // Not while a frame is open over the panel: the person is working in it.
+  // Back on the panel, the wait starts again.
+  const framing = frame !== null
   useEffect(() => {
     const seconds = refreshAfter
-    if (!seconds || finished) return
+    if (!seconds || finished || framing) return
     const timer = window.setTimeout(() => {
       if (pressing.current) return
       if (state === undefined) {
@@ -151,7 +154,7 @@ export function PanelHost({
       )
     }, seconds * 1000)
     return () => window.clearTimeout(timer)
-  }, [refreshAfter, finished, refetch, dataUpdatedAt, after, state, take, input, workspaceId])
+  }, [refreshAfter, finished, framing, refetch, dataUpdatedAt, after, state, take, input, workspaceId])
 
   const onAction = async (action: PanelAction) => {
     pressing.current = true

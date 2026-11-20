@@ -56,6 +56,33 @@ describe('PanelHost', () => {
     expect(onDone).toHaveBeenCalledWith({ message: 'Build started.', result: { build: '215' } })
   })
 
+  it('sends a choice as the schema’s own value, and asks for a required one first', async () => {
+    const form = {
+      type: 'form',
+      schema: {
+        type: 'object',
+        required: ['size'],
+        properties: { size: { type: 'integer', title: 'Size', enum: [1, 2, 3] } },
+      },
+      submit: { label: 'Save', action: { id: 'save' } },
+    }
+    callOp.mockImplementation(async (name: string) => (name === 'module_panel_open' ? opened({ blocks: [form] }) : null))
+    renderPiece(<PanelHost label="Sizes" place={place} />)
+    const size = await screen.findByRole('combobox', { name: /Size/ })
+    expect(size).toHaveValue('')
+    expect(screen.getByRole('option', { name: 'Choose…' })).toBeInTheDocument()
+
+    fireEvent.change(size, { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(callOp).toHaveBeenLastCalledWith(
+        'module_panel_press',
+        expect.objectContaining({ action: { id: 'save', values: { size: 2 } } }),
+        expect.anything(),
+      ),
+    )
+  })
+
   it('asks before a button with a confirmation, and draws the next panel it answers', async () => {
     callOp.mockImplementation(async (name: string) => (name === 'module_panel_open' ? opened(sample) : null))
     renderPiece(<PanelHost label="Builds" place={place} />)
