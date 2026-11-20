@@ -213,6 +213,19 @@ pub async fn client_for(
     pinned_client(url, &addresses, timeouts, user_agent).map_err(|_| Refusal::Unresolved)
 }
 
+/// A client for an address the operator configured, never one a
+/// workspace can set: the built-in host program reaching its own server to
+/// enrol. Follows no redirect, so the enrolment code goes only there.
+pub fn operator_client(timeouts: Timeouts) -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(total) = timeouts.total {
+        builder = builder.timeout(total);
+    }
+    builder.build()
+}
+
 // --- Webhooks and agent wakeups ---------------------------------------------
 
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(8);
@@ -752,10 +765,6 @@ mod tests {
             ("ai/gateway.rs", "the built-in providers' own addresses"),
             ("auth/workos.rs", "the sign-in provider's API"),
             ("github.rs", "the configured GitHub API"),
-            (
-                "hosts/builtin/program.rs",
-                "the host program enrolling with its operator-set server",
-            ),
             ("provider/claude_cloud.rs", "the provider's own cloud API"),
             (
                 "push.rs",

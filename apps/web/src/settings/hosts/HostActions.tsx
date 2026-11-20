@@ -49,6 +49,8 @@ export function HostActions({
   })
   if (actions.length === 0) return null
   const send = (action: HostAction) => {
+    // The last action's answer and panel belong to it alone.
+    setCommandId(null)
     setSent({ label: action.label, panelClosed: false })
     run.mutate(account ? { account, actionId: action.id } : { host: hostId, actionId: action.id })
   }

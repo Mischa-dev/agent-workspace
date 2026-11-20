@@ -79,6 +79,9 @@ services:
     environment:
       <<: *app-environment
       AGENT_WORKSPACE_HOST_SERVER_URL: http://app:3100
+      # The image's health check asks SERVER_ADDR; the host serves only
+      # its health there.
+      AGENT_WORKSPACE_SERVER_ADDR: 0.0.0.0:3101
       AGENT_WORKSPACE_HEALTH_ADDR: 0.0.0.0:3101
     secrets: [db_app_url]
     volumes:

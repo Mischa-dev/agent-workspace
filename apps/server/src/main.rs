@@ -569,10 +569,30 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["code-file"])?;
             let path = std::path::PathBuf::from(required_option(&options, "code-file")?);
-            let code = agent_workspace_server::hosts::builtin::install::new_code(&pool)
-                .await
-                .context("write a code for the built-in host")?;
-            write_private_file(&path, &code)?;
+            // The file is made first: a path that can't be written fails
+            // before the running host's token is revoked.
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .with_context(|| format!("create {}", path.display()))?
+            };
+            let code = match agent_workspace_server::hosts::builtin::install::new_code(&pool).await
+            {
+                Ok(code) => code,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error).context("write a code for the built-in host");
+                }
+            };
+            {
+                use std::io::Write as _;
+                file.write_all(code.as_bytes())?;
+                file.sync_all()?;
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({ "codeFile": path }))?

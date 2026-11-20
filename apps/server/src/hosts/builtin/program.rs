@@ -60,24 +60,39 @@ fn folder(config: &AppConfig) -> std::path::PathBuf {
     config.data_root.join("builtin-host")
 }
 
-/// The install's token: kept from an earlier start, or exchanged for the
-/// one-time code now (and the code file removed).
+/// The install's token: exchanged for the one-time code when there is one
+/// (and the code file removed), else kept from an earlier start. A code
+/// waiting comes first: writing a new one revokes the token before it, so
+/// a host whose token was replaced enrols again on its next start.
 pub async fn token(config: &AppConfig, settings: &ProgramSettings) -> anyhow::Result<String> {
     let kept = folder(config).join("token");
-    if let Ok(token) = std::fs::read_to_string(&kept) {
+    let waiting = std::fs::read_to_string(&settings.code_file)
+        .ok()
+        .filter(|code| !code.trim().is_empty());
+    if waiting.is_none()
+        && let Ok(token) = std::fs::read_to_string(&kept)
+    {
         let token = token.trim().to_owned();
         if !token.is_empty() {
             return Ok(token);
         }
     }
-    let code = std::fs::read_to_string(&settings.code_file).with_context(|| {
-        format!(
-            "no token yet and no code at {}: run `agent-workspace-server enrol-builtin-host \
+    let code = waiting
+        .map(Ok)
+        .unwrap_or_else(|| std::fs::read_to_string(&settings.code_file))
+        .with_context(|| {
+            format!(
+                "no token yet and no code at {}: run `agent-workspace-server enrol-builtin-host \
              --code-file <path>` on the server",
-            settings.code_file.display()
-        )
-    })?;
-    let response = reqwest::Client::new()
+                settings.code_file.display()
+            )
+        })?;
+    let client = crate::outbound::operator_client(crate::outbound::Timeouts {
+        connect: std::time::Duration::from_secs(10),
+        total: Some(std::time::Duration::from_secs(30)),
+    })
+    .context("build the enrolment client")?;
+    let response = client
         .post(format!("{}/api/v1/host/builtin/enrol", settings.server_url))
         .header(
             agent_workspace_host_protocol::PROTOCOL_HEADER,
@@ -120,6 +135,11 @@ pub fn write_private(path: &Path, value: &str) -> anyhow::Result<()> {
         .mode(0o600)
         .open(path)
         .with_context(|| format!("write {}", path.display()))?;
+    // A file that was already there keeps its mode on open: narrowed
+    // before anything secret goes in.
+    use std::os::unix::fs::PermissionsExt as _;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("make {} private", path.display()))?;
     file.write_all(value.as_bytes())
         .with_context(|| format!("write {}", path.display()))?;
     Ok(())

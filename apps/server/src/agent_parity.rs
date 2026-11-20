@@ -1055,6 +1055,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/builtin/enrol",
+            Plumbing("the built-in host's own program enrolling with the code its operator wrote"),
+        ),
+        (
+            Post,
             "/api/v1/connected-modules/token",
             Plumbing("a connected module trading its one-time install code"),
         ),

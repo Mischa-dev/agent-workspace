@@ -801,7 +801,7 @@ function AgentEditForm({
   }
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (dirty) save.mutate({})
+    if (dirty) save.mutate()
   }
   const busy = save.isPending
   return (
